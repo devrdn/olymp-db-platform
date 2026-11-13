@@ -730,16 +730,17 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		outage bool
 	}
 	failed := redirect{code: "external_signin_failed"}
+	conflict := redirect{code: "external_signin_conflict"}
 	want := map[error]redirect{
 		federation.ErrStaffAccount:     {code: "external_signin_staff_account"},
 		federation.ErrSignupClosed:     {code: "external_signin_closed"},
 		federation.ErrInvalidClaims:    failed,
-		federation.ErrIdentityConflict: failed,
+		federation.ErrIdentityConflict: conflict,
 		microsoft.ErrSignInRefused:     failed,
 		microsoft.ErrExchangeFailed:    failed,
 		microsoft.ErrKeysUnavailable:   {code: "external_signin_failed", outage: true},
 		microsoft.ErrInvalidToken:      failed,
-		microsoft.ErrTenantNotAllowed:  failed,
+		microsoft.ErrTenantNotAllowed:  conflict,
 		microsoft.ErrStateInvalid:      failed,
 		microsoft.ErrStateExpired:      failed,
 		users.ErrAccountBlocked:        {code: "account_blocked"},

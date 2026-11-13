@@ -2809,6 +2809,7 @@ const en = {
     external_signin_failed: "Signing in with Microsoft did not work. Try again.",
     external_signin_staff_account: "This address belongs to an organiser's or administrator's account. Sign in with its password, or ask an administrator to reset it.",
     external_signin_closed: "This Microsoft account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one.",
+    external_signin_conflict: "You cannot sign in here with this Microsoft account: your account on this site is linked to a different Microsoft account, or your organisation is not admitted. Ask an administrator.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
     internal_error: "The server could not process the request.",

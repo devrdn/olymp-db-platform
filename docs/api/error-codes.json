@@ -162,8 +162,12 @@
       "meaning": "The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored."
     },
     {
+      "code": "external_signin_conflict",
+      "meaning": "Signing in through the external provider will not succeed however often it is tried: the account the address belongs to is already linked to another identity at the same provider, or the installation does not admit that provider's tenant. Ask an administrator."
+    },
+    {
       "code": "external_signin_failed",
-      "meaning": "Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, the installation does not admit that provider's tenant, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again."
+      "meaning": "Signing in through the external provider did not succeed: the person declined or the provider refused, the sign-in took longer than ten minutes or was started in another browser, the provider's answer could not be verified, or too many sign-ins came from this address. Deliberately one answer. Start the sign-in again."
     },
     {
       "code": "external_signin_staff_account",

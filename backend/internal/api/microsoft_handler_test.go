@@ -342,6 +342,23 @@ func TestAKeyOutageIsLoggedAsAnError(t *testing.T) {
 	}
 }
 
+// An account linked to another identity at the same issuer will be refused
+// on every try, so the page must not say to try again.
+func TestASecondIdentityForALinkedAccountLandsOnTheConflictCode(t *testing.T) {
+	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
+		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: f.provider.Issuer(msHomeTenant), Subject: "an-earlier-object-id",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := f.start(t, "192.0.2.1", "/")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_conflict")
+}
+
 func TestARefusedTokenLandsOnTheSignInPage(t *testing.T) {
 	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")

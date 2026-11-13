@@ -10,6 +10,7 @@ const EXTERNAL_SIGN_IN_ERRORS = [
   "external_signin_failed",
   "external_signin_staff_account",
   "external_signin_closed",
+  "external_signin_conflict",
   "account_blocked",
 ] as const;
 

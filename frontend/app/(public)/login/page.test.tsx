@@ -123,6 +123,7 @@ describe("the sign-in page after an external sign-in came back refused", () => {
     "external_signin_failed",
     "external_signin_staff_account",
     "external_signin_closed",
+    "external_signin_conflict",
     "account_blocked",
   ] as const)("says what %s means", async (code) => {
     methods(false, false, true);
