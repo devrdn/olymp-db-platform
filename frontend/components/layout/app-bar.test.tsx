@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
@@ -7,8 +7,11 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 vi.mock("./locale-actions", () => ({ chooseLocale: vi.fn() }));
 vi.mock("./session-actions", () => ({ signOutAction: vi.fn() }));
 
+vi.mock("next/navigation", () => ({ usePathname: () => "/contests" }));
+
 import { FocusShell } from "./focus-shell";
 import { ProductShell } from "./product-shell";
+import { SectionNav } from "./section-nav";
 
 let en: Dictionary;
 
@@ -162,5 +165,40 @@ describe("the app bar", () => {
     );
 
     expect(container.querySelector("header")?.className).toMatch(/(^|\s)print:hidden(\s|$)/);
+  });
+});
+
+describe("the bar at phone width", () => {
+  test("puts the destinations on a row of their own, scrolling, beneath the mark and controls", () => {
+    const { container } = render(
+      <ProductShell
+        locale="en"
+        theme="system"
+        dict={en}
+        home="/contests"
+        nav={
+          <SectionNav
+            items={[
+              { href: "/contests", label: "Contests" },
+              { href: "/users", label: "Accounts" },
+            ]}
+          />
+        }
+      >
+        <p>rows</p>
+      </ProductShell>,
+    );
+
+    const row = container.querySelector('[data-slot="app-bar-nav"]');
+    expect(row).not.toBeNull();
+    expect(row?.className).toContain("max-narrow:order-last");
+    expect(row?.className).toContain("max-narrow:basis-full");
+    expect(row?.className).toContain("max-narrow:overflow-x-auto");
+    expect(within(row as HTMLElement).getAllByRole("link").map((a) => a.textContent)).toEqual([
+      "Contests",
+      "Accounts",
+    ]);
+    // The theme and language controls keep their accessible names beside the mark.
+    expect(screen.getAllByRole("button").length).toBeGreaterThan(0);
   });
 });

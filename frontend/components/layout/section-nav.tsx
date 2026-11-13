@@ -15,7 +15,7 @@ export function SectionNav({ items }: { items: { href: string; label: string }[]
   const pathname = usePathname();
 
   return (
-    <nav className="flex min-w-0 items-center gap-1">
+    <nav className="flex min-w-0 items-center gap-1 max-narrow:min-w-max">
       {items.map((item) => {
         // Stays marked anywhere inside the section.
         const current = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -26,7 +26,7 @@ export function SectionNav({ items }: { items: { href: string; label: string }[]
             href={item.href}
             aria-current={current ? "page" : undefined}
             className={cn(
-              "truncate px-2 py-1 text-control transition-colors duration-(--t-input) ease-standard",
+              "truncate px-2 py-1 text-control max-narrow:flex max-narrow:min-h-11 max-narrow:items-center transition-colors duration-(--t-input) ease-standard",
               current ? "text-ink" : "text-ink-3 hover:text-ink-2",
             )}
           >
