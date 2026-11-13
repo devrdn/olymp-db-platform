@@ -326,7 +326,8 @@ func (s *Service) Complete(ctx context.Context, token, newPassword string) error
 				return uuid.Nil, false, err
 			}
 			// Read once the row is held, so a change to the address or the
-			// roles either commits before the read or waits for this one.
+			// status either commits before the read or waits for this one; a
+			// role change waits only at its session bump (users.Repository).
 			err = s.cfg.Directory.Lock(ctx, link.UserID)
 			if errors.Is(err, users.ErrNotFound) {
 				return uuid.Nil, false, nil

@@ -141,14 +141,17 @@ func (r *Users) ByEmail(ctx context.Context, email string) (users.User, error) {
 }
 
 // Lock holds the account's row until the transaction in ctx ends, so a
-// change to its address, status or roles (each writes the row) waits for it.
-// It reads nothing: under READ COMMITTED a later statement takes a fresh
-// snapshot and sees what committed while Lock waited, which a read joined to
-// the lock would not for the roles.
+// change that writes the row (its address, status, password or session
+// generation) waits for it. It reads nothing: under READ COMMITTED a later
+// statement takes a fresh snapshot and sees what committed while Lock
+// waited, which a read joined to the lock would not for the roles.
 //
 // FOR NO KEY UPDATE, not FOR UPDATE: it conflicts with every such write, but
 // not with the key-share lock an insert referencing the account takes, so a
-// submission or role assignment is not held up behind it.
+// submission or a user_roles row is not held up behind it. A role change
+// therefore waits only at the session generation users.Service bumps in the
+// same transaction: one that commits after the holder's read still ends
+// every session the holder opened, but did not stop what the holder wrote.
 func (r *Users) Lock(ctx context.Context, id uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("locking an account must run inside a transaction")

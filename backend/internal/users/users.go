@@ -267,8 +267,10 @@ type Repository interface {
 	// otherwise, a deleted account included.
 	ByEmail(ctx context.Context, email string) (User, error)
 	// Lock holds the account's row until the transaction in ctx ends, which
-	// ctx must carry, so a change to its status, roles or address (each
-	// writes the row) waits for it; ErrNotFound for a missing account.
+	// ctx must carry, so a write to the row (its status, address, password or
+	// session generation) waits for it; a role change waits only at the
+	// session generation the service bumps. ErrNotFound for a missing
+	// account.
 	Lock(ctx context.Context, id uuid.UUID) error
 	// MarkEmailVerified records when the account proved its email;
 	// ErrNotFound for a missing account.
