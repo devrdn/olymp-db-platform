@@ -1,14 +1,10 @@
-import { LogIn } from "lucide-react";
-
 import type { ProviderId } from "@/lib/auth/external";
 
 const SIZE = 18;
 
-/**
- * The mark beside a provider's name; decorative, since the button's text
- * carries the name. Google and GitHub show a neutral icon until their official
- * marks replace it, here and nowhere else.
- */
+const GITHUB_MARK = 'url("/brand/github-mark.svg")';
+
+/** The mark beside a provider's name; decorative, since the button's text carries the name. */
 export function ProviderLogo({ provider }: { provider: ProviderId }) {
   if (provider === "microsoft") {
     return (
@@ -20,5 +16,38 @@ export function ProviderLogo({ provider }: { provider: ProviderId }) {
       </svg>
     );
   }
-  return <LogIn size={SIZE} aria-hidden="true" focusable="false" />;
+  if (provider === "google") {
+    // Google's G keeps its own colours on white in both themes, so the tile is
+    // white and not a token.
+    return (
+      <span
+        aria-hidden="true"
+        className="inline-flex shrink-0 items-center justify-center rounded-sm border border-line-2 bg-white p-0.5"
+        style={{ width: SIZE, height: SIZE }}
+      >
+        {/* Not next/image: a fixed static mark that needs no resizing pipeline. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/google-g.png" alt="" aria-hidden="true" className="h-full w-auto object-contain" />
+      </span>
+    );
+  }
+  // The mark is a mask over the text colour, so it follows the theme.
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block shrink-0 bg-current"
+      style={{
+        width: SIZE,
+        height: SIZE,
+        maskImage: GITHUB_MARK,
+        WebkitMaskImage: GITHUB_MARK,
+        maskSize: "contain",
+        WebkitMaskSize: "contain",
+        maskRepeat: "no-repeat",
+        WebkitMaskRepeat: "no-repeat",
+        maskPosition: "center",
+        WebkitMaskPosition: "center",
+      }}
+    />
+  );
 }

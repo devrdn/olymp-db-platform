@@ -13,21 +13,33 @@ describe("ProviderLogo", () => {
     expect(fills).toEqual(["#F25022", "#7FBA00", "#00A4EF", "#FFB900"]);
   });
 
-  test.each(["google", "github"] as const)("renders a hidden icon for %s", (provider) => {
-    const { container } = render(<ProviderLogo provider={provider} />);
+  test("shows Google's G as a hidden image on a white tile", () => {
+    const { container } = render(<ProviderLogo provider="google" />);
 
-    const svg = container.querySelector("svg");
-    expect(svg).not.toBeNull();
-    expect(svg).toHaveAttribute("aria-hidden", "true");
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("src", "/brand/google-g.png");
+    expect(img).toHaveAttribute("alt", "");
+    expect(img).toHaveAttribute("aria-hidden", "true");
+    const tile = img?.parentElement;
+    expect(tile).toHaveAttribute("aria-hidden", "true");
+    expect(tile).toHaveClass("bg-white");
+  });
+
+  test("masks GitHub's mark over the text colour", () => {
+    const { container } = render(<ProviderLogo provider="github" />);
+
+    const mark = container.firstElementChild;
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+    expect(mark).toHaveClass("bg-current");
+    expect(mark?.getAttribute("style")).toContain("/brand/github-mark.svg");
   });
 
   test.each(PROVIDER_IDS)("keeps the %s mark out of the accessibility tree and the tab order", (provider) => {
     const { container } = render(<ProviderLogo provider={provider} />);
 
-    const svgs = container.querySelectorAll("svg");
-    expect(svgs).toHaveLength(1);
-    for (const svg of svgs) {
-      expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelectorAll("a, button, input, [tabindex]")).toHaveLength(0);
+    for (const svg of container.querySelectorAll("svg")) {
       expect(svg.getAttribute("focusable")).toBe("false");
     }
   });
