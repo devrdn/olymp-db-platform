@@ -468,15 +468,21 @@ registration outside the organisation's own tenant, used with that tenant's
 ID as `MICROSOFT_TENANT`, needs the "any organizational directory" account
 type and, usually, that tenant's administrator's consent.
 
-#### The callback in the access log
+#### Tokens in the access log
 
 Caddy logs every request as JSON on its standard output (the `log` block of
 `deploy/Caddyfile`), with the query string, so the callback's line carries
 Microsoft's one-time `code` and the `state`. The code is redeemed at once,
 cannot be redeemed twice, and is useless without both the client secret and
 the PKCE verifier that only the person's browser holds, sealed in its state
-cookie. Nobody reading the log can sign in with it. To keep both out of the
-log anyway, replace that block with:
+cookie. Nobody reading the log can sign in with it.
+
+A password reset link is different. It opens `/reset?token=…`, so the line
+of the person's first visit carries the token, and the token alone sets the
+account's password until it is used, replaced or thirty minutes old.
+Whoever can read the access log in that window can set that account's
+password. To keep the reset token, Microsoft's code and the
+state out of the log, replace that block with:
 
 ```caddyfile
 log {
@@ -485,11 +491,15 @@ log {
 		request>uri query {
 			replace code REDACTED
 			replace state REDACTED
+			replace token REDACTED
 		}
 		wrap json
 	}
 }
 ```
+
+The filter matches the parameter's name on every path, so another `token`
+in a query string is redacted too.
 
 and recreate Caddy
 (`VERSION=<tag> docker compose -f deploy/docker-compose.yml up -d --no-deps --force-recreate caddy`).
