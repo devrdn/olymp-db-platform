@@ -1954,8 +1954,17 @@ it, with the number of questions waiting beside it while the contest runs.
     sends them to `/password`. From then on the account signs in through the
     provider, or with a password its owner sets by a reset link, or, for a
     staff account, which never gets one, a password an administrator issues.
-    Deleting an account deletes its identities. Another provider is another
-    adapter, with no change to federation.
+    Deleting an account deletes its identities, and nothing else unlinks
+    one. A known risk, accepted by the owner: a provider's verified mark
+    is what it checked once, so if the installation gives an address to
+    another person, a previous holder whose address is still verified at
+    GitHub or in a personal Microsoft or Google account is linked into
+    the new holder's account at a first sign-in through that provider.
+    The issuer guard above protects only the other direction. A sign-in
+    through the installation's own directory is not affected; the
+    mitigation is not reusing addresses, and an administrator can block
+    an account so linked. Another provider is another adapter, with no
+    change to federation.
 
     **Staff and the home directory.** A staff account is entered or linked
     through a provider only when the adapter says the provider, at this

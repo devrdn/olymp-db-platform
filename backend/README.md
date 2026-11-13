@@ -296,6 +296,16 @@ password. Each other way in is the installation's choice:
   account without one. A one-time password an administrator issues after the
   link is kept: the next sign-in through the provider lands on the change
   form, as a password sign-in does.
+- **A reused address is an accepted risk.** A provider's "verified" is what
+  it once checked, not who holds the address today. If the installation
+  gives an address to another person, a previous holder whose address is
+  still verified at GitHub, or in a personal Microsoft or Google account,
+  can be linked into the new holder's account on their first sign-in
+  through that provider, and then enters it. A sign-in through the
+  installation's own directory is not affected, and a staff account is
+  never linked this way. Do not give an address to somebody new; there is
+  no way to unlink an identity, so if it has happened, an administrator
+  blocks the account.
 - **What the audit trail records.** A password sign-up is `user.create` with
   no actor; a first provider sign-in that made an account is
   `user.external_sign_up`, one linked to an existing account
