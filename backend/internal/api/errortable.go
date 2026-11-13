@@ -344,8 +344,9 @@ var recoveryErrors = errorTable{
 }
 
 // externalSignInRedirects answers what a sign-in through a provider meets:
-// federation.Errors(), connector.Errors(), microsoft.Errors() and the account
-// refusals (walked by TestEveryExternalSignInErrorHasItsRedirect). The browser
+// federation.Errors(), federation.PassedThrough(), connector.Errors(),
+// microsoft.Errors() and auth's refusal (walked by
+// TestEveryExternalSignInErrorHasItsRedirect). The browser
 // is sent to the sign-in page with the code, since the callback is a
 // navigation. An outage is logged as an error, a refusal as a warning.
 var externalSignInRedirects = []struct {
@@ -360,6 +361,10 @@ var externalSignInRedirects = []struct {
 	{err: users.ErrAccountBlocked, code: codeAccountBlocked},
 	{err: users.ErrAccountDeleted, code: codeAccountBlocked},
 	{err: auth.ErrAccountBlocked, code: codeAccountBlocked},
+	{err: users.ErrNotFound, code: codeExternalSignInFailed},
+	{err: users.ErrEmailTaken, code: codeExternalSignInFailed},
+	{err: users.ErrLoginTaken, code: codeExternalSignInFailed},
+	{err: users.ErrInvalidAccount, code: codeExternalSignInFailed},
 	{err: federation.ErrInvalidClaims, code: codeExternalSignInFailed},
 	// Refused on every try, so the person is sent to an administrator, not
 	// back to the button.

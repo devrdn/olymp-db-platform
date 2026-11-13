@@ -77,9 +77,9 @@ func NewService(cfg Config) *Service {
 // linked to; else, when the email is trusted, the live account holding it,
 // linked now and its email marked verified; else a new student account,
 // carrying the email only when it is trusted. It refuses ErrInvalidClaims
-// before any lookup, ErrStaffAccount, ErrIdentityConflict, users.ErrAccountBlocked,
-// users.ErrAccountDeleted, and ErrSignupClosed where an account would have to
-// be created.
+// before any lookup, ErrStaffAccount, ErrIdentityConflict, ErrSignupClosed
+// where an account would have to be created, and the users sentinels in
+// PassedThrough.
 func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
 	c = c.cleaned()
 	identity, err := c.identity()

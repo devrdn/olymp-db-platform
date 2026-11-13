@@ -750,6 +750,10 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		connector.ErrStateExpired:      failed,
 		users.ErrAccountBlocked:        {code: "account_blocked"},
 		users.ErrAccountDeleted:        {code: "account_blocked"},
+		users.ErrNotFound:              failed,
+		users.ErrEmailTaken:            failed,
+		users.ErrLoginTaken:            failed,
+		users.ErrInvalidAccount:        failed,
 		auth.ErrAccountBlocked:         {code: "account_blocked"},
 		errSignInSwitchedOff:           {code: "external_signin_unavailable"},
 	}
@@ -759,8 +763,8 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		declared[info.Code] = true
 	}
 
-	reached := append(append(append(federation.Errors(), connector.Errors()...), microsoft.Errors()...),
-		users.ErrAccountBlocked, users.ErrAccountDeleted, auth.ErrAccountBlocked, errSignInSwitchedOff)
+	reached := append(append(append(append(federation.Errors(), federation.PassedThrough()...), connector.Errors()...), microsoft.Errors()...),
+		auth.ErrAccountBlocked, errSignInSwitchedOff)
 	for _, err := range reached {
 		t.Run(err.Error(), func(t *testing.T) {
 			expected, known := want[err]
@@ -783,12 +787,9 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		})
 	}
 
-	// What federation passes through from users after its retries, and
-	// anything else, is a failed sign-in an operator hears about, never a
-	// raw error.
-	for _, err := range []error{users.ErrEmailTaken, users.ErrLoginTaken, users.ErrNotFound, errors.New("the database is down")} {
-		if code, outage, listed := externalSignInCode(err); code.String() != "external_signin_failed" || !outage || listed {
-			t.Errorf("%q: redirected with %q (outage %v, listed %v), want external_signin_failed, an outage, unlisted", err, code, outage, listed)
-		}
+	// Anything else is a failed sign-in an operator hears about, never a raw
+	// error.
+	if code, outage, listed := externalSignInCode(errors.New("the database is down")); code.String() != "external_signin_failed" || !outage || listed {
+		t.Errorf("an unlisted error: redirected with %q (outage %v, listed %v), want external_signin_failed, an outage, unlisted", code, outage, listed)
 	}
 }

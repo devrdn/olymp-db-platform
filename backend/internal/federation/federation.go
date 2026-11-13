@@ -52,10 +52,20 @@ var (
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
-// users.ErrAccountBlocked and users.ErrAccountDeleted pass through and belong
-// to users.
 func Errors() []error {
 	return []error{ErrStaffAccount, ErrSignupClosed, ErrInvalidClaims, ErrIdentityConflict}
+}
+
+// PassedThrough lists the users sentinels Resolve hands over unchanged, so the
+// caller answers each one.
+func PassedThrough() []error {
+	return []error{
+		users.ErrAccountBlocked, users.ErrAccountDeleted,
+		// The account moved again after the one retry, or no login was free.
+		users.ErrNotFound, users.ErrEmailTaken, users.ErrLoginTaken,
+		// The claims passed here but not the account's own rules.
+		users.ErrInvalidAccount,
+	}
 }
 
 // Claims is what the provider's adapter verified about the person.

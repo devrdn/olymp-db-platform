@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -149,6 +150,8 @@ type stubConnector struct {
 	authorize string
 	claims    federation.Claims
 	exchanges int
+	// fail, when set, is the exchange's error.
+	fail func() error
 }
 
 func (s *stubConnector) AuthCodeURL(st connector.State) string {
@@ -157,6 +160,9 @@ func (s *stubConnector) AuthCodeURL(st connector.State) string {
 
 func (s *stubConnector) Exchange(context.Context, string, connector.State) (federation.Claims, error) {
 	s.exchanges++
+	if s.fail != nil {
+		return federation.Claims{}, s.fail()
+	}
 	return s.claims, nil
 }
 
@@ -712,6 +718,43 @@ func TestTheCallbackSignsInAsTheProvidersMethod(t *testing.T) {
 	sessionOf(t, rec)
 	if got := f.trail.loginMethod(); got != users.ProviderGoogle {
 		t.Errorf("auth.login method = %v, want %q", got, users.ProviderGoogle)
+	}
+}
+
+// A browser that leaves while the sign-in waits on the provider or the
+// database cancels the request: nothing is wrong with the installation.
+func TestAClientThatLeftIsNotLoggedAsAnOutage(t *testing.T) {
+	for name, tc := range map[string]struct {
+		leave  bool
+		outage bool
+	}{
+		"the client left":          {leave: true, outage: false},
+		"the client is still here": {leave: false, outage: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stub := &stubConnector{authorize: "https://accounts.example.test/authorize", fail: func() error {
+				if tc.leave {
+					cancel()
+				}
+				return fmt.Errorf("read the account: %w", context.Canceled)
+			}}
+			f := newExternalFixture(t, externalOptions{createAccounts: true, extra: []api.SignInProvider{stubProvider(users.ProviderGoogle, stub)}})
+			start := f.get("192.0.2.1", "/auth/google/start")
+			location, _ := url.Parse(start.Header().Get("Location"))
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/auth/google/callback?code=c&state="+location.Query().Get("state"), nil)
+			req.AddCookie(cookieNamed(t, start, "dbcontest_google_state"))
+			req.RemoteAddr = "192.0.2.1:4000"
+			rec := httptest.NewRecorder()
+
+			f.router.ServeHTTP(rec, req)
+
+			assertLocation(t, rec, "/login?error=external_signin_failed")
+			if got := f.logs.loggedError("a sign-in failed"); got != tc.outage {
+				t.Errorf("logged as an outage: %v, want %v", got, tc.outage)
+			}
+		})
 	}
 }
 
