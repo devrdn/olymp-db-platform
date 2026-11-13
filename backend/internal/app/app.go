@@ -82,10 +82,6 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 	})
 }
 
-// microsoftCallbackPath is where Microsoft sends the browser back, below
-// PUBLIC_URL; the application registration names the same address.
-const microsoftCallbackPath = "/api/v1/auth/microsoft/callback"
-
 // warnSignupWithoutMail says at start-up that SELF_SIGNUP_ENABLED is on
 // while mail is off: no code can reach anyone, so password sign-up does not
 // exist and only a first Microsoft sign-in creates accounts, which nothing
@@ -105,23 +101,51 @@ func selfServiceMail(limiter *auth.Limiter, log *slog.Logger) (signups, recoveri
 		mailing.NewBudget("recovery", mailing.Limits{PerMinute: recovery.MailsPerMinute, PerDay: recovery.MailsPerDay}, limiter, log)
 }
 
-// newMicrosoftClient builds the Microsoft connector, or nil when no client is
-// configured.
-func newMicrosoftClient(cfg config.Config) (*microsoft.Client, error) {
-	if !cfg.MicrosoftEnabled() {
-		return nil, nil
+// signInProviders lists the sign-in providers in the order they are offered,
+// each with a connector only when it is configured. A connector is assigned
+// from a non-nil client only, so a missing one stays a nil interface.
+func signInProviders(cfg config.Config) ([]api.SignInProvider, error) {
+	secret := cfg.DeviceCookieSecret
+	microsoftProvider := api.SignInProvider{
+		ID:        users.ProviderMicrosoft,
+		States:    connector.NewStateSealer(secret, users.ProviderMicrosoft, nil),
+		Variables: []string{"MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"},
 	}
-	client, err := microsoft.New(microsoft.Config{
-		ClientID:     cfg.MicrosoftClientID,
-		ClientSecret: cfg.MicrosoftClientSecret,
-		Tenant:       cfg.MicrosoftTenant,
-		HomeTenant:   cfg.MicrosoftHomeTenantID,
-		RedirectURL:  cfg.PublicURL + microsoftCallbackPath,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("sign-in with Microsoft: %w", err)
+	if cfg.MicrosoftEnabled() {
+		client, err := microsoft.New(microsoft.Config{
+			ClientID:     cfg.MicrosoftClientID,
+			ClientSecret: cfg.MicrosoftClientSecret,
+			Tenant:       cfg.MicrosoftTenant,
+			HomeTenant:   cfg.MicrosoftHomeTenantID,
+			RedirectURL:  cfg.PublicURL + api.CallbackPath(users.ProviderMicrosoft),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("sign-in with Microsoft: %w", err)
+		}
+		microsoftProvider.Connector = client
 	}
-	return client, nil
+	return []api.SignInProvider{
+		microsoftProvider,
+		{
+			ID: users.ProviderGoogle, States: connector.NewStateSealer(secret, users.ProviderGoogle, nil),
+			Variables: []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"},
+		},
+		{
+			ID: users.ProviderGitHub, States: connector.NewStateSealer(secret, users.ProviderGitHub, nil),
+			Variables: []string{"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"},
+		},
+	}, nil
+}
+
+// configuredProviderIDs are the providers that have a connector, in order.
+func configuredProviderIDs(providers []api.SignInProvider) []string {
+	ids := []string{}
+	for _, p := range providers {
+		if p.Connector != nil {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
 }
 
 // mailStore is the outbox table, as the outbox and its dispatcher use it.
@@ -662,16 +686,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	a.workers = append(a.workers, worker{name: "password-reset-requests", stop: recoveries.Stop})
 	modules = append(modules, api.NewRecoveryHandler(recoveries, limiter, log))
 
-	// Sign-in with Microsoft mounts its routes only with a client; it creates
-	// accounts only while SELF_SIGNUP_ENABLED is on.
-	microsoftClient, err := newMicrosoftClient(cfg)
+	// Each provider mounts its routes only with a connector; a first sign-in
+	// creates accounts only while SELF_SIGNUP_ENABLED is on.
+	providers, err := signInProviders(cfg)
 	if err != nil {
 		a.close()
 		return nil, err
 	}
-	modules = append(modules, api.NewMicrosoftHandler(api.MicrosoftSignIn{
-		Client: microsoftClient,
-		States: connector.NewStateSealer(cfg.DeviceCookieSecret, users.ProviderMicrosoft, nil),
+	modules = append(modules, api.NewExternalSignInHandler(api.ExternalSignIn{
+		Providers: providers,
 		Accounts: federation.NewService(federation.Config{
 			Policy:        federation.Policy{CreateAccounts: cfg.SelfSignupEnabled},
 			Store:         userRepo,
@@ -680,7 +703,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		}),
 		Auth: authService, Limiter: limiter, Middleware: authMiddleware, Cookies: cookies, Log: log,
 	}))
-	modules = append(modules, api.NewAuthMethodsHandler(signups, recoveries, microsoftClient != nil, cfg.TrustedEmailDomain))
+	modules = append(modules, api.NewAuthMethodsHandler(api.AuthMethods{
+		Signups: signups, Recoveries: recoveries,
+		Providers: configuredProviderIDs(providers), TrustedEmailDomain: cfg.TrustedEmailDomain,
+	}))
 
 	// Covers are not optional: an unwritable directory fails startup, and the
 	// same write probe answers /readyz, since a volume can turn read-only

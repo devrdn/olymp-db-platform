@@ -2,10 +2,12 @@ package api
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
 // offerer is a way in that may be switched off (signup.Service,
@@ -22,20 +24,39 @@ type AuthMethodsHandler struct {
 }
 
 type authMethodsResponse struct {
-	PasswordSignup     bool   `json:"password_signup"`
-	PasswordReset      bool   `json:"password_reset"`
-	Microsoft          bool   `json:"microsoft"`
-	TrustedEmailDomain string `json:"trusted_email_domain"`
+	PasswordSignup bool `json:"password_signup"`
+	PasswordReset  bool `json:"password_reset"`
+	// Microsoft is kept for interfaces that predate Providers.
+	Microsoft          bool           `json:"microsoft"`
+	Providers          []providerInfo `json:"providers"`
+	TrustedEmailDomain string         `json:"trusted_email_domain"`
+}
+
+type providerInfo struct {
+	ID string `json:"id"`
+}
+
+// AuthMethods is what the methods handler is built from. Providers are the
+// configured provider ids, in the order they are offered.
+type AuthMethods struct {
+	Signups, Recoveries offerer
+	Providers           []string
+	TrustedEmailDomain  string
 }
 
 // NewAuthMethodsHandler reads the answers once: each is decided at start-up,
 // as the routes it describes are.
-func NewAuthMethodsHandler(signups, recoveries offerer, microsoft bool, trustedEmailDomain string) *AuthMethodsHandler {
+func NewAuthMethodsHandler(cfg AuthMethods) *AuthMethodsHandler {
+	listed := make([]providerInfo, 0, len(cfg.Providers))
+	for _, id := range cfg.Providers {
+		listed = append(listed, providerInfo{ID: id})
+	}
 	return &AuthMethodsHandler{body: authMethodsResponse{
-		PasswordSignup:     signups.Offered(),
-		PasswordReset:      recoveries.Offered(),
-		Microsoft:          microsoft,
-		TrustedEmailDomain: trustedEmailDomain,
+		PasswordSignup:     cfg.Signups.Offered(),
+		PasswordReset:      cfg.Recoveries.Offered(),
+		Microsoft:          slices.Contains(cfg.Providers, users.ProviderMicrosoft),
+		Providers:          listed,
+		TrustedEmailDomain: cfg.TrustedEmailDomain,
 	}}
 }
 

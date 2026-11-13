@@ -92,7 +92,8 @@ type StateSealer struct {
 }
 
 // NewStateSealer keys the sealer with HMAC-SHA256(secret, provider+"-state");
-// secret is DEVICE_COOKIE_SECRET. now nil is time.Now.
+// secret is DEVICE_COOKIE_SECRET and provider a users.Provider* id, a constant
+// chosen by the caller. now nil is time.Now.
 func NewStateSealer(secret []byte, provider string, now func() time.Time) *StateSealer {
 	if now == nil {
 		now = time.Now

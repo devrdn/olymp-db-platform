@@ -35,23 +35,25 @@ const (
 	msObjectID    = "abababab-cdcd-4efe-8a0a-121212121212"
 )
 
-var msStateCookieName = auth.NewCookieWriter(false).MicrosoftStateName()
+var msStateCookieName = auth.NewCookieWriter(false).StateName(users.ProviderMicrosoft)
 
-type microsoftFixture struct {
+type externalFixture struct {
 	provider *microsofttest.Provider
 	repo     *userstest.Repository
 	sessions *auth.SessionStore
 	auth     *auth.Service
 	logs     *logBuffer
+	trail    *loginTrail
 	router   http.Handler
 }
 
-type microsoftOptions struct {
+type externalOptions struct {
 	createAccounts bool
 	noClient       bool
+	extra          []api.SignInProvider
 }
 
-func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture {
+func newExternalFixture(t *testing.T, opts externalOptions) *externalFixture {
 	t.Helper()
 	p := microsofttest.NewProvider(t)
 	repo := userstest.New()
@@ -64,9 +66,10 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 	log := logging.New("warn", logs)
 	sessions := auth.NewSessionStore(c, time.Hour)
 	limiter := auth.NewLimiter(c)
+	trail := &loginTrail{}
 	authService := auth.NewService(auth.ServiceConfig{
 		Users: repo, Sessions: sessions,
-		Audit: audit.New(&apiSink{}), Limiter: limiter, Logger: log,
+		Audit: audit.New(trail), Limiter: limiter, Logger: log,
 		Passwords: passwordtest.NewHasher(),
 		Devices:   devices(t),
 	})
@@ -92,17 +95,72 @@ func newMicrosoftFixture(t *testing.T, opts microsoftOptions) *microsoftFixture 
 		}
 	}
 
+	providers := []api.SignInProvider{{
+		ID: users.ProviderMicrosoft, States: externalStates(users.ProviderMicrosoft),
+		Variables: []string{"MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"},
+	}}
+	if client != nil {
+		providers[0].Connector = client
+	}
+	providers = append(providers, opts.extra...)
+
 	router := chi.NewRouter()
-	api.NewMicrosoftHandler(api.MicrosoftSignIn{
-		Client: client,
-		States: connector.NewStateSealer([]byte(strings.Repeat("k", 32)), users.ProviderMicrosoft, nil),
+	api.NewExternalSignInHandler(api.ExternalSignIn{
+		Providers: providers,
 		Accounts: federation.NewService(federation.Config{
 			Policy: federation.Policy{CreateAccounts: opts.createAccounts},
 			Store:  repo, Accounts: service, PendingLogins: noPendingLogins{},
 		}),
 		Auth: authService, Limiter: limiter, Middleware: mw, Cookies: cookies, Log: log,
 	}).Mount(router)
-	return &microsoftFixture{provider: p, repo: repo, sessions: sessions, auth: authService, logs: logs, router: router}
+	return &externalFixture{provider: p, repo: repo, sessions: sessions, auth: authService, logs: logs, trail: trail, router: router}
+}
+
+func externalStates(provider string) *connector.StateSealer {
+	return connector.NewStateSealer([]byte(strings.Repeat("k", 32)), provider, nil)
+}
+
+// stubConnector is a provider that sends the browser to a fixed address and
+// answers every exchange with the claims it holds.
+type stubConnector struct {
+	authorize string
+	claims    federation.Claims
+	exchanges int
+}
+
+func (s *stubConnector) AuthCodeURL(st connector.State) string {
+	return s.authorize + "?state=" + st.State
+}
+
+func (s *stubConnector) Exchange(context.Context, string, connector.State) (federation.Claims, error) {
+	s.exchanges++
+	return s.claims, nil
+}
+
+func stubProvider(id string, c *stubConnector) api.SignInProvider {
+	return api.SignInProvider{ID: id, Connector: c, States: externalStates(id)}
+}
+
+// loginTrail keeps the audit entries of the sign-ins it sees.
+type loginTrail struct{ entries []audit.Entry }
+
+func (l *loginTrail) Append(_ context.Context, e audit.Entry) error {
+	l.entries = append(l.entries, e)
+	return nil
+}
+
+func (l *loginTrail) AppendMany(_ context.Context, entries []audit.Entry) error {
+	l.entries = append(l.entries, entries...)
+	return nil
+}
+
+func (l *loginTrail) loginMethod() any {
+	for _, e := range l.entries {
+		if e.Action == "auth.login" {
+			return e.Payload["method"]
+		}
+	}
+	return nil
 }
 
 type noPendingLogins struct{}
@@ -111,7 +169,7 @@ func (noPendingLogins) LoginHeld(context.Context, string, string, time.Time) (bo
 	return false, nil
 }
 
-func (f *microsoftFixture) get(from, target string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+func (f *externalFixture) get(from, target string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	for _, c := range cookies {
 		req.AddCookie(c)
@@ -129,7 +187,7 @@ type started struct {
 	query  url.Values
 }
 
-func (f *microsoftFixture) start(t *testing.T, from, returnPath string) started {
+func (f *externalFixture) start(t *testing.T, from, returnPath string) started {
 	t.Helper()
 	rec := f.get(from, "/auth/microsoft/start?return="+url.QueryEscape(returnPath))
 	if rec.Code != http.StatusFound {
@@ -155,18 +213,18 @@ func cookieNamed(t *testing.T, rec *httptest.ResponseRecorder, name string) *htt
 
 // signIn has Microsoft send the browser back with a code for a token of
 // claims carrying this sign-in's nonce.
-func (f *microsoftFixture) signIn(t *testing.T, from string, s started, claims map[string]any) *httptest.ResponseRecorder {
+func (f *externalFixture) signIn(t *testing.T, from string, s started, claims map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 	claims["nonce"] = s.query.Get("nonce")
 	f.provider.Issue("code-"+s.query.Get("state"), f.provider.Sign(t, claims), s.query.Get("code_challenge"))
 	return f.callback(from, "code=code-"+s.query.Get("state")+"&state="+s.query.Get("state"), s.cookie)
 }
 
-func (f *microsoftFixture) callback(from, query string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+func (f *externalFixture) callback(from, query string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	return f.get(from, "/auth/microsoft/callback?"+query, cookies...)
 }
 
-func (f *microsoftFixture) claims(tid string) map[string]any {
+func (f *externalFixture) claims(tid string) map[string]any {
 	claims := f.provider.Claims(msClientID, tid, msObjectID, "")
 	claims["email"] = "ana@example.edu"
 	return claims
@@ -182,8 +240,13 @@ func assertLandsOnSignIn(t *testing.T, rec *httptest.ResponseRecorder, code stri
 
 func assertStateCleared(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
+	assertStateNamedCleared(t, rec, msStateCookieName)
+}
+
+func assertStateNamedCleared(t *testing.T, rec *httptest.ResponseRecorder, name string) {
+	t.Helper()
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == msStateCookieName {
+		if c.Name == name {
 			if c.MaxAge >= 0 || c.Value != "" {
 				t.Errorf("state cookie %+v, want it cleared", c)
 			}
@@ -199,7 +262,7 @@ func sessionOf(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func TestTheStartSendsTheBrowserToMicrosoftWithASignedState(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{})
+	f := newExternalFixture(t, externalOptions{})
 
 	rec := f.get("192.0.2.1", "/auth/microsoft/start?return=/contests/42")
 
@@ -230,7 +293,7 @@ func TestTheStartSendsTheBrowserToMicrosoftWithASignedState(t *testing.T) {
 }
 
 func TestTheCallbackSignsInAVerifiedToken(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/contests/42?tab=mine")
 
 	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
@@ -260,7 +323,7 @@ func TestTheCallbackSignsInAVerifiedToken(t *testing.T) {
 }
 
 func TestAForeignTenantClaimingAnAccountsAddressNeverEntersIt(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
 	s := f.start(t, "192.0.2.1", "/")
 
@@ -285,7 +348,7 @@ func TestAForeignTenantClaimingAnAccountsAddressNeverEntersIt(t *testing.T) {
 }
 
 func TestAHomeTenantMemberSignsIntoAStaffAccount(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	org := f.repo.Add(users.User{Login: "org", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
 	s := f.start(t, "192.0.2.1", "/contests/42")
 
@@ -303,7 +366,7 @@ func TestAHomeTenantMemberSignsIntoAStaffAccount(t *testing.T) {
 // A tenant that merely owns the address's domain is not the installation's
 // directory, so it never enters staff.
 func TestAForeignTenantNeverEntersAStaffAccount(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	f.repo.Add(users.User{Login: "org", FullName: "Org", Email: "ana@example.edu", Roles: []string{"organizer"}})
 	s := f.start(t, "192.0.2.1", "/")
 	claims := f.claims(msOtherTenant)
@@ -320,7 +383,7 @@ func TestAForeignTenantNeverEntersAStaffAccount(t *testing.T) {
 }
 
 func TestTheCallbackRefusesAStateItDidNotIssue(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")
 	other := connector.NewStateSealer([]byte(strings.Repeat("o", 32)), users.ProviderMicrosoft, nil)
 	forged := &http.Cookie{Name: msStateCookieName, Value: other.Seal(connector.State{
@@ -348,7 +411,7 @@ func TestTheCallbackRefusesAStateItDidNotIssue(t *testing.T) {
 // A code Microsoft issued to another sign-in (its PKCE challenge) cannot be
 // redeemed from this browser, even with this browser's nonce in the token.
 func TestACodeIssuedToAnotherSignInCannotBeRedeemed(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	victim := f.start(t, "192.0.2.1", "/")
 	attacker := f.start(t, "192.0.2.1", "/")
 	claims := f.claims(msHomeTenant)
@@ -366,7 +429,7 @@ func TestACodeIssuedToAnotherSignInCannotBeRedeemed(t *testing.T) {
 // An outage of Microsoft's keys is the installation's to hear about, not a
 // forged token.
 func TestAKeyOutageIsLoggedAsAnError(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	f.provider.FailKeys(http.StatusServiceUnavailable)
 	s := f.start(t, "192.0.2.1", "/")
 
@@ -381,7 +444,7 @@ func TestAKeyOutageIsLoggedAsAnError(t *testing.T) {
 // An account linked to another identity at the same issuer will be refused
 // on every try, so the page must not say to try again.
 func TestASecondIdentityForALinkedAccountLandsOnTheConflictCode(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
 	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
 		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: f.provider.Issuer(msHomeTenant), Subject: "an-earlier-object-id",
@@ -396,7 +459,7 @@ func TestASecondIdentityForALinkedAccountLandsOnTheConflictCode(t *testing.T) {
 }
 
 func TestARefusedTokenLandsOnTheSignInPage(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")
 	claims := f.claims(msHomeTenant)
 	claims["aud"] = "66666666-7777-4888-9999-aaaaaaaaaaaa"
@@ -423,7 +486,7 @@ func TestARefusedAccountLandsOnItsCode(t *testing.T) {
 		{"closed", false, nil, "external_signin_closed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newMicrosoftFixture(t, microsoftOptions{createAccounts: tc.create})
+			f := newExternalFixture(t, externalOptions{createAccounts: tc.create})
 			if tc.account != nil {
 				f.repo.Add(*tc.account)
 			}
@@ -446,7 +509,7 @@ func TestARefusedAccountLandsOnItsCode(t *testing.T) {
 func TestAnOffSiteOrMissingReturnPathLandsOnTheSignInPage(t *testing.T) {
 	for name, returnPath := range map[string]string{"off-site": "//evil.example/steal", "missing": ""} {
 		t.Run(name, func(t *testing.T) {
-			f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+			f := newExternalFixture(t, externalOptions{createAccounts: true})
 			s := f.start(t, "192.0.2.1", returnPath)
 
 			rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
@@ -462,7 +525,7 @@ func TestAnOffSiteOrMissingReturnPathLandsOnTheSignInPage(t *testing.T) {
 // one-time password; it must not stand between them and every screen.
 func TestASignInToAnAccountOnItsOneTimePasswordDropsIt(t *testing.T) {
 	const issued = "issued one-time password"
-	f := newMicrosoftFixture(t, microsoftOptions{})
+	f := newExternalFixture(t, externalOptions{})
 	ana := f.repo.Add(users.User{
 		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
 		PasswordHash: passwordtest.Hash(t, issued), MustChangePassword: true,
@@ -493,7 +556,7 @@ func TestASignInToAnAccountOnItsOneTimePasswordDropsIt(t *testing.T) {
 // A one-time password issued after the link was handed to the person on
 // purpose: the sign-in keeps it and sends them to change it.
 func TestAnAccountThatMustChangeItsPasswordLandsOnThePasswordScreen(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{})
+	f := newExternalFixture(t, externalOptions{})
 	ana := f.repo.Add(users.User{
 		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
 		PasswordHash: passwordtest.Hash(t, "issued again"), MustChangePassword: true,
@@ -513,11 +576,11 @@ func TestAnAccountThatMustChangeItsPasswordLandsOnThePasswordScreen(t *testing.T
 }
 
 func TestTheCallbackSpendsTheAddressBudgetBeforeTheExchange(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{createAccounts: true})
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")
 
 	// Refused callbacks spend the budget as well.
-	for i := 0; i < api.MicrosoftSignInsPerAddress; i++ {
+	for i := 0; i < api.ExternalSignInsPerAddress; i++ {
 		f.callback("192.0.2.9", "code=x&state=y")
 	}
 	rec := f.signIn(t, "192.0.2.9", s, f.claims(msHomeTenant))
@@ -534,8 +597,8 @@ func TestTheCallbackSpendsTheAddressBudgetBeforeTheExchange(t *testing.T) {
 }
 
 func TestTheStartSpendsTheAddressBudget(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{})
-	for i := 0; i < api.MicrosoftSignInsPerAddress; i++ {
+	f := newExternalFixture(t, externalOptions{})
+	for i := 0; i < api.ExternalSignInsPerAddress; i++ {
 		f.get("192.0.2.9", "/auth/microsoft/start")
 	}
 
@@ -552,11 +615,84 @@ func TestTheStartSpendsTheAddressBudget(t *testing.T) {
 }
 
 func TestMicrosoftRoutesDoNotExistWithoutAClient(t *testing.T) {
-	f := newMicrosoftFixture(t, microsoftOptions{noClient: true})
+	f := newExternalFixture(t, externalOptions{noClient: true})
 
 	for _, path := range []string{"/auth/microsoft/start", "/auth/microsoft/callback?code=x&state=y"} {
 		if rec := f.get("192.0.2.1", path); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d without a client, want 404", path, rec.Code)
 		}
+	}
+}
+
+func TestMicrosoftKeepsItsRoutes(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{})
+
+	start := f.get("192.0.2.1", "/auth/microsoft/start")
+	if location := start.Header().Get("Location"); start.Code != http.StatusFound || !strings.HasPrefix(location, f.provider.URL+"/common/oauth2/v2.0/authorize") {
+		t.Errorf("start = %d to %q, want 302 to the fake's authorize endpoint", start.Code, location)
+	}
+	if rec := f.get("192.0.2.1", "/auth/microsoft/callback"); rec.Code == http.StatusNotFound {
+		t.Error("/auth/microsoft/callback is not mounted")
+	}
+}
+
+func TestEachConfiguredProviderHasItsOwnRoutes(t *testing.T) {
+	stub := &stubConnector{authorize: "https://accounts.example.test/authorize"}
+	f := newExternalFixture(t, externalOptions{extra: []api.SignInProvider{
+		stubProvider(users.ProviderGoogle, stub),
+		{ID: users.ProviderGitHub, States: externalStates(users.ProviderGitHub)},
+	}})
+
+	rec := f.get("192.0.2.1", "/auth/google/start")
+	if location := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.HasPrefix(location, stub.authorize) {
+		t.Errorf("google start = %d to %q, want 302 to the stub", rec.Code, location)
+	}
+	cookieNamed(t, rec, "dbcontest_google_state")
+	for _, path := range []string{"/auth/github/start", "/auth/github/callback"} {
+		if rec := f.get("192.0.2.1", path); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d without a connector, want 404", path, rec.Code)
+		}
+	}
+}
+
+func TestTheCallbackSignsInAsTheProvidersMethod(t *testing.T) {
+	stub := &stubConnector{authorize: "https://accounts.example.test/authorize", claims: federation.Claims{
+		Provider: users.ProviderGoogle, Issuer: "https://accounts.google.com", Subject: "1234567890",
+		Email: "ana@example.edu", EmailTrusted: true, Name: "Ana",
+	}}
+	f := newExternalFixture(t, externalOptions{createAccounts: true, extra: []api.SignInProvider{stubProvider(users.ProviderGoogle, stub)}})
+
+	start := f.get("192.0.2.1", "/auth/google/start")
+	location, _ := url.Parse(start.Header().Get("Location"))
+	rec := f.get("192.0.2.1", "/auth/google/callback?code=c&state="+location.Query().Get("state"), cookieNamed(t, start, "dbcontest_google_state"))
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("callback = %d to %q, want 302 to the default return path", rec.Code, rec.Header().Get("Location"))
+	}
+	sessionOf(t, rec)
+	if got := f.trail.loginMethod(); got != users.ProviderGoogle {
+		t.Errorf("auth.login method = %v, want %q", got, users.ProviderGoogle)
+	}
+}
+
+func TestAStateSealedForOneProviderIsRefusedByAnother(t *testing.T) {
+	stub := &stubConnector{authorize: "https://accounts.example.test/authorize"}
+	f := newExternalFixture(t, externalOptions{createAccounts: true, extra: []api.SignInProvider{stubProvider(users.ProviderGoogle, stub)}})
+	s := f.start(t, "192.0.2.1", "/")
+	borrowed := &http.Cookie{Name: "dbcontest_google_state", Value: s.cookie.Value}
+
+	rec := f.get("192.0.2.1", "/auth/google/callback?code=c&state="+s.query.Get("state"), borrowed)
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login?error=external_signin_failed" {
+		t.Errorf("answered %d to %q, want 302 to /login?error=external_signin_failed", rec.Code, rec.Header().Get("Location"))
+	}
+	assertStateNamedCleared(t, rec, "dbcontest_google_state")
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionName {
+			t.Error("a session was opened")
+		}
+	}
+	if stub.exchanges != 0 {
+		t.Errorf("Exchange called %d times, want none", stub.exchanges)
 	}
 }
