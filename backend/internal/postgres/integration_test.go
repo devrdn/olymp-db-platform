@@ -53,7 +53,7 @@ func newJourney(t *testing.T) journey {
 	return journey{
 		repo:         repo,
 		limiter:      auth.NewLimiter(c),
-		accounts:     users.NewService(repo, recorder, uow, hasher).WithExternalIdentities(repo),
+		accounts:     users.NewService(repo, recorder, uow, hasher).WithExternalIdentities(repo).WithResetLinks(NewPasswordResets(testPool)),
 		installation: settings.NewService(NewSettings(testPool), NewSettingsImages(testPool), recorder, uow),
 		hasher:       hasher,
 		outbox:       mailing.NewOutbox(NewMailOutbox(testPool)),
@@ -241,6 +241,39 @@ func TestAMicrosoftSignInOnTheRealSchemaLinksTheRosterAccountAndDropsItsOneTimeP
 		})
 		if _, err := signIn.Login(ctx, auth.LoginCommand{Login: "journey-microsoft", Password: oneTimePassword, IP: "192.0.2.1"}); !errors.Is(err, auth.ErrInvalidCredentials) {
 			t.Errorf("a password sign-in with the dropped password = %v, want ErrInvalidCredentials", err)
+		}
+	})
+}
+
+// A reset an administrator issues, perhaps because the mailbox is no longer
+// the owner's, voids the link that mailbox holds.
+func TestAnAdministratorsResetOnTheRealSchemaVoidsTheMailedLink(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		j := newJourney(t)
+		recoveries := recovery.NewService(recovery.Config{
+			Store: NewPasswordResets(testPool), Directory: j.repo, Accounts: j.accounts, Hasher: j.hasher,
+			Outbox: j.outbox, Texts: mailing.NewTexts(journeyPublicURL), Settings: j.installation,
+			MailBudget: j.mailBudget("recovery", recovery.MailsPerMinute, recovery.MailsPerDay),
+			UnitOfWork: j.uow, Log: logging.New("error", io.Discard), PublicURL: journeyPublicURL,
+		})
+		const email = "journey.voided@example.edu"
+		ana := oneTimeStudent(t, ctx, j, "journey-voided", email)
+		admin := makeUser(t, ctx, "journey-voided-admin")
+		if err := recoveries.Request(ctx, email, ""); err != nil {
+			t.Fatalf("Request() = %v", err)
+		}
+		_, body := lastMailTo(t, ctx, email)
+		token := regexp.MustCompile(regexp.QuoteMeta(recovery.ResetPath) + `([A-Za-z0-9_-]+)`).FindStringSubmatch(body)
+		if token == nil {
+			t.Fatalf("no link in:\n%s", body)
+		}
+
+		if _, err := j.accounts.ResetPassword(ctx, admin.ID, ana.ID, users.Delivery{}); err != nil {
+			t.Fatalf("ResetPassword() = %v", err)
+		}
+
+		if err := recoveries.Complete(ctx, token[1], "a new long enough password"); !errors.Is(err, recovery.ErrInvalidLink) {
+			t.Errorf("Complete() after the reset = %v, want ErrInvalidLink", err)
 		}
 	})
 }

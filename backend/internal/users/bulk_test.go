@@ -681,3 +681,14 @@ func TestBulkResetPasswordWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
 		t.Errorf("issued %d passwords, want 1", len(res.Issued))
 	}
 }
+
+func TestBulkResetPasswordVoidsPendingResetLinks(t *testing.T) {
+	f, links := newResetLinksFixture(t)
+	first, second := f.addUser(t, "first", "a password"), f.addUser(t, "second", "a password")
+
+	if _, err := f.service.BulkResetPassword(t.Context(), f.actor, []uuid.UUID{first.ID, second.ID}, users.Delivery{}); err != nil {
+		t.Fatalf("BulkResetPassword() = %v", err)
+	}
+
+	assertLinksForgotten(t, links, first.ID, second.ID)
+}

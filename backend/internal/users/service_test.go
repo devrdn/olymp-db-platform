@@ -2085,3 +2085,86 @@ func TestDeleteForgetsTheAccountsExternalIdentitiesButBlockDoesNot(t *testing.T)
 		t.Errorf("Delete forgot identities of %v, want %v", identities.deleted, gone.ID)
 	}
 }
+
+// inTransaction marks the context a markingUnitOfWork hands its work.
+type inTransaction struct{}
+
+// markingUnitOfWork runs the work with a context that says it is inside the
+// transaction, so a write can be shown to join it.
+type markingUnitOfWork struct{}
+
+func (markingUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
+	return fn(context.WithValue(ctx, inTransaction{}, true))
+}
+
+// resetLinks records the accounts whose reset links were forgotten, and
+// whether inside the transaction.
+type resetLinks struct {
+	forgotten []uuid.UUID
+	outside   bool
+}
+
+func (r *resetLinks) DeleteFor(ctx context.Context, ids []uuid.UUID) error {
+	if ctx.Value(inTransaction{}) == nil {
+		r.outside = true
+	}
+	r.forgotten = append(r.forgotten, ids...)
+	return nil
+}
+
+// newResetLinksFixture is a service that forgets reset links, in a unit of
+// work that marks its context.
+func newResetLinksFixture(t *testing.T) (*fixture, *resetLinks) {
+	t.Helper()
+	f := newFixture(t)
+	links := &resetLinks{}
+	f.service = users.NewService(f.repo, audit.New(f.sink), markingUnitOfWork{}, passwordtest.NewHasher()).WithResetLinks(links)
+	return f, links
+}
+
+func assertLinksForgotten(t *testing.T, links *resetLinks, want ...uuid.UUID) {
+	t.Helper()
+	if links.outside {
+		t.Error("the reset links were forgotten outside the transaction")
+	}
+	if !slices.Equal(links.forgotten, want) {
+		t.Errorf("forgot the links of %v, want %v", links.forgotten, want)
+	}
+}
+
+// A reset issued because a mailbox is compromised must close the link the
+// mailbox still holds.
+func TestAnAdministratorsResetVoidsAPendingResetLink(t *testing.T) {
+	f, links := newResetLinksFixture(t)
+	ana := f.addUser(t, "ana", "the old password")
+
+	if _, err := f.service.ResetPassword(t.Context(), f.actor, ana.ID, users.Delivery{}); err != nil {
+		t.Fatalf("ResetPassword() = %v", err)
+	}
+
+	assertLinksForgotten(t, links, ana.ID)
+}
+
+func TestChangingThePasswordVoidsAPendingResetLink(t *testing.T) {
+	f, links := newResetLinksFixture(t)
+	ana := f.addUser(t, "ana", "the old password")
+
+	if err := f.service.ChangePassword(t.Context(), users.ChangePasswordCommand{
+		UserID: ana.ID, OldPassword: "the old password", NewPassword: "a brand new password",
+	}); err != nil {
+		t.Fatalf("ChangePassword() = %v", err)
+	}
+
+	assertLinksForgotten(t, links, ana.ID)
+}
+
+func TestARefusedPasswordChangeKeepsTheResetLink(t *testing.T) {
+	f, links := newResetLinksFixture(t)
+	ana := f.addUser(t, "ana", "the old password")
+
+	_ = f.service.ChangePassword(t.Context(), users.ChangePasswordCommand{
+		UserID: ana.ID, OldPassword: "not the old password", NewPassword: "a brand new password",
+	})
+
+	assertLinksForgotten(t, links)
+}

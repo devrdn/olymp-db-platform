@@ -399,7 +399,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	installation := settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool))
 	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool), passwords).
 		WithMail(users.Mail{Outbox: outbox, Texts: texts, Settings: installation}).
-		WithExternalIdentities(userRepo)
+		WithExternalIdentities(userRepo).
+		WithResetLinks(postgres.NewPasswordResets(pool))
 	if accounts != nil {
 		// Guarded: a nil *AccountCache in an interface is not a nil interface.
 		userService.WithAccessCache(accounts)
