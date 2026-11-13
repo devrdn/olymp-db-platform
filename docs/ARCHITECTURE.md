@@ -1937,7 +1937,11 @@ it, with the number of questions waiting beside it while the contest runs.
     somebody new. An address that is not vouched for is kept only on the
     identity, never on the account, and never links; one that is not a
     bounded address is dropped instead, so it never stops the sign-in, while
-    a vouched-for one refuses it. Linking any account that still holds the
+    a vouched-for one refuses it. An address with a character outside ASCII
+    is dropped, vouched for or not: Unicode case folding, PostgreSQL's
+    `lower()` included, takes the Kelvin sign for `k`, so it could find
+    another person's account, and an account's address must equal the
+    identity's in ASCII for a link. Linking any account that still holds the
     one-time password staff issued (a student's, or a staff account linked
     through the home directory) drops that password (the hash becomes NULL
     and the flag clears) and ends the account's older sessions, in the same

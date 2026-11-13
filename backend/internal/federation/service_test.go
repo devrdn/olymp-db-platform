@@ -556,6 +556,36 @@ func TestAnUntrustedInvalidEmailIsDropped(t *testing.T) {
 	}
 }
 
+// U+212A KELVIN SIGN folds to k, in Go and in PostgreSQL's lower(), so a
+// vouched-for spelling with it would otherwise find kate@'s account.
+func TestANonASCIIEmailNeitherFindsNorLandsOnAnAccount(t *testing.T) {
+	for _, trust := range []bool{true, false} {
+		t.Run(fmt.Sprintf("trusted %v", trust), func(t *testing.T) {
+			f := newFixture(t)
+			kate := f.repo.Add(users.User{Login: "kate", FullName: "Kate", Email: "kate@example.edu", Roles: []string{users.RoleStudent}})
+			c := claims("sub-kelvin")
+			c.Email, c.EmailTrusted = "\u212Aate@example.edu", trust
+
+			got, err := f.service().Resolve(t.Context(), c)
+			if err != nil {
+				t.Fatalf("Resolve() = %v, want a new account", err)
+			}
+			if got.ID == kate.ID {
+				t.Fatal("entered kate's account through a non-ASCII spelling of her address")
+			}
+			if f.store.byEmail != 0 {
+				t.Errorf("looked an account up by the address %d times, want never", f.store.byEmail)
+			}
+			if stored, _ := f.repo.Get(got.ID); stored.Email != "" {
+				t.Errorf("new account's email = %q, want none", stored.Email)
+			}
+			if linked := f.repo.Identities(got.ID); len(linked) != 1 || linked[0].Email != "" {
+				t.Errorf("identities = %+v, want one without the address", linked)
+			}
+		})
+	}
+}
+
 func TestATrustedInvalidEmailIsRefused(t *testing.T) {
 	for name, email := range map[string]string{
 		"too long":       strings.Repeat("x", federation.MaxEmailLength) + "@example.edu",

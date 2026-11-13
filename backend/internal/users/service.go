@@ -445,7 +445,7 @@ func (s *Service) LinkExternal(ctx context.Context, cmd LinkExternalCommand) (Us
 		if err := s.refuseExternalEntry(ctx, u, cmd.HomeDirectory); err != nil {
 			return err
 		}
-		if identity.Email == "" || !strings.EqualFold(u.Email, identity.Email) {
+		if !sameASCIIAddress(u.Email, identity.Email) {
 			return fmt.Errorf("%w: the account no longer holds the address", ErrNotFound)
 		}
 		other, err := s.identities.HoldsOtherIdentityAt(ctx, userID, identity.Provider, identity.Issuer, identity.Subject)
@@ -825,6 +825,13 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 	}
 	s.forget(ctx, userID)
 	return nil
+}
+
+// sameASCIIAddress reports whether a and b are one non-empty ASCII address
+// in any letter case. Unicode folding would take U+212A KELVIN SIGN for k.
+func sameASCIIAddress(a, b string) bool {
+	nonASCII := func(r rune) bool { return r > unicode.MaxASCII }
+	return a != "" && !strings.ContainsFunc(a, nonASCII) && !strings.ContainsFunc(b, nonASCII) && strings.EqualFold(a, b)
 }
 
 // entry builds an audit entry for an action on an account, for both single
