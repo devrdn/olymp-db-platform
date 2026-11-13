@@ -81,12 +81,23 @@ describe("the button's keyboard focus", () => {
     "app/(participant)/contests/[contestId]/play/schema-panel.tsx",
     "app/(admin)/contests/[contestId]/game/game-upload.tsx",
     "app/(admin)/contests/[contestId]/game/game-builder-table.tsx",
-    "components/product/code-editor.tsx",
     "app/(participant)/contests/[contestId]/play/result-panel.tsx",
-  ])("%s carries no bare outline-none", (file) => {
+    "components/product/code-editor.tsx",
+  ])("%s switches no outline off", (file) => {
+    const source = readFileSync(path.resolve(__dirname, "../..", file), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+    expect(source).not.toMatch(/(^|[\s"'`:])(focus(-visible)?:)?outline-(none|0|hidden)(?![\w-])/);
+  });
+
+  test.each([
+    "app/(participant)/contests/[contestId]/play/result-panel.tsx",
+    "components/product/code-editor.tsx",
+  ])("%s draws its ring inside, where a scroller cannot clip it", (file) => {
     const source = readFileSync(path.resolve(__dirname, "../..", file), "utf8");
 
-    expect(source).not.toMatch(/(^|[\s"'`])outline-none/);
+    expect(source).toContain("focus-visible:-outline-offset-2");
   });
 });
 

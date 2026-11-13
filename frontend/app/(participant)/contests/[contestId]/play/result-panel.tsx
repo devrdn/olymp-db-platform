@@ -574,7 +574,7 @@ function ResultTable({
         </colgroup>
         {/* Opaque, or the rows would show through the sticky head. */}
         <thead className="sticky top-0 z-1 bg-bg">
-          <tr aria-rowindex={1} className="border-b border-edge focus-visible:-outline-offset-2">
+          <tr aria-rowindex={1} className="border-b border-edge">
             {columns.map((column, i) => (
               <th
                 key={`${column}-${i}`}
@@ -617,7 +617,7 @@ function ResultTable({
               // rather than wrap.
               style={{ height: `${ROW_REM}rem` }}
               className={cn(
-                "border-b border-edge",
+                "border-b border-edge focus-visible:-outline-offset-2",
                 selection.selected === index
                   ? "bg-accent-wash"
                   : "hover:bg-sunk focus-visible:bg-sunk",

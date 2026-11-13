@@ -75,8 +75,10 @@ export function AppBar({
         {children ? (
           <>
             <span aria-hidden className="h-4.5 w-px shrink-0 bg-line-2 max-narrow:hidden" />
-            {/* Padded because a scroller clips the focus ring (2px + 2px offset) at its edges. At phone width the destinations take a row of their own below the
-               mark and controls, scrolling sideways rather than overlapping them. */}
+            {/* At phone width the destinations take a row of their own below the mark
+               and controls, scrolling sideways rather than overlapping them. The
+               padding keeps the scroller from clipping the focus ring (2px plus a
+               2px offset) at its edges. */}
             <div
               data-slot="app-bar-nav"
               className="flex min-w-0 flex-1 items-center gap-3.5 max-narrow:order-last max-narrow:basis-full max-narrow:-mx-1 max-narrow:overflow-x-auto max-narrow:p-1"
