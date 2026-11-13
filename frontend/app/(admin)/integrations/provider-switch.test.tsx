@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe("ProviderSwitch", () => {
   test("an enabled provider offers to switch off and submits the opposite", async () => {
-    render(<ProviderSwitch provider="microsoft" enabled labelledBy="integration-microsoft" dict={en} />);
+    render(<ProviderSwitch provider="microsoft" enabled describedBy="integration-microsoft" dict={en} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.settings.integrations.switchOff }));
 
@@ -34,7 +34,7 @@ describe("ProviderSwitch", () => {
   });
 
   test("a disabled provider offers to switch on and submits the opposite", async () => {
-    render(<ProviderSwitch provider="google" enabled={false} labelledBy="integration-google" dict={en} />);
+    render(<ProviderSwitch provider="google" enabled={false} describedBy="integration-google" dict={en} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.settings.integrations.switchOn }));
 
@@ -44,9 +44,20 @@ describe("ProviderSwitch", () => {
     expect(data.get("enabled")).toBe("true");
   });
 
+  test("the button is described by its provider's heading, so a list of buttons tells them apart", () => {
+    render(
+      <>
+        <h2 id="integration-github">GitHub</h2>
+        <ProviderSwitch provider="github" enabled describedBy="integration-github" dict={en} />
+      </>,
+    );
+
+    expect(screen.getByRole("button", { name: en.settings.integrations.switchOff })).toHaveAccessibleDescription("GitHub");
+  });
+
   test("says why it failed, in the dictionary's words", async () => {
     switchProviderAction.mockResolvedValueOnce({ code: "not_found" });
-    render(<ProviderSwitch provider="google" enabled labelledBy="integration-google" dict={en} />);
+    render(<ProviderSwitch provider="google" enabled describedBy="integration-google" dict={en} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.settings.integrations.switchOff }));
 
