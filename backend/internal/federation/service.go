@@ -27,10 +27,9 @@ type Store interface {
 // Accounts creates and links accounts (users.Service). Both refuse an
 // identity another request linked first with users.ErrExternalIdentityTaken,
 // leaving nothing behind. LinkExternal re-reads the account under a lock and
-// refuses users.ErrStaffNotLinkable unless the command carries HomeDirectory,
-// the blocked and deleted sentinels, users.ErrNotFound when the account no
-// longer holds the identity's email, and users.ErrIssuerAlreadyLinked when it
-// holds another identity at the issuer.
+// refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels,
+// users.ErrNotFound when the account no longer holds the identity's email, and
+// users.ErrIssuerAlreadyLinked when it holds another identity at the issuer.
 // LinkExternal drops a one-time password and returns the account as it then
 // stands, whose session generation a sign-in must use.
 type Accounts interface {
@@ -130,10 +129,10 @@ func (s *Service) resolve(ctx context.Context, c Claims, identity users.External
 
 // refuse says why the account cannot be entered through a provider, if it
 // cannot. A blocked or deleted account is refused whatever the provider says.
-// A staff account is entered only when the adapter says, for this sign-in,
-// that the provider vouches for the person as a member of the installation's
-// own directory; users.Service.LinkExternal checks the same again under the
-// lock.
+// A staff account is entered through a provider only when the adapter sets
+// HomeDirectory for this sign-in: the provider says the person is a member of
+// the installation's own directory. users.Service.LinkExternal checks the same
+// again under the lock.
 func (s *Service) refuse(ctx context.Context, u users.User, homeDirectory bool) error {
 	switch {
 	case u.Status == users.StatusDeleted:
