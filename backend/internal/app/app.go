@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/covers"
 	"github.com/devrdn/db-contest/backend/internal/federation"
@@ -670,7 +671,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	modules = append(modules, api.NewMicrosoftHandler(api.MicrosoftSignIn{
 		Client: microsoftClient,
-		States: microsoft.NewStateSealer(cfg.DeviceCookieSecret, nil),
+		States: connector.NewStateSealer(cfg.DeviceCookieSecret, users.ProviderMicrosoft, nil),
 		Accounts: federation.NewService(federation.Config{
 			Policy:        federation.Policy{CreateAccounts: cfg.SelfSignupEnabled},
 			Store:         userRepo,

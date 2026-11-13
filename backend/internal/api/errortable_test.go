@@ -13,6 +13,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/clarifications"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
@@ -740,13 +741,13 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		federation.ErrSignupClosed:     {code: "external_signin_closed"},
 		federation.ErrInvalidClaims:    failed,
 		federation.ErrIdentityConflict: conflict,
-		microsoft.ErrSignInRefused:     failed,
-		microsoft.ErrExchangeFailed:    failed,
-		microsoft.ErrKeysUnavailable:   {code: "external_signin_failed", outage: true},
-		microsoft.ErrInvalidToken:      failed,
+		connector.ErrSignInRefused:     failed,
+		connector.ErrExchangeFailed:    failed,
+		connector.ErrKeysUnavailable:   {code: "external_signin_failed", outage: true},
+		connector.ErrInvalidToken:      failed,
 		microsoft.ErrTenantNotAllowed:  conflict,
-		microsoft.ErrStateInvalid:      failed,
-		microsoft.ErrStateExpired:      failed,
+		connector.ErrStateInvalid:      failed,
+		connector.ErrStateExpired:      failed,
 		users.ErrAccountBlocked:        {code: "account_blocked"},
 		users.ErrAccountDeleted:        {code: "account_blocked"},
 		auth.ErrAccountBlocked:         {code: "account_blocked"},
@@ -757,7 +758,7 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		declared[info.Code] = true
 	}
 
-	reached := append(append(federation.Errors(), microsoft.Errors()...),
+	reached := append(append(append(federation.Errors(), connector.Errors()...), microsoft.Errors()...),
 		users.ErrAccountBlocked, users.ErrAccountDeleted, auth.ErrAccountBlocked)
 	for _, err := range reached {
 		t.Run(err.Error(), func(t *testing.T) {

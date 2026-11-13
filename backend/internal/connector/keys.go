@@ -1,4 +1,4 @@
-package microsoft
+package connector
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // Fetches of the signing keys. A token under a key ID the set does not hold
 // triggers a fetch, as key rotation requires, but no sooner than
 // KeyRefreshInterval after a fetch that brought keys, so unknown key IDs
-// cannot turn callbacks into requests to Microsoft; after a failed one the
+// cannot turn callbacks into requests to the provider; after a failed one the
 // next is allowed after KeyFetchBackoff, so an outage is not prolonged.
 const (
 	KeyRefreshInterval = time.Minute
@@ -27,11 +27,11 @@ var (
 	errNoUsableKey = errors.New("the key set holds no usable signing key")
 )
 
-// keySet is Microsoft's signing keys for one authority, fetched on the
+// KeySet is a provider's signing keys for one authority, fetched on the
 // first token and again for a key ID it does not hold. Exchange calls
 // Prepare, which may fetch; VerifySignature (oidc.KeySet) reads only what is
 // held, since go-oidc would flatten a fetch failure into an invalid token.
-type keySet struct {
+type KeySet struct {
 	url    string
 	client *http.Client
 	now    func() time.Time
@@ -46,14 +46,14 @@ type keySet struct {
 	lastErr   error
 }
 
-func newKeySet(url string, client *http.Client, now func() time.Time) *keySet {
+func NewKeySet(url string, client *http.Client, now func() time.Time) *KeySet {
 	if now == nil {
 		now = time.Now
 	}
-	return &keySet{url: url, client: client, now: now}
+	return &KeySet{url: url, client: client, now: now}
 }
 
-func (s *keySet) held() []jose.JSONWebKey {
+func (s *KeySet) held() []jose.JSONWebKey {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.keys
@@ -63,7 +63,7 @@ func (s *keySet) held() []jose.JSONWebKey {
 // and a fetch is allowed. It returns ErrKeysUnavailable when the keys could
 // not be fetched, now or at the last try within the backoff; a token it
 // cannot parse is left to VerifySignature to refuse.
-func (s *keySet) Prepare(ctx context.Context, raw string) error {
+func (s *KeySet) Prepare(ctx context.Context, raw string) error {
 	jws, err := parse(raw)
 	if err != nil {
 		return nil
@@ -105,7 +105,7 @@ func (s *keySet) Prepare(ctx context.Context, raw string) error {
 
 // VerifySignature returns the payload of raw, signed RS256 by a held key
 // under its key ID.
-func (s *keySet) VerifySignature(_ context.Context, raw string) ([]byte, error) {
+func (s *KeySet) VerifySignature(_ context.Context, raw string) ([]byte, error) {
 	jws, err := parse(raw)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func parse(raw string) (*jose.JSONWebSignature, error) {
 	return jws, nil
 }
 
-func (s *keySet) fetch(ctx context.Context) ([]jose.JSONWebKey, error) {
+func (s *KeySet) fetch(ctx context.Context) ([]jose.JSONWebKey, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (s *keySet) fetch(ctx context.Context) ([]jose.JSONWebKey, error) {
 		return nil, err
 	}
 	// A key this package cannot read is skipped rather than failing the set,
-	// so one new key type at Microsoft does not stop every sign-in.
+	// so one new key type at the provider does not stop every sign-in.
 	var keys []jose.JSONWebKey
 	for _, raw := range set.Keys {
 		var key jose.JSONWebKey
@@ -168,7 +168,7 @@ func holds(keys []jose.JSONWebKey, kid string) bool {
 	return false
 }
 
-// verifyWith tries the keys published under kid; Microsoft names the key of
+// verifyWith tries the keys published under kid; the provider names the key of
 // every token, so a token without one matches none.
 func verifyWith(jws *jose.JSONWebSignature, keys []jose.JSONWebKey, kid string) ([]byte, bool) {
 	if kid == "" {

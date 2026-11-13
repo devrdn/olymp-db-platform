@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
@@ -125,7 +125,7 @@ func TestTheMicrosoftClientIsBuiltOnlyWhenConfigured(t *testing.T) {
 	if err != nil || on == nil {
 		t.Fatalf("newMicrosoftClient() = %v, %v", on, err)
 	}
-	authorize, err := url.Parse(on.AuthCodeURL(microsoft.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
+	authorize, err := url.Parse(on.AuthCodeURL(connector.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)}))
 	if err != nil {
 		t.Fatal(err)
 	}

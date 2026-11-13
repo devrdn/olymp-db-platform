@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/microsoft/microsofttest"
@@ -64,13 +65,13 @@ func exchange(t *testing.T, c *microsoft.Client, p *microsofttest.Provider, clai
 func exchangeToken(t *testing.T, c *microsoft.Client, p *microsofttest.Provider, idToken string) (federation.Claims, error) {
 	t.Helper()
 	p.Issue("the-code", idToken, microsofttest.Challenge(strings.Repeat("v", 43)))
-	return c.Exchange(t.Context(), "the-code", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+	return c.Exchange(t.Context(), "the-code", connector.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
 }
 
 func TestTheAuthorizeURLNamesTheTenantAndAsksWithPKCE(t *testing.T) {
 	p := microsofttest.NewProvider(t)
 	c := newClient(t, p, func(cfg *microsoft.Config) { cfg.Tenant = microsoft.TenantOrganizations })
-	st := microsoft.State{State: "the-state", Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)}
+	st := connector.State{State: "the-state", Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)}
 
 	raw := c.AuthCodeURL(st)
 
@@ -101,7 +102,7 @@ func TestTheAuthorizeURLNamesTheTenantAndAsksWithPKCE(t *testing.T) {
 func TestStartingUpContactsNobody(t *testing.T) {
 	p := microsofttest.NewProvider(t)
 	c := newClient(t, p, nil)
-	_ = c.AuthCodeURL(microsoft.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)})
+	_ = c.AuthCodeURL(connector.State{State: "s", Nonce: "n", Verifier: strings.Repeat("v", 43)})
 
 	if n := p.Requests(); n != 0 {
 		t.Errorf("the provider was asked %d times before any callback, want none, so its outage cannot stop the boot", n)
@@ -160,7 +161,7 @@ func TestTheCallbackRefusesAnIssuerThatDoesNotMatchItsTenant(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
 			claims["iss"] = iss
-			if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+			if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
 				t.Errorf("Exchange() = %v, want ErrInvalidToken", err)
 			}
 		})
@@ -173,7 +174,7 @@ func TestATenantThatIsNotAnIdentifierIsRefused(t *testing.T) {
 
 	for _, tid := range []string{"", "common", "../" + homeTenant, strings.ToUpper(homeTenant)} {
 		claims := p.Claims(clientID, tid, objectID, "the-nonce")
-		if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+		if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
 			t.Errorf("tid %q: Exchange() = %v, want ErrInvalidToken", tid, err)
 		}
 	}
@@ -183,7 +184,7 @@ func TestTheCallbackRefusesAnotherAudience(t *testing.T) {
 	p := microsofttest.NewProvider(t)
 	c := newClient(t, p, nil)
 
-	if _, err := exchange(t, c, p, p.Claims(otherClient, homeTenant, objectID, "the-nonce")); !errors.Is(err, microsoft.ErrInvalidToken) {
+	if _, err := exchange(t, c, p, p.Claims(otherClient, homeTenant, objectID, "the-nonce")); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() of a token for another application = %v, want ErrInvalidToken", err)
 	}
 }
@@ -193,7 +194,7 @@ func TestTheCallbackRefusesABadSignature(t *testing.T) {
 	c := newClient(t, p, nil)
 	claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
 
-	if _, err := exchangeToken(t, c, p, p.SignWithUnpublishedKey(t, claims)); !errors.Is(err, microsoft.ErrInvalidToken) {
+	if _, err := exchangeToken(t, c, p, p.SignWithUnpublishedKey(t, claims)); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() of a forged token = %v, want ErrInvalidToken", err)
 	}
 
@@ -201,7 +202,7 @@ func TestTheCallbackRefusesABadSignature(t *testing.T) {
 	parts := strings.Split(p.Sign(t, claims), ".")
 	claims["oid"] = "cdcdcdcd-abab-4efe-8a0a-343434343434"
 	parts[1] = strings.Split(p.Sign(t, claims), ".")[1]
-	if _, err := exchangeToken(t, c, p, strings.Join(parts, ".")); !errors.Is(err, microsoft.ErrInvalidToken) {
+	if _, err := exchangeToken(t, c, p, strings.Join(parts, ".")); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() of a rewritten token = %v, want ErrInvalidToken", err)
 	}
 }
@@ -211,7 +212,7 @@ func TestTheCallbackRefusesAWrongNonce(t *testing.T) {
 	c := newClient(t, p, nil)
 
 	for _, nonce := range []string{"another-nonce", ""} {
-		if _, err := exchange(t, c, p, p.Claims(clientID, homeTenant, objectID, nonce)); !errors.Is(err, microsoft.ErrInvalidToken) {
+		if _, err := exchange(t, c, p, p.Claims(clientID, homeTenant, objectID, nonce)); !errors.Is(err, connector.ErrInvalidToken) {
 			t.Errorf("nonce %q: Exchange() = %v, want ErrInvalidToken", nonce, err)
 		}
 	}
@@ -223,7 +224,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
 	claims["exp"] = time.Now().Add(-time.Minute).Unix()
 
-	if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+	if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() of an expired token = %v, want ErrInvalidToken", err)
 	}
 }
@@ -247,14 +248,14 @@ func TestARefusedCodeIsAFailedExchange(t *testing.T) {
 	p := microsofttest.NewProvider(t)
 	c := newClient(t, p, nil)
 
-	_, err := c.Exchange(t.Context(), "a-code-never-issued", microsoft.State{Nonce: "n", Verifier: strings.Repeat("v", 43)})
-	if !errors.Is(err, microsoft.ErrExchangeFailed) {
+	_, err := c.Exchange(t.Context(), "a-code-never-issued", connector.State{Nonce: "n", Verifier: strings.Repeat("v", 43)})
+	if !errors.Is(err, connector.ErrExchangeFailed) {
 		t.Errorf("Exchange() of an unknown code = %v, want ErrExchangeFailed", err)
 	}
 
 	p.Answer("no-id-token", []byte(`{"access_token":"a","token_type":"Bearer","expires_in":3600}`))
-	_, err = c.Exchange(t.Context(), "no-id-token", microsoft.State{Nonce: "n", Verifier: strings.Repeat("v", 43)})
-	if !errors.Is(err, microsoft.ErrExchangeFailed) {
+	_, err = c.Exchange(t.Context(), "no-id-token", connector.State{Nonce: "n", Verifier: strings.Repeat("v", 43)})
+	if !errors.Is(err, connector.ErrExchangeFailed) {
 		t.Errorf("Exchange() answered without an ID token = %v, want ErrExchangeFailed", err)
 	}
 }
@@ -274,8 +275,8 @@ func TestAnOversizedTokenResponseIsRefusedAsItArrives(t *testing.T) {
 	}
 	p.Answer("large", body)
 
-	_, err = c.Exchange(t.Context(), "large", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
-	if !errors.Is(err, microsoft.ErrExchangeFailed) {
+	_, err = c.Exchange(t.Context(), "large", connector.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+	if !errors.Is(err, connector.ErrExchangeFailed) {
 		t.Errorf("Exchange() of a 300 KiB answer = %v, want ErrExchangeFailed", err)
 	}
 }
@@ -290,14 +291,8 @@ func TestAnUnreachableProviderIsAFailedExchange(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if _, err := c.Exchange(ctx, "code", microsoft.State{Nonce: "n", Verifier: strings.Repeat("v", 43)}); !errors.Is(err, microsoft.ErrExchangeFailed) {
+	if _, err := c.Exchange(ctx, "code", connector.State{Nonce: "n", Verifier: strings.Repeat("v", 43)}); !errors.Is(err, connector.ErrExchangeFailed) {
 		t.Errorf("Exchange() = %v, want ErrExchangeFailed", err)
-	}
-}
-
-func TestTheHTTPClientHasATimeout(t *testing.T) {
-	if got := microsoft.NewHTTPClient().Timeout; got <= 0 || got > 15*time.Second {
-		t.Errorf("timeout = %s, want a few seconds", got)
 	}
 }
 
@@ -530,8 +525,8 @@ func TestTheExchangeSendsTheVerifierTheChallengeWasMadeFrom(t *testing.T) {
 	c := newClient(t, p, nil)
 	p.Issue("the-code", p.Sign(t, p.Claims(clientID, homeTenant, objectID, "the-nonce")), microsofttest.Challenge(strings.Repeat("w", 43)))
 
-	_, err := c.Exchange(t.Context(), "the-code", microsoft.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
-	if !errors.Is(err, microsoft.ErrExchangeFailed) {
+	_, err := c.Exchange(t.Context(), "the-code", connector.State{Nonce: "the-nonce", Verifier: strings.Repeat("v", 43)})
+	if !errors.Is(err, connector.ErrExchangeFailed) {
 		t.Errorf("Exchange() with another sign-in's verifier = %v, want ErrExchangeFailed", err)
 	}
 }
@@ -593,7 +588,7 @@ func TestAnIdentityProviderOutOfBoundsIsRefused(t *testing.T) {
 	for _, idp := range []string{strings.Repeat("a", 256), "live.com\n", "live\x00.com"} {
 		claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
 		claims["idp"] = idp
-		if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+		if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
 			t.Errorf("idp %.20q: Exchange() = %v, want ErrInvalidToken", idp, err)
 		}
 	}
@@ -642,7 +637,7 @@ func TestAnAccountTypeOutOfBoundsIsRefused(t *testing.T) {
 	claims := p.Claims(clientID, homeTenant, objectID, "the-nonce")
 	claims["acct"] = strings.Repeat("1", 100)
 
-	if _, err := exchange(t, c, p, claims); !errors.Is(err, microsoft.ErrInvalidToken) {
+	if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
 		t.Errorf("Exchange() with a 100-byte acct = %v, want ErrInvalidToken", err)
 	}
 }

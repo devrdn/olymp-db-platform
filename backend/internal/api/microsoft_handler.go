@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 	"github.com/devrdn/db-contest/backend/internal/federation"
 	"github.com/devrdn/db-contest/backend/internal/microsoft"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -32,7 +33,7 @@ const maxAuthorizationCodeLength = 8 << 10
 // means the connector is not configured.
 type MicrosoftSignIn struct {
 	Client     *microsoft.Client
-	States     *microsoft.StateSealer
+	States     *connector.StateSealer
 	Accounts   *federation.Service
 	Auth       *auth.Service
 	Limiter    *auth.Limiter
@@ -70,12 +71,12 @@ func (h *MicrosoftHandler) start(w http.ResponseWriter, r *http.Request) {
 	if !h.admit(w, r, "microsoft_start:ip:"+addressKey(r)) {
 		return
 	}
-	st, err := microsoft.NewState(r.URL.Query().Get("return"))
+	st, err := connector.NewState(r.URL.Query().Get("return"))
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	h.cfg.Cookies.SetMicrosoftState(w, h.cfg.States.Seal(st), microsoft.StateLifetime)
+	h.cfg.Cookies.SetMicrosoftState(w, h.cfg.States.Seal(st), connector.StateLifetime)
 	redirect(w, h.cfg.Client.AuthCodeURL(st))
 }
 
@@ -89,7 +90,7 @@ func (h *MicrosoftHandler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	if refusal := query.Get("error"); refusal != "" {
-		h.fail(w, r, fmt.Errorf("%w: Microsoft answered %.64q", microsoft.ErrSignInRefused, refusal))
+		h.fail(w, r, fmt.Errorf("%w: Microsoft answered %.64q", connector.ErrSignInRefused, refusal))
 		return
 	}
 	st, err := h.state(r, query.Get("state"))
@@ -99,7 +100,7 @@ func (h *MicrosoftHandler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := query.Get("code")
 	if code == "" || len(code) > maxAuthorizationCodeLength {
-		h.fail(w, r, fmt.Errorf("%w: the callback carries no usable code", microsoft.ErrSignInRefused))
+		h.fail(w, r, fmt.Errorf("%w: the callback carries no usable code", connector.ErrSignInRefused))
 		return
 	}
 
@@ -141,17 +142,17 @@ const passwordChangePage = "/password"
 
 // state opens the one state cookie and checks that Microsoft sent back the
 // state it holds, so a callback this browser did not start is refused.
-func (h *MicrosoftHandler) state(r *http.Request, returned string) (microsoft.State, error) {
+func (h *MicrosoftHandler) state(r *http.Request, returned string) (connector.State, error) {
 	cookies := r.CookiesNamed(h.cfg.Cookies.MicrosoftStateName())
 	if len(cookies) != 1 {
-		return microsoft.State{}, fmt.Errorf("%w: the browser holds %d state cookies", microsoft.ErrStateInvalid, len(cookies))
+		return connector.State{}, fmt.Errorf("%w: the browser holds %d state cookies", connector.ErrStateInvalid, len(cookies))
 	}
 	st, err := h.cfg.States.Open(cookies[0].Value)
 	if err != nil {
-		return microsoft.State{}, err
+		return connector.State{}, err
 	}
 	if subtle.ConstantTimeCompare([]byte(returned), []byte(st.State)) != 1 {
-		return microsoft.State{}, fmt.Errorf("%w: the callback's state is not the cookie's", microsoft.ErrStateInvalid)
+		return connector.State{}, fmt.Errorf("%w: the callback's state is not the cookie's", connector.ErrStateInvalid)
 	}
 	return st, nil
 }

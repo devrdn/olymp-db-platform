@@ -1,4 +1,4 @@
-package microsoft_test
+package connector_test
 
 import (
 	"crypto/hmac"
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/microsoft"
+	"github.com/devrdn/db-contest/backend/internal/connector"
 )
 
 var (
@@ -17,16 +17,16 @@ var (
 	started = time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
 )
 
-func sealer(at *time.Time) *microsoft.StateSealer {
-	return microsoft.NewStateSealer(secret, func() time.Time { return *at })
+func sealer(at *time.Time) *connector.StateSealer {
+	return connector.NewStateSealer(secret, "microsoft", func() time.Time { return *at })
 }
 
 func TestANewStateIsFreshEachTime(t *testing.T) {
-	a, err := microsoft.NewState("/contests")
+	a, err := connector.NewState("/contests")
 	if err != nil {
 		t.Fatalf("NewState() = %v", err)
 	}
-	b, _ := microsoft.NewState("/contests")
+	b, _ := connector.NewState("/contests")
 	if a.State == b.State || a.Nonce == b.Nonce || a.Verifier == b.Verifier {
 		t.Errorf("two states share a value: %+v and %+v", a, b)
 	}
@@ -44,7 +44,7 @@ func TestANewStateIsFreshEachTime(t *testing.T) {
 func TestTheStateCookieIsSignedAndExpires(t *testing.T) {
 	now := started
 	s := sealer(&now)
-	st, err := microsoft.NewState("/contests/42?tab=standings")
+	st, err := connector.NewState("/contests/42?tab=standings")
 	if err != nil {
 		t.Fatalf("NewState() = %v", err)
 	}
@@ -61,16 +61,16 @@ func TestTheStateCookieIsSignedAndExpires(t *testing.T) {
 		t.Error("the cookie carries the secret")
 	}
 
-	now = started.Add(microsoft.StateLifetime)
+	now = started.Add(connector.StateLifetime)
 	if _, err := s.Open(sealed); err != nil {
 		t.Errorf("Open() at exactly ten minutes = %v, want it still valid", err)
 	}
-	now = started.Add(microsoft.StateLifetime + time.Second)
-	if _, err := s.Open(sealed); !errors.Is(err, microsoft.ErrStateExpired) {
+	now = started.Add(connector.StateLifetime + time.Second)
+	if _, err := s.Open(sealed); !errors.Is(err, connector.ErrStateExpired) {
 		t.Errorf("Open() past ten minutes = %v, want ErrStateExpired, whatever Max-Age the browser kept", err)
 	}
 	now = started.Add(-2 * time.Minute)
-	if _, err := s.Open(sealed); !errors.Is(err, microsoft.ErrStateInvalid) {
+	if _, err := s.Open(sealed); !errors.Is(err, connector.ErrStateInvalid) {
 		t.Errorf("Open() of a cookie issued in the future = %v, want ErrStateInvalid", err)
 	}
 
@@ -84,11 +84,11 @@ func TestTheStateCookieIsSignedAndExpires(t *testing.T) {
 		"two dots":         sealed + ".x",
 		"not base64":       "!!!." + mac,
 		"oversized":        strings.Repeat("a", 8<<10) + "." + mac,
-		"another secret":   microsoft.NewStateSealer([]byte(strings.Repeat("o", 32)), func() time.Time { return now }).Seal(st),
+		"another secret":   connector.NewStateSealer([]byte(strings.Repeat("o", 32)), "microsoft", func() time.Time { return now }).Seal(st),
 		"the raw secret":   payload + "." + rawSecretMAC(payload),
 		"payload not JSON": base64.RawURLEncoding.EncodeToString([]byte("plain")) + "." + derivedMAC("plain"),
 	} {
-		if _, err := s.Open(forged); !errors.Is(err, microsoft.ErrStateInvalid) {
+		if _, err := s.Open(forged); !errors.Is(err, connector.ErrStateInvalid) {
 			t.Errorf("%s: Open() = %v, want ErrStateInvalid", name, err)
 		}
 	}
@@ -111,12 +111,44 @@ func derivedMAC(plain string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-func TestTheStateKeyIsDerivedFromTheSecret(t *testing.T) {
-	now := started
-	s := sealer(&now)
-	st, _ := microsoft.NewState("/")
-	payload, mac, _ := strings.Cut(s.Seal(st), ".")
+// Anything but a path on this site returns to the sign-in page, which sends a
+// signed-in visitor on as a password sign-in would.
+func TestTheReturnPathStaysOnThisSite(t *testing.T) {
+	if connector.DefaultReturnPath != "/login" {
+		t.Errorf("DefaultReturnPath = %q, want /login", connector.DefaultReturnPath)
+	}
+	for raw, want := range map[string]string{
+		"":                       connector.DefaultReturnPath,
+		"/":                      "/",
+		"/contests/42":           "/contests/42",
+		"/contests?tab=mine#top": "/contests?tab=mine#top",
+		"//evil.example":         connector.DefaultReturnPath,
+		"///evil.example":        connector.DefaultReturnPath,
+		"/\\evil.example":        connector.DefaultReturnPath,
+		"\\\\evil.example":       connector.DefaultReturnPath,
+		"https://evil.example/":  connector.DefaultReturnPath,
+		"evil.example":           connector.DefaultReturnPath,
+		"javascript:alert(1)":    connector.DefaultReturnPath,
+		"/ok\r\nSet-Cookie: x=y": connector.DefaultReturnPath,
+		"/tab\there":             connector.DefaultReturnPath,
+		"/del\x7f":               connector.DefaultReturnPath,
+		"/a b":                   connector.DefaultReturnPath,
+		"/caf\u00e9":             connector.DefaultReturnPath,
+		"/caf%C3%A9?q=%20":       "/caf%C3%A9?q=%20",
+		"/" + strings.Repeat("a", connector.MaxReturnPathLength): connector.DefaultReturnPath,
+	} {
+		if got := connector.ReturnPath(raw); got != want {
+			t.Errorf("ReturnPath(%.40q) = %q, want %q", raw, got, want)
+		}
+	}
+}
 
+func TestTheStateKeyIsDerivedFromTheSecretAndTheProvider(t *testing.T) {
+	now := started
+	st, _ := connector.NewState("/")
+	sealed := connector.NewStateSealer(secret, "microsoft", func() time.Time { return now }).Seal(st)
+
+	payload, mac, _ := strings.Cut(sealed, ".")
 	k := hmac.New(sha256.New, secret)
 	k.Write([]byte("microsoft-state"))
 	m := hmac.New(sha256.New, k.Sum(nil))
@@ -124,36 +156,7 @@ func TestTheStateKeyIsDerivedFromTheSecret(t *testing.T) {
 	if want := base64.RawURLEncoding.EncodeToString(m.Sum(nil)); mac != want {
 		t.Error("the cookie is not signed with HMAC-SHA256(secret, \"microsoft-state\")")
 	}
-}
-
-// Anything but a path on this site returns to the sign-in page, which sends a
-// signed-in visitor on as a password sign-in would.
-func TestTheReturnPathStaysOnThisSite(t *testing.T) {
-	if microsoft.DefaultReturnPath != "/login" {
-		t.Errorf("DefaultReturnPath = %q, want /login", microsoft.DefaultReturnPath)
-	}
-	for raw, want := range map[string]string{
-		"":                       microsoft.DefaultReturnPath,
-		"/":                      "/",
-		"/contests/42":           "/contests/42",
-		"/contests?tab=mine#top": "/contests?tab=mine#top",
-		"//evil.example":         microsoft.DefaultReturnPath,
-		"///evil.example":        microsoft.DefaultReturnPath,
-		"/\\evil.example":        microsoft.DefaultReturnPath,
-		"\\\\evil.example":       microsoft.DefaultReturnPath,
-		"https://evil.example/":  microsoft.DefaultReturnPath,
-		"evil.example":           microsoft.DefaultReturnPath,
-		"javascript:alert(1)":    microsoft.DefaultReturnPath,
-		"/ok\r\nSet-Cookie: x=y": microsoft.DefaultReturnPath,
-		"/tab\there":             microsoft.DefaultReturnPath,
-		"/del\x7f":               microsoft.DefaultReturnPath,
-		"/a b":                   microsoft.DefaultReturnPath,
-		"/caf\u00e9":             microsoft.DefaultReturnPath,
-		"/caf%C3%A9?q=%20":       "/caf%C3%A9?q=%20",
-		"/" + strings.Repeat("a", microsoft.MaxReturnPathLength): microsoft.DefaultReturnPath,
-	} {
-		if got := microsoft.ReturnPath(raw); got != want {
-			t.Errorf("ReturnPath(%.40q) = %q, want %q", raw, got, want)
-		}
+	if _, err := connector.NewStateSealer(secret, "google", func() time.Time { return now }).Open(sealed); !errors.Is(err, connector.ErrStateInvalid) {
+		t.Errorf("Open() under another provider = %v, want ErrStateInvalid", err)
 	}
 }
