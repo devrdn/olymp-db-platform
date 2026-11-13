@@ -40,6 +40,7 @@ func TestAuthMethodsListsTheConfiguredProvidersInOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			router := chi.NewRouter()
 			api.NewAuthMethodsHandler(api.AuthMethods{
+				Log:     logging.New("warn", &logBuffer{}),
 				Signups: offered(tc.signup), Recoveries: offered(tc.reset),
 				Providers: tc.providers, TrustedEmailDomain: tc.domain, Switches: &fakeSwitches{},
 			}).Mount(router)
@@ -75,6 +76,24 @@ func TestAuthMethodsListsTheConfiguredProvidersInOrder(t *testing.T) {
 	}
 }
 
+// A nil switch or log would otherwise fail on the first request, or only
+// during the outage the log exists for.
+func TestStartingAuthMethodsRefusesAMissingSwitchOrLog(t *testing.T) {
+	for name, cfg := range map[string]api.AuthMethods{
+		"no switches": {Signups: offered(false), Recoveries: offered(false), Log: logging.New("warn", &logBuffer{})},
+		"no log":      {Signups: offered(false), Recoveries: offered(false), Switches: &fakeSwitches{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("NewAuthMethodsHandler did not panic")
+				}
+			}()
+			api.NewAuthMethodsHandler(cfg)
+		})
+	}
+}
+
 func getMethods(t *testing.T, router http.Handler) (int, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -89,6 +108,7 @@ func getMethods(t *testing.T, router http.Handler) (int, map[string]any) {
 func TestAuthMethodsHidesASwitchedOffProvider(t *testing.T) {
 	router := chi.NewRouter()
 	api.NewAuthMethodsHandler(api.AuthMethods{
+		Log:     logging.New("warn", &logBuffer{}),
 		Signups: offered(true), Recoveries: offered(true),
 		Providers: []string{"microsoft", "google"},
 		Switches:  &fakeSwitches{off: map[string]bool{"microsoft": true}},
@@ -109,6 +129,7 @@ func TestAuthMethodsReadsTheSwitchesAtMostOnceInFiveSeconds(t *testing.T) {
 	now := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
 	router := chi.NewRouter()
 	api.NewAuthMethodsHandler(api.AuthMethods{
+		Log:     logging.New("warn", &logBuffer{}),
 		Signups: offered(false), Recoveries: offered(false),
 		Providers: []string{"google"}, Switches: switches,
 		Now: func() time.Time { return now },
@@ -186,6 +207,7 @@ func TestConcurrentAuthMethodsRequestsShareOneRead(t *testing.T) {
 	switches := &slowSwitches{release: make(chan struct{}), entered: make(chan struct{}, 4)}
 	router := chi.NewRouter()
 	api.NewAuthMethodsHandler(api.AuthMethods{
+		Log:     logging.New("warn", &logBuffer{}),
 		Signups: offered(false), Recoveries: offered(false),
 		Providers: []string{"google"}, Switches: switches,
 	}).Mount(router)

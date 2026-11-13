@@ -86,8 +86,8 @@ func newMailSender(cfg config.Config) (*mail.Sender, error) {
 
 // warnSignupWithoutMail says at start-up that SELF_SIGNUP_ENABLED is on
 // while mail is off: no code can reach anyone, so password sign-up does not
-// exist and only a first sign-in through an external provider creates accounts, which nothing
-// else would tell the operator.
+// exist and only a first sign-in through an external provider creates
+// accounts, which nothing else would tell the operator.
 func warnSignupWithoutMail(log *slog.Logger, selfSignup, mailOn bool) {
 	if selfSignup && !mailOn {
 		log.Warn("SELF_SIGNUP_ENABLED is on but mail is off (SMTP_HOST is empty): password sign-up is not offered, " +

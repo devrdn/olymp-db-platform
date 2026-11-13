@@ -87,7 +87,8 @@ type ExternalSignInHandler struct {
 
 // NewExternalSignInHandler panics when a provider cannot be served: an id
 // no identity can carry, or a connector with nothing to seal its state, or no
-// switches to read. Both are mistakes of the composition root, found at start-up.
+// switches to read. Each is a mistake of the composition root, found at
+// start-up.
 func NewExternalSignInHandler(cfg ExternalSignIn) *ExternalSignInHandler {
 	for _, p := range cfg.Providers {
 		if !slices.Contains(users.Providers, p.ID) {
