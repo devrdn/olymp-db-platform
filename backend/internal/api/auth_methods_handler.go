@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -25,12 +27,19 @@ type offerer interface {
 // start and callback read it afresh.
 const authMethodsSwitchTTL = 5 * time.Second
 
+// authMethodsReadTimeout bounds the one read of the switches the page waits
+// for.
+const authMethodsReadTimeout = 2 * time.Second
+
 // AuthMethodsHandler tells the interface which ways in this installation
 // offers and which email domain is its own, so no installation's values are
 // written into the interface.
 type AuthMethodsHandler struct {
 	cfg AuthMethods
 	now func() time.Time
+
+	timeout time.Duration
+	reads   singleflight.Group
 
 	mu      sync.Mutex
 	off     map[string]bool
@@ -53,7 +62,7 @@ type providerInfo struct {
 
 // AuthMethods is what the methods handler is built from. Providers are the
 // configured provider ids, in the order they are offered; Now nil is
-// time.Now.
+// time.Now and ReadTimeout zero is authMethodsReadTimeout.
 type AuthMethods struct {
 	Signups, Recoveries offerer
 	Providers           []string
@@ -61,6 +70,7 @@ type AuthMethods struct {
 	TrustedEmailDomain  string
 	Log                 *slog.Logger
 	Now                 func() time.Time
+	ReadTimeout         time.Duration
 }
 
 func NewAuthMethodsHandler(cfg AuthMethods) *AuthMethodsHandler {
@@ -68,7 +78,11 @@ func NewAuthMethodsHandler(cfg AuthMethods) *AuthMethodsHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return &AuthMethodsHandler{cfg: cfg, now: now}
+	timeout := cfg.ReadTimeout
+	if timeout <= 0 {
+		timeout = authMethodsReadTimeout
+	}
+	return &AuthMethodsHandler{cfg: cfg, now: now, timeout: timeout}
 }
 
 // Mount registers GET /auth/methods, which needs no session. The browser
@@ -98,21 +112,37 @@ func (h *AuthMethodsHandler) body(r *http.Request) authMethodsResponse {
 	}
 }
 
-// switchedOff answers from the cache while it is fresh. A read that fails is
-// logged and answered as "no providers" (false), and not cached, so the next
-// request asks again; the lock is held across the read so a burst after
-// expiry makes one.
+// switchedOff answers from the cache while it is fresh. A burst of misses
+// shares one read, detached from the first caller's context so that a client
+// going away is not logged as an outage, and bounded by its own deadline so a
+// slow database cannot hold the page. A read that fails is logged and
+// answered as "no providers" (false), and is not stored: the next request
+// after it asks again.
 func (h *AuthMethodsHandler) switchedOff(r *http.Request) (map[string]bool, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.hasRead && h.now().Sub(h.readAt) < authMethodsSwitchTTL {
-		return h.off, true
+	if off, ok := h.cached(); ok {
+		return off, true
 	}
-	off, err := h.cfg.Switches.DisabledSignInProviders(r.Context())
+	v, err, _ := h.reads.Do("switches", func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), h.timeout)
+		defer cancel()
+		off, err := h.cfg.Switches.DisabledSignInProviders(ctx)
+		if err != nil {
+			h.cfg.Log.ErrorContext(ctx, "could not read the sign-in switches", "error", err)
+			return nil, err
+		}
+		h.mu.Lock()
+		h.off, h.readAt, h.hasRead = off, h.now(), true
+		h.mu.Unlock()
+		return off, nil
+	})
 	if err != nil {
-		h.cfg.Log.ErrorContext(r.Context(), "could not read the sign-in switches", "error", err)
 		return nil, false
 	}
-	h.off, h.readAt, h.hasRead = off, h.now(), true
-	return off, true
+	return v.(map[string]bool), true
+}
+
+func (h *AuthMethodsHandler) cached() (map[string]bool, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.off, h.hasRead && h.now().Sub(h.readAt) < authMethodsSwitchTTL
 }
