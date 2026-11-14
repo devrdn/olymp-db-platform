@@ -4425,7 +4425,7 @@ section 7. In addition:
   are checked on every participant action, and `X-Forwarded-For` is accepted
   only from the trusted reverse proxy, which an integration test forges.
 - **Write mode (`mode = read_write`):** filling the disk is bounded by the
-  instance's size quota (`pg_database_size` monitoring plus
+  instance's size quota (`pg_database_size` read before each write, plus
   `temp_file_limit`); the game tables' structure is immutable, with no `ALTER`
   or `DROP` in either the validator or the grants — `TRUNCATE` is allowed, but
   only on tables the contest opened for writing anyway, and it does not change
