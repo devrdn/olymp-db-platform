@@ -13,16 +13,15 @@ describe("ProviderLogo", () => {
     expect(fills).toEqual(["#F25022", "#7FBA00", "#00A4EF", "#FFB900"]);
   });
 
-  test("shows Google's G as a hidden image on a white tile", () => {
+  test("shows Google's G as a hidden image with no tile behind it", () => {
     const { container } = render(<ProviderLogo provider="google" />);
 
     const img = container.querySelector("img");
     expect(img).toHaveAttribute("src", "/brand/google-g.png");
     expect(img).toHaveAttribute("alt", "");
     expect(img).toHaveAttribute("aria-hidden", "true");
-    const tile = img?.parentElement;
-    expect(tile).toHaveAttribute("aria-hidden", "true");
-    expect(tile).toHaveClass("bg-white");
+    expect(container.firstElementChild).toBe(img);
+    expect(img).not.toHaveClass("bg-white");
   });
 
   test("masks GitHub's mark over the text colour", () => {
