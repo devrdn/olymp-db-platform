@@ -52,7 +52,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 func main() {

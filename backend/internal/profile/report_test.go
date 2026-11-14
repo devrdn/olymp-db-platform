@@ -6,10 +6,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/leaderboard"
-	"github.com/devrdn/db-contest/backend/internal/monitor"
-	"github.com/devrdn/db-contest/backend/internal/profile"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
+	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/profile"
 )
 
 // answered builds one question's answers tab, attempts a minute apart.

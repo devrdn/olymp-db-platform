@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 // Runs many fresh repositories, since map order decides which row is seen

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/covers"
+	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
 )
 
 // dirVolume is a real directory used directly, since this package does not

@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/covers"
-	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
 // task is a periodic job. The machinery is kept minimal: no retries, backoff

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
-	"github.com/devrdn/db-contest/backend/internal/settings"
-	"github.com/devrdn/db-contest/backend/internal/users"
-	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/settings"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 	"github.com/google/uuid"
 )
 

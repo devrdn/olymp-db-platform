@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
 )
 
 func readAllStatements(t *testing.T, src string) []gamedb.Statement {

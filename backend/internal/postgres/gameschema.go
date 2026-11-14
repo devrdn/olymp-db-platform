@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )

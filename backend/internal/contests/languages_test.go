@@ -3,7 +3,7 @@ package contests_test
 import (
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 func TestContestFilterClampsThePageSize(t *testing.T) {

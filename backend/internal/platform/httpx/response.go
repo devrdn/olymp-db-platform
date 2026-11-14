@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 )
 
 const contentTypeJSON = "application/json; charset=utf-8"

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
-	"github.com/devrdn/db-contest/backend/internal/registrations"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/registrations"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 // registrationRole is the role an event registration's account receives.

@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/platform/mail"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/mail"
 	"github.com/google/uuid"
 )
 

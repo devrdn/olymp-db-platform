@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 )
 

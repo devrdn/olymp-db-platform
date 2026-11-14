@@ -1,6 +1,6 @@
 package api
 
-import "github.com/devrdn/db-contest/backend/internal/platform/httpx"
+import "github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 
 // The machine codes this API answers with, published as its contract
 // (docs/api/error-codes.json).

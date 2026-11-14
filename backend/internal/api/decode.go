@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 )
 
 // decodeBody reads a JSON body into v, answering 400 invalid_request itself

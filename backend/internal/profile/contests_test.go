@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/leaderboard"
-	"github.com/devrdn/db-contest/backend/internal/profile"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
+	"github.com/devrdn/olymp-db-platform/backend/internal/profile"
 )
 
 func (r *rig) enrol(t *testing.T, status string, result profile.Result) (contests.Contest, contests.Participant) {

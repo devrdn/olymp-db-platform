@@ -21,7 +21,7 @@ edition = "2023";
 // hundred participants, nobody is going to replicate this.
 package dbcontest.queryrunner.v1;
 
-option go_package = "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1";
+option go_package = "github.com/devrdn/olymp-db-platform/backend/internal/rpc/queryrunnerv1";
 
 service QueryRunner {
   // Run checks one participant's query against the contest's policy and, if it

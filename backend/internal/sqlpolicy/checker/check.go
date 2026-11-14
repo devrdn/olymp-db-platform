@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 
 	pg "github.com/pganalyze/pg_query_go/v6"
 	pgparser "github.com/pganalyze/pg_query_go/v6/parser"

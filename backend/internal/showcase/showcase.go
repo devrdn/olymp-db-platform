@@ -18,9 +18,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/platform/flight"
-	"github.com/devrdn/db-contest/backend/internal/platform/i18n"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/flight"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/i18n"
 )
 
 const (

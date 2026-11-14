@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/settings"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/settings"
 	"github.com/google/uuid"
 )
 

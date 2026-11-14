@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 )
 
 // maxPrizePlaces bounds each prize count (CLAUDE.md rule 2), matching the

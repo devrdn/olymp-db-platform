@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 // The contest package: one olympiad as a file an organiser can edit and, once

@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 
-	"github.com/devrdn/db-contest/backend/internal/connector"
+	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
 )
 
 // The key set is exercised against a local JWKS endpoint, not through any

@@ -16,8 +16,8 @@ import (
 
 	// Imported to declare codes at init; every package with codes must be
 	// linked in.
-	_ "github.com/devrdn/db-contest/backend/internal/api"
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	_ "github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 )
 
 // contractFile is relative to the repository root, under docs/ because it

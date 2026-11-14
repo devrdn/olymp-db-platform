@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 )
 
 // StaffErrorText is what a contest's staff are shown of a journalled query's

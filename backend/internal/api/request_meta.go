@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 )
 
 // requestMeta puts the request's origin on the context, so every audit entry

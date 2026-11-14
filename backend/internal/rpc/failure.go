@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	pb "github.com/devrdn/olymp-db-platform/backend/internal/rpc/queryrunnerv1"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

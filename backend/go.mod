@@ -1,4 +1,4 @@
-module github.com/devrdn/db-contest/backend
+module github.com/devrdn/olymp-db-platform/backend
 
 go 1.26.11
 

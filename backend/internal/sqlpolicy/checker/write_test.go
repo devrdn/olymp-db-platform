@@ -3,8 +3,8 @@ package checker_test
 import (
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy/checker"
 )
 
 func writing() sqlpolicy.Policy { return sqlpolicy.ReadWrite("evidence") }

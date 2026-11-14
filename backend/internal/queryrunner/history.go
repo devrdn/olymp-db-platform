@@ -3,7 +3,7 @@ package queryrunner
 import (
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 // HistoryEntry is one row of a participant's own query log (query_log), read

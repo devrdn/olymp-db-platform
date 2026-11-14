@@ -15,7 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 )
 
 // contractFile is relative to the repository root, beside error-codes.json.

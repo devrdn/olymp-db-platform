@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 var deadlineBase = time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)

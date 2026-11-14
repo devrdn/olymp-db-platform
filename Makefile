@@ -239,8 +239,8 @@ test-game-build: require-env test-db-reset test-game-cluster
 # `make check`, which must keep working for a contributor with no protoc.
 proto: ## Regenerate the Query Runner contract from proto/
 	cd $(BACKEND) && protoc --proto_path=proto \
-		--go_out=. --go_opt=module=github.com/devrdn/db-contest/backend \
-		--go-grpc_out=. --go-grpc_opt=module=github.com/devrdn/db-contest/backend \
+		--go_out=. --go_opt=module=github.com/devrdn/olymp-db-platform/backend \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/devrdn/olymp-db-platform/backend \
 		proto/queryrunner/v1/queryrunner.proto
 
 # Fails when the committed Go does not match the .proto — the drift that

@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/connector"
-	"github.com/devrdn/db-contest/backend/internal/federation"
-	"github.com/devrdn/db-contest/backend/internal/microsoft"
-	"github.com/devrdn/db-contest/backend/internal/microsoft/microsofttest"
-	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
-	"github.com/devrdn/db-contest/backend/internal/platform/sentineltest"
-	"github.com/devrdn/db-contest/backend/internal/users"
-	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
+	"github.com/devrdn/olymp-db-platform/backend/internal/federation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/microsoft"
+	"github.com/devrdn/olymp-db-platform/backend/internal/microsoft/microsofttest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/sentineltest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 )
 
 // Made-up tenants and applications; none exists at Microsoft.

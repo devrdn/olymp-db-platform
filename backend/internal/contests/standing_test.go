@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 // A contest from nine to noon, a participant who starts at ten, and the

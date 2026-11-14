@@ -10,10 +10,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/platform/flight"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/flight"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 )
 
 const (

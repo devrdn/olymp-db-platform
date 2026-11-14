@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 // Rank orders entries and gives them places under the contest's scoring mode.

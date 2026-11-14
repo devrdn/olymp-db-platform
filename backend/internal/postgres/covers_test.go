@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/devrdn/db-contest/backend/internal/covers"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 )
 
 func aCover(contest, actor uuid.UUID) covers.Cover {

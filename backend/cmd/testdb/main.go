@@ -18,7 +18,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 	"github.com/jackc/pgx/v5"
 )
 

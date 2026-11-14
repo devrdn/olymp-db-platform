@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 )
 
 // The test cluster's address with the database swapped for "postgres", as a

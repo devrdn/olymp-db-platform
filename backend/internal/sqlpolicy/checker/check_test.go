@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy/checker"
 )
 
 func refusal(t *testing.T, sql string, p sqlpolicy.Policy) *sqlpolicy.Refusal {

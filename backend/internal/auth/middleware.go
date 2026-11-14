@@ -8,10 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/rbac"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

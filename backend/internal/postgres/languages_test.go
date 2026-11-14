@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 )
 
 // The shared contract (conteststest.LanguageCatalogContract) also pins the

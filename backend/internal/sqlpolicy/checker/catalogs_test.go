@@ -3,7 +3,7 @@ package checker_test
 import (
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 func TestTheStructuralCatalogsAreReadableByDefault(t *testing.T) {

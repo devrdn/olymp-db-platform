@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth/authtest"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
-	"github.com/devrdn/db-contest/backend/internal/signup"
-	"github.com/devrdn/db-contest/backend/internal/signup/signuptest"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth/authtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/signup"
+	"github.com/devrdn/olymp-db-platform/backend/internal/signup/signuptest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/google/uuid"
 )
 

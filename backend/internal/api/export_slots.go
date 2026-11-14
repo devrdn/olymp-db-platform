@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 )
 
 // The one bound every CSV download shares: how many may hold a core-database

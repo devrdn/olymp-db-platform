@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 )
 
 func allBackends(t *testing.T) map[string]Recorder {

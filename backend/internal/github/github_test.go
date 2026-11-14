@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/connector"
-	"github.com/devrdn/db-contest/backend/internal/federation"
-	"github.com/devrdn/db-contest/backend/internal/github"
-	"github.com/devrdn/db-contest/backend/internal/github/githubtest"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
+	"github.com/devrdn/olymp-db-platform/backend/internal/federation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/github"
+	"github.com/devrdn/olymp-db-platform/backend/internal/github/githubtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 const (

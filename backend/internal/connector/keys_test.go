@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/connector"
+	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
 )
 
 // unsigned is a JWT with header alg and an empty or given signature, built

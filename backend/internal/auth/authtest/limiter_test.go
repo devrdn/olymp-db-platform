@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth/authtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth/authtest"
 )
 
 func TestTheLimiterCountsUntilItsWindowPasses(t *testing.T) {

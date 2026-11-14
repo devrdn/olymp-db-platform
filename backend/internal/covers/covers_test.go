@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/covers"
+	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
 	"github.com/google/uuid"
 )
 
