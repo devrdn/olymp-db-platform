@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="16 8 90 116" width="90" height="116" role="img" aria-label="OlympDB Platform">
+<style>
+.i{fill:#F5ECDB}.c{fill:#1E1A18}.t{fill:#E0805F}.g{fill:#6B9E57}.m{fill:#E8B24A}.r{fill:#C8392E}.p{fill:#1E1A18}
+.w{stroke:#F5ECDB;stroke-width:1.2;stroke-linecap:round;fill:none}
+</style>
+<path d="M28,92 A32,7 0 0 0 92,92 L92,102 A32,7 0 0 1 28,102 Z" class="g"/>
+<path d="M28,105 A32,7 0 0 0 92,105 L92,114 A32,7 0 0 1 28,114 Z" class="t"/>
+<polygon points="36.00,99.53 38.10,101.63 36.00,103.73 33.90,101.63" class="c"/>
+<polygon points="48.00,101.39 50.10,103.49 48.00,105.59 45.90,103.49" class="c"/>
+<polygon points="60.00,101.90 62.10,104.00 60.00,106.10 57.90,104.00" class="c"/>
+<polygon points="72.00,101.39 74.10,103.49 72.00,105.59 69.90,103.49" class="c"/>
+<polygon points="84.00,99.53 86.10,101.63 84.00,103.73 81.90,101.63" class="c"/>
+<ellipse cx="60" cy="92" rx="32" ry="7" class="i"/>
+<polygon points="37,88 31,85 29,91 36,94" class="t"/>
+<polygon points="31,85 26,79 22,84 29,91" class="i"/>
+<polygon points="26,79 25,71 19,72 22,84" class="g"/>
+<polygon points="25,71 27,63 21,61 19,72" class="m"/>
+<polygon points="27,63 25,56 21,61" class="t"/>
+<polygon points="36,94 37,78 46,62 55,47 70,44 74,58 73,94" class="t"/>
+<polygon points="36,94 37,78 46,62 52,72 48,94" class="i"/>
+<polygon points="48,94 52,82 61,86 59,94" class="g"/>
+<polygon points="62,48 70,46 71,59 66,66 62,58" class="c"/>
+<polygon points="63,90 73,89 75,94 62,94" class="c"/>
+<polygon points="54,46 53,30 55,14 62,24 70,12 73,24 86,28 82,36 70,44" class="t"/>
+<polygon points="54,46 53,30 55,14 62,24 64,34 58,44" class="i"/>
+<polygon points="70,12 73,24 68,21" class="m"/>
+<path d="M67,27 Q71,23.5 75,26.5 Q71,29.5 67,27Z" class="m"/>
+<rect x="70.6" y="24.6" width="1.1" height="4" class="p"/>
+<polygon points="83.5,27.6 86.5,28.2 84.6,30.6" class="r"/>
+<polygon points="54,45 70,42 71,46 55,49" class="r"/>
+<polygon points="66.0,51.2 66.7,53.3 68.7,52.3 67.7,54.3 69.8,55.0 67.7,55.7 68.7,57.7 66.7,56.7 66.0,58.8 65.3,56.7 63.3,57.7 64.3,55.7 62.2,55.0 64.3,54.3 63.3,52.3 65.3,53.3" class="r"/>
+<path d="M80,32 L102,27 M80,34 L103,34" class="w"/>
+</svg>

@@ -1,184 +1,191 @@
-# DB Contest
+<div align="center">
 
-A platform for running university SQL olympiads in a detective format. Students
-are given the story of a crime and a database that holds the evidence. They
-write SQL in a browser console, answer questions from what the queries tell
-them, and name the culprit.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/logo-dark.svg">
+  <img src="docs/images/readme/logo-light.svg" alt="OlympDB Platform" width="90" height="116">
+</picture>
 
-The database is the puzzle. Nothing is asked about SQL in the abstract: every
-question is answerable only by querying the game database that came with the
-story, and the only way to the answer is through a query that works.
+# OlympDB Platform
 
-## What it does
+**A platform for SQL olympiads in a detective format: read the story, query the evidence database, name the culprit.**
 
-**For a participant.** A contest page with the story, the clock and the
-questions. A SQL console with syntax highlighting, several tabs, a query
-history and a result table you can open a row in. Notes that stay where they
-were left. Answers checked the moment they are submitted, with attempts and
-penalties as the organiser configured them. A profile that keeps their own
-contests, their report and their history. Where the installation allows it,
-an account they make themselves, with a password confirmed by email or with
-their Microsoft account, and a forgotten password reset by an emailed link.
+[![backend](https://img.shields.io/github/actions/workflow/status/devrdn/olymp-db-platform/backend.yml?label=backend)](https://github.com/devrdn/olymp-db-platform/actions/workflows/backend.yml)
+[![frontend](https://img.shields.io/github/actions/workflow/status/devrdn/olymp-db-platform/frontend.yml?label=frontend)](https://github.com/devrdn/olymp-db-platform/actions/workflows/frontend.yml)
+[![release](https://img.shields.io/github/v/release/devrdn/olymp-db-platform)](https://github.com/devrdn/olymp-db-platform/releases)
+[![license](https://img.shields.io/github/license/devrdn/olymp-db-platform)](LICENSE)
 
-**For an organiser.** A contest builder: the story in Markdown, the questions
-and their reference answers, and the game database itself — written as a SQL
-script, uploaded as a finished dump, or described table by table in a builder
-that takes CSV files and typed rows. Staff and their roles. A per-contest SQL
-policy deciding what participants may run. Registration that is open or by
-invitation, optionally restricted to an address range. Live monitoring of a
-contest in flight, which carries the contest's query log: a feed with filters
-and a live mode, each participant's queries with a search, and CSV export. A
-leaderboard with an optional freeze.
+[Quick start](#quick-start) · [Documentation](#documentation) · [Troubleshooting](docs/guide/08-troubleshooting.md) · [Contributing](#contributing-and-security)
 
-**Underneath.** Every participant works in their own copy of the game
-database, so nothing one of them does can be seen or felt by another. Every
-query is parsed by PostgreSQL's own parser before it runs, checked against the
-contest's policy, and executed under a statement timeout, a result-size budget
-and a disk quota.
+</div>
+
+<p align="center">
+  <img src="docs/images/readme/console.png" alt="The SQL console during a contest: the schema on the left, a query and its result table in the middle, the questions with answer boxes on the right" width="100%">
+</p>
+
+## What it is
+
+Students are given the story of a crime and a database that holds the evidence.
+They write SQL in a browser console, answer questions from what the queries
+tell them, and name the culprit. The database is the puzzle: every question is
+answerable only by querying the game database that came with the story.
+
+Every participant works in their own copy of that database, so nothing one of
+them does can be seen by another. Every query is parsed by PostgreSQL's own
+parser, checked against the contest's policy, and run under a statement
+timeout, a result-size budget and a disk quota.
+
+People sign in with a password, an emailed code, Microsoft, Google or GitHub,
+wherever the installation turns them on. The interface is in English, Romanian
+and Russian.
+
+**Participants** get:
+
+- a contest page with the story, the clock and the questions;
+- a SQL console with highlighting, tabs, query history and a result table that opens a row;
+- notes that stay where they were left, and answers checked the moment they are submitted, with the attempts and penalties the organiser set;
+- a profile with their contests, reports and history.
+
+**Organisers** get:
+
+- a contest builder: the story in Markdown, questions with reference answers, and the game database as a SQL script, a finished dump, or a table-by-table builder that takes CSV files;
+- staff and roles, and a per-contest SQL policy for what participants may run;
+- open or invitation-only registration, optionally limited to an address range;
+- live monitoring with a filterable query feed, per-participant queries, CSV export, and a leaderboard with an optional freeze.
+
+**Administrators** get:
+
+- self-signup, sign-in providers and their switches, and a forgotten-password reset by emailed link, all controlled per installation;
+- an audit trail, backups and restore, and Prometheus, Loki and Grafana as an optional add-on.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/readme/contest.png" alt="The contest page with the story in the side panel, the schema and an empty console"><br><sub>The contest page: the story, the clock and the schema.</sub></td>
+    <td width="50%"><img src="docs/images/readme/results.png" alt="The standings of a contest: a podium and a ranked table of points"><br><sub>The standings: a podium and the ranked table.</sub></td>
+  </tr>
+</table>
+
+## Quick start
+
+For development. You need Go (the version in [backend/go.mod](backend/go.mod)),
+Node 22, Docker with Compose v2, `make` and a C compiler (the Query Runner
+links PostgreSQL's parser through cgo).
+
+```bash
+# 1. Configuration: readable by you alone (make refuses it otherwise).
+install -m 600 deploy/.env.example deploy/.env
+```
+
+Edit `deploy/.env` and replace every `change-me` value with a secret from
+`openssl rand -hex 32`. Use hex, not base64: base64 characters break the
+database URLs.
+
+```bash
+# 2. Infrastructure: both PostgreSQL clusters and Redis.
+make dev-up
+
+# 3. Schema, the game cluster's roles, and the first administrator
+#    (the password is printed once).
+make migrate-up
+make game-roles
+make bootstrap
+
+# 4. Three processes, each in its own terminal.
+make runner   # the Query Runner: without it there is no console
+make run      # the Core API on :8080
+make front    # the interface on http://localhost:3000
+```
+
+Sign in as `admin` with the printed password. `make help` lists every target.
+
+To run the stack as a deployment does (Caddy, API, Query Runner, interface and
+databases in containers), use `make stack-up` and then `make stack-bootstrap`;
+the production procedure is in [backend/README.md](backend/README.md) and under
+[deploy/](deploy/).
+
+Something not working? See the [troubleshooting guide](docs/guide/08-troubleshooting.md).
+
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [docs/README.md](docs/README.md) | The index of every document |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The design, the trade-offs, and what is and is not finished |
+| [Developer guide](docs/guide/01-overview.md) | Chapters 01 to 08: [overview](docs/guide/01-overview.md), [use cases](docs/guide/02-use-cases.md), [flows](docs/guide/03-flows.md), [backend](docs/guide/04-backend.md), [frontend](docs/guide/05-frontend.md), [testing](docs/guide/06-testing.md), [running a contest](docs/guide/07-running-a-contest.md), [troubleshooting](docs/guide/08-troubleshooting.md) |
+| [backend/README.md](backend/README.md) | The Core API: configuration, endpoints, sign-in, deployment, backups |
+| [frontend/README.md](frontend/README.md) | The interface |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How changes are made |
+| [SECURITY.md](SECURITY.md) | Reporting a vulnerability |
 
 ## How it is put together
 
 ```
         browser
-           │
-         Caddy  ── TLS, the only port open to the outside
-           │
-    ┌──────┴───────┐
-    │              │
- Next.js        Core API ────────── PostgreSQL (core)
- (interface)    (Go monolith)        accounts, contests, questions,
-                    │                submissions, audit, query log
-                    │ gRPC
-              Query Runner ───────── PostgreSQL (game cluster)
-              (Go + cgo)             one database per participant,
-                                     copied from the contest's template
+           |
+         Caddy  -- TLS, the only port open to the outside
+           |
+    +------+-------+
+    |              |
+ Next.js        Core API ------- PostgreSQL (core)
+ (interface)    (Go monolith)     accounts, contests, questions,
+                    |             submissions, audit, query log
+                    | gRPC
+              Query Runner ------ PostgreSQL (game cluster)
+              (Go + cgo)          one database per participant,
+                                  copied from the contest's template
 ```
 
-Two processes rather than one, and the split is deliberate. The Query Runner
-is the only component that executes SQL a stranger wrote, and it links
-PostgreSQL's real parser through cgo to check a statement before running it —
-C code reading adversarial text, where a crash is the end of the process
-rather than a panic Go can recover from. Inside the API that would be a
-reproducible way to take down sign-in, the clock and answer submission at the
-moment they matter most. It is also the only process that holds the
-participants' roles on the game cluster and runs their SQL: the Core API
-connects there only as the provisioning role, to build each contest's template
-and the participants' copies.
-
-The architecture document explains the rest, including what was considered and
-rejected: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). If you are going to
-work on the code, start with the
-[developer guide](docs/guide/01-overview.md); [docs/README.md](docs/README.md)
-lists every document.
-
-## Running it locally
-
-You will need Docker, Go 1.26+ and Node 22+.
-
-```bash
-install -m 600 deploy/.env.example deploy/.env
-```
-
-Fill in the passwords in `deploy/.env` — the file is read by everything below,
-is never committed, and must stay readable by you alone (`make` refuses it
-otherwise). Then:
-
-```bash
-make dev-up
-```
-
-That starts both PostgreSQL clusters — the core database and the game cluster
-— along with Redis. Apply the schema and create the first administrator:
-
-```bash
-make migrate-up && make bootstrap
-```
-
-`make bootstrap` prints the password it generated; it is the only time that
-password is shown. Then run the two halves, each in its own terminal:
-
-```bash
-make run
-```
-
-```bash
-make front
-```
-
-The interface comes up on `http://localhost:3000`. To run the whole stack the
-way a deployment does — Caddy, the API, the interface and both databases in
-containers — use `make stack-up` instead, and `make stack-bootstrap` for the
-first administrator.
-
-`make help` lists every target.
+The Query Runner is a separate process on purpose. It is the only component
+that runs SQL a stranger wrote, and it links PostgreSQL's real parser through
+cgo: C code reading adversarial text, where a crash ends the process. Kept
+out of the API, such a crash cannot take down sign-in, the clock or answer
+submission. It also holds the participants' database roles; the Core API
+reaches the game cluster only as the provisioning role. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Testing
 
 ```bash
-make check
-```
-
-Formats, vets and runs the unit tests — the command to run before pushing.
-
-Some guarantees cannot be proved without a database, and those tests say so by
-skipping rather than passing quietly:
-
-```bash
-make test-db          # the repository tests, on a database recreated from zero
+make check            # format, vet and unit tests: run before pushing
+make test-db          # repository tests, on a database recreated from zero
 make test-game        # the game cluster's isolation, as the participant's role
-make test-game-build  # the one path that crosses both clusters
+make test-game-build  # the path that crosses both clusters
 make front-check      # the interface's lint, checks, tests and build
+make test-all         # the backend gate CI runs, without database tests
 ```
 
-`make test-all` runs the backend gate that needs no database: format and tidy
-checks, vet, the race detector, the build, a vulnerability scan and static
-security analysis. CI also runs the database tests, so run the three targets
-above as well before you trust a green `test-all`. How the tests are organised
-is in the [developer guide, chapter 6](docs/guide/06-testing.md).
+Tests that need a database skip rather than pass quietly. CI runs them, so run
+the three database targets before trusting a green `test-all`. See the
+[testing chapter](docs/guide/06-testing.md).
 
 ## Layout
 
 ```
-backend/
-  cmd/api/            the Core API
-  cmd/queryrunner/    the Query Runner
-  cmd/migrate/        schema migrations
-  internal/           the domain packages, and platform/ beneath them
-  migrations/         numbered SQL, applied by cmd/migrate
-  proto/              the gRPC contract between the two services
-frontend/             Next.js App Router, three locales
-deploy/               Docker Compose, Caddy, observability
-docs/                 the architecture, the design system, API contracts
+backend/    cmd/ (api, queryrunner, migrate, ...), internal/, migrations/, proto/
+frontend/   Next.js App Router, three locales
+deploy/     Docker Compose, Caddy, backups, observability
+docs/       architecture, guide, design system, API contracts
 ```
-
-`backend/README.md` and `frontend/README.md` go into each half in detail.
-`CLAUDE.md` holds the conventions the code is written to — package layout,
-error handling, the rules a change is reviewed against.
-
-## Languages
-
-The interface is served in English, Russian and Romanian; the locale
-dictionaries under `frontend/lib/i18n/dictionaries/` hold every string, and
-none is written inline in a component. The project itself — code, comments,
-commit messages and this documentation — is written in English.
 
 ## Status
 
-The platform runs contests. The architecture document's section 15 is the
-honest list of what is finished and what is not.
+The platform runs contests. Section 15 of the architecture document lists what
+is finished and what is not.
+
+## Built with AI assistance
+
+OlympDB Platform is designed, written and maintained by its author. Claude (Anthropic), working through Claude Code, assists with the work: drafting designs and plans, writing and reviewing code and tests, security reviews and documentation. Every change is reviewed and merged by the author.
 
 ## Contributing and security
 
-How changes are made here — English in everything committed, a linear
-history, tests on the path the deployment uses — is in
-[CONTRIBUTING.md](CONTRIBUTING.md). A vulnerability is reported privately, not
-in an issue: see [SECURITY.md](SECURITY.md).
+How changes are made here (English in everything committed, a linear history,
+tests on the path the deployment uses) is in [CONTRIBUTING.md](CONTRIBUTING.md).
+Report a vulnerability privately, not in an issue: see [SECURITY.md](SECURITY.md).
 
 ## License
 
 Copyright 2026 Nartea Nichita.
 
-DB Contest is licensed under the [Apache License, Version 2.0](LICENSE). You
+OlympDB Platform is licensed under the [Apache License, Version 2.0](LICENSE). You
 may use, modify and run it, including for commercial purposes, provided you
 keep the license and the [NOTICE](NOTICE) with it and say what you changed.
 The fonts it serves (JetBrains Mono, Literata, Onest) are under the SIL Open
