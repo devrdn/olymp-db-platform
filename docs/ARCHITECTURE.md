@@ -554,7 +554,7 @@ How it holds together:
   Runner reads the instance's size with `pg_database_size()` inside the
   statement's own transaction, and refuses the statement when the quota —
   five times the template's size by default, configurable in the policy — is
-  reached. (2) Nothing reads `pg_database_size()` on a schedule: the check
+  reached. (2) No background monitor reads an instance's size to enforce its quota: the check
   runs only when the participant writes, so an instance that one statement
   pushed past its quota stays as it is until its owner writes again.
   The race inside a **single** statement — an `INSERT … SELECT` that crosses
@@ -4394,7 +4394,7 @@ genuinely bad message being retried up to its cap instead of dropped at once.
   account created before the check whose login carries one cannot have its
   name or address edited, and no route renames a login.
 
-## 11. Security in summary, and the audit plan
+## 11. Security in summary
 
 Student SQL is section 5, database isolation section 4, authentication
 section 7. In addition:
@@ -4412,9 +4412,11 @@ section 7. In addition:
 - **Staff input:** an uploaded game script runs only on the game cluster,
   under a separate builder role, when a template is created — never against
   the core database; with validation and a size limit.
-- **Secrets:** through environment variables or Docker secrets; the repository
+- **Secrets:** through environment variables; the repository
   holds only `.env.example`; different passwords for each database role.
-- **Dependencies:** `govulncheck` and `npm audit` in CI; pinned base images.
+- **Dependencies:** `govulncheck` and `gosec` in the backend's CI; the
+  frontend's CI runs no dependency audit. The Go builder is pinned to a patch
+  release; the other base images follow floating tags.
 - **The integrity of the competition:** reference answers are unreachable from
   any participant endpoint; attempts are limited per question; changes to
   questions and answers after publication are in the audit trail; the SQL
@@ -4479,22 +4481,11 @@ mistaken for oversights:
   the route behind authentication, or giving a contest a mode with anonymised
   labels.
 
-**The audit plan before the first olympiad:**
-
-1. An **OWASP ASVS L2** checklist over authentication, sessions, access
-   control and validation.
-2. Automation: SAST (gosec, semgrep), a dependency scan, and an **OWASP ZAP**
-   baseline scan of a deployed instance.
-3. A manual penetration test of the Query Runner: attempts to walk around the
-   AST validation — nested statements, writing functions, reaching another
-   database, denial of service through recursive CTEs or Cartesian products —
-   written up as a regression suite.
-4. Load testing (`cmd/consoleload`, run as `make loadtest`): the peak
-   scenario of N participants pressing Run at once, plus bulk provisioning —
-   creating N instances from a template of the target size, measuring
-   `WAL_LOG` against `FILE_COPY`.
-5. Repeat a reduced audit before every olympiad, and a full one whenever
-   authentication, the query proxy or provisioning changes.
+**What CI runs against the code:** `govulncheck` and `gosec` on the backend,
+the linters and the contrast and error-code checks on the frontend. The
+load test is `cmd/consoleload`, run as `make loadtest`: the peak scenario of N
+participants pressing Run at once, plus bulk provisioning, measuring `WAL_LOG`
+against `FILE_COPY`.
 
 ## 12. Scaling
 
@@ -4953,7 +4944,7 @@ The existing step numbers do not move: other sections refer to "step 4" and
   stream. The scoring rules live here too, because without submissions there
   is nothing to enforce them with: the penalty for a wrong attempt, and
   sequential progression.
-- [x] **6. Reporting and the journal**
+- [ ] **6. Reporting and the journal** — partly built.
   - [x] **6.1 The leaderboard and the scoring modes** — the live, frozen and
     final table with the reveal (section 10); points, a single winner and
     ICPC scoring (section 6.1.1). The modes belong to this step because what
@@ -4964,8 +4955,8 @@ The existing step numbers do not move: other sections refer to "step 4" and
     staff, the contest's monitoring (section 9.4): a feed filtered by kind,
     time and participant with a live mode, each participant's queries with a
     status filter and a search, and CSV of the contest or of one participant.
-  - [x] **6.3 Results as a file** — the results as CSV and PDF
-    (item 28, first half).
+  - [ ] **6.3 Reports** — the results as a file, as CSV and PDF, exist
+    (item 28).
 - [ ] **7. Load** — a
   load test (`cmd/consoleload`, which exists: the steady and burst scenarios
   through the participant's real path, and provisioning under either copy
@@ -5001,17 +4992,6 @@ Product decisions the items below are built on.
   reaches a participant, and nothing reveals it during a contest.
 - **A registration is finished when its contest ends.** The move to
   `finished` writes it for every participant who started (item 24).
-- **`reports.view` is removed.** Contest roles are fixed sets, owner and
-  manager, so a separate permission for reports separates nobody; the staff
-  reports are guarded by `contest.monitor`, as monitoring is.
-- **`query_log` is kept for twelve months after its contest is archived, and
-  `audit_log` for eighteen months.** Then rows are deleted, with no archive
-  file: an organiser who wants a contest's log for good downloads
-  monitoring's CSV in that time, and the backups cover the window in which a
-  restore is needed. Addresses and user agents are personal data, so neither
-  table keeps them without limit.
-- **The three superseded question endpoints are removed**
-  (`PATCH /questions/{id}`, `PUT …/texts`, `PUT …/answers`).
 
 ### Remaining
 
@@ -5149,10 +5129,10 @@ Ideas deferred on purpose; each records what has to be decided when it is needed
 - [x] **20. Watching a participant** (section 9.4).
 - [x] **21. The front page** (section 9.6).
 - [x] **22. A contest's cover** (section 9.7).
-- [x] **23, first half. Publication and the start require a built game**
+- [x] **23. Publication and the start require a built game**
   (sections 4.2 and 6.1). The publication gate refuses `no_game` unless the
   contest's template is `ready`, on the organiser's transition, the
-  scheduler's start and the publish check. The second half stays in the list.
+  scheduler's start and the publish check.
 - [x] **24. A registration's lifecycle** (sections 6, 8.1 and 9). A
   participant becomes `active` on their first read, query or answer under
   either timing; every `active` registration becomes `finished` in the same
@@ -5169,13 +5149,13 @@ Ideas deferred on purpose; each records what has to be decided when it is needed
   and the cluster lacks, failing only for a contest still to be played; a
   running contest whose template is gone can be rebuilt through the build
   route.
-- [x] **28, first half. The results as a file** (section 10). The organiser's
+- [x] **28. The results as a file** (section 10). The organiser's
   page `/contests/{id}/standings/export`, `GET …/results` and
   `POST …/results/export`, guarded by `contest.monitor` (email also by
   `users.manage`): a CSV in a documented, versioned format
   ([`api/results-csv.md`](api/results-csv.md)), a PDF table and a PDF
   protocol, for chosen participants, summary or detailed, recorded as
-  `contest.results_export`. The second half stays in the list.
+  `contest.results_export`.
 - [x] **34. "Reset my database"** (section 4.1). `POST …/play/reset` and a
   button on the play screen for a `read_write` contest, behind the
   participation gate, limited to three resets per registration in ten

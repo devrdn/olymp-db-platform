@@ -108,7 +108,7 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 
 				// The contest as a file (contest_package.go). Under
 				// contest.edit, not contest.view, because the package carries
-				// the reference answers (docs/ARCHITECTURE.md §15, item 12).
+				// the reference answers (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON").
 				r.Get("/export", h.exportPackage)
 			})
 

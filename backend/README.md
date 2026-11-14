@@ -1771,8 +1771,8 @@ known), rclone with a named remote in its config file (`BACKUP_RCLONE_CONFIG`,
 else the user's own). The target is never written to the log either. A failed
 copy fails the run and leaves that set on this host only; the next run copies
 its own set, not the missed one. Nothing is deleted on the target: what it
-keeps is the target's business, and the design of a second server pulling the
-backups is still to come (item 35 of the architecture).
+keeps is the target's business, and no design for a second server pulling the
+backups exists.
 
 **Was the last backup taken?**
 

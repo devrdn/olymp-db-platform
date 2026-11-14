@@ -77,7 +77,7 @@ func seedExportable(t *testing.T, f *conteststest.Fixture) contests.Contest {
 
 func TestThePackageCarriesEverythingAnOrganizerWouldReauthor(t *testing.T) {
 	// Anything missing here an organizer reusing last year's contest would
-	// have to retype (docs/ARCHITECTURE.md §15, item 12).
+	// have to retype (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON").
 	f := conteststest.NewFixture()
 	c := seedExportable(t, f)
 
