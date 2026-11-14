@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/i18n"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/i18n"
 )
 
 // negotiateLang picks the language to answer a request in (§6.2), through

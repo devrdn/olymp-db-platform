@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 // codesScript is a template with one empty table, as a build leaves it before

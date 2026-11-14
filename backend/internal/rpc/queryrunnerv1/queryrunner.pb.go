@@ -767,7 +767,7 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\rKIND_INTERNAL\x10\n" +
 	"2a\n" +
 	"\vQueryRunner\x12R\n" +
-	"\x03Run\x12$.dbcontest.queryrunner.v1.RunRequest\x1a%.dbcontest.queryrunner.v1.RunResponseBAZ?github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1b\beditionsp\xe8\a"
+	"\x03Run\x12$.dbcontest.queryrunner.v1.RunRequest\x1a%.dbcontest.queryrunner.v1.RunResponseBHZFgithub.com/devrdn/olymp-db-platform/backend/internal/rpc/queryrunnerv1b\beditionsp\xe8\a"
 
 var (
 	file_queryrunner_v1_queryrunner_proto_rawDescOnce sync.Once

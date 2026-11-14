@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 // Why a definition could not be saved: always the organiser's mistake, so

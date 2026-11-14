@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devrdn/db-contest/backend/internal/monitor"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )

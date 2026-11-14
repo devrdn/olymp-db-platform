@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 // workSchema is where a participant's own objects live. The game's tables sit

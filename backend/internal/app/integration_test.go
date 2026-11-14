@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 )
 
 // The alert rules and the dashboard are loaded by a Prometheus and a Grafana

@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devrdn/db-contest/backend/internal/health"
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/health"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
 	"github.com/go-chi/chi/v5"
 )
 

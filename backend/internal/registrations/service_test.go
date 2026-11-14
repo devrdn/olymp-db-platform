@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/registrations"
-	"github.com/devrdn/db-contest/backend/internal/registrations/registrationstest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/registrations"
+	"github.com/devrdn/olymp-db-platform/backend/internal/registrations/registrationstest"
 	"github.com/google/uuid"
 )
 

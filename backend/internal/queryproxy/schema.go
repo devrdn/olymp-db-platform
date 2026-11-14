@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
 // ErrSchemaHidden is a contest that closed its catalogues (allow_catalog

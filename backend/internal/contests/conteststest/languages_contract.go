@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 )
 
 // LanguageTarget is a catalogue holding what a fresh installation holds, and

@@ -6,10 +6,10 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 

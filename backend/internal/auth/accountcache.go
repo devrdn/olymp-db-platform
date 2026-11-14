@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/google/uuid"
 )
 

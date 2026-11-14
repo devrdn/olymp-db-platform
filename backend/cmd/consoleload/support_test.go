@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
-	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
-	"github.com/devrdn/db-contest/backend/internal/postgres"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/google/uuid"
 )
 

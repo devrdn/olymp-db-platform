@@ -20,14 +20,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
-	"github.com/devrdn/db-contest/backend/internal/platform/config"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
-	"github.com/devrdn/db-contest/backend/internal/platform/server"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	"github.com/devrdn/db-contest/backend/internal/rpc"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/config"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/server"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/rpc"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy/checker"
 )
 
 // version is set at build time with -ldflags.

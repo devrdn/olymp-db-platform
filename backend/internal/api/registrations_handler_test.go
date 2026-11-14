@@ -13,16 +13,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/devrdn/db-contest/backend/internal/api"
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
-	"github.com/devrdn/db-contest/backend/internal/rbac"
-	"github.com/devrdn/db-contest/backend/internal/registrations"
-	"github.com/devrdn/db-contest/backend/internal/registrations/registrationstest"
-	"github.com/devrdn/db-contest/backend/internal/users"
-	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
+	"github.com/devrdn/olymp-db-platform/backend/internal/registrations"
+	"github.com/devrdn/olymp-db-platform/backend/internal/registrations/registrationstest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 )
 
 type registrationsFixture struct {

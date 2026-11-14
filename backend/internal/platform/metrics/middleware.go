@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/go-chi/chi/v5"
 )
 

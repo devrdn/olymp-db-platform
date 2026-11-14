@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 )
 
 func newTestLimiter(t *testing.T) *Limiter {

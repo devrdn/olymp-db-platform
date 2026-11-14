@@ -3,7 +3,7 @@ package queryproxy_test
 import (
 	"context"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 )
 
 // quiet is the audit sink and unit of work of a test that does not read the

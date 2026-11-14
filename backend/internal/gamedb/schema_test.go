@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
 // A real database, because the catalogue query is the whole of the method.

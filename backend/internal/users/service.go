@@ -12,10 +12,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/google/uuid"
 )
 

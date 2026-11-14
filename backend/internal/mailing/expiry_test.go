@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 )
 
 // With mail off no dispatcher runs; the sweep still erases what is too old.

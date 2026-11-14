@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

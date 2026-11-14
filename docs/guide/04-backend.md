@@ -29,7 +29,7 @@ for why the system is built this way, see
 
 ## 1. The shape
 
-The backend is one Go module (`github.com/devrdn/db-contest/backend`) that
+The backend is one Go module (`github.com/devrdn/olymp-db-platform/backend`) that
 builds two services: the **Core API** (`cmd/api`), a modular monolith that
 serves `/api/v1`, and the **Query Runner** (`cmd/queryrunner`), a separate
 process that checks and runs participants' SQL. A handful of one-shot

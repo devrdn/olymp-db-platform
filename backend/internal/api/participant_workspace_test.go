@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
-	"github.com/devrdn/db-contest/backend/internal/workspace"
-	"github.com/devrdn/db-contest/backend/internal/workspace/workspacetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/workspace"
+	"github.com/devrdn/olymp-db-platform/backend/internal/workspace/workspacetest"
 	"github.com/google/uuid"
 )
 

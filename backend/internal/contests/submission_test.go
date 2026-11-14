@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
-	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 	"github.com/google/uuid"
 )
 

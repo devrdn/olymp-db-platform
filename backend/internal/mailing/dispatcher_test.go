@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/mail"
-	"github.com/devrdn/db-contest/backend/internal/platform/mail/mailtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/mail"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/mail/mailtest"
 )
 
 var now = time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/google/uuid"
 )
 

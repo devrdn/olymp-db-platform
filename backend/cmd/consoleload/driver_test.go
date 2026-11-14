@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 )
 
 func TestSignInKeepsTheSessionCookieWhateverTheAPIsTLSSetting(t *testing.T) {

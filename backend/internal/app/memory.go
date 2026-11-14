@@ -5,7 +5,7 @@ import (
 	"math"
 	"runtime/debug"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
 )
 
 // baseMemory is the estimated memory need besides password hashing, the

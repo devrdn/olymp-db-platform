@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/workspace"
+	"github.com/devrdn/olymp-db-platform/backend/internal/workspace"
 	"github.com/google/uuid"
 )
 

@@ -27,10 +27,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/postgres"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
 // errTemplatesMissing is the check's finding, returned so the exit status
