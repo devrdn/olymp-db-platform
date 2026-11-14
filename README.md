@@ -164,8 +164,9 @@ commit messages and this documentation — is written in English.
 
 ## Status
 
-The platform runs contests. The architecture document's section 15 is the
-honest list of what is finished and what is not.
+The platform runs contests. The architecture document's section 15 lists what
+is decided, what is built and what is deferred on purpose; open work is
+tracked as GitHub issues.
 
 ## Contributing and security
 

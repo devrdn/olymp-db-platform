@@ -170,10 +170,7 @@ participant.
   when the template was built, so clicking through the tree or the diagram
   costs no query against an instance and none of the student's rate limit.
   A click on a table's name writes a short `SELECT` on it into the editor for
-  the participant to run. The planned "show me the data" button, an ordinary
-  generated `SELECT * FROM t LIMIT 50` that runs through the same pipeline
-  under the same rules and limits and appears in `query_log` like any other
-  query, is not built (section 15, item 45). An organiser can turn the diagram
+  the participant to run. An organiser can turn the diagram
   off per contest (`contests.schema_diagram`, on by default, changeable while
   the contest runs; the participant's listing carries it, so an open play
   screen follows a change at its next load). It removes a view and nothing
@@ -557,10 +554,9 @@ How it holds together:
   Runner reads the instance's size with `pg_database_size()` inside the
   statement's own transaction, and refuses the statement when the quota —
   five times the template's size by default, configurable in the policy — is
-  reached. (2) A background monitor reading `pg_database_size()` is meant to
-  be the safety net, putting an over-quota instance into read-only
-  (`ALTER DATABASE … SET default_transaction_read_only = on`) with a message
-  the participant can understand; it is not built (section 15, item 40).
+  reached. (2) Nothing reads `pg_database_size()` on a schedule: the check
+  runs only when the participant writes, so an instance that one statement
+  pushed past its quota stays as it is until its owner writes again.
   The race inside a **single** statement — an `INSERT … SELECT` that crosses
   the quota before the next check — cannot be removed entirely, but the
   overshoot is bounded by what can be written within `statement_timeout`,
@@ -633,11 +629,10 @@ it never runs in bulk at the moment that matters:
   woke it. Only a committed change can wake it — a registration rolled back
   with its transaction does not.
 - **Late enrolment, on an open contest.** Somebody enrolling just before the
-  start gets a database from the pool; if the pool is empty they are meant to
-  see "your database is being prepared", and the console to open on a
-  readiness event over SSE, usually within tens of seconds. Neither is built:
-  the copy is made by the participant's first query or first look at the
-  schema, inside that request, which waits for it (section 15, item 32). An
+  start gets a database from the pool; the copy is made by the
+  participant's first query or first look at the schema, inside that request,
+  which waits for it; there is no "being prepared" state and no readiness
+  event. An
   enrolment deadline — ten minutes before the start, say — is available as
   an option.
 
@@ -2829,12 +2824,11 @@ Three independent streams with different purposes:
 | Stream | What | Where | Retention |
 |---|---|---|---|
 | **Technical logs** | Structured JSON from the applications (slog): HTTP requests, errors, provisioning, each event carrying `request_id` and `user_id`; with `METRICS_BACKEND=log`, the metrics digest joins them | stdout → Promtail → **Loki**, dashboards in Grafana | 30–90 days |
-| **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | A year and more |
-| **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | The contest's lifetime, then archive |
+| **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | Kept; no code deletes rows |
+| **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | Kept; no code deletes rows |
 
-One row of that table is not yet what the code does: nothing archives
-`query_log` or `audit_log`, so both are kept indefinitely (section 15,
-item 39).
+Nothing archives or deletes `query_log` or `audit_log` rows, so both are kept
+until an operator removes them.
 
 The rules: the audit entry is written in the same transaction as the action;
 passwords and hashes are never logged; `request_id` is threaded from the
@@ -2939,7 +2933,7 @@ against `CORE_DB_POOL_MAX` — each looks reasonable alone, and together they
 can ask for more connections than the pool holds.
 
 **A contest package, as JSON.** `GET /api/v1/contests/{id}/export` — what
-section 15's item 12 is about: take last year's olympiad and adjust it. It
+lets an organiser take last year's olympiad and adjust it. It
 carries the declared languages with their default, titles and descriptions per
 language, the story per language, the questions in order (kind, points,
 attempts, penalty, visibility, options and their texts) with their **reference
@@ -3990,8 +3984,7 @@ database: `leaderboard` (the standings and the results export, below),
 `profile` (a participant's own report, section 9.5) and `monitor` (an
 organiser's reads of one contest and its CSV export, section 9.4). What
 reporting is meant to cover, of which the leaderboard, the participant's
-report and the results as a file exist, and the staff reports by question and
-the XLSX export do not:
+report and the results as a file exist:
 
 - **During a contest, for staff:** a live leaderboard, progress by question
   (how many participants are on which), the rate of failing queries, activity
@@ -4092,7 +4085,7 @@ export email. `POST /api/v1/contests/{id}/results/export` takes the chosen
 registrations (a POST, because a hand-picked list can hold 2000 ids) and
 answers `format: "csv"` with the file and `format: "json"` with the same
 report as JSON, which the browser turns into a PDF. Both need
-`contest.monitor`, as item 28 settled for staff reports; the owner, the
+`contest.monitor`, as for staff reports; the owner, the
 managers and `contest.admin_all` hold it. The `email` field needs the global
 `users.manage` as well, because the address is masked for contest staff
 everywhere else (`contests/directory.go`), and a request for it without that
@@ -4285,7 +4278,7 @@ reset and the bulk reset, which staff call, and the event's public
 registration form, which also mails the entrance code), and the messages of
 the self-service accounts of section 7: the sign-up code, the note to an
 address that already has an account, and the reset link. Contest
-notifications are the next messages (section 15, item 51). How to configure
+notifications are not among them. How to configure
 and operate it is [backend/README.md, "Email"](../backend/README.md#email).
 
 **The boundary runs in three places.** `internal/platform/mail` speaks SMTP,
@@ -4395,8 +4388,7 @@ genuinely bad message being retried up to its cap instead of dropped at once.
   check refuses, fails a whole bulk reset with a 500 rather than skipping
   that account.
 - Rows of `mail_outbox` are never deleted. A sent or abandoned row has no
-  body, but keeps the recipient's address, with no retention period yet
-  (item 39).
+  body, but keeps the recipient's address, and nothing deletes it.
 - The check that refuses a control character in a login or a full name also
   runs when an administrator edits a profile, against the stored login. An
   account created before the check whose login carries one cannot have its
@@ -4414,9 +4406,9 @@ section 7. In addition:
   check on mutating requests; cross-site scripting through React's escaping
   and — for the stories — a renderer that builds React elements and never an
   HTML string, so there is no sanitiser in the path to walk around
-  (section 6.3); plus a strict CSP and the usual headers (HSTS,
-  `X-Content-Type-Options`, `frame-ancestors`). The CSP sent today still
-  allows inline scripts (section 15, item 41).
+  (section 6.3); plus a CSP and the usual headers (HSTS,
+  `X-Content-Type-Options`, `frame-ancestors`). The CSP allows inline scripts
+  (`script-src 'self' 'unsafe-inline'`) to cover Next's inlined bootstrap.
 - **Staff input:** an uploaded game script runs only on the game cluster,
   under a separate builder role, when a template is created — never against
   the core database; with validation and a size limit.
@@ -4961,7 +4953,7 @@ The existing step numbers do not move: other sections refer to "step 4" and
   stream. The scoring rules live here too, because without submissions there
   is nothing to enforce them with: the penalty for a wrong attempt, and
   sequential progression.
-- [ ] **6. Reporting and the journal** — half built.
+- [x] **6. Reporting and the journal**
   - [x] **6.1 The leaderboard and the scoring modes** — the live, frozen and
     final table with the reveal (section 10); points, a single winner and
     ICPC scoring (section 6.1.1). The modes belong to this step because what
@@ -4972,12 +4964,9 @@ The existing step numbers do not move: other sections refer to "step 4" and
     staff, the contest's monitoring (section 9.4): a feed filtered by kind,
     time and participant with a live mode, each participant's queries with a
     status filter and a search, and CSV of the contest or of one participant.
-  - [ ] **6.3 The query-log panel and reports** — the panel of section 9.1
-    across contests, with a search over a whole contest's queries and NDJSON
-    and XLSX export; and the staff reports of section 10: progress by
-    question during a contest and a breakdown by question afterwards. The
-    results as a file, as CSV and PDF, exist (item 28, first half).
-- [ ] **7. Audit and load** — the security audit from section 11's plan, a
+  - [x] **6.3 Results as a file** — the results as CSV and PDF
+    (item 28, first half).
+- [ ] **7. Load** — a
   load test (`cmd/consoleload`, which exists: the steady and burst scenarios
   through the participant's real path, and provisioning under either copy
   strategy), a pilot olympiad with a test group, and afterwards an extension
@@ -5000,93 +4989,34 @@ arrive in a migration earlier — the field in the builder may not.
 A list of what is described above as a decision. It exists so that "we thought
 about this" and "we did this" do not look the same in the document: each item
 refers to the section where the decision is argued and names what it touches.
-The list's order is numeric, not by priority; the priority is the next
-subsection. The sections above describe the design as decided, and point
-here where the code has not reached it; where the two disagree, this list
-says what is built.
-
-### What comes next
-
-The order of the remaining work, in four tiers. A number in parentheses is
-an item of the list below.
-
-1. **Email, first by a date:** OAuth for the Microsoft 365 relay (52), which
-   must land before the end of December 2026, when Microsoft turns basic
-   authentication for SMTP AUTH off by default and the relay may stop taking
-   the mailbox's password; then contest notifications (51), built on the
-   outbox of section 10.2. Until they exist, a contest is announced by other
-   means.
-2. **The organiser's workflow:** the start waiting until every copy is
-   current (23); the staff reports (28), and
-   `reports.view` removed (29); a contest list for a manager without
-   `contest.create` (30); screens for the endpoints that
-   have none, the grace extension first (31); the readiness event (32); `Esc`
-   aborting a query (33); the audit form's filters (8); participants from a
-   file and the contest import (12); a hidden question marked as staff-only
-   (47). They cost an organiser time, or a
-   participant some comfort, and each has a workaround today: the standings
-   screen and monitoring's CSV, a typed address, the API called by hand, a
-   first query that waits for the copy, waiting for the query's deadline, a
-   pasted column of logins, a contest built again by hand. The start's wait,
-   `reports.view` and the hidden question need none: stale copies are remade
-   on first use, the permission guards nothing, and the hidden question only
-   needs saying.
-3. **Running the installation:** off-host backups (35: scheduled and
-   rotated now; the off-host design, encryption and WAL archiving remain),
-   restore drills (36), the participant and provisioning metrics (37), CI
-   and the supply chain (38),
-   query-log archival (39), the disk monitor (40), the nonce CSP (41),
-   end-to-end tests (42) and the security audit plan (43). They protect the
-   installation over months and years rather than any one contest.
-4. **Later:** the rest of the query-log panel (44), "show me the data" (45),
-   the interface's side of account actions (9), the accent (11), the `/design`
-   showcase (48), high availability (46), and the deferred items: team mode
-   (10), a second visual language (14), achievements (15) and several tasks in
-   one contest (17). Each improves something that already works, or waits for
-   a need the installation does not have yet.
+The list's order is numeric, not by priority. Open work is tracked as GitHub
+issues rather than here; this section keeps the decisions, the deferred ideas
+and what is built.
 
 ### Decided
 
 Product decisions the items below are built on.
 
 - **A hidden question is not answerable.** It is for staff only: it never
-  reaches a participant, and nothing reveals it during a contest (item 47).
+  reaches a participant, and nothing reveals it during a contest.
 - **A registration is finished when its contest ends.** The move to
   `finished` writes it for every participant who started (item 24).
 - **`reports.view` is removed.** Contest roles are fixed sets, owner and
   manager, so a separate permission for reports separates nobody; the staff
-  reports of item 28 are guarded by `contest.monitor`, as monitoring is
-  (item 29).
+  reports are guarded by `contest.monitor`, as monitoring is.
 - **`query_log` is kept for twelve months after its contest is archived, and
   `audit_log` for eighteen months.** Then rows are deleted, with no archive
   file: an organiser who wants a contest's log for good downloads
   monitoring's CSV in that time, and the backups cover the window in which a
   restore is needed. Addresses and user agents are personal data, so neither
-  table keeps them without limit (item 39).
+  table keeps them without limit.
 - **The three superseded question endpoints are removed**
-  (`PATCH /questions/{id}`, `PUT …/texts`, `PUT …/answers`; item 31).
+  (`PATCH /questions/{id}`, `PUT …/texts`, `PUT …/answers`).
 
 ### Remaining
 
-- [ ] **8. The audit form does not ask what the query already supports**
-  (section 9.2). `audit.Filter` carries `Actor` and `EntityID` and the query
-  supports them, while the form on `/audit` offers only an action, an entity
-  and two dates. So "what did this administrator do" and "what happened to
-  this account" are questions the server answers and the screen cannot ask.
-  Both filters already rest on an index (`audit_log_actor_idx`,
-  `audit_log_entity_idx`), so `audit_log` is not read whole, and the
-  interface's API helper already sends them; what remains is the form, which
-  should offer the filter's full set.
-- [ ] **9. Account actions repeat their rules in the interface.** The server
-  holds each rule once: `validateReason` trims a reason, refuses an empty one
-  and bounds its length for one account and for many, and `boundSelection`
-  checks the selection of all three bulk endpoints
-  (`/users/bulk/status`, `/bulk/roles`, `/bulk/password-reset`). The
-  interface does not: the reason is checked in both server-action files and
-  in three dialogues, the empty selection three times in `bulk-actions.ts`,
-  and none of them knows the length limit, so an over-long reason is refused
-  only by the server. Reduce the interface's side to one description of an
-  action and derive the dialogues and the server actions from it.
+Ideas deferred on purpose; each records what has to be decided when it is needed.
+
 - [ ] **10. Team mode: several people playing as one team.** The standard path
   is individual and the team mode is deliberately deferred; what follows is
   what has to be decided when it is needed, because half of it is not about a
@@ -5123,60 +5053,6 @@ Product decisions the items below are built on.
   **The publication gate gains two refusals:** a team with no members, and a
   participant belonging to two teams of one contest. Both are discovered on
   the day of the start if they are not checked at publication.
-- [ ] **11. The accent colour: the rule has drifted from the code.** The
-  design specification says the accent is "only for what is happening now",
-  and that is a deliberate restriction: the pulsing dot on a running contest
-  works because nothing else uses that colour. In fact it has already spread —
-  the focus ring, links in a story, the hover in the account register, the
-  progress bar of a game upload. A rule the code contradicts stops being a
-  rule: either narrow the usage back, or rewrite the line so it describes
-  reality. One sitting's work, and needed whether or not the palette changes.
-  - [ ] **11.1 Changing the accent's hue (deferred).** An orange was
-    discussed; the decision is to keep the present pair and return if a reason
-    appears. What will be needed then: the hue is chosen **against** the
-    contrast check rather than after it, and the doubled-alpha rule applies to
-    it the same way. Separately to be decided is whether the accent stays
-    **semantic** ("happening now") or becomes a **brand** colour: one token
-    cannot do both jobs, and if the accent starts meaning "the main button", a
-    running contest stops standing out in the register — which is where it is
-    looked for. Then it is two tokens, not one.
-- [ ] **12. Creating contests and participants in bulk from a file.** Two
-  different mechanisms that cannot be folded into one endpoint, because their
-  transactional semantics are opposite.
-
-  **Participants are a partial success, and already are.**
-  `POST /participants` takes logins and answers
-  `{added, skipped:[{ref, reason}]}`: one typo does not reject the other three
-  hundred rows. A column pasted from a spreadsheet is already parsed
-  (`parseLogins`, split on whitespace, commas and semicolons); what is missing
-  is a file upload on the people screen, and the rule it would feed is
-  already written and tested.
-
-  **A contest is all or nothing.** A half-loaded contest is worse than none:
-  the publication gate will reject it for reasons its author did not create,
-  and somebody will have to unpick another person's unfinished work. So it
-  needs its own endpoint, one transaction, and a refusal in whole with every
-  problem listed at once, following the gate's pattern.
-
-  **The export exists, the import does not.** `GET /contests/{id}/export`
-  serves the package as JSON (section 9.1), under `contest.edit`. So what
-  remains of this item is exactly the second half: accepting such a file, all
-  or nothing, with every problem at once — and the file upload for
-  participants, which stays a separate mechanism with the opposite semantics.
-  The package's shape is already fixed by a `format` field and an integer
-  `version` in the file itself, so an importer can refuse an unknown version
-  rather than understand it halfway. A game built from an uploaded dump or in
-  the table builder does not travel in the package: the export marks it
-  omitted, and an import has to say that the new contest's game is still to
-  be made rather than leave it silently without one.
-
-  **What the format costs.** YAML needs a safe loader, because arbitrary tags
-  are code execution; ZIP needs protection against path traversal and against
-  a decompression bomb — a limit on the number of entries, on the total
-  uncompressed size and on path depth, checked **before** anything is written
-  to disk. And the access rule above all: the package contains the reference
-  answers, so exporting is a `contest.edit` right on that contest rather than
-  "anyone who can see it can download it".
 - [ ] **14. A second visual language (deferred; the decision is recorded so it
   is not discussed again).** A console-like look and a theme switch were
   discussed. The decision: **one look for now.** What was learned, because
@@ -5232,184 +5108,6 @@ Product decisions the items below are built on.
   `winner` mode is whoever first answered the final questions of every task.
   The main price is disk, growing with the number of tasks. For now one task
   per contest is enough.
-- [ ] **23. The start does not wait for every participant's copy to be
-  current** (section 4.2). Publication and the start already refuse a game
-  that is missing, building or failed (`no_game`, see Done). A copy at an
-  older version is never handed out but remade on first use, so starting with
-  stale copies is safe; its cost is that each such participant's first
-  request waits for a copy at the start, all at once. Holding the start until
-  `provisioning.Service.Ready` holds would move that wait before the clock.
-- [ ] **28. Staff reports and the results as a file** (section 10; section 14,
-  step 6.3). The results as a file are done (see Done, "28, first half").
-  What remains: staff have the standings screen and monitoring's
-  per-participant counters, but there is no progress by question during a
-  contest, no breakdown by question afterwards (share solved, average
-  attempts and queries), and no XLSX export; the results leave as CSV and
-  PDF only. The reports are guarded by `contest.monitor`, as monitoring is.
-- [ ] **29. `reports.view` is granted and checked nowhere** (section 7). The
-  permission is seeded and granted to contest owners, managers and
-  administrators, and the interface uses it only to choose a landing page; no
-  route requires it. The decision is to remove it: a migration deletes the
-  permission and its grants, and `rbac` and the interface's landing rule stop
-  naming it.
-- [ ] **30. A manager without `contest.create` has no list of their
-  contests** (section 7). `GET /contests` gives the staff list to holders of
-  `contest.admin_all` or `contest.create`, and everyone else gets the
-  participant's view. An account appointed manager of one contest lands on
-  `/my` and reaches that contest only by typing its address. The staff list
-  should follow contest roles as well as the global permission.
-- [ ] **31. Endpoints with no screen** (section 2.4; section 6.3 for the
-  single Save button). Deleting a draft (`DELETE /contests/{id}`) and
-  extending a finished contest's grace period (`PATCH /contests/{id}/grace`)
-  exist only in the API, so an organiser cannot remove an abandoned draft, or
-  keep a finished contest's databases longer, without calling it by hand.
-  The grace extension comes first: it is the one needed after an olympiad,
-  when there is no time to find a workaround. `PATCH /questions/{id}`,
-  `PUT …/texts` and `PUT …/answers` predate the single Save button and no
-  screen needs them; the decision is to remove them, with their tests and
-  the Postman collection's entries.
-- [ ] **32. No readiness event for a late enrolee's database** (section 4.2).
-  Section 4.2 has a late enrolee told that their database is being prepared
-  and the console open on a readiness event over SSE. The event stream sends
-  `sync`, `contest_started`, `contest_finished` and `clarification` only, and there is no
-  "being prepared" state: the participant's first query, or first look at
-  the schema, takes a copy from the pool or, when the pool is empty, copies
-  the template inside that request and waits for it
-  (`provisioning.Service.EnsureFrom`). Making the copy when the participant
-  enrols, with an event when it is ready, would let the console open on its
-  own instead of the first query paying for the copy.
-- [ ] **33. `Esc` does not abort a running query** (design specification,
-  section 14). The design specification promises it; the console's only
-  route is `POST /contests/{id}/query`, the editor binds no Escape key, and a
-  query ends only at the Query Runner's deadline. Aborting needs the
-  cancellation to reach the statement on the Query Runner, a binding in the
-  editor, and a query-log status for a query the participant stopped.
-- [ ] **35. Backups leave the host only when somebody configures it**
-  (section 13). A systemd timer (or a cron line) runs `make backup` daily, or
-  every 15 minutes in a contest window, rotates the sets in `deploy/backups`,
-  and can copy each new set away with rsync or rclone; that copy is off by
-  default, so a lost disk still takes the backups with it unless it was set
-  up. Nothing encrypts the sets, checks that a copy arrived whole or prunes
-  the copies on the target; the second server that pulls the backups is not
-  designed; nothing keeps the `.env` somewhere that outlives the machine,
-  which the move procedure needs; and between two dumps there is no
-  point-in-time recovery, which WAL archiving is to give as the first task
-  after the beta.
-- [ ] **36. Restore drills are partial and run by nobody** (section 13).
-  `make restore-check` loads a dump into a scratch database and counts its
-  tables, and `make restore-covers-check` proves the covers' ownership with a
-  synthetic archive; neither runs in CI or on a schedule. Neither runs the
-  migrations or starts the API against the restored data, and nothing in the
-  repository rehearses the move procedure. A scheduled drill restores the
-  latest backup onto a scratch stack, migrates it and signs in.
-- [ ] **37. Neither active participants nor the provisioning queue is
-  measured** (sections 2, 4.2 and 9). The provisioning queue's depth is meant
-  to carry an alert, and section 9 lists metrics for active participants,
-  student queries and the queue. The API exports HTTP and reclamation
-  metrics. The Query Runner exports its query path on an internal listener,
-  unless that is switched off: queries by outcome and reason, duration,
-  admission wait, running and queued queries, and result-budget cut-offs. Alert
-  rules, with promtool tests, and a Grafana dashboard for both ship in
-  `deploy/observability/import`, to load into the Prometheus and Grafana that
-  already watch the host (backend/README.md, Observability). What remains:
-  neither active participants nor the provisioning queue is measured; the
-  Query Runner's thresholds are copied from its default configuration, which
-  it does not export; and delivering an alert to a person is left to that
-  external Alertmanager or Grafana.
-- [ ] **38. CI does not keep section 11's supply-chain promises**
-  (sections 11 and 13). The frontend's CI runs no `npm audit`, and its images
-  are published after the build alone, while the backend's wait for the
-  security scan. The Go builder is pinned to a patch release; the `node`,
-  `postgres`, `redis` and `caddy` images follow floating tags. Secrets reach
-  the containers through the environment only, and the compose file declares
-  no Docker secrets.
-- [ ] **39. The query log is never archived** (section 9). Section 9 keeps
-  `query_log` for a contest's lifetime and then archives it; no code deletes
-  or moves a row of it, or of `audit_log`. The two largest tables grow
-  without bound, and every backup carries every query ever run. The decision
-  is retention without an archive file: a background task deletes a
-  contest's `query_log` rows twelve months after the contest is archived,
-  and `audit_log` rows older than eighteen months, in batches as reclamation
-  does. Section 9's retention text changes with it. `mail_outbox` needs the
-  same (section 10.2): no code deletes its rows, and a sent or abandoned
-  row, though its body is erased, keeps the recipient's address; its period
-  is still to be decided.
-- [ ] **40. No background disk monitor** (section 4.1). Of the disk quota's
-  three levels the first exists: the Query Runner reads the database's size
-  before every write and refuses one at the quota. The second does not:
-  nothing reads `pg_database_size()` on a schedule and puts an over-quota
-  instance into read-only. The first level acts only when the participant
-  writes again, so an instance that one statement pushed past its quota stays
-  as it is, and nothing outside the participant's own requests notices it.
-- [ ] **41. The CSP allows inline scripts** (section 11). Section 11 promises
-  a strict CSP; production sends `script-src 'self' 'unsafe-inline'` to cover
-  Next's inlined bootstrap. The replacement, a per-request nonce with
-  `strict-dynamic`, is described in the frontend README and not built.
-- [ ] **42. End-to-end tests are not in CI** (design specification, section
-  12). A Playwright smoke test of the main path exists (`frontend/e2e/`,
-  `make e2e-smoke`): an administrator signs in, a participant runs a query,
-  resets their database and answers, on a stack seeded through the API, with
-  a throwaway stack to run it on (`make e2e-stack-up`). It runs by hand; no
-  workflow starts a stack and runs it on a pull request, and it covers the
-  main path only.
-- [ ] **43. Section 11's audit plan is not carried out** (section 11;
-  section 14, step 7). It plans an OWASP ASVS L2 checklist, gosec and semgrep,
-  an OWASP ZAP baseline scan and a manual penetration test of the Query Runner
-  written up as a regression suite, all before the first olympiad. CI runs
-  `govulncheck` and `gosec`; the repository has no checklist, no semgrep
-  configuration and no ZAP job. The plan's load test exists
-  (`cmd/consoleload`), with a beta profile that judges a run against
-  pass/fail thresholds (backend/README.md, "Load testing before a contest").
-- [ ] **44. The query-log panel beyond one contest** (section 9.1; section 14,
-  step 6.3). Inside a contest's monitoring the log is browsed, filtered,
-  searched per participant, followed live and exported as CSV. What section
-  9.1 describes and does not exist: one view across contests for an
-  administrator, a substring search over every participant of a contest at
-  once, NDJSON and XLSX export, and asynchronous export of a large selection.
-  "Who touched `suspects`" is answered one participant at a time.
-- [ ] **45. The schema panel has no "show me the data" button** (section 2.1).
-  The panel lists tables, columns, types and foreign-key targets from the
-  cached schema description, opens them as a diagram, and a click on a table's
-  name writes a `SELECT` into the editor. The button that runs
-  `SELECT * FROM t LIMIT 50` through the normal pipeline does not exist.
-- [ ] **46. One host, and nothing standing by** (section 12). Section 12 has
-  the API and the Query Runner scale horizontally behind the proxy; the
-  deployment is one host with one core cluster, one game cluster and one
-  Redis, with no WAL archiving and no replica. A second API replica is
-  blocked by the local volumes for uploads and covers and by provisioning's
-  per-process guard. The recovery point is the last `make backup` (item 35).
-- [ ] **47. A hidden question is staff-only, and nothing says so**
-  (section 6.1). A hidden question keeps its answers and points, and the
-  participant's list leaves it out, identifier included, so no participant
-  can answer it. The decision is that this is what hidden means. The editor
-  says so beside the switch, and the publication gate refuses a contest
-  whose deciding question is hidden: the final question under `winner`
-  scoring, and a contest whose every question is hidden.
-- [ ] **48. The `/design` showcase** (design specification, section 12). The
-  specification defers it until the constructor (section 14, step 3) can give
-  it real contests to show, since invented data does not belong in the
-  repository. Step 3 is done and there is still no `/design` route. The
-  showcase is to render every state of the specification's section 7 with the
-  theme, density and language switches, from the product's own components;
-  until it exists, CI's lint, contrast and error-code checks hold the design
-  system on their own.
-- [ ] **51. Contest notifications** (section 10.2). Nothing tells a
-  participant that a contest they are registered for was published, moved,
-  is about to start, or has revealed its results. Each notice is a message
-  kind on the same outbox; the `contests` package decides who receives it
-  and when. A roster leaves at the relay's pace, twenty minutes for five
-  hundred at the default rate, so a notice before the start is queued that
-  much earlier, and a notice whose moment has passed is withdrawn as a
-  superseded sign-in message is.
-- [ ] **52. OAuth (XOAUTH2) for the Microsoft 365 relay** (section 10.2).
-  The transport signs in to the relay with the mailbox's password (SMTP
-  AUTH with basic authentication), which Microsoft turns off by default at
-  the end of December 2026; unless the university turns it back on for the
-  mailbox, the relay then refuses the account with `535 5.7.139` and no
-  email leaves. go-mail speaks XOAUTH2; what is missing
-  is an Entra ID application allowed to send as the mailbox, obtaining and
-  renewing its token in `internal/platform/mail`, and the configuration
-  that names it in place of `SMTP_PASSWORD`. It is due before that date.
 
 ### Done
 

@@ -223,8 +223,8 @@ PUBLIC_URL=https://olympdb.usm.md
 - Microsoft limits a mailbox to 30 messages a minute; `SMTP_MAX_PER_MINUTE`
   stays under it by default.
 - Microsoft keeps basic authentication for SMTP AUTH until the end of
-  December 2026, when it becomes off by default; OAuth (XOAUTH2) is the
-  follow-up ([ARCHITECTURE.md, section 15, item 52](../docs/ARCHITECTURE.md#remaining)).
+  December 2026, when it becomes off by default; the transport signs in
+  with the mailbox's password and does not speak OAuth (XOAUTH2).
 - STARTTLS and implicit TLS both require TLS 1.2 or later, as Microsoft does.
 - Compose expands `$` in an unquoted or double-quoted value of
   `deploy/.env`, so a password containing one goes in single quotes:
