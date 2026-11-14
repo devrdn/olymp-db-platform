@@ -168,8 +168,9 @@ docs/       architecture, guide, design system, API contracts
 
 ## Status
 
-The platform runs contests. Section 15 of the architecture document lists what
-is finished and what is not.
+The platform runs contests. The architecture document's section 15 lists what
+is decided, what is built and what is deferred on purpose; open work is
+tracked as GitHub issues.
 
 ## Built with AI assistance
 
