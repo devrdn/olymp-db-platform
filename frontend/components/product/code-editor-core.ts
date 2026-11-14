@@ -74,7 +74,9 @@ const editorTheme = EditorView.theme({
   },
   ".cm-lineNumbers .cm-gutterElement": { padding: "0 0.5rem 0 0.75rem", minWidth: "2.25rem" },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--ink)" },
-  ".cm-scroller": { overflow: "auto" },
+  // The base theme sets `font-family: monospace` on the scroller, which the
+  // editor root's font does not reach through.
+  ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono)" },
   ".cm-placeholder": { color: "var(--ink-3)" },
   // `bracketMatching()` ships a base theme with literal colours. A base theme
   // always loses to a regular one for the same selector, so repeating its
