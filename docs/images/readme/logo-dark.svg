@@ -1,8 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="16 8 90 116" width="90" height="116" role="img" aria-label="OlympDB Platform">
 <style>
-.i{fill:#1E1A18}.c{fill:#F5ECDB}.t{fill:#E0805F}.g{fill:#6B9E57}.m{fill:#E8B24A}.r{fill:#C8392E}.p{fill:#1E1A18}
-.w{stroke:#1E1A18;stroke-width:1.2;stroke-linecap:round;fill:none}
-@media (prefers-color-scheme: dark){.i{fill:#F5ECDB}.c{fill:#1E1A18}.w{stroke:#F5ECDB}}
+.i{fill:#F5ECDB}.c{fill:#1E1A18}.t{fill:#E0805F}.g{fill:#6B9E57}.m{fill:#E8B24A}.r{fill:#C8392E}.p{fill:#1E1A18}
+.w{stroke:#F5ECDB;stroke-width:1.2;stroke-linecap:round;fill:none}
 </style>
 <path d="M28,92 A32,7 0 0 0 92,92 L92,102 A32,7 0 0 1 28,102 Z" class="g"/>
 <path d="M28,105 A32,7 0 0 0 92,105 L92,114 A32,7 0 0 1 28,114 Z" class="t"/>

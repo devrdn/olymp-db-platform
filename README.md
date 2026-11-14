@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="docs/images/readme/logo.svg" alt="OlympDB Platform" width="90" height="116">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/logo-dark.svg">
+  <img src="docs/images/readme/logo-light.svg" alt="OlympDB Platform" width="90" height="116">
+</picture>
 
 # OlympDB Platform
 
