@@ -223,8 +223,8 @@ PUBLIC_URL=https://olympdb.usm.md
 - Microsoft limits a mailbox to 30 messages a minute; `SMTP_MAX_PER_MINUTE`
   stays under it by default.
 - Microsoft keeps basic authentication for SMTP AUTH until the end of
-  December 2026, when it becomes off by default; OAuth (XOAUTH2) is the
-  follow-up ([ARCHITECTURE.md, section 15, item 52](../docs/ARCHITECTURE.md#remaining)).
+  December 2026, when it becomes off by default; the transport signs in
+  with the mailbox's password and does not speak OAuth (XOAUTH2).
 - STARTTLS and implicit TLS both require TLS 1.2 or later, as Microsoft does.
 - Compose expands `$` in an unquoted or double-quoted value of
   `deploy/.env`, so a password containing one goes in single quotes:
@@ -1771,8 +1771,8 @@ known), rclone with a named remote in its config file (`BACKUP_RCLONE_CONFIG`,
 else the user's own). The target is never written to the log either. A failed
 copy fails the run and leaves that set on this host only; the next run copies
 its own set, not the missed one. Nothing is deleted on the target: what it
-keeps is the target's business, and the design of a second server pulling the
-backups is still to come (item 35 of the architecture).
+keeps is the target's business, and no design for a second server pulling the
+backups exists.
 
 **Was the last backup taken?**
 
