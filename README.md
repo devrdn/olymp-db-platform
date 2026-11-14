@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="frontend/public/icon.svg" alt="DB Contest" width="72" height="72">
+<img src="docs/images/readme/logo.svg" alt="OlympDB Platform" width="90" height="116">
 
-# DB Contest
+# OlympDB Platform
 
 **A platform for SQL olympiads in a detective format: read the story, query the evidence database, name the culprit.**
 
@@ -170,7 +170,7 @@ is finished and what is not.
 
 ## Built with AI assistance
 
-DB Contest is designed, written and maintained by its author. Claude (Anthropic), working through Claude Code, assists with the work: drafting designs and plans, writing and reviewing code and tests, security reviews and documentation. Every change is reviewed and merged by the author.
+OlympDB Platform is designed, written and maintained by its author. Claude (Anthropic), working through Claude Code, assists with the work: drafting designs and plans, writing and reviewing code and tests, security reviews and documentation. Every change is reviewed and merged by the author.
 
 ## Contributing and security
 
@@ -182,7 +182,7 @@ Report a vulnerability privately, not in an issue: see [SECURITY.md](SECURITY.md
 
 Copyright 2026 Nartea Nichita.
 
-DB Contest is licensed under the [Apache License, Version 2.0](LICENSE). You
+OlympDB Platform is licensed under the [Apache License, Version 2.0](LICENSE). You
 may use, modify and run it, including for commercial purposes, provided you
 keep the license and the [NOTICE](NOTICE) with it and say what you changed.
 The fonts it serves (JetBrains Mono, Literata, Onest) are under the SIL Open
