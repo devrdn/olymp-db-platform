@@ -465,7 +465,7 @@ that is the personal-account tenant now refuses start-up; set it to
 then, and the **Secret ID** beside it is not the secret. The portal suggests
 180 days and allows up to 24 months, unless the tenant's policy allows less.
 Put the expiry in a calendar. On that day every sign-in with Microsoft
-fails: people read "Signing in with Microsoft did not work", and the API's
+fails: people read "Signing in through that service did not work", and the API's
 log warns `a sign-in was refused` (`provider=microsoft`) with Microsoft's `AADSTS7000222`
 (an invalid value is `AADSTS7000215`).
 
@@ -497,7 +497,7 @@ https://login.microsoftonline.com/<their tenant ID>/adminconsent?client_id=<MICR
 ```
 
 Microsoft then sends the browser to the platform without a sign-in, so it
-lands on the sign-in page with "Signing in with Microsoft did not work"; the
+lands on the sign-in page with "Signing in through that service did not work"; the
 consent is given all the same. In the tenant holding the registration,
 **API permissions**, **Grant admin consent** does the same. Verifying the
 publisher (**Branding & properties**, with a Microsoft partner account) lets
