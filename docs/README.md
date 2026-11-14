@@ -16,6 +16,7 @@ A path through the project for your first days on it.
 | [5. Frontend](guide/05-frontend.md) | Route groups, how a page gets its data, UI text and locales, the play screen, and recipes for a page, an API module, a string |
 | [6. Testing](guide/06-testing.md) | The kinds of tests, how to run each, what CI runs, and how to write a good one here |
 | [7. Running a contest](guide/07-running-a-contest.md) | The runbook for a live contest: the week, the day and the hour before, what to watch and the incidents during it, and what to close after |
+| [8. Troubleshooting](guide/08-troubleshooting.md) | What goes wrong on a first run and how to get past it: prerequisites and ports, configuration refusals, containers, migrations, the interface, sign-in and the console, and how to collect logs |
 
 ## Rules
 
