@@ -15,12 +15,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/devrdn/db-contest/backend/internal/api"
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/showcase"
+	"github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/showcase"
 )
 
 // showcaseRepo serves whatever a test put in it and counts reads: a refusal

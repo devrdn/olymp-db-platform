@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/connector"
+	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
 )
 
 var (

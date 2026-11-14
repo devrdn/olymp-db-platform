@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 )
 
 func TestTargetRefusesADatabaseThatIsNotATestDatabase(t *testing.T) {

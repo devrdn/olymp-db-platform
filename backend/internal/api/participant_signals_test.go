@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
 	"github.com/google/uuid"
 )
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 )
 
 func TestNewFallsBackToMemoryWhenNoAddressIsConfigured(t *testing.T) {

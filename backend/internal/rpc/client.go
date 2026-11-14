@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	pb "github.com/devrdn/olymp-db-platform/backend/internal/rpc/queryrunnerv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"

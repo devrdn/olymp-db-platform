@@ -15,12 +15,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/postgres"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 func main() {

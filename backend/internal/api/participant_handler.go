@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/monitor"
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

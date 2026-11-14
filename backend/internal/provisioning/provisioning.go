@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 	"golang.org/x/sync/semaphore"
 )

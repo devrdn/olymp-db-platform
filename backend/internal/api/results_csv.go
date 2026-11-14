@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/leaderboard"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
 )
 
 // resultsCSVVersion is the layout of the file, sent as X-Results-Format. A

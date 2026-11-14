@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 // Store finds accounts and their identities (internal/postgres.Users).

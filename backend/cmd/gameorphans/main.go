@@ -24,14 +24,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/covers"
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
-	"github.com/devrdn/db-contest/backend/internal/platform/config"
-	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/postgres"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/config"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/filestore"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
 // dropStatementTimeout bounds one statement on the game cluster: a DROP

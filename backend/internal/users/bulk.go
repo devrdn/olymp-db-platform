@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )

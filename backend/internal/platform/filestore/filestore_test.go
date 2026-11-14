@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/filestore"
 )
 
 func newStore(t *testing.T, dir string) *filestore.Store {

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/api"
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 )
 
 // A CSV download holds a core-pool connection while the client reads it, so the

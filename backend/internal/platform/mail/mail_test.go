@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/mail"
-	"github.com/devrdn/db-contest/backend/internal/platform/mail/mailtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/mail"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/mail/mailtest"
 )
 
 const (

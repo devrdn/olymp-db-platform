@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/google/uuid"
 )
 

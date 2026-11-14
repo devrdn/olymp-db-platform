@@ -14,8 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/devrdn/db-contest/backend/internal/api"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 )
 
 type offered bool

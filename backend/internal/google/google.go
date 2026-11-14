@@ -24,9 +24,9 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/devrdn/db-contest/backend/internal/connector"
-	"github.com/devrdn/db-contest/backend/internal/federation"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
+	"github.com/devrdn/olymp-db-platform/backend/internal/federation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 // Issuer is the canonical issuer of Google's ID tokens; Google also writes

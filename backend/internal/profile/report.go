@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/leaderboard"
-	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
+	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
 )
 
 // Result is the participant's own standing, as the profile may show it.

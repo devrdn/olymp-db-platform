@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
 // 63 GiB used of 64: a 3 GiB copy does not fit.

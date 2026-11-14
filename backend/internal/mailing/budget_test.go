@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 )
 
 func newBudget(t *testing.T, name string, limits mailing.Limits, c *cache.Memory, logs *bytes.Buffer) *mailing.Budget {

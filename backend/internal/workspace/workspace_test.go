@@ -8,12 +8,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/monitor"
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
-	"github.com/devrdn/db-contest/backend/internal/workspace"
-	"github.com/devrdn/db-contest/backend/internal/workspace/workspacetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/workspace"
+	"github.com/devrdn/olymp-db-platform/backend/internal/workspace/workspacetest"
 	"github.com/google/uuid"
 )
 

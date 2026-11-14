@@ -3,7 +3,7 @@ package checker
 import (
 	"fmt"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 // The parser this package calls is PostgreSQL's own, linked through cgo, and

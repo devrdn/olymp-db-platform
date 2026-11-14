@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
 )
 
 func TestAMemoryLimitBelowWhatHashingNeedsIsWarnedAbout(t *testing.T) {

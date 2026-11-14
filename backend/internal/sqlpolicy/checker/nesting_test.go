@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 )
 
 // The parser overflows its C stack at about 25,000 chained operators, inside

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/gamedb"
-	"github.com/devrdn/db-contest/backend/internal/platform/config"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/config"
 )
 
 func TestRefusePlaceholderCredentialsOutsideDevelopment(t *testing.T) {

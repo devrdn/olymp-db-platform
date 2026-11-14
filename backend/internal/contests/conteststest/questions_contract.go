@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/google/uuid"
 )
 

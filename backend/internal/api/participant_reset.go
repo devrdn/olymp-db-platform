@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/go-chi/chi/v5"
 )
 

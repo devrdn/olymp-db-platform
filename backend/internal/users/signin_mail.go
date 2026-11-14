@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/settings"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/settings"
 	"github.com/google/uuid"
 )
 

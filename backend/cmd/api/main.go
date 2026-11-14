@@ -11,9 +11,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/devrdn/db-contest/backend/internal/app"
-	"github.com/devrdn/db-contest/backend/internal/health"
-	"github.com/devrdn/db-contest/backend/internal/platform/config"
+	"github.com/devrdn/olymp-db-platform/backend/internal/app"
+	"github.com/devrdn/olymp-db-platform/backend/internal/health"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/config"
 )
 
 // version is set at build time with -ldflags.

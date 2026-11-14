@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	pb "github.com/devrdn/olymp-db-platform/backend/internal/rpc/queryrunnerv1"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"

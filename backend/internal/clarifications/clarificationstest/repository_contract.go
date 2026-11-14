@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/clarifications"
+	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
 	"github.com/google/uuid"
 )
 

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
-	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 

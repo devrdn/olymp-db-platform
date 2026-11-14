@@ -17,17 +17,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/devrdn/db-contest/backend/internal/api"
-	"github.com/devrdn/db-contest/backend/internal/auth"
-	"github.com/devrdn/db-contest/backend/internal/auth/authtest"
-	"github.com/devrdn/db-contest/backend/internal/mailing"
-	"github.com/devrdn/db-contest/backend/internal/platform/cache"
-	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
-	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
-	"github.com/devrdn/db-contest/backend/internal/recovery"
-	"github.com/devrdn/db-contest/backend/internal/recovery/recoverytest"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/auth/authtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
+	"github.com/devrdn/olymp-db-platform/backend/internal/recovery/recoverytest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 const recoveryPassword = "a long enough new password"

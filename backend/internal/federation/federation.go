@@ -22,7 +22,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 // Bounds on the claims an adapter hands over (CLAUDE.md rule 2), in bytes.

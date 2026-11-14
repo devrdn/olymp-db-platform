@@ -1,6 +1,6 @@
 package auth
 
-import "github.com/devrdn/db-contest/backend/internal/platform/httpx"
+import "github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 
 // The codes authentication and authorisation answer with, declared here
 // because the middleware emits them before any handler runs.

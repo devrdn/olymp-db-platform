@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
 	"golang.org/x/crypto/argon2"
 )
 

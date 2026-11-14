@@ -16,7 +16,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/devrdn/db-contest/backend/migrations"
+	"github.com/devrdn/olymp-db-platform/backend/migrations"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"

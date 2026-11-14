@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/gamefile"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
 	"github.com/google/uuid"
 )
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
+	pb "github.com/devrdn/olymp-db-platform/backend/internal/rpc/queryrunnerv1"
 )
 
 // cellsFor renders one row as text for the console. NULL is a flag, not an

@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/clarifications"
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/google/uuid"
 )
 

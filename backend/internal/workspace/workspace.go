@@ -19,7 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/fanout"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/fanout"
 	"github.com/google/uuid"
 )
 

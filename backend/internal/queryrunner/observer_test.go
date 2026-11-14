@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

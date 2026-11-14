@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 )
 
 // offerer is a way in that may be switched off (signup.Service,

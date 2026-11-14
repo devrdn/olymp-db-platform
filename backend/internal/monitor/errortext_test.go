@@ -3,7 +3,7 @@ package monitor
 import (
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 )
 
 func TestStaffSeeTheParticipantsSQLFeedbackAndNotOurInfrastructure(t *testing.T) {
