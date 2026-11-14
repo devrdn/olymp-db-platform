@@ -253,7 +253,7 @@ func TestTheContestPackageLeavesLastYearsRunBehind(t *testing.T) {
 
 func TestTheContestPackageIsBehindContestEditRatherThanContestView(t *testing.T) {
 	// The package is a full answer key, so it needs the permission to author
-	// answers, not to view (docs/ARCHITECTURE.md §15, item 12). Asserted on
+	// answers, not to view (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON"). Asserted on
 	// what the route asked the authorizer: rbac grants managers contest.view
 	// and contest.edit together, so no status code could tell the two wirings
 	// apart.

@@ -23,7 +23,7 @@ const MaxPackageQuestions = 500
 // (roster, submissions, query log).
 //
 // It carries the reference answers, so it is a full answer key and its
-// endpoint requires contest.edit (docs/ARCHITECTURE.md §15, item 12).
+// endpoint requires contest.edit (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON").
 type Package struct {
 	// Contest is the domain object; the HTTP layer decides which fields
 	// reach the wire.
@@ -66,8 +66,7 @@ type GameSource interface {
 	Script(ctx context.Context, contestID uuid.UUID) (script string, ok, omitted bool, err error)
 }
 
-// ExportPackage assembles the contest as a package (docs/ARCHITECTURE.md §15,
-// item 12).
+// ExportPackage assembles the contest as a package (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON").
 //
 // Assembled whole rather than streamed, so a failure cannot leave a partial
 // answer key behind a 200. The reads are not transactional: a package can be

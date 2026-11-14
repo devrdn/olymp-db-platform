@@ -10,8 +10,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 )
 
-// The contest package: one olympiad as a file an organiser can edit and, once
-// import is built, load back (docs/ARCHITECTURE.md §15 item 12).
+// The contest package: one olympiad as a file an organiser can take away and
+// adjust (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON").
 //
 // It carries the reference answers. That decides how it is served: contest.edit
 // rather than contest.view, an audit entry, and no route a participant can
