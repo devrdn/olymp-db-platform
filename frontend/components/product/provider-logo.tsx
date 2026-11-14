@@ -17,18 +17,16 @@ export function ProviderLogo({ provider }: { provider: ProviderId }) {
     );
   }
   if (provider === "google") {
-    // Google's G keeps its own colours on white in both themes, so the tile is
-    // white and not a token.
     return (
-      <span
+      // Not next/image: a fixed static mark that needs no resizing pipeline.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src="/brand/google-g.png"
+        alt=""
         aria-hidden="true"
-        className="inline-flex shrink-0 items-center justify-center rounded-sm border border-line-2 bg-white p-0.5"
+        className="shrink-0 object-contain"
         style={{ width: SIZE, height: SIZE }}
-      >
-        {/* Not next/image: a fixed static mark that needs no resizing pipeline. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/google-g.png" alt="" aria-hidden="true" className="h-full w-auto object-contain" />
-      </span>
+      />
     );
   }
   // The mark is a mask over the text colour, so it follows the theme.
