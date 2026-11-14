@@ -59,7 +59,7 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
         />
       </section>
 
-      {/* The contest export (ARCHITECTURE.md §15, item 12). It includes the
+      {/* The contest export (ARCHITECTURE.md §9.1, "A contest package, as JSON"). It includes the
          reference answers, so it sits behind contest.edit. */}
       <section aria-labelledby="export-heading" className="flex flex-col gap-4">
         <h2 id="export-heading" className="text-h3 text-ink">

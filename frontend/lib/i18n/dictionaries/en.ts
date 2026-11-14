@@ -960,7 +960,7 @@ const en = {
       },
     },
     /**
-     * The contest as a file (docs/ARCHITECTURE.md §15, item 12). The lede
+     * The contest as a file (docs/ARCHITECTURE.md §9.1, "A contest package, as JSON"). The lede
      * says what is in it and, in the same breath, why the control is on a
      * page only editors reach: it is the answer key.
      */
