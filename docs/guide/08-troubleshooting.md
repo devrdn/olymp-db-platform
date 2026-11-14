@@ -27,9 +27,9 @@ Check these first; most first-run failures are one of them.
 | A C compiler | `gcc` or `clang` | The Query Runner, `make check`, `make test` and `make build` link PostgreSQL's own parser through cgo |
 | Node.js | 22 (what CI and `frontend/Dockerfile` use; the interface is Next.js 16 on React 19) | Nothing in the repository pins it, so an older Node fails inside Next |
 | Docker with Compose v2 | the `docker compose` plugin | Every target calls `docker compose`; the standalone `docker-compose` v1 is not supported |
-| `make` | GNU Make 3.81 or newer | The macOS default is enough |
+| `make` | GNU Make | The one that ships with macOS and Linux is what the Makefile was run with |
 | `openssl` | any | To generate secrets |
-| Docker resources | at least 2 CPUs and 8 GiB of memory | The game cluster container is declared with 2 CPUs and a 7 GiB limit |
+| Docker resources | 2 CPUs and 8 GiB of memory recommended | The game cluster container is declared with 2 CPUs and a 7 GiB limit |
 
 Platform notes:
 
@@ -56,7 +56,7 @@ The ports the project uses on your machine:
 | 8080 | Core API | `make run` | none: `HTTP_ADDR` is read from the shell |
 | 9090 | API metrics, `/healthz`, `/readyz` | `make run` | none: `INTERNAL_ADDR` is read from the shell |
 | 9100, 9101 | Query Runner (gRPC, metrics), on loopback | `make runner` | the port of `QUERY_RUNNER_ADDR` |
-| 3000 | Interface | `make front`, `make front-start` | `FRONT_PORT` (read by the Makefile only) |
+| 3000 | Interface | `make front`, `make front-start` | `FRONT_PORT` only sets the origin `make run` accepts (`FRONT_ORIGIN`); it does not move the interface, which listens on `PORT` |
 | 80, 443 | Caddy | `make stack-up` | `HTTP_PORT`, `HTTPS_PORT` |
 | 8081 | Adminer | `make dev-db-ui` | `ADMINER_PORT` |
 | 3001 | Grafana | the observability profile | `GRAFANA_PORT` |
@@ -250,10 +250,10 @@ a DSN included, is refused. The API checks the names in no fixed order, so after
 fixing one the next start may name another.
 
 **Fix.** Replace every secret in one pass with generated values (see the
-password entry above), then start again. For a throwaway local stack you can
-instead set `ENV=development`, which accepts the placeholders and also turns the
-secure-cookie default off (see
-[sign-in loops back to the form](#sign-in-succeeds-and-the-next-click-returns-to-the-sign-in-form)).
+password entry above), then start again. For a throwaway local stack only, you can
+instead set `ENV=development`, which accepts the placeholders (and, in the
+containers, nothing else is relaxed: the stack still sends secure cookies, so
+open it over `https://localhost`). Never use it for anything other people reach.
 
 ### `ENV` must be exactly `development`
 
@@ -261,7 +261,9 @@ secure-cookie default off (see
 on a laptop where you set `ENV=dev`, `ENV=local` or `ENV=Development`.
 
 **Cause.** Only the exact string `development` counts. Any other value is
-treated as production, and `ENV` itself is not validated.
+treated as production, and `ENV` itself is not validated. A host process
+with `ENV` unset counts as development; the stack's `.env.example` sets
+`ENV=production`.
 
 **Fix.** `ENV=development`.
 
@@ -270,7 +272,8 @@ treated as production, and `ENV` itself is not validated.
 **Symptom.** One of `DEVICE_COOKIE_SECRET: required outside development`;
 `DEVICE_COOKIE_SECRET: N bytes, at least 32 are required`;
 `DEVICE_COOKIE_SECRET and QUERY_RUNNER_TOKEN must be different secrets`;
-`QUERY_RUNNER_TOKEN: required outside development ...`;
+`QUERY_RUNNER_TOKEN: required outside development ...` (the API asks for it only
+when `QUERY_RUNNER_ADDR` is set; the runner always does);
 `QUERY_RUNNER_TOKEN: N bytes, want between 32 and 512`.
 
 **Cause.** Both are blank in `.env.example` on purpose. Outside development they
@@ -329,7 +332,7 @@ line.
 
 **Symptom.** `fatal: load configuration: <NAME>: <reason>` for a value that is
 out of range or malformed, for example `CORE_DB_POOL_MAX: N is outside [0, 100]`,
-`COOKIE_SECURE: strconv.ParseBool: parsing "yes": invalid syntax`,
+`COOKIE_SECURE:` followed by Go's boolean parse error for a value such as `yes`,
 `TRUSTED_PROXIES: "x" is neither a CIDR nor an address`,
 `LOG_LEVEL: unknown level "x", ...`, or
 `INTERNAL_ADDR: must differ from HTTP_ADDR (both are ":8080")`.
@@ -360,8 +363,8 @@ move together.
 **Symptom.** `fatal: reach the game cluster: ...`, a missing `GAME_DB_ADMIN_DSN`
 or role password, or one of the memory checks (for example the cluster's memory
 limit differs from the configured `GAME_DB_MEMORY_BYTES`). `make stack-up` ends
-with a dependency that failed to start: the job must finish before `api` and
-`queryrunner` start.
+with a dependency that failed to start: the job must finish before `queryrunner`
+starts (the `api` does not wait for it).
 
 **Cause.** After changing `GAME_DB_MEMORY_BYTES` or `GAME_DB_PROCESS_MEMORY_BYTES`
 the running `pg-game` container keeps its old limits. The job also fails when
@@ -375,8 +378,9 @@ VERSION=$(git describe --tags --always --dirty) \
 ```
 
 On a host whose containers cannot report their memory limit (cgroup v1), set
-`GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT=true`. `make game-roles` in development
-skips the memory checks.
+`GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT=true`. `make game-roles` skips the memory checks
+when neither `GAME_DB_MEMORY_BYTES` nor `GAME_DB_PROCESS_MEMORY_BYTES` is in its
+environment, which is the case in development.
 
 ### `PUBLIC_URL`
 
@@ -396,6 +400,7 @@ provider is set. It may carry a path but not `?`, `#` or credentials; a trailing
 **Symptom.** With `SMTP_HOST` set the API refuses to start, for example
 `SMTP_HOST: "smtp.example.edu:587" is not a host name; the port goes in SMTP_PORT`,
 `SMTP_PASSWORD: required when SMTP_USERNAME is set` (and the reverse),
+`SMTP_TLS: none never carries SMTP_USERNAME and SMTP_PASSWORD; use starttls or tls`,
 `SMTP_TLS: none is allowed only with ENV=development`, or
 `SMTP_FROM: required environment variable is not set`. With `SMTP_HOST` empty the
 API starts and logs `mail is off: SMTP_HOST is not set`.
@@ -469,7 +474,7 @@ standalone `docker-compose` v1 binary is not supported.
 
 **Symptom.** Docker reports a port as already allocated for `127.0.0.1:5432`
 (or 5433, 6379, 80, 443). The API says
-`fatal: start public server: listen tcp :8080: bind: address already in use`. The
+`fatal: start public server:` followed by the operating system's "address already in use". The
 Query Runner says `fatal: listen on 127.0.0.1:9100: ...`.
 
 **Cause.** Something else owns the port: a local PostgreSQL on 5432, a local
@@ -551,8 +556,8 @@ With data you want, change the password inside the database instead
 `web` stays `Created` or `unhealthy`.
 
 **Cause.** The services start in order: databases and Redis (healthy), then
-`migrate` and `game-prepare` (which must exit 0), then `api` and `queryrunner`
-(healthy), then `web`, then `caddy`. The first failure in the Configuration
+`migrate` (which must exit 0) and then `api`; `game-prepare` (which must exit 0)
+and then `queryrunner`; `web` after them, then `caddy`. The first failure in the Configuration
 section shows up as everything after it not starting.
 
 **Fix.** Read the failing step:
@@ -617,7 +622,7 @@ make migrate-up
 ### A migration left the database dirty
 
 **Symptom.** Every later `up`, `down` or `version` stops with
-`migrate: Dirty database version N. Fix and force version.`, and
+`migrate:` followed by the migration library's complaint that the database version N is dirty and must be forced, and
 `make migrate-version` reports `dirty: true`.
 
 **Cause.** A migration that fails or is interrupted leaves its version marked
@@ -672,7 +677,8 @@ database the API uses.
 ### `make migrate-down` goes back one step only
 
 **Symptom.** One migration is undone per call. Migration 54's down file refuses
-while accounts without a password exist.
+while accounts without a password exist; you reach it only after rolling back
+57, 56 and 55.
 
 **Cause.** That is how the command works; the guard stops a rollback from leaving
 accounts that have no password.
@@ -708,8 +714,9 @@ replaced).
 
 **Cause.** Each names a real limit. `GAME_TEMPLATE_MAX_BYTES` (64 MiB to 64 GiB)
 caps one template and `GAME_CLUSTER_MAX_BYTES` caps the cluster. A script is
-limited to what a request may carry (1 MiB). Uploads need `GAME_UPLOAD_DIR`,
-which `make run` and the stack set. A build that never finishes ends after
+limited to what a request may carry (1 MiB). Uploads need `GAME_UPLOAD_DIR`;
+it has no default, uploads are off when it is empty, and `make run` and the
+stack set it. A build that never finishes ends after
 `GAME_BUILD_TIMEOUT` (default 30 minutes) and drops its template.
 
 **Fix.** For a script that is too long, generate rows instead of writing them:
@@ -721,9 +728,10 @@ named setting and rebuild.
 **Symptom.** `fatal: open the cover directory: mkdir /var/lib/dbcontest: permission denied`
 or `fatal: open the upload directory: ...`.
 
-**Cause.** `COVER_DIR` and `GAME_UPLOAD_DIR` default to paths inside the
-container. A process on your machine cannot create them, and covers are not
-optional.
+**Cause.** `COVER_DIR` defaults to a path inside the container, which a
+process on your machine cannot create, and covers are not optional. A
+`GAME_UPLOAD_DIR` copied from the stack fails the same way; left empty, an API
+started by hand turns uploads off and answers `game_uploads_disabled`.
 
 **Fix.** Start it with `make run`, which points them at `deploy/covers` and
 `deploy/game-uploads`, or set both to directories you can write. In the stack the
@@ -940,6 +948,8 @@ them.
 docker compose -f deploy/docker-compose.yml exec redis sh -c 'REDISCLI_AUTH=$REDIS_PASSWORD redis-cli FLUSHDB'
 ```
 
+This also signs everyone out: it clears the sessions and every other cache key.
+
 ### Sign-in succeeds and the next click returns to the sign-in form
 
 **Symptom.** No error; you sign in and land back on the form.
@@ -1026,8 +1036,8 @@ After restoring a backup or losing `pg-game`, a contest can record a template as
 built that the cluster no longer has.
 
 **Fix.** Build the game for the contest as an organiser. Run `make game-roles` and
-`make runner` if they are missing. `make game-check` lists contests whose built
-template is missing on the cluster.
+`make runner` if they are missing. `make game-check` (it runs inside the `api` container, so it needs the stack)
+lists contests whose built template is missing on the cluster.
 [7. Running a contest](07-running-a-contest.md) covers the repair.
 
 ### A large story, script or file is rejected
@@ -1042,13 +1052,14 @@ go through them; they are uploaded in chunks straight to `/api`.
 
 **Fix.** Keep scripts under 1 MiB (generate rows with `generate_series`), or
 upload a dump. Raising the limit means changing the Caddyfile and the
-interface's server-action limit together. A cover picture has its own bound
-(up to 512 KB and 4096 pixels on a side).
+interface's server-action limit together. A cover picture has its own bound:
+up to 8 MiB, 8000 pixels on a side and 40 megapixels. A settings image (a logo)
+is limited to 512 KB and 4096 pixels on a side.
 
 ### Signing in with Microsoft, Google or GitHub fails
 
 **Symptom.** After the round trip to the provider:
-`Signing in with Microsoft did not work. Try again.`, or a message that the
+`Signing in through that service did not work. Try again.`, or a message that the
 account is not linked and new accounts cannot be created, or that the address
 belongs to an organiser's or administrator's account.
 
