@@ -73,3 +73,20 @@ func TestASystemActorLeavesNoAuthorRatherThanAnInventedOne(t *testing.T) {
 		}
 	})
 }
+
+func TestTheDarkVariantSlotsAcceptAPicture(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewSettingsImages(testPool)
+
+		for _, kind := range []string{settings.ImageLogoDark, settings.ImageFaviconDark} {
+			img := settings.Image{Kind: kind, ContentType: "image/png", Bytes: []byte{1}, SHA256: "h-" + kind, Width: 1, Height: 1}
+			if err := repo.Save(ctx, uuid.Nil, img); err != nil {
+				t.Fatalf("Save(%q) = %v", kind, err)
+			}
+			got, err := repo.ByKind(ctx, kind)
+			if err != nil || got.SHA256 != img.SHA256 {
+				t.Errorf("ByKind(%q) = %+v, %v, want the stored picture", kind, got, err)
+			}
+		}
+	})
+}

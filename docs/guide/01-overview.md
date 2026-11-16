@@ -225,7 +225,7 @@ The gate's refusals and their API codes, from
 
 | Term | Meaning | In code |
 |---|---|---|
-| Installation settings | What the installation calls itself and looks like (name, contact e-mail, logo, icon, favicon), changed from a screen by an administrator. Never anything the process needs to start or anything secret: those are environment variables. | [`internal/settings`](../../backend/internal/settings/settings.go); `GET`/`PUT /settings` |
+| Installation settings | What the installation calls itself and looks like (name, contact e-mail, logo, icon, favicon, and optional dark-theme variants of the logo and the favicon), changed from a screen by an administrator. Never anything the process needs to start or anything secret: those are environment variables. | [`internal/settings`](../../backend/internal/settings/settings.go); `GET`/`PUT /settings` |
 | Configuration | Environment variables read once at startup and validated. | [`platform/config`](../../backend/internal/platform/config/config.go), [`runner.go`](../../backend/internal/platform/config/runner.go); `deploy/.env.example` |
 | Cover | The picture above a contest: re-encoded on upload, named by its hash, stored as a file in `COVER_DIR` (not in the database), with a required attribution. Without one, the interface draws a cover. | [`internal/covers`](../../backend/internal/covers/covers.go), [`platform/filestore`](../../backend/internal/platform/filestore); `PUT /contests/{contestID}/cover` |
 | Showcase, front page | The landing page's public reads: four installation totals and a few recent contests, never a draft. | [`internal/showcase`](../../backend/internal/showcase/showcase.go); `/public/stats`, `/public/contests`; `frontend/app/(public)/page.tsx` |

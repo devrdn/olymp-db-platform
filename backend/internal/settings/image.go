@@ -25,12 +25,16 @@ import (
 // Image slots.
 const (
 	ImageLogo = "logo"
+	// ImageLogoDark is the dark-theme variant of the logo.
+	ImageLogoDark = "logo-dark"
 	// ImageIcon is the large square one (home screen, bookmark tile).
 	ImageIcon    = "icon"
 	ImageFavicon = "favicon"
+	// ImageFaviconDark is the dark-theme variant of the tab icon.
+	ImageFaviconDark = "favicon-dark"
 )
 
-var ImageKinds = []string{ImageLogo, ImageIcon, ImageFavicon}
+var ImageKinds = []string{ImageLogo, ImageLogoDark, ImageIcon, ImageFavicon, ImageFaviconDark}
 
 var (
 	ErrUnknownImageKind = errors.New("no such image")

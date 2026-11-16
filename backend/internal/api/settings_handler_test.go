@@ -695,3 +695,22 @@ func TestTheTestMessageIsRefusedPastTheCallersBudget(t *testing.T) {
 		t.Errorf("the relay received %d messages, want %d", got, mailing.TestsPerMinute)
 	}
 }
+
+func TestADarkVariantCanBeUploadedAndIsListedAmongTheImages(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.upload(t, settings.ImageLogoDark, pngBytes(t), f.cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Images map[string]json.RawMessage `json:"images"`
+	}
+	if err := json.Unmarshal(f.do(http.MethodGet, "/settings", "").Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := body.Images["logo-dark"]; !ok {
+		t.Errorf("images = %v, want logo-dark listed", body.Images)
+	}
+}

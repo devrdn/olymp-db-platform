@@ -4197,9 +4197,10 @@ language, the session length, the attempt limits. The rule is simple — if a
 wrong value makes the installation unreachable or exposes a secret, it belongs
 in the environment; if it merely looks wrong, it is a setting.
 
-**The logo is a file, and that is a decision of its own.** Three slots exist —
-`logo`, `icon`, `favicon` — one row per slot in `settings_files`. Accepting a
-file from a user means four checks, each closing its own hole:
+**The logo is a file, and that is a decision of its own.** Five slots exist —
+`logo`, `logo-dark`, `icon`, `favicon`, `favicon-dark` — one row per slot in
+`settings_files`; the two `-dark` ones are optional dark-theme variants.
+Accepting a file from a user means four checks, each closing its own hole:
 
 - **the type is determined from the content twice** — first
   `http.DetectContentType` over the leading bytes, then `image.DecodeConfig`,

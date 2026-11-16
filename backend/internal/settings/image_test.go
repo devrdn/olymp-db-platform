@@ -161,3 +161,24 @@ func TestUploadingAnImageIsRecorded(t *testing.T) {
 		t.Errorf("payload = %+v, want it to name the slot", f.sink.entries[0].Payload)
 	}
 }
+
+func TestTheDarkVariantsHaveSlotsOfTheirOwn(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture()
+
+	for _, kind := range []string{settings.ImageLogoDark, settings.ImageFaviconDark} {
+		if _, err := f.service.SaveImage(ctx, uuid.New(), kind, pngOf(t, 16, 16)); err != nil {
+			t.Fatalf("SaveImage(%q) = %v", kind, err)
+		}
+	}
+
+	present, err := f.service.Images(ctx)
+	if err != nil {
+		t.Fatalf("Images() = %v", err)
+	}
+	for _, kind := range []string{"logo-dark", "favicon-dark"} {
+		if present[kind] == "" {
+			t.Errorf("slot %q is empty, want the saved picture", kind)
+		}
+	}
+}
