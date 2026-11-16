@@ -1533,6 +1533,16 @@ make migrate-down      # roll back one step
 Each migration ships an `up` and a `down` file; a test in `migrations/` fails
 the build if a pair is incomplete or a version number is reused.
 
+`migrate up` leaves a schema newer than its release alone and says so, so
+deploying the release directly before is a rollback that keeps the data: every
+migration keeps that one release working (docs/guide/04-backend.md). It refuses
+such a schema if it is dirty: only the release that wrote the half-applied
+migration knows how to finish it or take it back. Going back further than one
+release is not covered by that rule, since a later migration may have dropped
+what an older release reads: take the newer migrations back first, one
+`migrate down` each with the release that ran them. That undoes what they
+added, data included; take a dump first.
+
 ## Releases and deployment
 
 Development does not go near the registry. `make dev-up` starts PostgreSQL and

@@ -509,20 +509,30 @@ as an orientation.
    (`000009` and `000033` show a permission and its grants removed). The test
    does not check down files, but recent ones set the same lock timeout
    (`000038`, `000039`).
-4. **How it ships.** `migrations/embed.go` embeds every `*.sql` file
+4. **Keep the previous release working.** A release is rolled back by
+   deploying the one directly before it, and `cmd/migrate up` leaves a schema
+   newer than its release alone, so the older code runs on the newer schema. The
+   rule covers that one step back; older history is not: `000007`, `000012` and
+   `000014` drop, rename or tighten. Add in one release (a table, a nullable
+   column or one with a default, a wider `CHECK`); remove or narrow what the old
+   code reads (a dropped or renamed column, a stricter constraint) only in a
+   later release, once no deployed version reads it. `000058` is the shape: it
+   widens a `CHECK`, and the release before it passes the new rows through and
+   never reads them.
+5. **How it ships.** `migrations/embed.go` embeds every `*.sql` file
    (`//go:embed *.sql`), so the image carries the schema its code expects.
    `cmd/migrate` applies them (golang-migrate) as a separate step, never on
    API start-up.
-5. **Apply and roll back locally:** `make migrate-up`, `make migrate-version`,
+6. **Apply and roll back locally:** `make migrate-up`, `make migrate-version`,
    `make migrate-down`. Check the file rules with `make test`.
-6. **Test it on a real database.** `make test-db` drops the test database,
+7. **Test it on a real database.** `make test-db` drops the test database,
    recreates it, and migrates it from zero with the same `cmd/migrate`, so
    every repository test runs on the new schema. A migration whose down file
    matters (seeded rows, grants) gets a round trip in
    `cmd/migrate/main_test.go`, modelled on
    `TestTheMonitoringMigrationRollsBackAndForward`, which runs on a scratch
    database of its own.
-7. After a schema change, `make restore-check FILE=...` on a recent dump shows
+8. After a schema change, `make restore-check FILE=...` on a recent dump shows
    backups still load. See
    [backend/README.md, Migrations](../../backend/README.md#migrations).
 

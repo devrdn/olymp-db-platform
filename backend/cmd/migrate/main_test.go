@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/olymp-db-platform/backend/migrations"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -803,5 +806,101 @@ func TestTheSignInProvidersMigrationRollsBackAndForward(t *testing.T) {
 	var kept int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM external_identities WHERE provider = 'microsoft'`).Scan(&kept); err != nil || kept != 1 {
 		t.Errorf("microsoft identities after the round trip = %d, %v; want 1", kept, err)
+	}
+}
+
+// An older release deployed onto a schema a newer one migrated: what a
+// rollback by version does.
+func TestUpLeavesASchemaNewerThanTheReleaseAlone(t *testing.T) {
+	dsn := scratchDatabase(t)
+	t.Setenv(storagetest.CoreDSNVar, dsn)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Up(); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+	latest, _, err := m.Version()
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	newer := int(latest) + 1
+	if err := m.Force(newer); err != nil {
+		t.Fatalf("force %d: %v", newer, err)
+	}
+
+	if err := run([]string{"up"}); err != nil {
+		t.Fatalf("up on a schema at %d, newer than this release's %d: %v", newer, latest, err)
+	}
+	version, dirty, err := m.Version()
+	if err != nil || version != uint(newer) || dirty {
+		t.Errorf("schema after up = %d (dirty %t), %v; want %d untouched", version, dirty, err, newer)
+	}
+}
+
+// A newer release that failed half way left the schema dirty: an older
+// release cannot know what that migration did, so it must not start on it.
+func TestUpRefusesADirtySchemaNewerThanTheRelease(t *testing.T) {
+	dsn := scratchDatabase(t)
+	t.Setenv(storagetest.CoreDSNVar, dsn)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Up(); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+	latest, _, err := m.Version()
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE schema_migrations SET version = $1, dirty = true`, int(latest)+1); err != nil {
+		t.Fatalf("mark the schema dirty: %v", err)
+	}
+
+	if err := run([]string{"up"}); !errors.Is(err, errDirtyNewerSchema) {
+		t.Fatalf("up on a dirty schema newer than the release = %v; want errDirtyNewerSchema", err)
+	}
+	var version int
+	var dirty bool
+	if err := conn.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil ||
+		version != int(latest)+1 || !dirty {
+		t.Errorf("schema after the refusal = %d (dirty %t), %v; want %d dirty, untouched", version, dirty, err, int(latest)+1)
+	}
+}
+
+func TestLatestMigrationIsTheHighestUpFile(t *testing.T) {
+	files, err := fs.Glob(migrations.FS, "*.up.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob the embedded migrations: %v, %d files", err, len(files))
+	}
+	var highest uint64
+	for _, name := range files {
+		number, err := strconv.ParseUint(strings.SplitN(name, "_", 2)[0], 10, 64)
+		if err != nil {
+			t.Fatalf("%s does not start with a version: %v", name, err)
+		}
+		highest = max(highest, number)
+	}
+
+	latest, err := latestMigration()
+	if err != nil || uint64(latest) != highest {
+		t.Errorf("latestMigration() = %d, %v; want %d", latest, err, highest)
 	}
 }

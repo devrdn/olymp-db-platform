@@ -3,7 +3,9 @@
 //
 // Usage:
 //
-//	migrate up            apply all pending migrations
+//	migrate up            apply all pending migrations; a schema newer than
+//	                      this release is left as it is (a rollback by one
+//	                      release)
 //	migrate down          roll back the most recent migration
 //	migrate version       print the current schema version
 //	migrate force <n>     clear a dirty state after a failed migration
@@ -13,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 
@@ -62,7 +65,7 @@ func run(args []string) error {
 
 	switch args[0] {
 	case "up":
-		return report(m.Up(), "schema is up to date")
+		return up(m)
 	case "down":
 		return report(m.Steps(-1), "rolled back one migration")
 	case "version":
@@ -141,6 +144,61 @@ func newMigrator(dsn string) (*migrate.Migrate, func(), error) {
 	}
 
 	return m, closeDB, nil
+}
+
+// errDirtyNewerSchema is a schema a newer release left half-migrated: only
+// that release knows what its migration did.
+var errDirtyNewerSchema = errors.New("the schema is newer than this release and dirty")
+
+// up applies the pending migrations. A schema newer than this release is
+// what a rollback by version meets, and it is left alone: every migration
+// keeps the release before it working (docs/guide/04-backend.md). That holds
+// one release back only; further back, the newer migrations are taken back
+// first with the release that ran them.
+func up(m *migrate.Migrate) error {
+	version, dirty, err := m.Version()
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
+		return err
+	}
+	if err == nil {
+		latest, err := latestMigration()
+		if err != nil {
+			return err
+		}
+		if version > latest {
+			if dirty {
+				return fmt.Errorf("%w: version %d against this release's %d; finish or roll it back "+
+					"with the release that wrote it", errDirtyNewerSchema, version, latest)
+			}
+			fmt.Printf("schema is at version %d, newer than this release's %d: nothing to apply, "+
+				"which is safe only if this is the release directly before the one that migrated it\n", version, latest)
+			return nil
+		}
+	}
+	return report(m.Up(), "schema is up to date")
+}
+
+// latestMigration is the highest version this release carries.
+func latestMigration() (uint, error) {
+	source, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		return 0, fmt.Errorf("read embedded migrations: %w", err)
+	}
+	defer func() { _ = source.Close() }()
+	version, err := source.First()
+	if err != nil {
+		return 0, fmt.Errorf("read the first migration: %w", err)
+	}
+	for {
+		next, err := source.Next(version)
+		if errors.Is(err, fs.ErrNotExist) {
+			return version, nil
+		}
+		if err != nil {
+			return 0, fmt.Errorf("read the migration after %d: %w", version, err)
+		}
+		version = next
+	}
 }
 
 // report treats "nothing to do" as success: re-running the job must be safe.
