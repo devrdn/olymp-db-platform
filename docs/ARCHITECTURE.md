@@ -4638,8 +4638,12 @@ Deployment is a **pull model, started by a person on the host**: nothing is
 opened outward from the university's network, the production private key does
 not live in a cloud CI, and a merge into `main` does not restart the service
 in the middle of a competition. A rollback is the same command with the
-previous version. The API and the interface have separate images, so
-`deploy-web` does not touch the API or its live sessions.
+previous version: `cmd/migrate up` leaves a schema newer than its release
+alone, which is safe one release back because every migration keeps the
+release before it working (developer guide, chapter 4). Further back, the
+newer migrations are taken back first. The API and the interface have separate
+images, so `deploy-web` does not touch the API or its live sessions.
+
 
 **CI is split by component.** The error-dictionary check reads
 `docs/api/error-codes.json`, which the backend generates, rather than the
