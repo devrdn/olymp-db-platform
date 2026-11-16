@@ -117,6 +117,11 @@
   --select-bg: var(--accent-wash);
   --select-fg: var(--accent-ink);
 
+  /* The logo's own black and cream, which trade places in the dark theme.
+     Brand colours, not interface ones, so they have no contrast row. */
+  --logo-ink: #1e1a18;
+  --logo-chalk: #f5ecdb;
+
   /* Tells the browser which way to render the surfaces it owns: form controls
      it draws itself, and the scrollbar when the custom one is not honoured. */
   color-scheme: light;
@@ -186,6 +191,8 @@
   --dark-glow: rgb(94 208 188 / 0.22);
   --dark-scrim-a: rgb(10 11 15 / 0.97);
   --dark-scrim-b: rgb(10 11 15 / 0.72);
+  --dark-logo-ink: #f5ecdb;
+  --dark-logo-chalk: #1e1a18;
 }
 
 /**
@@ -260,6 +267,8 @@
     --glow: var(--dark-glow);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
+    --logo-ink: var(--dark-logo-ink);
+    --logo-chalk: var(--dark-logo-chalk);
     color-scheme: dark;
   }
 }
@@ -323,6 +332,8 @@
     --glow: var(--dark-glow);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
+    --logo-ink: var(--dark-logo-ink);
+    --logo-chalk: var(--dark-logo-chalk);
     color-scheme: dark;
   }
 }

@@ -6,7 +6,7 @@ import type { Theme } from "@/lib/theme/config";
 
 import { AccountLink, type Account } from "./account-link";
 import { LanguageSwitcher } from "./language-switcher";
-import { Mark } from "./mark";
+import { Logo } from "./logo";
 import { SignOutButton } from "./sign-out-button";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -50,15 +50,13 @@ export function AppBar({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={logo} alt="" aria-hidden className="h-5 w-auto max-w-32 shrink-0 object-contain" />
       ) : (
-        <span aria-hidden className="grid size-5 shrink-0 place-items-center bg-cta text-cta-fg">
-          <Mark className="size-3" />
-        </span>
+        <Logo className="h-8 w-auto shrink-0" />
       )}
       {/* The installation's name, falling back to the product's. */}
       <span className="max-narrow:line-clamp-2 max-narrow:leading-tight max-narrow:wrap-break-word">{name?.trim() || dict.chrome.product}</span>
     </>
   );
-  const markClass = "flex min-w-0 items-center gap-2 text-control font-semibold text-ink";
+  const markClass = "flex min-w-0 items-center gap-2.5 text-control font-semibold text-ink";
 
   return (
     <header className="sticky top-0 z-20 grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line bg-bg max-narrow:grid-cols-[0_minmax(0,1fr)_0] print:hidden">

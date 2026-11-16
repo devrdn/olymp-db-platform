@@ -61,6 +61,9 @@
   --color-cta: var(--cta-bg);
   --color-cta-fg: var(--cta-fg);
 
+  --color-logo-ink: var(--logo-ink);
+  --color-logo-chalk: var(--logo-chalk);
+
   --color-accent: var(--accent-ink);
   --color-accent-wash: var(--accent-wash);
   --color-good: var(--good);

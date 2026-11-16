@@ -50,6 +50,24 @@ describe("the product mark", () => {
     expect(screen.getByRole("link", { name: en.chrome.product })).toHaveAttribute("href", "/my");
   });
 
+  test("shows the product's logo until the installation uploads its own", () => {
+    const { container, rerender } = render(
+      <ProductShell locale="en" theme="system" dict={en} home="/contests">
+        <p>rows</p>
+      </ProductShell>,
+    );
+    const link = screen.getByRole("link", { name: en.chrome.product });
+    expect(link.querySelector('svg[data-slot="logo"]')).not.toBeNull();
+
+    rerender(
+      <ProductShell locale="en" theme="system" dict={en} home="/contests" logo="/api/v1/settings/images/logo/abc">
+        <p>rows</p>
+      </ProductShell>,
+    );
+    expect(container.querySelector('svg[data-slot="logo"]')).toBeNull();
+    expect(container.querySelector('header img[src="/api/v1/settings/images/logo/abc"]')).not.toBeNull();
+  });
+
   test("is not a link on the sign-in screen, where there is nowhere to go yet", () => {
     render(
       <FocusShell locale="en" theme="system" dict={en}>
