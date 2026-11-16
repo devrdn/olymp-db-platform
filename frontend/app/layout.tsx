@@ -36,18 +36,29 @@ const FACE_HOME = { url: "/apple-icon.png", sizes: "180x180", type: "image/png" 
  * The icons are always named here and nothing under app/ uses an icon file
  * convention: Next adds app/favicon.ico beside whatever the metadata names, so
  * an uploaded favicon would compete with it.
+ *
+ * The dark icon goes first: a browser that honours `media` picks the last
+ * matching link, and one that ignores `media` takes the last link, which must
+ * be the light one.
  */
 export async function generateMetadata(): Promise<Metadata> {
   const brand = await branding();
   const name = brand.name.trim() || "OlympDB Platform";
   const { favicon, icon } = brand.images;
+  const faviconDark = brand.images["favicon-dark"];
+  const light = favicon ? [{ url: imageHref("favicon", favicon) }] : FACE_TAB;
 
   return {
     title: { default: name, template: `%s · ${name}` },
     description:
       "SQL detective contests for universities: a crime story, an isolated game database and a timer.",
     icons: {
-      icon: favicon ? [{ url: imageHref("favicon", favicon) }] : FACE_TAB,
+      icon: faviconDark
+        ? [
+            { url: imageHref("favicon-dark", faviconDark), media: "(prefers-color-scheme: dark)" },
+            ...light.map((link) => ({ ...link, media: "(prefers-color-scheme: light)" })),
+          ]
+        : light,
       // Not the favicon scaled up: it is drawn for 16 pixels, and iOS takes
       // only PNG or JPEG here.
       apple: icon ? [{ url: imageHref("icon", icon) }] : [FACE_HOME],

@@ -84,6 +84,33 @@ describe("the icons in the head", () => {
     ]);
   });
 
+  const DARK_MEDIA = "(prefers-color-scheme: dark)";
+  const LIGHT_MEDIA = "(prefers-color-scheme: light)";
+
+  test("name the dark upload first, then the light one, when both are set", async () => {
+    installation({ favicon: "f1", "favicon-dark": "d1" });
+
+    const { icons } = await generateMetadata();
+
+    expect(links(icons)).toEqual([
+      { rel: "icon", url: "/api/v1/settings/images/favicon-dark?v=d1", media: DARK_MEDIA },
+      { rel: "icon", url: "/api/v1/settings/images/favicon?v=f1", media: LIGHT_MEDIA },
+      FACE_APPLE,
+    ]);
+  });
+
+  test("keep the face for the light theme beside a dark upload alone", async () => {
+    installation({ "favicon-dark": "d1" });
+
+    const { icons } = await generateMetadata();
+
+    expect(links(icons)).toEqual([
+      { rel: "icon", url: "/api/v1/settings/images/favicon-dark?v=d1", media: DARK_MEDIA },
+      ...FACE.map((link) => ({ ...link, media: LIGHT_MEDIA })),
+      FACE_APPLE,
+    ]);
+  });
+
   test("name files the server actually has", () => {
     for (const { url } of [...FACE, FACE_APPLE]) {
       expect(existsSync(join(__dirname, "..", "public", url)), url).toBe(true);

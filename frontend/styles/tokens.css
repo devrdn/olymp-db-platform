@@ -125,6 +125,11 @@
   /* Tells the browser which way to render the surfaces it owns: form controls
      it draws itself, and the scrollbar when the custom one is not honoured. */
   color-scheme: light;
+
+  /* Which of a pair of uploaded images shows: the `light-only` and `dark-only`
+     utilities read these, so the swap costs no script and no flash. */
+  --show-light: block;
+  --show-dark: none;
 }
 
 /* The dark values, written once and applied from two places: the system
@@ -193,6 +198,8 @@
   --dark-scrim-b: rgb(10 11 15 / 0.72);
   --dark-logo-ink: #f5ecdb;
   --dark-logo-chalk: #1e1a18;
+  --dark-show-light: none;
+  --dark-show-dark: block;
 }
 
 /**
@@ -269,6 +276,8 @@
     --scrim-b: var(--dark-scrim-b);
     --logo-ink: var(--dark-logo-ink);
     --logo-chalk: var(--dark-logo-chalk);
+    --show-light: var(--dark-show-light);
+    --show-dark: var(--dark-show-dark);
     color-scheme: dark;
   }
 }
@@ -334,6 +343,8 @@
     --scrim-b: var(--dark-scrim-b);
     --logo-ink: var(--dark-logo-ink);
     --logo-chalk: var(--dark-logo-chalk);
+    --show-light: var(--dark-show-light);
+    --show-dark: var(--dark-show-dark);
     color-scheme: dark;
   }
 }

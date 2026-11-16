@@ -10,6 +10,8 @@ import { Logo } from "./logo";
 import { SignOutButton } from "./sign-out-button";
 import { ThemeToggle } from "./theme-toggle";
 
+const LOGO_IMAGE = "h-5 w-auto max-w-32 shrink-0 object-contain";
+
 /**
  * The bar every screen wears, on the bands' three-track grid so the mark and
  * the switcher align with the column below.
@@ -21,6 +23,7 @@ export function AppBar({
   home,
   name,
   logo,
+  logoDark,
   account,
   signedIn,
   children,
@@ -33,6 +36,8 @@ export function AppBar({
   name?: string;
   /** The installation's uploaded logo, if any. */
   logo?: string;
+  /** The logo for the dark theme; the bar shows it instead of `logo` there. */
+  logoDark?: string;
   /** When present, the bar links to the profile, where signing out lives. */
   account?: Account;
   /**
@@ -48,10 +53,21 @@ export function AppBar({
          the API, so an optimiser would only add a second copy and origin. */}
       {logo ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={logo} alt="" aria-hidden className="h-5 w-auto max-w-32 shrink-0 object-contain" />
+        <img
+          src={logo}
+          alt=""
+          aria-hidden
+          // A lazy image under `display: none` has no box and is never fetched.
+          loading={logoDark ? "lazy" : undefined}
+          className={`${LOGO_IMAGE}${logoDark ? " light-only" : ""}`}
+        />
       ) : (
-        <Logo className="h-8 w-auto shrink-0" />
+        <Logo className={`h-8 w-auto shrink-0${logoDark ? " light-only" : ""}`} />
       )}
+      {logoDark ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logoDark} alt="" aria-hidden loading="lazy" className={`${LOGO_IMAGE} dark-only`} />
+      ) : null}
       {/* The installation's name, falling back to the product's. */}
       <span className="max-narrow:line-clamp-2 max-narrow:leading-tight max-narrow:wrap-break-word">{name?.trim() || dict.chrome.product}</span>
     </>

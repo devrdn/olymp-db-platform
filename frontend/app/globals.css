@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "../styles/tokens.css";
 
+@utility light-only {
+  display: var(--show-light);
+}
+
+@utility dark-only {
+  display: var(--show-dark);
+}
+
 /**
  * shadcn/ui wears this project's design system rather than its own.
  *

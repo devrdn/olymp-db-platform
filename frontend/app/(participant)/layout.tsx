@@ -32,6 +32,7 @@ export default async function ParticipantLayout({ children }: { children: React.
     <ProductShell
       name={brand.name}
       logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined}
+      logoDark={brand.images["logo-dark"] ? imageHref("logo-dark", brand.images["logo-dark"]) : undefined}
       locale={locale}
       theme={theme}
       dict={dict}

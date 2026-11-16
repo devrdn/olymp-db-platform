@@ -21,6 +21,7 @@ export function ProductShell({
   account,
   name,
   logo,
+  logoDark,
   children,
 }: {
   locale: Locale;
@@ -35,11 +36,13 @@ export function ProductShell({
   name?: string;
   /** The installation's uploaded logo, if any. */
   logo?: string;
+  /** The logo for the dark theme, if any. */
+  logoDark?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} home={home} account={account} name={name} logo={logo}>
+      <AppBar locale={locale} theme={theme} dict={dict} home={home} account={account} name={name} logo={logo} logoDark={logoDark}>
         {nav ?? (section ? <span className="truncate text-control text-ink-2">{section}</span> : null)}
       </AppBar>
       <main className="flex flex-1 flex-col">{children}</main>

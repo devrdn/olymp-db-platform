@@ -15,6 +15,7 @@ export function FocusShell({
   signedIn,
   name,
   logo,
+  logoDark,
   children,
 }: {
   locale: Locale;
@@ -29,11 +30,13 @@ export function FocusShell({
   name?: string;
   /** The installation's uploaded logo, if any. */
   logo?: string;
+  /** The logo for the dark theme, if any. */
+  logoDark?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} signedIn={signedIn} name={name} logo={logo} />
+      <AppBar locale={locale} theme={theme} dict={dict} signedIn={signedIn} name={name} logo={logo} logoDark={logoDark} />
       <main className="flex flex-1 flex-col">{children}</main>
     </div>
   );

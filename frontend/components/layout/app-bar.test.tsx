@@ -68,6 +68,52 @@ describe("the product mark", () => {
     expect(container.querySelector('header img[src="/api/v1/settings/images/logo/abc"]')).not.toBeNull();
   });
 
+  describe("for the dark theme", () => {
+    const LIGHT = "/api/v1/settings/images/logo?v=l1";
+    const DARK = "/api/v1/settings/images/logo-dark?v=d1";
+    const bar = (props: { logo?: string; logoDark?: string }) =>
+      render(
+        <ProductShell locale="en" theme="system" dict={en} home="/contests" {...props}>
+          <p>rows</p>
+        </ProductShell>,
+      ).container.querySelector("header")!;
+
+    test("shows each upload only in its own theme", () => {
+      const header = bar({ logo: LIGHT, logoDark: DARK });
+
+      expect(header.querySelectorAll("img")).toHaveLength(2);
+      expect(header.querySelector(`img[src="${LIGHT}"]`)).toHaveClass("light-only");
+      expect(header.querySelector(`img[src="${DARK}"]`)).toHaveClass("dark-only");
+      // A lazy image with no box is never fetched, so the hidden one costs nothing.
+      expect(header.querySelector(`img[src="${LIGHT}"]`)).toHaveAttribute("loading", "lazy");
+      expect(header.querySelector(`img[src="${DARK}"]`)).toHaveAttribute("loading", "lazy");
+    });
+
+    test("keeps the cat in the light theme beside a dark upload", () => {
+      const header = bar({ logoDark: DARK });
+
+      expect(header.querySelector('svg[data-slot="logo"]')).toHaveClass("light-only");
+      expect(header.querySelector(`img[src="${DARK}"]`)).toHaveClass("dark-only");
+      expect(header.querySelector(`img[src="${DARK}"]`)).toHaveAttribute("loading", "lazy");
+    });
+
+    test("adds nothing when there is no dark upload", () => {
+      const header = bar({ logo: LIGHT });
+
+      expect(header.querySelectorAll("img")).toHaveLength(1);
+      expect(header.querySelector(".light-only, .dark-only")).toBeNull();
+      expect(header.querySelector("img")).not.toHaveAttribute("loading");
+    });
+
+    test("is the lone cat when nothing was uploaded", () => {
+      const header = bar({});
+
+      expect(header.querySelectorAll("img")).toHaveLength(0);
+      expect(header.querySelectorAll('svg[data-slot="logo"]')).toHaveLength(1);
+      expect(header.querySelector(".light-only, .dark-only")).toBeNull();
+    });
+  });
+
   test("is not a link on the sign-in screen, where there is nowhere to go yet", () => {
     render(
       <FocusShell locale="en" theme="system" dict={en}>
