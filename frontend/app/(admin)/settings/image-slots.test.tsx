@@ -46,9 +46,46 @@ describe("ImageSlots, the accepted-format rule and its reasons", () => {
 
     const t = dict.settings.images;
     // One for the section, one per slot.
-    expect(screen.getAllByRole("button", { name: dict.chrome.helpLabel })).toHaveLength(4);
-    for (const help of [t.logoHelp, t.iconHelp, t.faviconHelp]) {
+    expect(screen.getAllByRole("button", { name: dict.chrome.helpLabel })).toHaveLength(6);
+    for (const help of [t.logoHelp, t.logoDarkHelp, t.iconHelp, t.faviconHelp, t.faviconDarkHelp]) {
       expect(screen.getByText(help)).not.toBeVisible();
     }
+  });
+});
+
+describe("ImageSlots, the dark-theme variants", () => {
+  test("lists the five slots in order, the dark ones after the marks they replace", () => {
+    render(<ImageSlots images={{}} dict={dict} />);
+
+    const t = dict.settings.images;
+    const labels = [t.logo, t.logoDark, t.icon, t.favicon, t.faviconDark];
+    const positions = labels.map((label) => {
+      const node = screen.getByText(label);
+      return node.compareDocumentPosition.bind(node);
+    });
+    for (let i = 0; i < labels.length - 1; i++) {
+      const next = screen.getByText(labels[i + 1]);
+      expect(positions[i](next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  test("says an empty dark slot falls back to the light one, and an empty light slot does not", () => {
+    render(<ImageSlots images={{}} dict={dict} />);
+
+    const t = dict.settings.images;
+    expect(t.noneDark).toBe("Nothing uploaded — the one above is used.");
+    expect(screen.getAllByText(t.noneDark)).toHaveLength(2);
+    expect(screen.getAllByText(t.none)).toHaveLength(3);
+  });
+
+  test("shows a filled dark slot on the dark ground and a light one on the plain tile", () => {
+    const { container } = render(
+      <ImageSlots images={{ logo: "aaa", "logo-dark": "bbb" }} dict={dict} />,
+    );
+
+    const tile = (hash: string) =>
+      container.querySelector(`img[src$="v=${hash}"]`)!.parentElement as HTMLElement;
+    expect(tile("bbb").style.background).toBe("var(--dark-bg)");
+    expect(tile("aaa").style.background).toBe("");
   });
 });

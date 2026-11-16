@@ -46,7 +46,7 @@ export function feedbackHref(value: string): string | null {
 }
 
 /** The pictures an installation may replace. */
-export const IMAGE_KINDS = ["logo", "icon", "favicon"] as const;
+export const IMAGE_KINDS = ["logo", "logo-dark", "icon", "favicon", "favicon-dark"] as const;
 export type ImageKind = (typeof IMAGE_KINDS)[number];
 
 /**

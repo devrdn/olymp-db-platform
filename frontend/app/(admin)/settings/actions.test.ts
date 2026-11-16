@@ -70,6 +70,22 @@ describe("saveSettingsAction", () => {
   });
 });
 
+describe("uploadImageAction, the dark-theme slots", () => {
+  test.each(["logo-dark", "favicon-dark"])("sends %s to its own address", async (kind) => {
+    serverRequest.mockResolvedValueOnce(undefined);
+    const data = form({ kind });
+    data.set("file", new File([new Uint8Array([1])], "mark.png", { type: "image/png" }));
+
+    const state = await uploadImageAction({}, data);
+
+    expect(state).toEqual({ saved: true });
+    expect(serverRequest).toHaveBeenCalledWith(
+      `/settings/images/${kind}`,
+      expect.objectContaining({ method: "PUT" }),
+    );
+  });
+});
+
 describe("a change to the installation's frame", () => {
   const withFile = () => {
     const data = form({ kind: "logo" });

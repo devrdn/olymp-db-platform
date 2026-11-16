@@ -12,15 +12,16 @@ import { removeImageAction, uploadImageAction, type SettingsState } from "./acti
 import { messageForCode } from "@/lib/i18n/errors";
 
 /**
- * One of the installation's three marks (bar wordmark, large square, tab icon),
- * each its own form so one is never replaced by accident. Choosing a file
- * submits.
+ * One of the installation's marks (bar wordmark, large square, tab icon, and a
+ * dark-theme variant of the wordmark and of the tab icon), each its own form so
+ * one is never replaced by accident. Choosing a file submits.
  */
 function Slot({
   kind,
   label,
   help,
   hash,
+  dark = false,
   dict,
 }: {
   kind: ImageKind;
@@ -28,6 +29,8 @@ function Slot({
   /** What this mark is for, behind the "?". */
   help: string;
   hash?: string;
+  /** A dark-theme variant: previewed on the dark ground, and an empty one falls back to the light mark. */
+  dark?: boolean;
   dict: Dictionary;
 }) {
   const t = dict.settings.images;
@@ -50,9 +53,13 @@ function Slot({
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
-        {/* A checkerboard, so a transparent mark shows in either theme. */}
+        {/* A light slot's preview sits on the sunk ground, a dark slot's on the dark
+           ground, so each mark is seen against the theme it is for. */}
         {hash ? (
-          <span className="grid size-16 shrink-0 place-items-center border border-line bg-sunk p-1.5">
+          <span
+            className="grid size-16 shrink-0 place-items-center border border-line bg-sunk p-1.5"
+            style={dark ? { background: "var(--dark-bg)" } : undefined}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={imageHref(kind, hash)}
@@ -61,7 +68,7 @@ function Slot({
             />
           </span>
         ) : (
-          <span className="max-w-body text-small text-ink-3">{t.none}</span>
+          <span className="max-w-body text-small text-ink-3">{dark ? t.noneDark : t.none}</span>
         )}
 
         <form action={upload}>
@@ -127,12 +134,28 @@ export function ImageSlots({
       </div>
 
       <Slot kind="logo" label={t.logo} help={t.logoHelp} hash={images.logo} dict={dict} />
+      <Slot
+        kind="logo-dark"
+        label={t.logoDark}
+        help={t.logoDarkHelp}
+        hash={images["logo-dark"]}
+        dark
+        dict={dict}
+      />
       <Slot kind="icon" label={t.icon} help={t.iconHelp} hash={images.icon} dict={dict} />
       <Slot
         kind="favicon"
         label={t.favicon}
         help={t.faviconHelp}
         hash={images.favicon}
+        dict={dict}
+      />
+      <Slot
+        kind="favicon-dark"
+        label={t.faviconDark}
+        help={t.faviconDarkHelp}
+        hash={images["favicon-dark"]}
+        dark
         dict={dict}
       />
     </section>
