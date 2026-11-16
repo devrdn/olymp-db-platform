@@ -1,4 +1,4 @@
-# DB Contest — development tasks.
+# OlympDB Platform — development tasks.
 #
 # Run `make help` for the list.
 

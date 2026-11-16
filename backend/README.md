@@ -1,6 +1,6 @@
 # Core API
 
-Backend of the DB Contest platform: the Core API (`cmd/api`), which serves
+Backend of the OlympDB Platform: the Core API (`cmd/api`), which serves
 `/api/v1`, and the Query Runner (`cmd/queryrunner`), a separate process that
 checks and runs participants' SQL on the game cluster. For how the code fits
 together, a worked package and recipes for common changes, see the

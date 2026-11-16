@@ -1,4 +1,4 @@
-# Scrape configuration for the DB Contest stack.
+# Scrape configuration for the OlympDB Platform stack.
 #
 # The API and the Query Runner expose /metrics on internal listeners only;
 # those ports are never published to the host, so a scraper on the compose

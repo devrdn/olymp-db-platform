@@ -1,4 +1,4 @@
-# DB Contest — interface
+# OlympDB Platform — interface
 
 The participant and administrator interface: Next.js 16 (App Router), React 19,
 Tailwind v4, TypeScript.

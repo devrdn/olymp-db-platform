@@ -1,4 +1,4 @@
-// Command api runs the DB Contest Core API.
+// Command api runs the OlympDB Platform Core API.
 //
 // Assembly lives in internal/app; this file is flags, signals and exit codes.
 package main

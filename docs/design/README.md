@@ -1,4 +1,4 @@
-# DB Contest design
+# OlympDB Platform design
 
 Everything the frontend is built from lives here. `SPEC.md` is the source of
 truth; `preview.html` illustrates it and is reproducible from it.

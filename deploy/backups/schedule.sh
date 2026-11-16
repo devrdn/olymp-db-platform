@@ -114,7 +114,8 @@ cron() { # user
 	check_root_path
 	at=$(daily_time)
 	cat <<-EOF
-		# /etc/cron.d/dbcontest-backup: DB Contest backups, for a host without systemd.
+		# /etc/cron.d/dbcontest-backup: OlympDB Platform backups, for a host
+		# without systemd.
 		# Keep exactly one schedule line uncommented. Before a beta or an olympiad,
 		# swap the comment onto the daily line; swap it back after the contest.
 		# The output goes to syslog under dbcontest-backup.

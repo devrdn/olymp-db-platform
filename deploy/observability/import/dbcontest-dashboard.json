@@ -1,6 +1,6 @@
 {
   "uid": "dbcontest-overview",
-  "title": "DB Contest",
+  "title": "OlympDB Platform",
   "description": "The API and the Query Runner during a contest. Alerts: deploy/observability/import/dbcontest-rules.yml.",
   "tags": [
     "dbcontest"

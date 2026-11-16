@@ -1,4 +1,4 @@
-# Core stack for the DB Contest platform.
+# Core stack of OlympDB Platform.
 #
 # Only the API's public port is published to the host. The core database, the
 # cache and the API's internal listener (metrics, health) stay on the private

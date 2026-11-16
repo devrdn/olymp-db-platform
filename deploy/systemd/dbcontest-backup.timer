@@ -2,7 +2,7 @@
 # window (every 15 minutes) is the drop-in contest-window.conf, put in place
 # by `deploy/backups/schedule.sh contest` and removed by `... daily`.
 [Unit]
-Description=DB Contest backup schedule
+Description=OlympDB Platform backup schedule
 
 [Timer]
 OnCalendar=*-*-* 03:30:00

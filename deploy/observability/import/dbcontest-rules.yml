@@ -1,5 +1,5 @@
-# Alert and recording rules for the DB Contest API and Query Runner, to load
-# into an existing Prometheus (rule_files) or a ruler-backed Grafana data
+# Alert and recording rules for the OlympDB Platform API and Query Runner, to
+# load into an existing Prometheus (rule_files) or a ruler-backed Grafana data
 # source. backend/README.md (Observability) says how.
 #
 # Severity: critical means act now, even mid-contest; warning means look at the

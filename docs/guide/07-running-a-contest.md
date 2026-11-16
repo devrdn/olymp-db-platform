@@ -148,7 +148,7 @@ says how to load each into the Prometheus or ruler and the Grafana you run:
 3. Load `dbcontest-rules.yml` (never `dbcontest-rules.test.yml`) and check
    the rules page lists four groups.
 4. Import `dbcontest-dashboard.json` (Dashboards, New, Import) and pick the
-   Prometheus data source. It opens as **DB Contest**.
+   Prometheus data source. It opens as **OlympDB Platform**.
 5. Route the alerts on `severity`: `critical` reaches someone at once,
    `warning` can wait for the next break.
 
@@ -456,7 +456,7 @@ A failed teardown prints the exact command that finishes it
 2. `make game-check` passes.
 3. `deploy/backups/schedule.sh status` shows the contest window, a successful
    last run and a set younger than 15 minutes.
-4. The **DB Contest** dashboard shows both services up and no alert is
+4. The **OlympDB Platform** dashboard shows both services up and no alert is
    firing.
 5. The **Databases** tab shows at least as many **ready** copies as the
    roster has participants.

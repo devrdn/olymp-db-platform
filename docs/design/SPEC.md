@@ -1,4 +1,4 @@
-# DB Contest design system — specification
+# OlympDB Platform design system — specification
 
 Status: accepted 2026-08-25, revised 2026-08-26 after the first run on real
 screens. Basis for the "frontend skeleton" step and a precondition for item 3 of
