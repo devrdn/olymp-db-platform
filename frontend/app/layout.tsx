@@ -20,14 +20,14 @@ import "@fontsource-variable/jetbrains-mono/wght.css";
 import "@fontsource-variable/literata/wght.css";
 
 /**
- * The product mark, drawn by scripts/icons.mjs into public/. The ICO declares
+ * The cat's face, drawn by scripts/icons.mjs into public/. The ICO declares
  * its size because Chrome prefers an icon marked `any` over the SVG.
  */
-const MARK_TAB = [
+const FACE_TAB = [
   { url: "/favicon.ico", sizes: "32x32" },
   { url: "/icon.svg", type: "image/svg+xml" },
 ];
-const MARK_HOME = { url: "/apple-icon.png", sizes: "180x180", type: "image/png" };
+const FACE_HOME = { url: "/apple-icon.png", sizes: "180x180", type: "image/png" };
 
 /**
  * Title and icons come from the installation's settings, so a rename reaches
@@ -47,10 +47,10 @@ export async function generateMetadata(): Promise<Metadata> {
     description:
       "SQL detective contests for universities: a crime story, an isolated game database and a timer.",
     icons: {
-      icon: favicon ? [{ url: imageHref("favicon", favicon) }] : MARK_TAB,
+      icon: favicon ? [{ url: imageHref("favicon", favicon) }] : FACE_TAB,
       // Not the favicon scaled up: it is drawn for 16 pixels, and iOS takes
       // only PNG or JPEG here.
-      apple: icon ? [{ url: imageHref("icon", icon) }] : [MARK_HOME],
+      apple: icon ? [{ url: imageHref("icon", icon) }] : [FACE_HOME],
     },
   };
 }

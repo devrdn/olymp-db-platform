@@ -33,3 +33,23 @@ describe("a mark as an SVG document", () => {
     });
   });
 });
+
+describe("a mark that follows the colour scheme", () => {
+  const dark = { ink: "#eeeeee", chalk: "#111111" };
+
+  test("paints its theme patches by class, swapped under a dark scheme", () => {
+    const svg = markSvg(CAT, scheme, dark);
+
+    expect(svg).toContain(
+      `<style>.ink{fill:${scheme.ink}}.chalk{fill:${scheme.chalk}}.ink-line{stroke:${scheme.ink}}` +
+        `@media (prefers-color-scheme: dark){.ink{fill:${dark.ink}}.chalk{fill:${dark.chalk}}.ink-line{stroke:${dark.ink}}}</style>`,
+    );
+    shapes(svg)
+      .filter((shape) => shape.tagName !== "style")
+      .forEach((shape, i) => {
+        const { paint } = CAT.shapes[i];
+        if (paint === "ink" || paint === "chalk" || paint === "ink-line") expect(shape.getAttribute("class")).toBe(paint);
+        else expect(shape.getAttribute("fill")).toBe(PAINT[paint as keyof typeof PAINT]);
+      });
+  });
+});

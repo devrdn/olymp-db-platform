@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * The default tab and home-screen icons, drawn from the product mark.
+ * The default tab and home-screen icons, drawn from the cat's face in
+ * lib/brand/marks.mjs.
  *
- * The path is read from components/layout/mark.tsx and the colours from
- * styles/tokens.css, so the icons follow both; scripts/icons.test.ts fails
- * while the committed files differ from what this writes. No dependency: the
- * mark is straight lines only, so a supersampled even-odd fill and Node's zlib
- * are enough to draw and encode it.
+ * The logo's black and cream come from styles/tokens.css, so the icons follow
+ * both; scripts/icons.test.ts fails while the committed files differ from what
+ * this writes. No dependency: the faces are straight lines and quadratic
+ * curves only, so a supersampled even-odd fill and Node's zlib are enough to
+ * draw and encode them.
  *
  *   npm run icons    writes public/icon.svg, public/favicon.ico, public/apple-icon.png
  */
@@ -16,17 +17,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
 
+import { FACE, FACE_DETAILED, PAINT, markSvg } from "../lib/brand/marks.mjs";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The mark's path data, as mark.tsx draws it in its 16-unit box. */
-export function markPath() {
-  const source = readFileSync(join(ROOT, "components", "layout", "mark.tsx"), "utf8");
-  const match = source.match(/<path d="([^"]+)"/);
-  if (!match) throw new Error("components/layout/mark.tsx has no <path d=…>");
-  return match[1];
-}
-
-/** The light theme's ink and ground and the dark theme's ink, as hex. */
+/** The logo's black and cream in each theme, as hex. */
 export function palette() {
   const tokens = readFileSync(join(ROOT, "styles", "tokens.css"), "utf8");
   const token = (name) => {
@@ -34,70 +29,82 @@ export function palette() {
     if (!match) throw new Error(`styles/tokens.css has no hex --${name}`);
     return match[1];
   };
-  return { ink: token("ink"), bg: token("bg"), darkInk: token("dark-ink") };
+  return {
+    ink: token("logo-ink"),
+    chalk: token("logo-chalk"),
+    darkInk: token("dark-logo-ink"),
+    darkChalk: token("dark-logo-chalk"),
+  };
 }
 
 /**
- * The tab icon for browsers that read SVG favicons. The scheme query follows
- * the browser's own light or dark setting, which is what its chrome follows.
+ * The tab icon for browsers that read SVG favicons. Its black and cream swap
+ * with the browser's own light or dark setting, which is what its tabs follow.
  */
 export function iconSvg() {
-  const { ink, darkInk } = palette();
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">` +
-    `<style>path{fill:${ink}}@media (prefers-color-scheme: dark){path{fill:${darkInk}}}</style>` +
-    `<path fill-rule="evenodd" d="${markPath()}"/></svg>\n`
-  );
+  const { ink, chalk, darkInk, darkChalk } = palette();
+  return `${markSvg(FACE, { ink, chalk }, { ink: darkInk, chalk: darkChalk })}\n`;
 }
 
+/** A quadratic curve becomes this many straight segments; at 180 px that is finer than a pixel. */
+const CURVE_STEPS = 16;
+
 /**
- * The path's closed outlines as point lists. Only the commands the mark uses
- * are understood (M, L, H, V, Z, absolute and relative); a curve is refused
- * rather than drawn wrong.
+ * A path's closed outlines as point lists. Only what the faces use is
+ * understood (absolute M, L, Q, Z); anything else is refused rather than
+ * drawn wrong.
  */
-function outlines(d) {
+function pathOutlines(d) {
   const tokens = d.match(/[a-zA-Z]|-?\d*\.?\d+/g);
   const shapes = [];
   let shape = [];
-  let x = 0;
-  let y = 0;
   let command = "";
   for (let i = 0; i < tokens.length; ) {
     if (/[a-zA-Z]/.test(tokens[i])) command = tokens[i++];
     const number = () => Number(tokens[i++]);
-    const relative = command === command.toLowerCase();
-    switch (command.toUpperCase()) {
+    switch (command) {
       case "M":
         if (shape.length) shapes.push(shape);
-        x = number() + (relative ? x : 0);
-        y = number() + (relative ? y : 0);
-        shape = [[x, y]];
-        command = relative ? "l" : "L";
+        shape = [[number(), number()]];
+        command = "L";
         break;
       case "L":
-        x = number() + (relative ? x : 0);
-        y = number() + (relative ? y : 0);
-        shape.push([x, y]);
+        shape.push([number(), number()]);
         break;
-      case "H":
-        x = number() + (relative ? x : 0);
-        shape.push([x, y]);
+      case "Q": {
+        const [x0, y0] = shape[shape.length - 1];
+        const [cx, cy, x1, y1] = [number(), number(), number(), number()];
+        for (let step = 1; step <= CURVE_STEPS; step++) {
+          const t = step / CURVE_STEPS;
+          const [a, b, c] = [(1 - t) ** 2, 2 * (1 - t) * t, t ** 2];
+          shape.push([a * x0 + b * cx + c * x1, a * y0 + b * cy + c * y1]);
+        }
         break;
-      case "V":
-        y = number() + (relative ? y : 0);
-        shape.push([x, y]);
-        break;
+      }
       case "Z":
         shapes.push(shape);
-        [x, y] = shape[0];
         shape = [];
         break;
       default:
-        throw new Error(`the mark's path uses "${command}", which this script cannot draw`);
+        throw new Error(`a face's path uses "${command}", which this script cannot draw`);
     }
   }
   if (shape.length) shapes.push(shape);
   return shapes;
+}
+
+/** A shape's closed outlines, in the mark's own units. */
+function outlines({ el, attrs }) {
+  if (el === "polygon") {
+    const numbers = attrs.points.trim().split(/[\s,]+/).map(Number);
+    return [Array.from({ length: numbers.length / 2 }, (_, i) => [numbers[2 * i], numbers[2 * i + 1]])];
+  }
+  if (el === "rect") {
+    const [x, y, w, h] = ["x", "y", "width", "height"].map((key) => Number(attrs[key]));
+    return [[[x, y], [x + w, y], [x + w, y + h], [x, y + h]]];
+  }
+  if (el === "path") return pathOutlines(attrs.d);
+  throw new Error(`a face uses <${el}>, which this script cannot draw`);
 }
 
 /**
@@ -116,54 +123,66 @@ function crossings(shapes, y) {
   return found.sort((a, b) => a - b);
 }
 
-function inRoundedSquare(size, radius, x, y) {
-  const cx = Math.min(Math.max(x, radius), size - radius);
-  const cy = Math.min(Math.max(y, radius), size - radius);
-  return (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2;
-}
-
 /** Samples per pixel edge; 16 gives 256 coverage levels, as many as a byte holds. */
 const SAMPLES = 16;
 
-/**
- * RGBA pixels of the mark in ink on a ground-coloured tile. A raster cannot
- * follow the colour scheme, so the tile carries its own ground and the mark
- * reads on light and dark chrome alike. `scale` is pixels per mark unit,
- * `offset` where the mark's box starts, `radius` the tile's corner in pixels.
- */
-export function rasterise(size, { scale, offset, radius }) {
-  const shapes = outlines(markPath());
-  const { ink, bg } = palette();
-  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  const [inkRgb, bgRgb] = [rgb(ink), rgb(bg)];
-  const pixels = Buffer.alloc(size * size * 4);
-  const tile = new Uint16Array(size);
-  const mark = new Uint16Array(size);
-  for (let y = 0; y < size; y++) {
-    tile.fill(0);
-    mark.fill(0);
+/** How much of each pixel the outlines cover, from 0 to 1. */
+function coverage(shapes, size) {
+  const covered = new Float64Array(size * size);
+  const ys = shapes.flat().map(([, y]) => y);
+  const [top, bottom] = [Math.max(0, Math.floor(Math.min(...ys))), Math.min(size, Math.ceil(Math.max(...ys)))];
+  for (let y = top; y < bottom; y++) {
     for (let sy = 0; sy < SAMPLES; sy++) {
-      const py = y + (sy + 0.5) / SAMPLES;
-      const edges = crossings(shapes, (py - offset) / scale).map((x) => x * scale + offset);
-      let passed = 0;
-      for (let x = 0; x < size; x++) {
-        for (let sx = 0; sx < SAMPLES; sx++) {
-          const px = x + (sx + 0.5) / SAMPLES;
-          while (passed < edges.length && edges[passed] <= px) passed++;
-          if (!inRoundedSquare(size, radius, px, py)) continue;
-          tile[x]++;
-          if ((edges.length - passed) % 2 === 1) mark[x]++;
-        }
+      const edges = crossings(shapes, y + (sy + 0.5) / SAMPLES);
+      for (let e = 0; e + 1 < edges.length; e += 2) {
+        // Samples whose centres lie between a pair of crossings are inside.
+        const first = Math.max(0, Math.ceil(edges[e] * SAMPLES - 0.5));
+        const last = Math.min(size * SAMPLES - 1, Math.ceil(edges[e + 1] * SAMPLES - 0.5) - 1);
+        for (let s = first; s <= last; s++) covered[y * size + Math.floor(s / SAMPLES)] += 1 / SAMPLES ** 2;
       }
     }
-    for (let x = 0; x < size; x++) {
-      const at = (y * size + x) * 4;
-      const share = tile[x] ? mark[x] / tile[x] : 0;
-      for (let c = 0; c < 3; c++) {
-        pixels[at + c] = Math.round(bgRgb[c] + (inkRgb[c] - bgRgb[c]) * share);
-      }
-      pixels[at + 3] = Math.round((255 * tile[x]) / SAMPLES ** 2);
+  }
+  return covered;
+}
+
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+/**
+ * RGBA pixels of a face, its shapes laid over one another in order, in the
+ * light theme's colours: a raster cannot follow the colour scheme. `scale` is
+ * pixels per mark unit, (`x`, `y`) where the mark's box starts, and `ground`
+ * the colour under it, or null for a clear one.
+ */
+export function rasterise(size, mark, { scale, x, y, ground }) {
+  const [left, top] = mark.viewBox.split(" ").map(Number);
+  const { ink, chalk } = palette();
+  const colour = { ink, chalk, ...PAINT };
+  // Premultiplied colour and alpha, composited in floating point.
+  const image = new Float64Array(size * size * 4);
+  if (ground) {
+    const [r, g, b] = rgb(ground);
+    for (let at = 0; at < image.length; at += 4) image.set([r, g, b, 1], at);
+  }
+  for (const shape of mark.shapes) {
+    if (!(shape.paint in colour)) throw new Error(`a face paints with "${shape.paint}", which this script cannot draw`);
+    const [r, g, b] = rgb(colour[shape.paint]);
+    const placed = outlines(shape).map((points) => points.map(([px, py]) => [x + (px - left) * scale, y + (py - top) * scale]));
+    const covered = coverage(placed, size);
+    for (let i = 0; i < covered.length; i++) {
+      const a = covered[i];
+      if (!a) continue;
+      const at = i * 4;
+      image[at] = r * a + image[at] * (1 - a);
+      image[at + 1] = g * a + image[at + 1] * (1 - a);
+      image[at + 2] = b * a + image[at + 2] * (1 - a);
+      image[at + 3] = a + image[at + 3] * (1 - a);
     }
+  }
+  const pixels = Buffer.alloc(size * size * 4);
+  for (let at = 0; at < image.length; at += 4) {
+    const alpha = image[at + 3];
+    for (let c = 0; c < 3; c++) pixels[at + c] = alpha ? Math.round(image[at + c] / alpha) : 0;
+    pixels[at + 3] = Math.round(alpha * 255);
   }
   return pixels;
 }
@@ -208,13 +227,12 @@ function png(size, pixels) {
 }
 
 /**
- * The tab icon for browsers without SVG favicons: one 32-pixel image, PNG
- * inside an ICO. At this size a mark unit is two pixels, and the mark's own
- * margin in its box is the tile's padding.
+ * The tab icon for browsers without SVG favicons: the face at 32 pixels, one
+ * pixel to a unit of its 32-unit grid, PNG inside an ICO, on a clear ground.
  */
 export function faviconIco() {
   const size = 32;
-  const image = png(size, rasterise(size, { scale: 2, offset: 0, radius: 6 }));
+  const image = png(size, rasterise(size, FACE, { scale: 1, x: 0, y: 0, ground: null }));
   const header = Buffer.alloc(6 + 16);
   header.writeUInt16LE(0, 0);
   header.writeUInt16LE(1, 2);
@@ -229,12 +247,16 @@ export function faviconIco() {
 
 /**
  * The home-screen icon: 180 pixels, square and opaque, since iOS rounds the
- * corners itself and fills transparency with black. The mark's box takes the
- * middle 120 pixels.
+ * corners itself and fills transparency with black. The detailed face sits on
+ * the cream as the design canvas places it: 104 of a 150-pixel tile's width,
+ * centred.
  */
 export function appleIcon() {
   const size = 180;
-  return png(size, rasterise(size, { scale: 7.5, offset: 30, radius: 0 }));
+  const [, , width, height] = FACE_DETAILED.viewBox.split(" ").map(Number);
+  const scale = (size * 104) / (150 * width);
+  const place = { scale, x: (size - width * scale) / 2, y: (size - height * scale) / 2, ground: palette().chalk };
+  return png(size, rasterise(size, FACE_DETAILED, place));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -61,23 +61,77 @@ export const CAT = {
 };
 
 /**
- * A mark as a standalone SVG document, its theme patches in `scheme`'s
- * colours, for a renderer that has no stylesheet (a PDF).
+ * The cat's face as the tab icon draws it, simplified for 16 to 48 px.
+ *
+ * @type {Mark}
+ */
+export const FACE = {
+  viewBox: "0 0 32 32",
+  shapes: [
+    { el: "polygon", attrs: { points: "6,24 16,28 26,24 27,28 16,32 5,28" }, paint: "red" },
+    { el: "polygon", attrs: { points: "3,1 10,8 22,8 29,1 30,15 25,24 16,28 7,24 2,15" }, paint: "terracotta" },
+    { el: "polygon", attrs: { points: "3,1 10,8 13,8 11,16 2,15" }, paint: "ink" },
+    { el: "polygon", attrs: { points: "19,19 30,15 25,24 17,27" }, paint: "green" },
+    { el: "polygon", attrs: { points: "25,5 29,1 29.5,10" }, paint: "mustard" },
+    { el: "polygon", attrs: { points: "16,9 18.5,11.5 16,14 13.5,11.5" }, paint: "chalk" },
+    { el: "rect", attrs: { x: "7", y: "16", width: "6", height: "3" }, paint: "mustard" },
+    { el: "rect", attrs: { x: "19", y: "16", width: "6", height: "3" }, paint: "mustard" },
+    { el: "rect", attrs: { x: "9.5", y: "15.5", width: "1.5", height: "4" }, paint: "pupil" },
+    { el: "rect", attrs: { x: "21.5", y: "15.5", width: "1.5", height: "4" }, paint: "pupil" },
+    { el: "polygon", attrs: { points: "14,21 18,21 16,23.5" }, paint: "red" },
+  ],
+};
+
+/**
+ * The cat's face in full, for the home-screen icon.
+ *
+ * @type {Mark}
+ */
+export const FACE_DETAILED = {
+  viewBox: "8 6 84 92",
+  shapes: [
+    { el: "polygon", attrs: { points: "22,72 50,84 78,72 80,82 50,96 20,82" }, paint: "red" },
+    { el: "polygon", attrs: { points: "31,80 33,82 31,84 29,82" }, paint: "chalk" },
+    { el: "polygon", attrs: { points: "41,85 43,87 41,89 39,87" }, paint: "chalk" },
+    { el: "polygon", attrs: { points: "59,85 61,87 59,89 57,87" }, paint: "chalk" },
+    { el: "polygon", attrs: { points: "69,80 71,82 69,84 67,82" }, paint: "chalk" },
+    { el: "polygon", attrs: { points: "16,10 34,28 66,28 84,10 88,46 76,72 50,84 24,72 12,46" }, paint: "terracotta" },
+    { el: "polygon", attrs: { points: "16,10 34,28 42,28 36,50 12,46" }, paint: "ink" },
+    { el: "polygon", attrs: { points: "60,58 88,46 76,72 56,80" }, paint: "green" },
+    { el: "polygon", attrs: { points: "76,18 84,10 85,30" }, paint: "mustard" },
+    { el: "polygon", attrs: { points: "50.0,28.0 51.4,32.6 55.7,30.3 53.4,34.6 58.0,36.0 53.4,37.4 55.7,41.7 51.4,39.4 50.0,44.0 48.6,39.4 44.3,41.7 46.6,37.4 42.0,36.0 46.6,34.6 44.3,30.3 48.6,32.6" }, paint: "chalk" },
+    { el: "path", attrs: { d: "M26,53 Q33,47 40,53 Q33,58 26,53Z" }, paint: "mustard" },
+    { el: "path", attrs: { d: "M60,53 Q67,47 74,53 Q67,58 60,53Z" }, paint: "mustard" },
+    { el: "rect", attrs: { x: "32.1", y: "49.5", width: "1.8", height: "7" }, paint: "pupil" },
+    { el: "rect", attrs: { x: "66.1", y: "49.5", width: "1.8", height: "7" }, paint: "pupil" },
+    { el: "polygon", attrs: { points: "45,64 55,64 50,69" }, paint: "red" },
+  ],
+};
+
+/**
+ * A mark as a standalone SVG document. Its theme patches are painted in
+ * `scheme`'s colours; given `dark` as well, they are painted by class and swap
+ * to `dark`'s under a dark colour scheme, which is how a tab icon follows the
+ * browser.
  *
  * @param {Mark} mark
  * @param {{ ink: string, chalk: string }} scheme
+ * @param {{ ink: string, chalk: string }} [dark]
  * @returns {string}
  */
-export function markSvg(mark, scheme) {
+export function markSvg(mark, scheme, dark) {
+  const line = `fill="none" stroke-width="${LINE_WIDTH}" stroke-linecap="round"`;
   const paint = (name) => {
-    if (name === "ink-line") {
-      return `fill="none" stroke="${scheme.ink}" stroke-width="${LINE_WIDTH}" stroke-linecap="round"`;
-    }
+    if (dark && (name === "ink" || name === "chalk")) return `class="${name}"`;
+    if (dark && name === "ink-line") return `class="ink-line" ${line}`;
+    if (name === "ink-line") return `stroke="${scheme.ink}" ${line}`;
     return `fill="${name === "ink" ? scheme.ink : name === "chalk" ? scheme.chalk : PAINT[name]}"`;
   };
+  const rules = (colours) => `.ink{fill:${colours.ink}}.chalk{fill:${colours.chalk}}.ink-line{stroke:${colours.ink}}`;
+  const style = dark ? `<style>${rules(scheme)}@media (prefers-color-scheme: dark){${rules(dark)}}</style>` : "";
   const shapes = mark.shapes.map(({ el, attrs, paint: name }) => {
     const attributes = Object.entries(attrs).map(([key, value]) => `${key}="${value}"`);
     return `<${el} ${attributes.join(" ")} ${paint(name)}/>`;
   });
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${mark.viewBox}">${shapes.join("")}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${mark.viewBox}">${style}${shapes.join("")}</svg>`;
 }

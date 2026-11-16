@@ -5,7 +5,9 @@ import { inflateSync } from "node:zlib";
 
 import { describe, expect, test } from "vitest";
 
-import { appleIcon, faviconIco, iconSvg, markPath, palette, rasterise } from "./icons.mjs";
+import { FACE, PAINT, markSvg } from "../lib/brand/marks.mjs";
+
+import { appleIcon, faviconIco, iconSvg, palette, rasterise } from "./icons.mjs";
 
 const ROOT = join(__dirname, "..");
 const read = (path: string) => readFileSync(join(ROOT, path));
@@ -42,31 +44,37 @@ function icoEntries(ico: Buffer) {
   });
 }
 
+/** A pixel of an RGBA buffer `size` pixels wide. */
+const pixelAt = (pixels: Buffer, size: number, x: number, y: number) =>
+  Array.from(pixels.subarray((y * size + x) * 4, (y * size + x) * 4 + 4));
+const rgb = (colour: string) => [1, 3, 5].map((i) => parseInt(colour.slice(i, i + 2), 16));
+
 /**
- * The committed icons are what the generator writes, so a change to the mark
- * or to the ink colours fails here until `npm run icons` is run. Rasters are
+ * The committed icons are what the generator writes, so a change to the face
+ * or to the logo's colours fails here until `npm run icons` is run. Rasters are
  * compared by their pixels: zlib's bytes may differ between Node versions.
  */
 describe("the default icons", () => {
-  test("draw the path components/layout/mark.tsx draws", () => {
-    const mark = readFileSync(join(ROOT, "components/layout/mark.tsx"), "utf8");
+  test("draw the cat's face from lib/brand/marks.mjs", () => {
+    const { ink, chalk, darkInk, darkChalk } = palette();
 
-    expect(mark).toContain(`d="${markPath()}"`);
-    expect(iconSvg()).toContain(`d="${markPath()}"`);
+    expect(iconSvg()).toBe(`${markSvg(FACE, { ink, chalk }, { ink: darkInk, chalk: darkChalk })}\n`);
   });
 
-  test("take the ink of each theme from the tokens", () => {
+  test("take the logo's colours of each theme from the tokens", () => {
     const tokens = readFileSync(join(ROOT, "styles/tokens.css"), "utf8");
+    const { ink, chalk, darkInk, darkChalk } = palette();
 
-    expect(tokens).toMatch(new RegExp(`--ink: ${palette().ink};`));
-    expect(tokens).toMatch(new RegExp(`--dark-ink: ${palette().darkInk};`));
-    expect(tokens).toMatch(new RegExp(`--bg: ${palette().bg};`));
+    expect(tokens).toMatch(new RegExp(`--logo-ink: ${ink};`));
+    expect(tokens).toMatch(new RegExp(`--logo-chalk: ${chalk};`));
+    expect(tokens).toMatch(new RegExp(`--dark-logo-ink: ${darkInk};`));
+    expect(tokens).toMatch(new RegExp(`--dark-logo-chalk: ${darkChalk};`));
   });
 
-  test("follow the browser's colour scheme in the SVG", () => {
-    const { ink, darkInk } = palette();
+  test("swap the black and cream patches with the browser's colour scheme in the SVG", () => {
+    const { darkInk, darkChalk } = palette();
 
-    expect(iconSvg()).toMatch(new RegExp(`path\\{fill:${ink}\\}@media \\(prefers-color-scheme: ?dark\\)\\{path\\{fill:${darkInk}\\}\\}`));
+    expect(iconSvg()).toContain(`@media (prefers-color-scheme: dark){.ink{fill:${darkInk}}.chalk{fill:${darkChalk}}`);
   });
 
   test("are committed as the generator writes them", () => {
@@ -82,14 +90,22 @@ describe("the default icons", () => {
     expect(committed.map((entry) => decodePng(entry.png))).toEqual(generated.map((entry) => decodePng(entry.png)));
   });
 
-  test("rasterise the card in ink with its rules cut out to the ground", () => {
-    // At 32 pixels a unit is two: pixel (5, 9) lies inside the card's body and
-    // pixel (10, 15) inside the first rule, which spans y 14.4 to 16.8.
-    const pixel = rasterise(32, { scale: 2, offset: 0, radius: 0 });
-    const at = (x: number, y: number) => Array.from(pixel.subarray((y * 32 + x) * 4, (y * 32 + x) * 4 + 4));
-    const hex = (colour: string) => [1, 3, 5].map((i) => parseInt(colour.slice(i, i + 2), 16));
+  test("rasterise the face in its colours on a clear ground", () => {
+    // At 32 pixels a unit of the face is one pixel. Pixel (20, 11) lies in the
+    // terracotta of the face, (5, 5) in the black ear, (0, 31) outside it.
+    const pixels = rasterise(32, FACE, { scale: 1, x: 0, y: 0, ground: null });
 
-    expect(at(5, 9)).toEqual([...hex(palette().ink), 255]);
-    expect(at(10, 15)).toEqual([...hex(palette().bg), 255]);
+    expect(pixelAt(pixels, 32, 20, 11)).toEqual([...rgb(PAINT.terracotta), 255]);
+    expect(pixelAt(pixels, 32, 5, 5)).toEqual([...rgb(palette().ink), 255]);
+    expect(pixelAt(pixels, 32, 0, 31)[3]).toBe(0);
+  });
+
+  test("put the detailed face on an opaque cream square for the home screen", () => {
+    const { rows } = decodePng(appleIcon());
+    const row = 1 + 180 * 4;
+    const alphas = Array.from({ length: 180 * 180 }, (_, i) => rows[Math.floor(i / 180) * row + 1 + (i % 180) * 4 + 3]);
+
+    expect(new Set(alphas)).toEqual(new Set([255]));
+    expect(Array.from(rows.subarray(1, 5))).toEqual([...rgb(palette().chalk), 255]);
   });
 });

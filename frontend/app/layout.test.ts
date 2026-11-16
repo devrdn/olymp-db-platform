@@ -34,21 +34,21 @@ function links(icons: Metadata["icons"]) {
   ];
 }
 
-const MARK = [
+const FACE = [
   { rel: "icon", url: "/favicon.ico", sizes: "32x32" },
   { rel: "icon", url: "/icon.svg", type: "image/svg+xml" },
 ];
-const MARK_APPLE = { rel: "apple-touch-icon", url: "/apple-icon.png", sizes: "180x180", type: "image/png" };
+const FACE_APPLE = { rel: "apple-touch-icon", url: "/apple-icon.png", sizes: "180x180", type: "image/png" };
 
 describe("the icons in the head", () => {
   beforeEach(() => vi.mocked(branding).mockReset());
 
-  test("are the product mark when the installation uploaded none", async () => {
+  test("are the cat's face when the installation uploaded none", async () => {
     installation({});
 
     const { icons } = await generateMetadata();
 
-    expect(links(icons)).toEqual([...MARK, MARK_APPLE]);
+    expect(links(icons)).toEqual([...FACE, FACE_APPLE]);
   });
 
   test("hold only the uploaded favicon in the tab once there is one", async () => {
@@ -58,7 +58,7 @@ describe("the icons in the head", () => {
 
     expect(links(icons)).toEqual([
       { rel: "icon", url: "/api/v1/settings/images/favicon?v=f1" },
-      MARK_APPLE,
+      FACE_APPLE,
     ]);
   });
 
@@ -68,7 +68,7 @@ describe("the icons in the head", () => {
     const { icons } = await generateMetadata();
 
     expect(links(icons)).toEqual([
-      ...MARK,
+      ...FACE,
       { rel: "apple-touch-icon", url: "/api/v1/settings/images/icon?v=i1" },
     ]);
   });
@@ -85,7 +85,7 @@ describe("the icons in the head", () => {
   });
 
   test("name files the server actually has", () => {
-    for (const { url } of [...MARK, MARK_APPLE]) {
+    for (const { url } of [...FACE, FACE_APPLE]) {
       expect(existsSync(join(__dirname, "..", "public", url)), url).toBe(true);
     }
   });
