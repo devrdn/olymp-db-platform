@@ -116,17 +116,19 @@ export const COLOR = {
   line: "#eeeeef",
   line2: "#e0e0e1",
   ann: "#c5c6c7",
+  // The logo's black and cream; paper has no dark theme, so they never trade places.
+  logoInk: "#1e1a18",
+  logoChalk: "#f5ecdb",
 } as const;
 
 /**
  * The logo as the running header prints it on every page, far larger than the
- * app bar's `h-5`: a printed page is read from arm's length, and the header
+ * app bar's 32 px: a printed page is read from arm's length, and the header
  * carries the installation's identity on every sheet. An uploaded logo fits
- * inside the box keeping its proportions; the product mark is an ink square of
- * the box's height with the mark at the app bar's three fifths of it (`size-3`
- * in `size-5`).
+ * inside the box keeping its proportions; the product's cat stands the box's
+ * full height.
  */
-export const LOGO = { height: 28, maxWidth: 180, mark: (28 * 3) / 5 } as const;
+export const LOGO = { height: 28, maxWidth: 180 } as const;
 
 const BOTTOM = MARGIN;
 // The page number's top sits this far below the text block.

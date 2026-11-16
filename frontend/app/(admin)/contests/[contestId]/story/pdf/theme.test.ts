@@ -112,6 +112,8 @@ describe("the PDF's colours are the light theme's, as they print on white", () =
     ["line", "line"],
     ["line2", "line-2"],
     ["ann", "ann"],
+    ["logoInk", "logo-ink"],
+    ["logoChalk", "logo-chalk"],
   ] as const)("%s is --%s", (key, token) => {
     expect(COLOR[key]).toBe(onPaper(lightToken(token)));
   });

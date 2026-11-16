@@ -1,65 +1,22 @@
+import { CAT, markSvg } from "@/lib/brand/marks.mjs";
+
 import type { LogoImage } from "./logo";
 import { storyBlocks, tracked, type Node } from "./story-markdown";
 import { COLOR, HEADER, LOGO, MEASURE, NATURAL, PAGE, SPACE, STEP, inset, lineHeight } from "./theme";
 
-/** The product mark (`components/layout/mark.tsx`), on a 16-unit grid. */
-export const MARK_PATH = "M1 2h5.6v1.6H15V14H1V2Zm3 5.2h8v1.2H4V7.2Zm0 3h5.6v1.2H4v-1.2Z";
-
-/** The mark's outlines: the card first, then the two rules cut out of it. Reads `M`, `m`, `H`, `h`, `V`, `v` and `Z`. */
-export function markOutlines(path: string): { x: number; y: number }[][] {
-  const outlines: { x: number; y: number }[][] = [];
-  let x = 0;
-  let y = 0;
-  let start = { x, y };
-  for (const [, command, number] of path.matchAll(/([MmHhVvZz])\s*([-\d.]*(?:\s+[-\d.]+)?)/g)) {
-    const [a, b] = number.trim().split(/\s+/).map(Number);
-    switch (command) {
-      case "M":
-      case "m":
-        [x, y] = command === "M" ? [a, b] : [x + a, y + b];
-        start = { x, y };
-        outlines.push([{ x, y }]);
-        continue;
-      case "H":
-        x = a;
-        break;
-      case "h":
-        x += a;
-        break;
-      case "V":
-        y = a;
-        break;
-      case "v":
-        y += a;
-        break;
-      default:
-        ({ x, y } = start);
-        continue;
-    }
-    outlines[outlines.length - 1].push({ x, y });
-  }
-  return outlines;
-}
-
-/** The mark drawn as the app bar draws it: the paper-coloured card on an ink square, its rules in ink. */
-function productMark(): Node {
-  const scale = LOGO.mark / 16;
-  const offset = (LOGO.height - LOGO.mark) / 2;
-  const [card, ...rules] = markOutlines(MARK_PATH).map((outline) =>
-    outline.map((point) => ({ x: offset + point.x * scale, y: offset + point.y * scale })),
-  );
+/** The product's cat (`lib/brand/marks.mjs`), standing the logo box's full height. */
+function productMark(): Node & { width: number } {
+  const [, , width, height] = CAT.viewBox.split(" ").map(Number);
   return {
-    canvas: [
-      { type: "rect", x: 0, y: 0, w: LOGO.height, h: LOGO.height, color: COLOR.ink },
-      { type: "polyline", points: card, closePath: true, color: COLOR.paper, lineWidth: 0 },
-      ...rules.map((points) => ({ type: "polyline", points, closePath: true, color: COLOR.ink, lineWidth: 0 })),
-    ],
+    svg: markSvg(CAT, { ink: COLOR.logoInk, chalk: COLOR.logoChalk }),
+    width: (LOGO.height * width) / height,
+    height: LOGO.height,
   };
 }
 
 /** The logo's cell in the header's row, centred in the row's height. */
 function logoCell(logo: LogoImage | "mark"): Node & { width: number } {
-  if (logo === "mark") return { ...productMark(), width: LOGO.height };
+  if (logo === "mark") return productMark();
   const scale = Math.min(LOGO.height / logo.height, LOGO.maxWidth / logo.width);
   const [width, height] = [logo.width * scale, logo.height * scale];
   const room = (LOGO.height - height) / 2;

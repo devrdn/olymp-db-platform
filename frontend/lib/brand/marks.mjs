@@ -59,3 +59,25 @@ export const CAT = {
     { el: "path", attrs: { d: "M80,32 L102,27 M80,34 L103,34" }, paint: "ink-line" },
   ],
 };
+
+/**
+ * A mark as a standalone SVG document, its theme patches in `scheme`'s
+ * colours, for a renderer that has no stylesheet (a PDF).
+ *
+ * @param {Mark} mark
+ * @param {{ ink: string, chalk: string }} scheme
+ * @returns {string}
+ */
+export function markSvg(mark, scheme) {
+  const paint = (name) => {
+    if (name === "ink-line") {
+      return `fill="none" stroke="${scheme.ink}" stroke-width="${LINE_WIDTH}" stroke-linecap="round"`;
+    }
+    return `fill="${name === "ink" ? scheme.ink : name === "chalk" ? scheme.chalk : PAINT[name]}"`;
+  };
+  const shapes = mark.shapes.map(({ el, attrs, paint: name }) => {
+    const attributes = Object.entries(attrs).map(([key, value]) => `${key}="${value}"`);
+    return `<${el} ${attributes.join(" ")} ${paint(name)}/>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${mark.viewBox}">${shapes.join("")}</svg>`;
+}

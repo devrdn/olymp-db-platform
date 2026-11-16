@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
-import { MARK_PATH, markOutlines, storyDocument, titleSpace } from "./story-document";
+import { CAT, markSvg } from "@/lib/brand/marks.mjs";
+
+import { storyDocument, titleSpace } from "./story-document";
 import type { Node } from "./story-markdown";
 import { A4, COLOR, HEADER, LOGO, MEASURE, MM, NATURAL, PAGE, SPACE, STEP } from "./theme";
 
@@ -41,57 +41,13 @@ function nodes(node: unknown): Node[] {
 }
 
 describe("the product mark", () => {
-  test("is the mark the app draws, path for path", () => {
-    const component = readFileSync(join(process.cwd(), "components/layout/mark.tsx"), "utf8");
-    const icon = readFileSync(join(process.cwd(), "public/icon.svg"), "utf8");
-
-    expect(component).toContain(`d="${MARK_PATH}"`);
-    expect(icon).toContain(`d="${MARK_PATH}"`);
-  });
-
-  test("reads as the card with its tab, and the two rules cut out of it", () => {
-    const rounded = markOutlines(MARK_PATH).map((outline) => outline.map(({ x, y }) => ({ x: +x.toFixed(6), y: +y.toFixed(6) })));
-
-    expect(rounded).toEqual([
-      [
-        { x: 1, y: 2 },
-        { x: 6.6, y: 2 },
-        { x: 6.6, y: 3.6 },
-        { x: 15, y: 3.6 },
-        { x: 15, y: 14 },
-        { x: 1, y: 14 },
-        { x: 1, y: 2 },
-      ],
-      [
-        { x: 4, y: 7.2 },
-        { x: 12, y: 7.2 },
-        { x: 12, y: 8.4 },
-        { x: 4, y: 8.4 },
-        { x: 4, y: 7.2 },
-      ],
-      [
-        { x: 4, y: 10.2 },
-        { x: 9.6, y: 10.2 },
-        { x: 9.6, y: 11.4 },
-        { x: 4, y: 11.4 },
-        { x: 4, y: 10.2 },
-      ],
-    ]);
-  });
-
-  test("is the app bar's mark set large: a 28 pt ink square with the mark at three fifths of it, the card in paper and the rules in ink", () => {
+  test("is the cat the app bar draws, at the logo's height, in the light theme's colours", () => {
     const [mark] = row(header(storyDocument({ ...input, logo: "mark" }).definition));
-    const [square, card, ...rules] = mark.canvas as Node[];
-    const xs = (card.points as { x: number }[]).map((point) => point.x);
 
     expect(LOGO.height).toBe(28);
-    expect(mark.width).toBe(28);
-    expect(square).toMatchObject({ type: "rect", x: 0, y: 0, w: 28, h: 28, color: COLOR.ink });
-    // The card is 14 of the mark's 16 units, centred in the square.
-    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo((14 / 16) * 16.8, 6);
-    expect(Math.min(...xs) + Math.max(...xs)).toBeCloseTo(28, 6);
-    expect(card).toMatchObject({ type: "polyline", closePath: true, color: COLOR.paper });
-    expect(rules.map((rule) => rule.color)).toEqual([COLOR.ink, COLOR.ink]);
+    // The cat's box is 90 by 116 units.
+    expect(mark).toMatchObject({ height: 28, width: (28 * 90) / 116 });
+    expect(mark.svg).toBe(markSvg(CAT, { ink: COLOR.logoInk, chalk: COLOR.logoChalk }));
   });
 });
 
@@ -153,7 +109,7 @@ describe("the running header", () => {
 
   test("gives the title the measure less the logo and the gap before it", () => {
     expect(titleSpace(null)).toBeCloseTo(MEASURE, 6);
-    expect(titleSpace("mark")).toBeCloseTo(MEASURE - 28 - HEADER.titleGap, 6);
+    expect(titleSpace("mark")).toBeCloseTo(MEASURE - (28 * 90) / 116 - HEADER.titleGap, 6);
     expect(titleSpace(uploaded(480, 140))).toBeCloseTo(MEASURE - 96 - HEADER.titleGap, 6);
   });
 
