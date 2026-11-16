@@ -27,7 +27,7 @@ export default function GlobalError({
       >
         <main style={{ maxWidth: "40ch", padding: "2rem", textAlign: "left" }}>
           <h1 style={{ fontSize: "1.25rem", fontWeight: 500, margin: 0 }}>
-            DB Contest could not start
+            OlympDB Platform could not start
           </h1>
           <p style={{ color: "#4c535e", lineHeight: 1.6 }}>
             The page failed before the interface loaded. Reloading usually helps.

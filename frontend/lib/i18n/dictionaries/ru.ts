@@ -2,7 +2,7 @@ import type { Dictionary } from "./en";
 
 const ru = {
   chrome: {
-    product: "DB Contest",
+    product: "OlympDB Platform",
     signOut: "Выйти",
     language: "Язык",
     helpLabel: "Подсказка",
@@ -95,7 +95,6 @@ const ru = {
     },
   },
   home: {
-    defaultName: "Olymp Database System",
     lede: "Площадка для олимпиад по SQL. Настоящая база данных, настоящий вопрос и ответ, который проверяется сразу, — и для университетского курса, и для школьного тура.",
     hero: {
       signIn: "Войти",

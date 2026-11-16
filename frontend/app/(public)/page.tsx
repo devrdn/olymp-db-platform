@@ -38,7 +38,7 @@ export default async function HomePage() {
   const signedIn = jar.has(sessionCookie().name);
 
   // Resolved once for both hero and footer, so they agree.
-  const name = brand.name.trim() || dict.home.defaultName;
+  const name = brand.name.trim() || dict.chrome.product;
 
   /**
    * Settled, not joined: neither read should take the page down, and each

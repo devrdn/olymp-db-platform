@@ -14,10 +14,10 @@ beforeAll(async () => {
 /** A signed-in visitor's main action leads to their own work, not the sign-in form. */
 describe("the hero", () => {
   test("offers the way in to a visitor, and the way to work to an account", () => {
-    const { rerender } = render(<Hero name="Olymp Database System" signedIn={false} dict={en} />);
+    const { rerender } = render(<Hero name="OlympDB Platform" signedIn={false} dict={en} />);
     expect(screen.getByRole("link", { name: en.home.hero.signIn })).toHaveAttribute("href", "/login");
 
-    rerender(<Hero name="Olymp Database System" signedIn dict={en} />);
+    rerender(<Hero name="OlympDB Platform" signedIn dict={en} />);
     expect(screen.getByRole("link", { name: en.home.hero.mine })).toHaveAttribute("href", "/my");
   });
 

@@ -315,7 +315,7 @@ func TestTheLinkIsMailedInTheLanguageTheReaderAsksFor(t *testing.T) {
 	f := newRecoveryFixture(t)
 	f.student("ana", "ana@example.edu")
 	want, err := mailing.NewTexts(recoverytest.PublicURL).PasswordReset(mailing.Romanian, mailing.PasswordResetData{
-		Installation: "DB Contest", FullName: "Ana Popescu", Login: "ana", Link: "x",
+		Installation: "OlympDB Platform", FullName: "Ana Popescu", Login: "ana", Link: "x",
 	})
 	if err != nil {
 		t.Fatal(err)

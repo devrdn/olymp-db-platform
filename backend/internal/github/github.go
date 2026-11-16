@@ -193,7 +193,7 @@ func (c *Client) get(ctx context.Context, token, path string, out any) (int, err
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "db-contest")
+	req.Header.Set("User-Agent", "olymp-db-platform")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, err

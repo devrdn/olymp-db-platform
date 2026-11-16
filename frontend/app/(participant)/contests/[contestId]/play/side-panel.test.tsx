@@ -189,7 +189,7 @@ describe("the side panel", () => {
 
     // Browsers suggest `document.title` as the "Save as PDF" filename.
     test("names the file after the contest, prints, and puts the tab's own title back afterward", async () => {
-      document.title = "DBContest";
+      document.title = "OlympDB Platform";
       show();
 
       await userEvent.click(
@@ -203,14 +203,14 @@ describe("the side panel", () => {
       // Chrome and Firefox fire this once the print dialog closes.
       window.dispatchEvent(new Event("afterprint"));
 
-      expect(document.title).toBe("DBContest");
+      expect(document.title).toBe("OlympDB Platform");
     });
 
     // `afterprint` does not fire everywhere (older Safari, some webviews), and
     // the tab must not stay titled `story-…` for the rest of the olympiad.
     test("restores the title even on a browser that never fires afterprint", () => {
       vi.useFakeTimers();
-      document.title = "DBContest";
+      document.title = "OlympDB Platform";
       show();
 
       fireEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.story.print, hidden: true }));
@@ -219,18 +219,18 @@ describe("the side panel", () => {
       // No `afterprint`, only time passing.
       vi.runOnlyPendingTimers();
 
-      expect(document.title).toBe("DBContest");
+      expect(document.title).toBe("OlympDB Platform");
       vi.useRealTimers();
     });
 
     test("does not restore the title twice, once from afterprint and once from the defensive timer", () => {
       vi.useFakeTimers();
-      document.title = "DBContest";
+      document.title = "OlympDB Platform";
       show();
 
       fireEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.story.print, hidden: true }));
       window.dispatchEvent(new Event("afterprint"));
-      expect(document.title).toBe("DBContest");
+      expect(document.title).toBe("OlympDB Platform");
 
       // A later title change must survive the timer firing after `afterprint`
       // already restored the title.

@@ -58,7 +58,7 @@ func NewFixture(t testing.TB, edit func(*signup.Config)) *Fixture {
 		Outbox:    outbox,
 		Texts:     mailing.NewTexts("https://contest.example.edu"),
 		Settings: Settings{
-			settings.KeyName:         "DB Contest",
+			settings.KeyName:         "OlympDB Platform",
 			settings.KeyMailLanguage: string(mailing.English),
 		},
 		Limiter: auth.NewLimiter(memoryCache(t)),

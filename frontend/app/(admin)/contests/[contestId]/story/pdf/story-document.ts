@@ -152,7 +152,7 @@ export function storyDocument({ title, language, markdown, logo, columnWidths, h
   const storyGap = Math.max(SPACE.titleAfter, story.mt) + story.first - inset(titleStep);
 
   const definition: Node = {
-    info: { title, creator: "DB Contest", producer: "DB Contest" },
+    info: { title, creator: "OlympDB Platform", producer: "OlympDB Platform" },
     language,
     pageSize: "A4",
     pageMargins: [PAGE.side, PAGE.top, PAGE.side, PAGE.bottom],

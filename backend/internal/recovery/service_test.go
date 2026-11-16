@@ -179,7 +179,7 @@ func TestRequestWritesInTheReadersLanguageOrTheInstallations(t *testing.T) {
 			f := recoverytest.NewFixture(t, nil)
 			student(t, f, "ana", "ana@example.edu")
 			expected, err := mailing.NewTexts(recoverytest.PublicURL).PasswordReset(want, mailing.PasswordResetData{
-				Installation: "DB Contest", FullName: "Ana Popescu", Login: "ana", Link: "x",
+				Installation: "OlympDB Platform", FullName: "Ana Popescu", Login: "ana", Link: "x",
 			})
 			if err != nil {
 				t.Fatal(err)

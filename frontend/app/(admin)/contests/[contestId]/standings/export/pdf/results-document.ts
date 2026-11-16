@@ -344,7 +344,11 @@ function frame(input: ResultsPdfInput, title: string): Content {
   const measure = measureOf(report);
   const contest = contestTitle(report, language);
   return {
-    info: { title: contest ? `${title} — ${contest}` : title, creator: "DB Contest", producer: "DB Contest" },
+    info: {
+      title: contest ? `${title} — ${contest}` : title,
+      creator: "OlympDB Platform",
+      producer: "OlympDB Platform",
+    },
     language,
     pageSize: "A4",
     ...(report.detail === "detailed" ? { pageOrientation: "landscape" } : {}),

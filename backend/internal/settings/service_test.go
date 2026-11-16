@@ -21,7 +21,7 @@ func TestAFreshInstallationReadsAsSomethingRatherThanBlanks(t *testing.T) {
 		t.Fatalf("All() = %v", err)
 	}
 
-	if all[settings.KeyName] != "DB Contest" {
+	if all[settings.KeyName] != "OlympDB Platform" {
 		t.Errorf("name = %q, want the fallback", all[settings.KeyName])
 	}
 }

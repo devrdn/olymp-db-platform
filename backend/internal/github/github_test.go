@@ -159,7 +159,7 @@ func TestTheAPICallsCarryTheTokenAndTheVersion(t *testing.T) {
 		}
 		for header, value := range map[string]string{
 			"Authorization": "Bearer gho_the-code", "Accept": "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2022-11-28", "User-Agent": "db-contest",
+			"X-GitHub-Api-Version": "2022-11-28", "User-Agent": "olymp-db-platform",
 		} {
 			if got := r.Header.Get(header); got != value {
 				t.Errorf("%s %s = %q, want %q", path, header, got, value)

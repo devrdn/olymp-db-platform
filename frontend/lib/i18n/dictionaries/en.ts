@@ -15,7 +15,7 @@
  */
 const en = {
   chrome: {
-    product: "DB Contest",
+    product: "OlympDB Platform",
     signOut: "Sign out",
     language: "Language",
     /** The accessible name of every "?" that opens a `help` text. */
@@ -117,8 +117,6 @@ const en = {
    * translated.
    */
   home: {
-    /** The heading when the installation has not yet named itself. */
-    defaultName: "Olymp Database System",
     lede: "A place to hold SQL olympiads. A real database, a real question, and an answer checked the moment it is sent — for a university course and for a school round alike.",
     hero: {
       signIn: "Sign in",
