@@ -1,9 +1,9 @@
 # 2. Who can do what
 
-This chapter maps every actor of DB Contest to what they can do, the screen
-they do it on, the endpoint behind the screen, the package that holds the rule,
-and the permission or condition that admits them. Use it to answer "where does
-this live?" before you change a behaviour, and "who else does this affect?"
+This chapter maps every actor of OlympDB Platform to what they can do, the
+screen they do it on, the endpoint behind the screen, the package that holds the
+rule, and the permission or condition that admits them. Use it to answer "where
+does this live?" before you change a behaviour, and "who else does this affect?"
 after.
 
 The domain words (contest, registration, the participation gate, grace) are
@@ -73,7 +73,7 @@ holding `contest.admin_all` cannot participate anywhere
 ```mermaid
 flowchart LR
     visitor(("Visitor"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["See the landing page"])
         uc2(["Open a public leaderboard"])
         uc3(["See a contest cover"])
@@ -126,7 +126,7 @@ can do the account actions; the rest need a registration or an open contest.
 ```mermaid
 flowchart LR
     learner(("Participant"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["Change own password"])
         uc2(["Sign out"])
         uc3(["See my contests"])
@@ -178,7 +178,7 @@ published contest to start (`Standing.MayWait`).
 ```mermaid
 flowchart LR
     learner(("Participant"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["Wait for the start"])
         uc2(["Read the story"])
         uc3(["Read the questions"])
@@ -244,7 +244,7 @@ in `contests.Service` ([`service.go`](../../backend/internal/contests/service.go
 flowchart LR
     staff(("Owner or manager"))
     organizer(("Organiser"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["Create a contest"])
         uc2(["See my contests"])
         uc3(["Check what blocks publishing"])
@@ -305,7 +305,7 @@ In the game rows, `/game` stands for `/contests/{contestID}/game`.
 flowchart LR
     owner(("Owner"))
     staff(("Owner or manager"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["Publish, start, finish, archive"])
         uc2(["Appoint and revoke managers"])
         uc3(["Add and remove participants"])
@@ -366,7 +366,7 @@ apply to them on every contest.
 ```mermaid
 flowchart LR
     admin(("Administrator"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["Manage accounts"])
         uc2(["Import a roster of accounts"])
         uc3(["Act on many accounts at once"])
@@ -429,7 +429,7 @@ failure and runs again on the next tick.
 ```mermaid
 flowchart LR
     clock(("Scheduler and jobs"))
-    subgraph system["DB Contest"]
+    subgraph system["OlympDB Platform"]
         uc1(["Start contests that are due"])
         uc2(["Finish contests that are over"])
         uc3(["Build waiting game databases"])

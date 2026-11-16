@@ -1,8 +1,8 @@
 {
   "info": {
     "_postman_id": "e1a7c9a0-6b3a-4f7a-9d2e-db-contest-core-api",
-    "name": "DB Contest — Core API",
-    "description": "Auth + account management endpoints for the DB Contest Core API (step 1 & 2 of the architecture plan). Sessions are stored server-side and carried in an HttpOnly cookie set by /auth/login — Postman's cookie jar handles it automatically once you run Login inside this collection.\n\nFolders:\n- Auth — login, current session, logout, own password change\n- Users (admin) — account management, requires `users.manage`\n- Operational — health/readiness/metrics. Reachable only against `go run ./cmd/api` on the host (`make run`), NOT against `make stack-up`: there, the internal listener lives only on the compose network and is not published to the host, by design — the same as production. See that folder's description for how to reach it inside the container.\n\nRun order for a fresh environment: Auth ▸ Login (bootstrap account) → any Users request → Auth ▸ Logout.",
+    "name": "OlympDB Platform — Core API",
+    "description": "Auth + account management endpoints for the OlympDB Platform Core API (step 1 & 2 of the architecture plan). Sessions are stored server-side and carried in an HttpOnly cookie set by /auth/login — Postman's cookie jar handles it automatically once you run Login inside this collection.\n\nFolders:\n- Auth — login, current session, logout, own password change\n- Users (admin) — account management, requires `users.manage`\n- Operational — health/readiness/metrics. Reachable only against `go run ./cmd/api` on the host (`make run`), NOT against `make stack-up`: there, the internal listener lives only on the compose network and is not published to the host, by design — the same as production. See that folder's description for how to reach it inside the container.\n\nRun order for a fresh environment: Auth ▸ Login (bootstrap account) → any Users request → Auth ▸ Logout.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {

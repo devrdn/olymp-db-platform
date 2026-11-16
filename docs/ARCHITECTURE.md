@@ -1,4 +1,4 @@
-# DB Contest — architecture
+# OlympDB Platform — architecture
 
 A platform for running university SQL olympiads in a detective format:
 students are given the story of a crime and a database holding the evidence,
@@ -4544,7 +4544,7 @@ university.
 A monorepo:
 
 ```
-DBContest/
+olymp-db-platform/
 ├── backend/
 │   ├── cmd/api/            # the Core API
 │   ├── cmd/queryrunner/    # the Query Runner
@@ -4567,6 +4567,16 @@ DBContest/
     ├── api/                # generated contracts: error codes, audit actions
     └── design/             # the design system's specification
 ```
+
+**Technical names keep `dbcontest`.** The product is OlympDB Platform, but
+the identifiers a running installation depends on still read `dbcontest` or
+`db-contest`: the cookies (`dbcontest_session`, `dbcontest_device`,
+`dbcontest_locale`, `dbcontest_theme`), the browser storage keys, the Compose
+project with its volumes, the image names, the rules' `dbcontest` label and
+the `DBContest*` alert names. Renaming one would sign everybody out or forget
+their drafts and layouts, leave the databases' volumes behind, or break the
+alert routes and silences written against the old name, and nobody using the
+platform would see the difference.
 
 **The Compose file grows with the code** rather than ahead of it: a service
 with no implementation behind it would be a stack that does not come up.

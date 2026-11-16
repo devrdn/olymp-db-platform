@@ -1,4 +1,4 @@
-// Command queryrunner runs the DB Contest Query Runner. It is a separate
+// Command queryrunner runs the OlympDB Platform Query Runner. It is a separate
 // service because it links PostgreSQL's parser through cgo, C code reading
 // adversary text whose crash a recover cannot catch, and because only it
 // holds the participants' roles (game_reader, game_writer) and runs their

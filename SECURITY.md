@@ -1,6 +1,6 @@
 # Security policy
 
-DB Contest runs SQL that participants write against databases on a shared
+OlympDB Platform runs SQL that participants write against databases on a shared
 cluster, and it holds their accounts, their answers and the reference answers
 they are trying to find. A weakness in it is rarely theoretical, so please
 report one privately.

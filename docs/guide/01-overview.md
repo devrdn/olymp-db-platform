@@ -1,9 +1,9 @@
 # Start here
 
-This is the first chapter of the developer guide. It tells you what DB Contest
-is, who uses it, what its words mean in the code, how the running system is put
-together and where things live in the repository. The later chapters build on
-the vocabulary defined here and link back to it.
+This is the first chapter of the developer guide. It tells you what OlympDB
+Platform is, who uses it, what its words mean in the code, how the running
+system is put together and where things live in the repository. The later
+chapters build on the vocabulary defined here and link back to it.
 
 ## Contents
 
@@ -16,10 +16,10 @@ the vocabulary defined here and link back to it.
 
 ## The product
 
-DB Contest runs university SQL olympiads in a detective format. A participant
-gets the story of a crime and a database holding the evidence. They write SQL
-in a browser console, answer questions from what their queries show, and in the
-end name the culprit.
+OlympDB Platform runs university SQL olympiads in a detective format. A
+participant gets the story of a crime and a database holding the evidence. They
+write SQL in a browser console, answer questions from what their queries show,
+and in the end name the culprit.
 
 **A participant** signs in, joins a contest (or is added to it), and when the
 contest opens works on the play screen: the story, the clock, the questions, an

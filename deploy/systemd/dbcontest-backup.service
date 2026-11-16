@@ -1,9 +1,9 @@
-# The scheduled backup of DB Contest: `make backup`, rotation, and the
+# The scheduled backup of OlympDB Platform: `make backup`, rotation, and the
 # optional off-host copy, run by deploy/backups/scheduled-backup.sh.
 # Rendered and installed by `deploy/backups/schedule.sh install`, which fills
 # in the checkout and the user; started by dbcontest-backup.timer.
 [Unit]
-Description=DB Contest backup (core dump, covers, game uploads) and rotation
+Description=OlympDB Platform backup (core dump, covers, game uploads) and rotation
 Documentation=file://@ROOT@/backend/README.md
 # After the clock is set: a catch-up run at boot must not stamp its set with
 # a time the clock is about to take back.
