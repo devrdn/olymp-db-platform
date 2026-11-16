@@ -16,9 +16,9 @@ beforeAll(async () => {
 
 describe("the footer", () => {
   test("names the installation and offers the same language and theme controls as the bar", () => {
-    render(<SiteFooter name="Olymp Database System" contact="admin@example.edu" locale="en" theme="system" dict={en} />);
+    render(<SiteFooter name="OlympDB Platform" contact="admin@example.edu" locale="en" theme="system" dict={en} />);
 
-    expect(screen.getByText("Olymp Database System")).toBeInTheDocument();
+    expect(screen.getByText("OlympDB Platform")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /admin@example\.edu/ })).toHaveAttribute("href", "mailto:admin@example.edu");
     // The bar's own components: the language switcher is a form named by
     // `chrome.language`, the theme control one button.

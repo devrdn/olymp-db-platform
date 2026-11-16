@@ -39,7 +39,7 @@ const MARK_HOME = { url: "/apple-icon.png", sizes: "180x180", type: "image/png" 
  */
 export async function generateMetadata(): Promise<Metadata> {
   const brand = await branding();
-  const name = brand.name.trim() || "DB Contest";
+  const name = brand.name.trim() || "OlympDB Platform";
   const { favicon, icon } = brand.images;
 
   return {

@@ -563,7 +563,7 @@ func TestTheCodeIsMailedInTheLanguageTheReaderAsksFor(t *testing.T) {
 	subject := func(t *testing.T, lang mailing.Language) string {
 		t.Helper()
 		text, err := texts.SignupCode(lang, mailing.SignupCodeData{
-			Installation: "DB Contest", FullName: "Ana Popescu", Login: "ana", Code: "123456",
+			Installation: "OlympDB Platform", FullName: "Ana Popescu", Login: "ana", Code: "123456",
 		})
 		if err != nil {
 			t.Fatalf("SignupCode(%s) = %v", lang, err)
@@ -584,7 +584,7 @@ func TestTheCodeIsMailedInTheLanguageTheReaderAsksFor(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := mountSignup(t, signuptest.NewFixture(t, func(cfg *signup.Config) {
 				cfg.Settings = signuptest.Settings{
-					settings.KeyName: "DB Contest", settings.KeyMailLanguage: string(mailing.Russian),
+					settings.KeyName: "OlympDB Platform", settings.KeyMailLanguage: string(mailing.Russian),
 				}
 			}))
 

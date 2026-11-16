@@ -71,7 +71,7 @@ func NewFixture(t testing.TB, edit func(*recovery.Config)) *Fixture {
 		Outbox:    outbox,
 		Texts:     mailing.NewTexts(PublicURL),
 		Settings: Settings{
-			settings.KeyName:         "DB Contest",
+			settings.KeyName:         "OlympDB Platform",
 			settings.KeyMailLanguage: string(mailing.English),
 		},
 		Limiter: auth.NewLimiter(memoryCache(t)),

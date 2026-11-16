@@ -70,7 +70,7 @@ type Definition struct {
 
 // Catalogue is every setting this installation has.
 var Catalogue = []Definition{
-	{Key: KeyName, Fallback: "DB Contest", Public: true, Validate: required},
+	{Key: KeyName, Fallback: "OlympDB Platform", Public: true, Validate: required},
 	{Key: KeyContact, Public: true, Validate: optionalEmail},
 	// The stored value is a reference to an uploaded file, not the file.
 	{Key: KeyLogo, Public: true, Validate: anything},
