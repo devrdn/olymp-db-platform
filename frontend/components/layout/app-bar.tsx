@@ -55,22 +55,27 @@ export function AppBar({
         </span>
       )}
       {/* The installation's name, falling back to the product's. */}
-      {name?.trim() || dict.chrome.product}
+      <span className="max-narrow:line-clamp-2 max-narrow:leading-tight max-narrow:wrap-break-word">{name?.trim() || dict.chrome.product}</span>
     </>
   );
-  const markClass = "flex shrink-0 items-center gap-2 text-control font-semibold text-ink";
+  const markClass = "flex min-w-0 items-center gap-2 text-control font-semibold text-ink";
 
   return (
     <header className="sticky top-0 z-20 grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line bg-bg max-narrow:grid-cols-[0_minmax(0,1fr)_0] print:hidden">
       <div />
-      <div className="flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:h-auto max-narrow:min-h-12 max-narrow:flex-wrap max-narrow:gap-x-3 max-narrow:px-4.5">
-        {home ? (
-          <Link href={home} className={markClass}>
-            {mark}
-          </Link>
-        ) : (
-          <span className={markClass}>{mark}</span>
-        )}
+      <div className="flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:h-auto max-narrow:min-h-12 max-narrow:flex-wrap max-narrow:gap-x-3 max-narrow:gap-y-1 max-narrow:px-4.5">
+        {/* At phone width a long name takes two lines beside the controls. A row
+           that wraps moves an item down before it shrinks it, so the mark claims
+           no width and takes what the controls leave. */}
+        <div className="flex shrink-0 items-center max-narrow:min-h-12 max-narrow:min-w-0 max-narrow:shrink max-narrow:grow max-narrow:basis-0">
+          {home ? (
+            <Link href={home} className={markClass}>
+              {mark}
+            </Link>
+          ) : (
+            <span className={markClass}>{mark}</span>
+          )}
+        </div>
 
         {children ? (
           <>
@@ -87,7 +92,7 @@ export function AppBar({
             </div>
           </>
         ) : (
-          <div className="flex-1" />
+          <div className="flex-1 max-narrow:hidden" />
         )}
 
         <div className="flex shrink-0 items-center gap-1.5 max-narrow:ml-auto">

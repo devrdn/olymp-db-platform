@@ -203,4 +203,17 @@ describe("the bar at phone width", () => {
       "Accounts",
     ]);
   });
+
+  test("lets a long name take two lines rather than push the controls onto a row of their own", () => {
+    render(
+      <ProductShell locale="en" theme="system" dict={en} home="/contests" name="Olimpiada de baze de date USM">
+        <p>rows</p>
+      </ProductShell>,
+    );
+
+    const link = screen.getByRole("link", { name: "Olimpiada de baze de date USM" });
+    expect(link.parentElement?.className).toContain("max-narrow:basis-0");
+    expect(link.parentElement?.className).toContain("max-narrow:grow");
+    expect(screen.getByText("Olimpiada de baze de date USM").className).toContain("max-narrow:line-clamp-2");
+  });
 });
