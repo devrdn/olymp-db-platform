@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -268,6 +269,57 @@ func TestArchiveListUsesTheArchiveIndex(t *testing.T) {
 			}
 			if strings.Contains(plan.String(), "Seq Scan on contests") {
 				t.Errorf("%s: the plan scans contests sequentially:\n%s", name, plan.String())
+			}
+		}
+	})
+}
+
+type switchOn struct{}
+
+func (switchOn) ArchiveEnabled(context.Context) (bool, error) { return true, nil }
+
+func TestArchiveTasksNeverCarryAReferenceAnswerOrHiddenQuestion(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-archive-tasks")
+		id := makeArchived(t, ctx, author.ID, "finished", "open", "Tasks")
+		exec(t, ctx, `UPDATE contests SET archive_tasks = true WHERE id = $1`, id)
+		exec(t, ctx, `INSERT INTO contest_schema_notes (contest_id, lang, body_md) VALUES ($1, 'en', 'the tables')`, id)
+
+		for n, visible := range []bool{true, false, true} {
+			q := makeQuestion(t, ctx, id)
+			title := fmt.Sprintf("visible-%d", n)
+			if !visible {
+				title = "HIDDEN-TITLE"
+			}
+			exec(t, ctx, `UPDATE questions SET is_visible = $2 WHERE id = $1`, q, visible)
+			exec(t, ctx, `INSERT INTO question_translations (question_id, lang, body_md, title) VALUES ($1, 'en', $2, $3)`,
+				q, "body", title)
+			exec(t, ctx, `INSERT INTO question_answers (question_id, value) VALUES ($1, $2)`,
+				q, fmt.Sprintf("REF-%d-SECRET", n))
+		}
+
+		svc := archive.NewService(archive.Config{
+			Repository: NewArchive(testPool), Switch: switchOn{},
+			Stories: NewStories(testPool), Notes: NewSchemaNotes(testPool), Questions: NewQuestions(testPool),
+		})
+		c, err := svc.Contest(ctx, id)
+		if err != nil {
+			t.Fatalf("Contest() = %v", err)
+		}
+		tasks, err := svc.Tasks(ctx, c, "en")
+		if err != nil || tasks == nil {
+			t.Fatalf("Tasks() = %v, %v", tasks, err)
+		}
+		if len(tasks.Questions) != 2 || tasks.Questions[0].Position != 1 || tasks.Questions[1].Position != 2 {
+			t.Fatalf("questions = %+v, want the two visible ones at positions 1 and 2", tasks.Questions)
+		}
+		if tasks.SchemaNotes != "the tables" {
+			t.Errorf("SchemaNotes = %q", tasks.SchemaNotes)
+		}
+		dump := fmt.Sprintf("%#v", tasks)
+		for _, banned := range []string{"SECRET", "HIDDEN-TITLE"} {
+			if strings.Contains(dump, banned) {
+				t.Errorf("the task view carries %q: %s", banned, dump)
 			}
 		}
 	})
