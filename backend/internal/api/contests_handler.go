@@ -87,9 +87,11 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				// Unlike the rest of this group, these two are reachable after
 				// the finish, the exceptions to SettingsEditable: extending
 				// the grace period (§2.4), also once archived, and the prize
-				// places, until archived.
+				// places, until archived. The archive settings are open in
+				// every status: they matter only once the contest has ended.
 				r.Patch("/grace", h.extendGrace)
 				r.Put("/prize-places", h.setPrizePlaces)
+				r.Put("/archive-settings", h.setArchiveSettings)
 				r.Delete("/", h.delete)
 				r.Put("/languages", h.setLanguages)
 				r.Put("/translations", h.setTranslations)
@@ -155,17 +157,21 @@ type ContestResponse struct {
 	EndsAt      string `json:"ends_at,omitempty"`
 	// ICPCPenaltyMin is ICPC's per-attempt penalty in minutes, always present
 	// even in other modes (§6.1.1).
-	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
-	ResultDownload bool                           `json:"result_download"`
-	SchemaDiagram  bool                           `json:"schema_diagram"`
-	PrizePlaces    PrizePlacesPayload             `json:"prize_places"`
-	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
-	Settings       SettingsResponse               `json:"settings"`
-	Leaderboard    LeaderboardSettingsResponse    `json:"leaderboard"`
-	Languages      []LanguageResponse             `json:"languages"`
-	Translations   map[string]TranslationResponse `json:"translations"`
-	CreatedAt      string                         `json:"created_at"`
-	UpdatedAt      string                         `json:"updated_at"`
+	ICPCPenaltyMin int                `json:"icpc_penalty_min"`
+	ResultDownload bool               `json:"result_download"`
+	SchemaDiagram  bool               `json:"schema_diagram"`
+	PrizePlaces    PrizePlacesPayload `json:"prize_places"`
+	// Visibility is "open" or "closed": whether an ended contest is listed in
+	// the archive. ArchiveTasks shows its questions there.
+	Visibility   string                         `json:"visibility"`
+	ArchiveTasks bool                           `json:"archive_tasks"`
+	AllowedCIDRs []string                       `json:"allowed_cidrs"`
+	Settings     SettingsResponse               `json:"settings"`
+	Leaderboard  LeaderboardSettingsResponse    `json:"leaderboard"`
+	Languages    []LanguageResponse             `json:"languages"`
+	Translations map[string]TranslationResponse `json:"translations"`
+	CreatedAt    string                         `json:"created_at"`
+	UpdatedAt    string                         `json:"updated_at"`
 	// MayMonitor says whether the caller holds contest.monitor here, so the
 	// workspace can offer its monitoring tab without restating the rule. Sent
 	// only by GET /contests/{id}.
@@ -292,6 +298,8 @@ func toContestResponse(c contests.Contest) ContestResponse {
 		ResultDownload: c.ResultDownload,
 		SchemaDiagram:  c.SchemaDiagram,
 		PrizePlaces:    toPrizePlacesPayload(c.PrizePlaces),
+		Visibility:     c.Visibility,
+		ArchiveTasks:   c.ArchiveTasks,
 		AllowedCIDRs:   make([]string, 0, len(c.AllowedCIDRs)),
 		Settings: SettingsResponse{
 			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
@@ -670,6 +678,39 @@ func (h *ContestsHandler) setPrizePlaces(w http.ResponseWriter, r *http.Request)
 	identity, _ := auth.IdentityFrom(r.Context())
 	updated, err := h.service.SetPrizePlaces(r.Context(), identity.UserID, id, contests.PrizePlaces{
 		First: req.First, Second: req.Second, Third: req.Third,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
+}
+
+// archiveSettingsRequest replaces both settings, so neither may be left out;
+// ArchiveTasks is a pointer to tell false from absent.
+type archiveSettingsRequest struct {
+	Visibility   string `json:"visibility"`
+	ArchiveTasks *bool  `json:"archive_tasks"`
+}
+
+func (h *ContestsHandler) setArchiveSettings(w http.ResponseWriter, r *http.Request) {
+	id, ok := contestIDFrom(w, r)
+	if !ok {
+		return
+	}
+
+	var req archiveSettingsRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.ArchiveTasks == nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "archive_tasks is required")
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	updated, err := h.service.SetArchiveSettings(r.Context(), identity.UserID, id, contests.ArchiveSettings{
+		Visibility: req.Visibility, ArchiveTasks: *req.ArchiveTasks,
 	})
 	if err != nil {
 		h.fail(w, r, err)

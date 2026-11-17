@@ -1392,3 +1392,72 @@ func TestAnEnrolmentRefusedForItsEmailAnswers403(t *testing.T) {
 		t.Errorf("error code = %q, want contest_trusted_email_required", code)
 	}
 }
+
+func TestSetArchiveSettingsAnswersWithTheContest(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusFinished)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/archive-settings", `{"visibility": "open", "archive_tasks": true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["visibility"] != contests.VisibilityOpen || body["archive_tasks"] != true {
+		t.Errorf("visibility = %v, archive_tasks = %v, want open and true", body["visibility"], body["archive_tasks"])
+	}
+}
+
+func TestSetArchiveSettingsRefusesClosingASelfRegistrationContest(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedContest(contests.StatusFinished)
+	c.Enrollment = contests.EnrollmentOpen
+	c.Visibility = contests.VisibilityOpen
+	c = f.stores.Contests.Put(c)
+	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+		ContestID: c.ID, UserID: f.actor.ID, Role: rbac.RoleOwner, GrantedBy: f.actor.ID,
+	}); err != nil {
+		t.Fatalf("Grant() returned error: %v", err)
+	}
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/archive-settings", `{"visibility": "closed", "archive_tasks": false}`)
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "visibility_needs_invite_only" {
+		t.Errorf("status = %d (%s), want 409 visibility_needs_invite_only", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSetArchiveSettingsRequiresBothFields(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusFinished)
+
+	for _, body := range []string{`{"visibility": "open"}`, `{"archive_tasks": true}`, `{"visibility": "public", "archive_tasks": true}`} {
+		rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/archive-settings", body)
+
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+			t.Errorf("body %s: status = %d (%s), want 400 invalid_request", body, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestSetArchiveSettingsNeedsContestEdit(t *testing.T) {
+	f := newContestFixtureDenying(t, rbac.PermissionContestEdit)
+	c := f.ownedContest(t, contests.StatusFinished)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/archive-settings", `{"visibility": "open", "archive_tasks": true}`)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d (%s), want 403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSetArchiveSettingsIsOpenOnAnArchivedContest(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusArchived)
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/archive-settings", `{"visibility": "open", "archive_tasks": false}`)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+}
