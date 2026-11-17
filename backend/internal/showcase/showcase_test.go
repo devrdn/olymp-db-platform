@@ -276,6 +276,30 @@ func TestADraftIsRefusedEvenWhenStorageHandsOneOver(t *testing.T) {
 	}
 }
 
+func TestRecentDropsAClosedEndedContestStorageReturned(t *testing.T) {
+	hidden := uuid.New()
+	repo := &countingRepo{contests: []showcase.Contest{
+		{ID: hidden, Status: contests.StatusFinished, Visibility: contests.VisibilityClosed},
+	}}
+	for range showcase.MaxRecent {
+		repo.contests = append(repo.contests, showcase.Contest{ID: uuid.New(), Status: contests.StatusFinished, Visibility: contests.VisibilityOpen})
+	}
+	now := time.Now()
+
+	got, err := newService(repo, &now).Recent(t.Context(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != showcase.MaxRecent {
+		t.Errorf("Recent() returned %d contests, want %d", len(got), showcase.MaxRecent)
+	}
+	for _, c := range got {
+		if c.ID == hidden {
+			t.Error("an ended closed contest reached the public page")
+		}
+	}
+}
+
 func TestTheListIsAskedForAndCutToMaxRecent(t *testing.T) {
 	repo := &countingRepo{}
 	for range showcase.MaxRecent + 3 {

@@ -156,6 +156,8 @@ const en = {
       table: "Results",
       /** The same link's accessible name, which carries the contest. */
       tableOf: "Results of {title}",
+      /** The link to the whole archive, shown when the installation has it on. */
+      archive: "The whole archive",
       /**
        * The alternative text of an uploaded cover.
        *

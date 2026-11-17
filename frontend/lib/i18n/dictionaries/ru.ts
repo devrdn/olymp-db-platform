@@ -123,6 +123,8 @@ const ru = {
       heading: "Ближайшие и недавние олимпиады",
       table: "Результаты",
       tableOf: "Результаты олимпиады «{title}»",
+      /** The link to the whole archive, shown when the installation has it on. */
+      archive: "Весь архив",
       coverOf: "Обложка олимпиады «{title}»",
       empty: {
         title: "Показывать пока нечего",

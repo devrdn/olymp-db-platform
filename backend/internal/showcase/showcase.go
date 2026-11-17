@@ -58,6 +58,9 @@ type Contest struct {
 	ID     uuid.UUID
 	Title  string
 	Status string
+	// Visibility is the contest's archive visibility; with Status it decides
+	// whether the contest still appears in lists (contests.Listed).
+	Visibility string
 	// StartsAt and EndsAt are absent for an unscheduled contest.
 	StartsAt *time.Time
 	EndsAt   *time.Time
@@ -209,8 +212,8 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 }
 
 // Recent returns the contests a visitor may see, newest first, titled in
-// lang. The result is the caller's own copy. The status filter and MaxRecent
-// are applied again over what storage returned, as a second guard against a
+// lang. The result is the caller's own copy. The status and visibility filters
+// and MaxRecent are applied again over what storage returned, as a second guard against a
 // draft. Stale answers and a done context behave as in Numbers.
 func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 	now := s.now()
@@ -245,12 +248,12 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 }
 
 // title copies the cached list into one caller's answer: titles in their
-// language, public statuses only, at most MaxRecent rows. Titles is cloned so
+// language, public and listed contests only, at most MaxRecent rows. Titles is cloned so
 // the caller's rows share no map with the cache.
 func title(list []Contest, lang string) []Contest {
 	out := make([]Contest, 0, min(len(list), MaxRecent))
 	for _, c := range list {
-		if !Public(c.Status) {
+		if !Public(c.Status) || !contests.Listed(c.Status, c.Visibility) {
 			continue
 		}
 		c.Title = c.titleIn(lang)

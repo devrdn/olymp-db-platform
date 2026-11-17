@@ -36,14 +36,14 @@ function card(): HTMLElement {
 describe("the contest list", () => {
   /** The table link appears only when the table is open. */
   test("leads to the public table only where there is one to read", () => {
-    render(<RecentContests signedIn={false} contests={[running({ tableOpen: false })]} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={[running({ tableOpen: false })]} dict={en} locale="en" />);
     expect(
       screen.queryByRole("link", { name: en.home.contests.tableOf.replace("{title}", "Spring round") }),
     ).toBeNull();
   });
 
   test("leads to the public table where there is one", () => {
-    render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={[running()]} dict={en} locale="en" />);
     // Named by the contest, so repeated links are distinguishable.
     expect(
       screen.getByRole("link", { name: en.home.contests.tableOf.replace("{title}", "Spring round") }),
@@ -58,7 +58,7 @@ describe("the contest list", () => {
     const many = Array.from({ length: 9 }, (_, index) =>
       running({ id: `contest-${index}`, title: `Round ${index}` }),
     );
-    render(<RecentContests signedIn={false} contests={many} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={many} dict={en} locale="en" />);
 
     const rows = screen.getAllByRole("listitem");
     expect(rows).toHaveLength(3);
@@ -70,6 +70,7 @@ describe("the contest list", () => {
     render(
       <RecentContests
         signedIn={false}
+        archive={false}
         contests={[running(), running({ id: "b", title: "Autumn round", status: "finished" })]}
         dict={en}
         locale="en"
@@ -89,6 +90,7 @@ describe("the contest list", () => {
     render(
       <RecentContests
         signedIn={false}
+        archive={false}
         contests={[running({ coverHash: "9f86d081884c7d65", coverAttribution: "Photo: A. Organiser, CC BY 4.0" })]}
         dict={en}
         locale="en"
@@ -110,7 +112,7 @@ describe("the contest list", () => {
 
   /** No upload means a drawn cover, not an empty frame. */
   test("draws a cover for a contest that has no picture", () => {
-    render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={[running()]} dict={en} locale="en" />);
 
     expect(card().querySelector("img")).toBeNull();
     // The frame is not empty; the drawing has its own tests.
@@ -122,7 +124,7 @@ describe("the contest list", () => {
     ["an uploaded cover", { coverHash: "9f86d081884c7d65", coverAttribution: "Photo: A. Organiser" }],
     ["a drawn cover", {}],
   ])("puts the title of a card with %s on a scrim", (_name, over) => {
-    render(<RecentContests signedIn={false} contests={[running(over)]} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={[running(over)]} dict={en} locale="en" />);
 
     expect(card().querySelector(".from-scrim-a")).not.toBeNull();
     expect(card()).toHaveTextContent("Spring round");
@@ -133,6 +135,7 @@ describe("the contest list", () => {
     const credited = render(
       <RecentContests
         signedIn={false}
+        archive={false}
         contests={[running({ coverHash: "9f86d081884c7d65", coverAttribution: "Photo: A. Organiser, CC BY 4.0" })]}
         dict={en}
         locale="en"
@@ -141,7 +144,7 @@ describe("the contest list", () => {
     expect(screen.getByText("Photo: A. Organiser, CC BY 4.0")).toBeInTheDocument();
     credited.unmount();
 
-    render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={[running()]} dict={en} locale="en" />);
     expect(screen.queryByText(/Photo:/)).toBeNull();
   });
 
@@ -150,7 +153,7 @@ describe("the contest list", () => {
     ["nothing to show", [] as PublicContest[]],
     ["a failed read", null],
   ])("explains %s and names the way on, rather than ruling an empty table", (_name, contests) => {
-    render(<RecentContests signedIn={false} contests={contests} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} archive={false} contests={contests} dict={en} locale="en" />);
 
     expect(screen.getByText(en.home.contests.empty.body)).toBeInTheDocument();
     // Signed out, the label names the sign-in door.
@@ -165,17 +168,37 @@ describe("the contest list", () => {
 
   /** The hero links to this anchor. */
   test("carries the anchor the hero points at", () => {
-    const { container } = render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+    const { container } = render(<RecentContests signedIn={false} archive={false} contests={[running()]} dict={en} locale="en" />);
     expect(container.querySelector("#contests")).not.toBeNull();
   });
 });
 
 // Signed in, the empty state names the catalogue, not sign-in.
 test("offers a signed-in reader the catalogue by its own name", () => {
-  render(<RecentContests signedIn contests={[]} dict={en} locale="en" />);
+  render(<RecentContests signedIn archive={false} contests={[]} dict={en} locale="en" />);
 
   expect(screen.getByRole("link", { name: en.home.contests.empty.action })).toHaveAttribute(
     "href",
     "/open",
   );
+});
+
+describe("the link to the archive", () => {
+  const name = () => en.home.contests.archive;
+
+  test("links to the whole archive only when it is on", () => {
+    const { unmount } = render(
+      <RecentContests signedIn={false} archive contests={[running()]} dict={en} locale="en" />,
+    );
+    expect(screen.getByRole("link", { name: name() })).toHaveAttribute("href", "/archive");
+    unmount();
+
+    render(<RecentContests signedIn={false} archive contests={[]} dict={en} locale="en" />);
+    expect(screen.getByRole("link", { name: name() })).toHaveAttribute("href", "/archive");
+  });
+
+  test("offers no link while the archive is off", () => {
+    render(<RecentContests signedIn={false} archive={false} contests={[running()]} dict={en} locale="en" />);
+    expect(screen.queryByRole("link", { name: name() })).toBeNull();
+  });
 });

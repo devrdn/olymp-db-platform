@@ -37,6 +37,59 @@ func TestRecentContestsLeaveOutDrafts(t *testing.T) {
 	})
 }
 
+func TestRecentLeavesOutClosedContestsOnceEnded(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-showcase-closed")
+		mk := func(status, visibility string) uuid.UUID {
+			id := makeContest(t, ctx, author.ID)
+			exec(t, ctx, `UPDATE contests SET status = $2, visibility = $3 WHERE id = $1`, id, status, visibility)
+			return id
+		}
+		closedFinished := mk("finished", "closed")
+		closedArchived := mk("archived", "closed")
+		closedRunning := mk("running", "closed")
+		closedPublished := mk("published", "closed")
+		openFinished := mk("finished", "open")
+
+		got, err := NewShowcase(testPool).Recent(ctx, 50)
+		if err != nil {
+			t.Fatalf("Recent() = %v", err)
+		}
+		for _, id := range []uuid.UUID{closedFinished, closedArchived} {
+			if _, ok := byID(got, id); ok {
+				t.Errorf("an ended closed contest %s reached the front page", id)
+			}
+		}
+		for _, id := range []uuid.UUID{closedRunning, closedPublished, openFinished} {
+			if _, ok := byID(got, id); !ok {
+				t.Errorf("contest %s is missing from the front page", id)
+			}
+		}
+	})
+}
+
+// The filter runs before the LIMIT, so hidden contests do not use up the slots.
+func TestRecentFillsTheLimitPastHiddenContests(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-showcase-fill")
+		for range 3 {
+			id := makeContest(t, ctx, author.ID)
+			exec(t, ctx, `UPDATE contests SET status = 'finished', visibility = 'closed', starts_at = now() + interval '1 year' WHERE id = $1`, id)
+		}
+		for range 3 {
+			id := makeContest(t, ctx, author.ID)
+			exec(t, ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, id)
+		}
+		got, err := NewShowcase(testPool).Recent(ctx, 3)
+		if err != nil {
+			t.Fatalf("Recent() = %v", err)
+		}
+		if len(got) != 3 {
+			t.Errorf("Recent(3) returned %d contests, want 3", len(got))
+		}
+	})
+}
+
 // The caller, not the query, picks the visitor's language or the default.
 func TestRecentContestsCarryEveryTitleTheContestHas(t *testing.T) {
 	withTx(t, func(ctx context.Context) {

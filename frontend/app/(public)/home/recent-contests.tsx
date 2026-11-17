@@ -34,6 +34,7 @@ const CARD_COVER = { size: 800, height: 450 } as const;
 export function RecentContests({
   contests,
   signedIn,
+  archive,
   dict,
   locale,
 }: {
@@ -43,6 +44,8 @@ export function RecentContests({
   locale: Locale;
   /** Whether the visitor has a session, which decides what the empty state offers. */
   signedIn: boolean;
+  /** Whether the installation's archive is on; the link needs a session, so signed out it leads to sign-in. */
+  archive: boolean;
 }) {
   const t = dict.home.contests;
   /**
@@ -80,6 +83,15 @@ export function RecentContests({
           ))}
         </ul>
       )}
+
+      {archive ? (
+        <Link
+          href="/archive"
+          className="self-start text-control text-ink-2 underline decoration-line-2 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:decoration-ink"
+        >
+          {t.archive}
+        </Link>
+      ) : null}
     </Band>
   );
 }

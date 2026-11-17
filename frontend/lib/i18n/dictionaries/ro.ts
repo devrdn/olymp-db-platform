@@ -123,6 +123,8 @@ const ro = {
       heading: "Olimpiade apropiate și recente",
       table: "Rezultate",
       tableOf: "Rezultatele olimpiadei {title}",
+      /** The link to the whole archive, shown when the installation has it on. */
+      archive: "Toată arhiva",
       coverOf: "Coperta olimpiadei {title}",
       empty: {
         title: "Deocamdată nu este nimic de arătat",

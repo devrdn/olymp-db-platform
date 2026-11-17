@@ -64,6 +64,7 @@ export default async function HomePage() {
 
       <RecentContests
         signedIn={signedIn}
+        archive={brand.archive}
         contests={settled(contests, "/public/contests")}
         dict={dict}
         locale={locale}
