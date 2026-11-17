@@ -298,6 +298,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		}
 		return s.record(ctx, cmd.ActorID, audit.ActionContestCreate, created.ID, map[string]any{
 			"enrollment":    created.Enrollment,
+			"visibility":    created.Visibility,
 			"question_mode": created.QuestionMode,
 			"progression":   created.Progression,
 			"scoring":       created.Scoring,

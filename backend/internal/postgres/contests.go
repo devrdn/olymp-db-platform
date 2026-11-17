@@ -205,7 +205,12 @@ const contestListWhere = `
 		  -- already decided the row may be seen.
 		  AND ($5::boolean IS NULL OR $5 = EXISTS (
 		          SELECT 1 FROM registrations reg
-		          WHERE reg.contest_id = c.id AND reg.user_id = $4))`
+		          WHERE reg.contest_id = c.id AND reg.user_id = $4))
+		  -- A participant's catalogue drops a closed contest once it ends;
+		  -- "my contests" ($5 true) keeps it. Like the clause above this only
+		  -- narrows, and staff lists (no $4) are untouched.
+		  AND ($4::uuid IS NULL OR $5 IS TRUE
+		       OR NOT (c.visibility = 'closed' AND c.status IN ('finished', 'archived')))`
 
 func contestListArgs(f contests.Filter) []any {
 	// The search text lands in an ILIKE pattern (CLAUDE.md rule 3).
@@ -324,6 +329,39 @@ func (r *Contests) SetPrizePlaces(ctx context.Context, id uuid.UUID, places cont
 		return contests.PrizePlaces{}, fmt.Errorf("%w: it is archived", contests.ErrNotEditable)
 	case err != nil:
 		return contests.PrizePlaces{}, fmt.Errorf("set prize places: %w", err)
+	}
+	return previous, nil
+}
+
+// SetArchiveSettings leaves updated_at alone, as SetPrizePlaces does. The
+// self-registration test sits in the locking read, so closing a contest that
+// takes self-registration matches no row instead of tripping the CHECK.
+func (r *Contests) SetArchiveSettings(ctx context.Context, id uuid.UUID, s contests.ArchiveSettings) (contests.ArchiveSettings, error) {
+	var previous contests.ArchiveSettings
+	err := r.querier(ctx).QueryRow(ctx, `
+		WITH prior AS (
+			SELECT id, visibility, archive_tasks
+			FROM contests
+			WHERE id = $1 AND ($2 = 'open' OR enrollment = 'invite_only')
+			FOR UPDATE
+		)
+		UPDATE contests c
+		SET visibility = $2, archive_tasks = $3
+		FROM prior
+		WHERE c.id = prior.id
+		RETURNING prior.visibility, prior.archive_tasks`,
+		id, s.Visibility, s.ArchiveTasks).
+		Scan(&previous.Visibility, &previous.ArchiveTasks)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Nothing matched: a second read tells a missing contest from the
+		// refused closing.
+		if _, err := r.ByID(ctx, id); err != nil {
+			return contests.ArchiveSettings{}, err
+		}
+		return contests.ArchiveSettings{}, contests.ErrVisibilityNeedsInviteOnly
+	case err != nil:
+		return contests.ArchiveSettings{}, fmt.Errorf("set archive settings: %w", err)
 	}
 	return previous, nil
 }

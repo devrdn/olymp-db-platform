@@ -479,7 +479,9 @@ type Filter struct {
 	// ManagedBy limits the result to contests the user owns or manages.
 	ManagedBy uuid.UUID
 	// VisibleTo limits the result to contests the participant is registered
-	// for, plus open ones still accepting signups.
+	// for, plus open ones still accepting signups. A closed contest leaves it
+	// once it ends, unless Enrolled asks for the contests the person is on;
+	// the catalogue only narrows here, it never widens.
 	VisibleTo uuid.UUID
 	// Enrolled splits the VisibleTo set: true for contests the person is on,
 	// false for the rest, nil for both. It only narrows that set.
@@ -523,6 +525,12 @@ type Repository interface {
 	// reports ErrNotEditable for an archived contest, decided in the same
 	// statement, and ErrNotFound for a missing one.
 	SetPrizePlaces(ctx context.Context, id uuid.UUID, places PrizePlaces) (PrizePlaces, error)
+	// SetArchiveSettings writes visibility and archive tasks alone, leaving
+	// updated_at as it was, and returns the settings it replaced, read under
+	// the row's lock. It reports ErrVisibilityNeedsInviteOnly for closing a
+	// contest with self-registration, decided in the same statement, and
+	// ErrNotFound for a missing one.
+	SetArchiveSettings(ctx context.Context, id uuid.UUID, s ArchiveSettings) (ArchiveSettings, error)
 	// SetStatus moves the contest from status from to status to, and reports
 	// ErrStatusChanged if a concurrent request moved it since the caller read
 	// it. A move to finished finishes every active registration of the

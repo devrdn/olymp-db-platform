@@ -545,6 +545,64 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
+	t.Run("SetArchiveSettings writes both and returns the previous", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			created := create(t, ctx, target, plain(target.NewUser()))
+
+			previous, err := target.Repo.SetArchiveSettings(ctx, created.ID,
+				contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true})
+			if err != nil {
+				t.Fatalf("SetArchiveSettings() = %v", err)
+			}
+
+			if want := (contests.ArchiveSettings{Visibility: contests.VisibilityClosed}); previous != want {
+				t.Errorf("previous = %+v, want %+v", previous, want)
+			}
+			got := byID(t, ctx, target, created.ID)
+			if got.Visibility != contests.VisibilityOpen || !got.ArchiveTasks {
+				t.Errorf("visibility, archive tasks = %q, %v, want open, true", got.Visibility, got.ArchiveTasks)
+			}
+		})
+	})
+
+	t.Run("SetArchiveSettings refuses closed on self-registration and changes nothing", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			created := create(t, ctx, target, full(target.NewUser()))
+
+			_, err := target.Repo.SetArchiveSettings(ctx, created.ID,
+				contests.ArchiveSettings{Visibility: contests.VisibilityClosed, ArchiveTasks: false})
+
+			if !errors.Is(err, contests.ErrVisibilityNeedsInviteOnly) {
+				t.Errorf("SetArchiveSettings() = %v, want ErrVisibilityNeedsInviteOnly", err)
+			}
+			wantFields(t, byID(t, ctx, target, created.ID), created)
+		})
+	})
+
+	t.Run("SetArchiveSettings leaves UpdatedAt alone", func(t *testing.T) {
+		// The reclaim sweep measures a finished contest's grace from it.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			created := create(t, ctx, target, plain(target.NewUser()))
+
+			if _, err := target.Repo.SetArchiveSettings(ctx, created.ID,
+				contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true}); err != nil {
+				t.Fatalf("SetArchiveSettings() = %v", err)
+			}
+
+			if got := byID(t, ctx, target, created.ID); !got.UpdatedAt.Equal(created.UpdatedAt) {
+				t.Errorf("UpdatedAt = %v, want %v left alone", got.UpdatedAt, created.UpdatedAt)
+			}
+		})
+	})
+
+	t.Run("SetArchiveSettings reports ErrNotFound for a missing contest", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			_, err := target.Repo.SetArchiveSettings(ctx, uuid.New(),
+				contests.ArchiveSettings{Visibility: contests.VisibilityOpen})
+			notFound(t, err, "SetArchiveSettings")
+		})
+	})
+
 	t.Run("Update turns the result download off", func(t *testing.T) {
 		// The other cases only ever turn it on.
 		each(t, func(ctx context.Context, target ContestTarget) {
@@ -1365,7 +1423,9 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			marker, seed := seeder(t, ctx, target)
 			student, someoneElse := target.NewUser(), target.NewUser()
 			invited := func(status string) uuid.UUID {
-				return seed("-invited-"+status, withStatus(status), withEnrollment(contests.EnrollmentInviteOnly))
+				// Open visibility: a closed contest leaves the catalogue once it ends.
+				return seed("-invited-"+status, withStatus(status), withEnrollment(contests.EnrollmentInviteOnly),
+					func(c *contests.Contest) { c.Visibility = contests.VisibilityOpen })
 			}
 			open := func(status string) uuid.UUID {
 				return seed("-open-"+status, withStatus(status), withEnrollment(contests.EnrollmentOpen))
@@ -1412,6 +1472,43 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 
 			found, total = list(t, ctx, target, contests.Filter{Query: marker, VisibleTo: student, Limit: 20})
 			wantListed(t, found, total, joined, joinedOpen, open)
+		})
+	})
+
+	t.Run("a participant catalogue leaves out a closed contest once it ends", func(t *testing.T) {
+		// "My contests" keeps it: a participant can still reach what they took part in.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			marker, seed := seeder(t, ctx, target)
+			student := target.NewUser()
+			closed := func(status string) func(*contests.Contest) {
+				return func(c *contests.Contest) { c.Status, c.Visibility = status, contests.VisibilityClosed }
+			}
+			closedFinished := seed("-closed-finished", closed(contests.StatusFinished))
+			closedRunning := seed("-closed-running", closed(contests.StatusRunning))
+			openFinished := seed("-open-finished", withStatus(contests.StatusFinished),
+				func(c *contests.Contest) { c.Visibility = contests.VisibilityOpen })
+			for _, id := range []uuid.UUID{closedFinished, closedRunning, openFinished} {
+				target.Register(id, student)
+			}
+			elsewhere := seed("-elsewhere", withStatus(contests.StatusPublished), withEnrollment(contests.EnrollmentOpen))
+			on, notOn := true, false
+
+			found, total := list(t, ctx, target, contests.Filter{Query: marker, VisibleTo: student, Limit: 20})
+			wantListed(t, found, total, closedRunning, openFinished, elsewhere)
+
+			found, total = list(t, ctx, target, contests.Filter{Query: marker, VisibleTo: student, Enrolled: &notOn, Limit: 20})
+			wantListed(t, found, total, elsewhere)
+
+			found, total = list(t, ctx, target, contests.Filter{Query: marker, VisibleTo: student, Enrolled: &on, Limit: 20})
+			wantListed(t, found, total, closedFinished, closedRunning, openFinished)
+
+			staff := target.NewUser()
+			target.Appoint(closedFinished, staff, rbac.RoleManager)
+			found, total = list(t, ctx, target, contests.Filter{Query: marker, ManagedBy: staff, Limit: 20})
+			wantListed(t, found, total, closedFinished)
+
+			found, total = list(t, ctx, target, contests.Filter{Query: marker, Limit: 20})
+			wantListed(t, found, total, closedFinished, closedRunning, openFinished, elsewhere)
 		})
 	})
 

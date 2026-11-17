@@ -727,3 +727,34 @@ func TestAContestStoredWithColumnDefaultsCanBeUpdatedThroughTheService(t *testin
 		}
 	})
 }
+
+func TestTheSelfRegistrationCheckHoldsInTheDatabase(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "check-"+uuid.NewString()[:8])
+		id := makeContest(t, ctx, author.ID)
+
+		_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE contests SET enrollment = 'open', visibility = 'closed' WHERE id = $1`, id)
+
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "contests_self_registration_open" {
+			t.Errorf("UPDATE = %v, want a check violation of contests_self_registration_open", err)
+		}
+	})
+}
+
+// A row created by the previous release carries only the column defaults.
+func TestAContestCreatedBeforeTheReleaseIsOpenWithTasksHidden(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "legacy-"+uuid.NewString()[:8])
+		id := makeContest(t, ctx, author.ID)
+
+		got, err := NewContests(testPool).ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if got.Visibility != contests.VisibilityOpen || got.ArchiveTasks {
+			t.Errorf("visibility, archive tasks = %q, %v, want open, false", got.Visibility, got.ArchiveTasks)
+		}
+	})
+}

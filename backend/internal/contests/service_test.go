@@ -1663,9 +1663,10 @@ func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
 	})
 }
 
-func TestACreatedContestStartsClosedWhenInviteOnlyAndOpenWithSelfRegistration(t *testing.T) {
+func TestCreateDerivesVisibilityFromEnrollment(t *testing.T) {
 	f := conteststest.NewFixture()
 	for enrollment, want := range map[string]string{
+		"":                            contests.VisibilityClosed,
 		contests.EnrollmentInviteOnly: contests.VisibilityClosed,
 		contests.EnrollmentOpen:       contests.VisibilityOpen,
 	} {
@@ -1673,15 +1674,16 @@ func TestACreatedContestStartsClosedWhenInviteOnlyAndOpenWithSelfRegistration(t 
 			ActorID: uuid.New(), Enrollment: enrollment,
 		})
 		if err != nil {
-			t.Fatalf("Create(%s) = %v", enrollment, err)
+			t.Fatalf("Create(%q) = %v", enrollment, err)
 		}
-		if created.Visibility != want {
-			t.Errorf("visibility of a new %s contest = %q, want %q", enrollment, created.Visibility, want)
+		if created.Visibility != want || created.ArchiveTasks {
+			t.Errorf("a new %q contest has visibility %q, archive tasks %v, want %q, false",
+				enrollment, created.Visibility, created.ArchiveTasks, want)
 		}
 	}
 }
 
-func TestSwitchingAClosedContestToSelfRegistrationOpensIt(t *testing.T) {
+func TestUpdateToSelfRegistrationOpensAClosedContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	if c.Visibility != contests.VisibilityClosed {
@@ -1696,5 +1698,13 @@ func TestSwitchingAClosedContestToSelfRegistrationOpensIt(t *testing.T) {
 	}
 	if updated.Visibility != contests.VisibilityOpen {
 		t.Errorf("visibility = %q, want open once the contest takes self-registration", updated.Visibility)
+	}
+	stored, _ := f.Contests.ByID(context.Background(), c.ID)
+	if stored.Visibility != contests.VisibilityOpen {
+		t.Errorf("stored visibility = %q, want open", stored.Visibility)
+	}
+	change, ok := changesIn(t, f, audit.ActionContestUpdate)["visibility"].(map[string]any)
+	if !ok || change["from"] != contests.VisibilityClosed || change["to"] != contests.VisibilityOpen {
+		t.Errorf("visibility change = %v, want closed -> open", change)
 	}
 }

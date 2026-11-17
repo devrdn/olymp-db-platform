@@ -210,6 +210,9 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 		if f.Enrolled != nil && *f.Enrolled != r.registered(f.VisibleTo, c.ID) {
 			continue
 		}
+		if f.VisibleTo != uuid.Nil && (f.Enrolled == nil || !*f.Enrolled) && !c.Listed() {
+			continue
+		}
 		matched = append(matched, r.serve(c))
 	}
 	slices.SortStableFunc(matched, func(a, b contests.Contest) int {
@@ -314,6 +317,22 @@ func (r *Contests) SetPrizePlaces(_ context.Context, id uuid.UUID, places contes
 	}
 	previous := stored.PrizePlaces
 	stored.PrizePlaces = places
+	r.store(stored)
+	return previous, nil
+}
+
+// SetArchiveSettings mirrors the real statement: the self-registration test
+// and the write are one step, and UpdatedAt stays.
+func (r *Contests) SetArchiveSettings(_ context.Context, id uuid.UUID, settings contests.ArchiveSettings) (contests.ArchiveSettings, error) {
+	stored, ok := r.byID[id]
+	if !ok {
+		return contests.ArchiveSettings{}, contests.ErrNotFound
+	}
+	if settings.Visibility == contests.VisibilityClosed && stored.Enrollment == contests.EnrollmentOpen {
+		return contests.ArchiveSettings{}, contests.ErrVisibilityNeedsInviteOnly
+	}
+	previous := contests.ArchiveSettings{Visibility: stored.Visibility, ArchiveTasks: stored.ArchiveTasks}
+	stored.Visibility, stored.ArchiveTasks = settings.Visibility, settings.ArchiveTasks
 	r.store(stored)
 	return previous, nil
 }

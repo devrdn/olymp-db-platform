@@ -1,8 +1,13 @@
 package contests
 
 import (
+	"context"
 	"errors"
 	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 )
 
 // Visibility of a contest once it has ended.
@@ -60,4 +65,32 @@ func (c Contest) Listed() bool {
 // InArchive reports whether the contest is shown in the public archive.
 func (c Contest) InArchive() bool {
 	return c.Visibility == VisibilityOpen && c.Ended()
+}
+
+// SetArchiveSettings is a contest's second settings door, open in every
+// status: visibility and archive tasks matter most once the contest has ended,
+// when Update is closed.
+func (s *Service) SetArchiveSettings(ctx context.Context, actorID, contestID uuid.UUID, settings ArchiveSettings) (Contest, error) {
+	if err := settings.Validate(); err != nil {
+		return Contest{}, err
+	}
+
+	var updated Contest
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		previous, err := s.contests.SetArchiveSettings(ctx, contestID, settings)
+		if err != nil {
+			return err
+		}
+		if updated, err = s.contests.ByID(ctx, contestID); err != nil {
+			return err
+		}
+		changes := audit.Between(
+			map[string]any{"visibility": previous.Visibility, "archive_tasks": previous.ArchiveTasks},
+			map[string]any{"visibility": settings.Visibility, "archive_tasks": settings.ArchiveTasks})
+		return s.record(ctx, actorID, audit.ActionContestUpdate, contestID, changes.Payload())
+	})
+	if err != nil {
+		return Contest{}, err
+	}
+	return updated, nil
 }
