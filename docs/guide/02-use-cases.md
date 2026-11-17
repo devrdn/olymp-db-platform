@@ -104,7 +104,7 @@ flowchart LR
 
 | Use case | Screen | API | Package | Permission or condition |
 |---|---|---|---|---|
-| See the installation's totals and recent contests | `/` | `GET /public/stats`, `GET /public/contests` | `showcase` | None; limited per address (`public_too_often`). Drafts never appear |
+| See the installation's totals and recent contests | `/` | `GET /public/stats`, `GET /public/contests` | `showcase` | None; limited per address (`public_too_often`). Drafts never appear, nor does a contest closed to the archive once it has ended |
 | Open a contest's public leaderboard by link | `/contests/{contestID}/leaderboard` | `GET /contests/{contestID}/leaderboard` | `leaderboard` | None; a draft answers 404; limited per address (`leaderboard_too_often`) |
 | See a contest cover | `/` (recent contests), the story on `/contests/{contestID}/play` | `GET /public/contests/{contestID}/cover` | `covers` | None; a draft's cover is refused |
 | Read the installation's name and images | every shell | `GET /settings`, `GET /settings/images/{kind}` | `settings` | None |
@@ -161,8 +161,9 @@ flowchart LR
 | Change own password | `/password` | `POST /auth/password` | `auth` | Session; the current password is verified and throttled. While the account holds a one-time password, every route but this one, sign-out and `GET /auth/me` answers `password_change_required` |
 | Sign out | account menu in every shell | `POST /auth/logout` | `auth` | Session |
 | Know who I am | every shell | `GET /auth/me` | `auth` | Session; returns the global permissions the frontend routes by |
-| See my contests | `/my` | `GET /contests?scope=participant&enrolled=true` | `contests` | Session; registered contests that are published, running or finished |
-| Browse contests open to me | `/open` | `GET /contests?scope=participant` | `contests` | Session; adds contests with open enrolment that are published or running |
+| See my contests | `/my` | `GET /contests?scope=participant&enrolled=true` | `contests` | Session; registered contests that are published, running or finished; a contest closed to the archive stays here after it ends |
+| Browse contests open to me | `/open` | `GET /contests?scope=participant` | `contests` | Session; adds contests with open enrolment that are published or running; a contest whose visibility is `closed` drops out once it has ended |
+| Read the archive of finished contests | `/archive`, `/archive/{contestID}` (its results are `GET /contests/{contestID}/leaderboard`) | `GET /archive/contests`, `GET /archive/contests/{contestID}` | `archive` | Session, any account; only when an administrator has switched the archive on, otherwise 404; open contests that have ended; tasks only when the organiser allowed them; 60 reads a minute (`archive_too_often`) |
 | Enrol | `/open` (the enrol button) | `POST /contests/{contestID}/enroll` | `contests` | Session; enrolment `open`; status published, or running with individual timing; before the enrolment deadline; address inside `allowed_cidrs`; not staff of the contest |
 | See my profile and totals | `/profile` | `GET /me/summary`, `GET /me/contests` | `profile` | Session; rate-limited (`profile_too_often`) |
 | Read my report of one contest | `/profile/contests/{contestID}` | `GET /me/contests/{contestID}/report`, `/queries`, `/answers`, `/workspace` | `profile` | Session; the contest is over for this participant, otherwise `profile_contest_not_found` |
@@ -352,6 +353,7 @@ flowchart LR
 | Export the results as CSV or PDF | `/contests/{contestID}/standings/export` | `GET /contests/{contestID}/results`, `POST /contests/{contestID}/results/export` | `leaderboard` | `contest.monitor`, and `users.manage` as well to include email; one export per account at a time (`results_export_too_often`); more than 2000 registrations refused (`results_too_many_rows`); recorded as `contest.results_export`; the CSV's format is in [api/results-csv.md](../api/results-csv.md) |
 | Reveal a frozen leaderboard | `/contests/{contestID}/standings` | `POST /contests/{contestID}/leaderboard/reveal` | `leaderboard` | `contest.edit`; the contest has finished and was frozen (`leaderboard_not_revealable`) |
 | List and drop participant databases | `/contests/{contestID}/databases` | `GET /contests/{contestID}/game/instances`, `DELETE .../game/instances/{database}` | `provisioning` | `contest.view` to list, `contest.edit` to drop |
+| Choose whether a finished contest is in the archive, and whether its tasks are shown | `/contests/{contestID}/settings` | `PUT /contests/{contestID}/archive-settings` | `contests` | `contest.edit`; in every status; a contest with open enrolment cannot be closed (`visibility_needs_invite_only`); audited as `contest.update` |
 | Set how many prize places there are | `/contests/{contestID}/settings` | `PUT /contests/{contestID}/prize-places` | `contests` | `contest.edit`; also on a finished contest, refused once archived (`not_editable`) |
 | Extend the grace before databases are reclaimed | API only | `PATCH /contests/{contestID}/grace` | `contests` | `contest.edit`; only on a finished or archived contest, and only longer |
 
@@ -410,6 +412,7 @@ flowchart LR
 | Change global roles | `/users/{userID}` | `PUT /users/{userID}/roles` | `users` | `users.manage`; never removes the last account able to manage accounts |
 | Read the audit trail | `/audit` | `GET /audit`, `GET /audit/actions` | `audit` | `audit.view` |
 | Brand the installation | `/settings` | `GET /settings/all`, `PUT /settings`, `PUT`, `DELETE /settings/images/{kind}` | `settings` | `settings.manage` |
+| Switch the contest archive on or off | `/settings` | `PUT /settings/archive` | `settings` | `settings.manage`; off by default; audited (`settings.archive`) |
 | See the sign-in providers and switch one on or off | `/integrations` | `GET /integrations`, `PUT /integrations/{provider}` | `settings` | `settings.manage`; a provider that is configured; the switch is audited (`settings.sign_in_provider`) |
 | Send oneself the test email | `/settings` | `POST /settings/mail-test` | `mailing` | `settings.manage`; only to the caller's own address, three a minute |
 | Act on any contest as its staff | every `/contests/{contestID}/...` staff screen | every contest-scoped route | `rbac` | `contest.admin_all` |
@@ -537,7 +540,7 @@ screen treats each kind is in
 
 Rate limits answer 429 with their own codes (`query_too_often`,
 `play_read_too_often`, `answer_too_often`, `workspace_too_often`,
-`signals_too_often`, `clarification_too_often`) and a
+`signals_too_often`, `clarification_too_often`, `archive_too_often`) and a
 `Retry-After` header. A new refusal follows CLAUDE.md, security rule 1: a
 sentinel, a row in the error table, a code in
 [`codes.go`](../../backend/internal/api/codes.go) and a sentence in every

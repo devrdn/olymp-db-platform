@@ -177,6 +177,15 @@ participant.
   more: the foreign keys stay in the schema document and in the table list, so
   it is a convenience for the screen and not a secret.
 
+**Route groups.** The App Router's groups follow who is reading: `(public)` for
+the front page and the sign-in and sign-up screens, `(session)` and `(account)`
+for a signed-in person's profile and password, `(participant)` for `/my`,
+`/open` and the contest screens, `(admin)` for the staff side, and `(archive)`
+for the contest archive. The archive has a group of its own because both
+audiences read it: its menu is the viewer's own, the mark leads to the
+viewer's own home, and the group's layout answers 404 while an administrator
+has the archive switched off (section 9.8).
+
 Rendering: the App Router, with public pages server-rendered and the console a
 client component. Every read goes to the Core API; Next.js has no database
 access of its own.
@@ -211,6 +220,7 @@ access of its own.
 | `settings` | The installation's name, contacts, images and mail language, changed from a screen (section 10.1) |
 | `mailing` | The installation's email: the texts in each language, the outbox and the job that delivers it, the test message (section 10.2) |
 | `showcase` | The front page's public reads: the installation's totals and the contests a visitor may see (section 9.6) |
+| `archive` | Which ended contests are in the archive and what of each may be shown: the list, and the story, table descriptions and visible questions when the organiser allows them (section 9.8) |
 
 Beside the modules, `internal/queryrunner` is the Query Runner's own package
 (section 2.3); `api`, `rpc` and `health` adapt the modules to HTTP and gRPC;
@@ -2096,6 +2106,39 @@ both paths are identical — provisioning, the start, the clock. The type can be
 changed before the start, and every addition or removal by a manager is an
 audit event.
 
+**Visibility (`contests.visibility`):**
+
+Two properties say what happens once a contest has ended:
+
+- `visibility` is `open` or `closed`. An `open` contest that has ended is in
+  the archive (section 9.8). A `closed` one leaves every list when it ends and
+  stays reachable by a direct link; the lists are the front page, the
+  participant's catalogue and the archive (sections 9.3, 9.6 and 9.8).
+- `archive_tasks` is a boolean, off by default: whether the archive shows the
+  contest's story, table descriptions and visible questions. Results are not
+  governed by it.
+
+A CHECK on the table (`contests_self_registration_open`) says that a contest
+with `enrollment = 'open'` always has `visibility = 'open'`: a contest anybody
+may join cannot be closed. The domain states the same rule
+(`ErrVisibilityNeedsInviteOnly`), and the repository applies it in the
+statement's locking read, so closing such a contest is refused with that error
+rather than tripping the constraint.
+
+**The defaults.** Every contest that existed before the setting became `open`
+with its tasks hidden, so nothing that was listed disappears. A new contest is
+`open` when its enrolment is `open` and `closed` when it is `invite_only`;
+changing the enrolment to `open` writes visibility `open` in the same update,
+and changing it the other way leaves visibility as it was.
+
+**A second door, open in every status.** Visibility and archive tasks are
+changed with `PUT /contests/{id}/archive-settings`, not through the contest's
+ordinary update, which closes when a contest finishes. They matter most once a
+contest has ended, so this door stays open in every status, behind
+`contest.edit`, and the ordinary update never writes `archive_tasks`: a stale
+form cannot undo it. A change is audited as `contest.update` with the two
+fields as `from` → `to`.
+
 **The installation's email domain (`settings.trusted_domain_only`):**
 
 Off by default. On, self-enrolment admits only an account with a verified
@@ -3033,7 +3076,7 @@ The boundary follows a field's meaning, not its type:
 
 | What | How it is recorded | Why |
 |---|---|---|
-| Configuration: status, enrolment, timing, the window, `allowed_cidrs`, the question mode, points, visibility, the SQL policy's flags, languages, roles | `from` → `to` | Small, and exactly what somebody asks about six months later |
+| Configuration: status, enrolment, timing, the window, `allowed_cidrs`, the question mode, points, a question's visibility, a contest's archive visibility and archive tasks, the SQL policy's flags, languages, roles | `from` → `to` | Small, and exactly what somebody asks about six months later |
 | Authored text: the story, wordings, titles | the fact of the change and the languages | Size and retention; and that is a job for versioning, not for audit |
 | Reference answers | the count only | Organisers read the journal |
 | Passwords, hashes, tokens | not recorded at all | Redacted at any depth before the write (section 7.2) |
@@ -3109,6 +3152,14 @@ become twenty checks. The method lives on the registrations repository rather
 than as a field on `Contest`, because "I am enrolled" is a fact about a pair —
 a viewer and a contest — and on the domain type it would have to be either
 filled in or left wrong everywhere a contest is loaded.
+
+**A closed contest leaves `/open` once it has ended, and stays in `/my`.**
+A contest whose visibility is `closed` (section 7.1) is dropped from the
+catalogue when it finishes: the catalogue is where a stranger discovers
+contests, and the organiser asked for this one not to be discovered. `/my` is
+the person's own record, so a participant keeps the contest they took part in.
+The rule is one more `AND` in the same list query, beside the one below, and
+leaves the staff registers alone.
 
 **The `enrolled` filter only narrows.** It is a separate `AND` after the
 visibility rule rather than part of it, so whatever it says, the right to see
@@ -3892,6 +3943,13 @@ one read (`singleflight`): a room opening the page at once does not become a
 room of queries. A stale answer is served only when a refresh failed, and for
 no longer than fifteen minutes.
 
+**A closed contest leaves the list once it has ended.** `Recent` filters on
+visibility in the query, before the `LIMIT`, so a closed contest does not take
+a place and leave the page short, and the service applies the same rule again
+(`contests.Listed`) over what storage returned. When the archive is on, the
+page links to it under the list; the archive needs a session, so a visitor who
+is signed out is taken to sign-in first.
+
 **The status filter is one for the whole product.** `contests.PublicStatuses`
 is defined as "every status except draft", and three repositories — profile,
 front page, covers — take it as a parameter rather than writing the list by
@@ -3976,6 +4034,87 @@ hash and two contests with the same picture share one file. By default the
 tool prints, and deletes with `-apply`. Deleting a file is not written to the
 audit trail, unlike dropping a game database: that is a privileged action over
 a participant's work, this is housekeeping.
+
+### 9.8 The archive
+
+Code: the domain package `internal/archive`, the handler
+`internal/api/archive_handler.go`, the storage `internal/postgres/archive.go`;
+the screens at `frontend/app/(archive)/`.
+
+The archive lets a signed-in person read about contests that are over: what
+they were, who took part, how they ended and, when the organiser allows it,
+what was asked. An administrator turns it on (section 10.1), and an organiser
+decides per contest whether it appears (`visibility`) and whether its tasks are
+shown (`archive_tasks`), both in section 7.1.
+
+**Two reads, signed-in only.**
+
+- `GET /archive/contests` — a page of the archive: open contests that have
+  ended, newest end first. `limit` defaults to 20 and is at most 50; `offset`;
+  and `q`, a title search in any translation, at most 100 characters, which
+  goes through `escapeLike` like every pattern built from free text. A longer
+  search is a 400.
+- `GET /archive/contests/{id}` — one contest: title, description, status,
+  window, the number of participants (disqualified excluded) and, when
+  `archive_tasks` is on, its tasks.
+
+Both need a session and no permission, so a participant and a staff member read
+the same pages. A contest that does not exist, is closed or has not ended is a
+404, the same answer for all three. The index `contests_archive_idx` carries
+the list's own predicate (`visibility = 'open'` and status finished or
+archived) in the order it is read.
+
+**The budget.** An account may make 60 archive reads a minute
+(`archive:user:<id>`, `429 archive_too_often`). The budget is spent before the
+search text is checked or the database touched, and a refusal counts like a
+success, as for every limit in the service.
+
+**The task view is an allow-list.** It is built from the readers a participant's own
+screen uses — the story, the table descriptions and
+`VisibleQuestionRepository` — rather than from a second query over the
+questions. That is the point of reusing them: a question hidden from the
+participants (section 6.1) is absent here by the same code, and no new query
+can start selecting a reference answer. Positions are numbered over the
+visible questions, so a gap in the stored order does not give away that
+something was hidden. A question carries its kind, points, bonus flag, title,
+body and, for a choice question, the choices; it carries no identifier, no
+attempt limit and no answer. The description of the tables is included because
+participants read it beside the story; the schema itself is not, since game
+databases are reclaimed after the contest.
+
+**Results are not in this response.** The contest page draws the table from
+the existing public leaderboard endpoint with the same component, so freezing
+and revealing are implemented once: a frozen table whose reveal has not
+happened stays frozen in the archive. A `finished` contest's page says its
+results are still provisional; an `archived` one's are final. The two reads
+are settled apart: a refused or failed table leaves the card and the tasks on
+the page, says so where the table would be, and the browser asks for the table
+again. The page's title is the archive's heading and its metadata reads
+nothing, and the list does not prefetch the contest pages, so neither a
+prefetch nor a crawler spends a reader's 60 reads.
+
+**While the switch is off, the archive is not there.** The API's gate runs
+before authentication and the limiter, so every request under `/archive`, signed
+in or not, whatever the method or the identifier, meets the same 404 an
+unknown address does, and spends nothing. On the interface the `(archive)`
+layout calls `notFound()` for the pages and the menu entry is not drawn. A
+contest identifier that is not one is a 404 too; an identifier that is well
+formed but outside a live archive shows the not-found view with status 200,
+because the loading boundary has streamed the status by then.
+
+**A switch that cannot be read is not "off".** A process that has read the
+switch once keeps answering with that value through a failed read and tries the
+database again five seconds later; one that has never read it answers 500 on
+the archive endpoints, since an outage is not the same fact as absence. The
+public settings read, which every page needs for its name,
+answers `archive: false` instead and logs a warning, so a database blip costs
+the menu entry and not the page.
+
+**The cache timings.** The API reads the switch from the database at most once
+every five seconds per process, and a change made on that process is seen at
+once; another process sees it within five seconds. The interface keeps the
+public settings for thirty seconds (section 10.1), so the menu entry and the
+layout's 404 follow a switch within that time.
 
 ## 10. Reporting
 
@@ -4227,6 +4366,17 @@ logo is a different address, and no cache needs to be told anything.
 fields with their old and new values (section 9.2). "Who changed the default
 language in the middle of an olympiad" is exactly the question the journal
 exists for.
+
+**The archive is a switch, not a value.** `archive.enabled` is stored in
+`settings` outside the catalogue, so neither the settings screen's form nor the
+generic save can read or write it; `PUT /settings/archive` takes
+`{"enabled": true}` or `{"enabled": false}` under `settings.manage`, and a
+change is audited as `settings.archive`. It sits beside the sign-in switches
+(section 7.2): `true` means on and anything else or nothing means off, the
+reverse of a provider's `auth.<provider>.disabled`, because the archive is
+off until somebody asks for it. The public read, `GET /settings`, carries
+`archive` so the menu and the front page can show their entry without a
+request of their own; the cache timings are in section 9.8.
 
 **The feedback address is a link on every participant's screen, so it is
 checked as one.** `installation.feedback_url` is where beta testers send

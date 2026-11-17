@@ -36,13 +36,14 @@ that ship with the installed version in `frontend/node_modules/next/dist/docs/`
 
 Everything under `frontend/app/` is a route. A folder in parentheses is a
 **route group**: it does not appear in the URL, but it gives every page inside
-it the same layout. The app has five groups, one per audience.
+it the same layout. The app has six groups, one per audience.
 
 | Group | Who it serves | Routes | Shell |
 |---|---|---|---|
 | `(public)` | anyone, signed in or not | `/`, `/login`, `/contests/[contestId]/leaderboard` | `FocusShell` |
 | `(account)` | a signed-in account that must change its one-time password | `/password` | `FocusShell` with `signedIn` |
 | `(session)` | any signed-in account, participant or staff | `/profile`, `/profile/contests/[contestId]` | `ProductShell`, no navigation |
+| `(archive)` | any signed-in account, participant or staff | `/archive`, `/archive/[contestId]` | `ProductShell`, the viewer's own menu and home; 404 while the archive is off |
 | `(participant)` | participants | `/my`, `/open`, `/contests/[contestId]/play` | `ProductShell`, home is `/my` |
 | `(admin)` | contest authors and administrators | `/contests`, `/contests/new`, `/contests/[contestId]/…`, `/users`, `/users/[userId]`, `/audit`, `/settings` | `ProductShell`, home is `/contests` |
 
@@ -62,12 +63,14 @@ flowchart LR
     root --> pub["(public): FocusShell"]
     root --> acc["(account): FocusShell, signed in"]
     root --> ses["(session): ProductShell"]
+    root --> arc["(archive): ProductShell, the viewer's menu"]
     root --> par["(participant): ProductShell, home /my"]
     root --> adm["(admin): ProductShell, home /contests"]
     pub --> pub1["/ and /login"]
     pub --> pub2["/contests/id/leaderboard"]
     acc --> acc1["/password"]
     ses --> ses1["/profile"]
+    arc --> arc1["/archive and /archive/id"]
     par --> par1["/my and /open"]
     par --> par2["/contests/id/play"]
     adm --> adm1["/contests and the contest workspace"]
@@ -81,6 +84,7 @@ flowchart LR
   [`(public)`](../../frontend/app/(public)/layout.tsx),
   [`(account)`](../../frontend/app/(account)/layout.tsx),
   [`(session)`](../../frontend/app/(session)/layout.tsx),
+  [`(archive)`](../../frontend/app/(archive)/layout.tsx),
   [`(participant)`](../../frontend/app/(participant)/layout.tsx),
   [`(admin)`](../../frontend/app/(admin)/layout.tsx).
 - The shells live in `components/layout/`: `focus-shell.tsx` (a bare frame for

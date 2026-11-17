@@ -27,9 +27,9 @@ backend/
 │   ├── auth/, rbac/, users/, audit/, settings/
 │   │                    accounts, sessions, permissions, the trail, installation settings
 │   ├── contests/        contests, content, staff, participants, the participation gate
-│   ├── leaderboard/, monitor/, profile/, showcase/, covers/, workspace/
+│   ├── leaderboard/, monitor/, profile/, showcase/, archive/, covers/, workspace/
 │   │                    standings, watching participants, own profile, front page,
-│   │                    cover pictures, notes and SQL tabs
+│   │                    the contest archive, cover pictures, notes and SQL tabs
 │   ├── clarifications/  participants' questions to the organisers, the answers, announcements
 │   ├── mailing/         the texts of email, the outbox and the job that delivers it
 │   ├── provisioning/, gamefile/, gamedb/
@@ -63,6 +63,7 @@ Architecture without its folder ceremony.
 | when a contest may still be edited | `internal/contests/contests.go` |
 | what stops a contest being published | `internal/contests/publish.go` |
 | who may sign themselves up | `internal/contests/enrollment.go` |
+| what the archive shows | `internal/archive/archive.go` |
 | which routes exist | `internal/api/router.go` and the `*_handler.go` beside it |
 | how the service is wired | `internal/app/app.go` |
 | a setting and its default | `internal/platform/config/config.go` |
@@ -730,6 +731,29 @@ docker compose -f deploy/docker-compose.yml exec -T pg-core \
     DELETE FROM settings WHERE key = 'auth.<provider>.disabled'"
 ```
 
+### Switching the archive on
+
+The contest archive (`GET /api/v1/archive/contests` and
+`/archive/contests/{id}`, for any signed-in account) is off until an
+administrator turns it on, on **Settings** (`/settings`) or with
+`PUT /api/v1/settings/archive` and `{"enabled": true}`, which needs
+`settings.manage`. The switch is the setting `archive.enabled`, stored in `settings`
+but outside the catalogue, so the settings screen cannot read or write it, and
+a change is audited as `settings.archive`.
+
+Off, every route under `/archive` answers the router's 404 before it looks at a
+session, so nothing there can be told from an address that does not exist, and
+the interface shows no menu entry or page. The API reads the switch at most
+once every five seconds per process, so a change reaches another process
+within that time; the interface keeps the public settings for thirty seconds.
+A switch that cannot be read is not taken as off: the archive routes answer
+500, while `GET /api/v1/settings` answers `archive: false` and logs "could not
+read the archive switch".
+
+An account may read the archive 60 times a minute (`429 archive_too_often`).
+Results are not part of it: a contest's page draws the public leaderboard, so a
+table that is frozen stays frozen there.
+
 ## Running locally
 
 Compose and the Makefile both read `deploy/.env`, and the host-side targets
@@ -804,7 +828,10 @@ A few routes answer without a session: sign-in, the ways in the
 installation offers (`/auth/methods`) and the ones it has switched on
 ([Self-service accounts](#self-service-accounts)), the installation's name
 and images (the sign-in screen wears them), the landing page's reads under
-`/public`, a contest's public leaderboard and its cover. `GET /contests` is
+`/public`, a contest's public leaderboard and its cover. The archive's own
+routes under `/archive` need a session and no permission, and while an
+administrator has the archive switched off they do not exist
+([Switching the archive on](#switching-the-archive-on)). `GET /contests` is
 scoped by who is asking, and `POST /contests/{id}/enroll` is open to any
 signed-in account, with the contest's own rules deciding.
 
@@ -851,6 +878,20 @@ move is the shape (question mode, timing model, session length).
 `enrollment` decides only **who creates the registration**: `open` lets a
 student sign themselves up, `invite_only` means staff add them. Past that point
 both paths are identical.
+
+`visibility` decides what happens once the contest has ended: `open` puts it in
+the archive, `closed` takes it out of every list (the front page, the
+participant's `/open` and the archive) while a direct link keeps working, and
+`/my` keeps it for those who took part. A contest with `enrollment = 'open'` is
+always `open`; the database refuses the other combination
+(`contests_self_registration_open`). The default follows the enrollment: `open`
+for an open contest, `closed` for an invite-only one; contests that existed
+before the setting are `open`. `archive_tasks` (off by default) lets the
+archive show the story, the table descriptions and the visible questions.
+Both are set with `PUT /api/v1/contests/{id}/archive-settings`, which takes
+`{"visibility": "open", "archive_tasks": false}` (neither field may be left
+out), is guarded by `contest.edit` and, unlike the contest's ordinary update,
+works in every status. A change is audited as `contest.update`.
 
 A roster import takes logins as well as identifiers, because what an organizer
 has is a spreadsheet of student numbers. It reports partial success honestly:

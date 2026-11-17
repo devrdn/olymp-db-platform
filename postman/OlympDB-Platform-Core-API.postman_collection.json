@@ -839,6 +839,40 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Set archive visibility and tasks",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/archive-settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "archive-settings"
+              ]
+            },
+            "description": "Whether the contest appears in the archive once it has ended (`visibility`: `open` or `closed`) and whether the archive shows its story, table descriptions and visible questions (`archive_tasks`). Both fields are required.\n\nOpen in every status, unlike Update contest: the settings matter once the contest has ended. A contest with `enrollment: open` is always `open`.\n\nResponses: 200 the contest · 400 `invalid_request` · 403 `forbidden` · 404 `not_found` · 409 `visibility_needs_invite_only`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"visibility\": \"open\",\n  \"archive_tasks\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -2430,6 +2464,100 @@
         }
       ],
       "description": "What a participant is shown of their own account (docs/ARCHITECTURE.md §9.5). Behind authentication and nothing else — no `contest.monitor`, no `contest.view`: taking part in a contest is a registration, and these routes answer \"what did I do\".\n\nThe registration is always resolved from the session, so no request can name anybody else's — there is no identifier for one in any of these URLs. Every route under `{{contestId}}` also requires that the contest has ended for this participant: the contest finished, their own deadline passed under an individual timer, or their registration is finished or disqualified. A contest that does not exist, one somebody else is on, and one still running for the caller are all the same `404 profile_contest_not_found`.\n\nA read budget of 120 a minute per account, refused reads included, spent before any lookup: past it `429 profile_too_often` with `Retry-After`. Reading one's own profile is not access to anybody else's data, so none of it is recorded in the audit trail."
+    },
+    {
+      "name": "Contest archive",
+      "description": "Finished contests an organiser has left open, readable by any signed-in account. The whole folder answers 404 while an administrator has the archive switched off. Results are not here: a contest's table is `GET /contests/{id}/leaderboard`.",
+      "item": [
+        {
+          "name": "List the archive",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/archive/contests?q=&limit=20&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "archive",
+                "contests"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Title search, at most 100 characters."
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Page size, default 20, capped at 50."
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Open contests that have ended, newest end first, with one title negotiated for the caller. `q` matches a title in any translation (at most 100 characters).\n\nResponses: 200 `{ items, total }` · 400 `invalid_request` · 401 `unauthenticated` · 404 `not_found` (archive off) · 429 `archive_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Read an archived contest",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/archive/contests/{{contestId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "archive",
+                "contests",
+                "{{contestId}}"
+              ]
+            },
+            "description": "One archived contest. `tasks` (story, table descriptions, visible questions) is present only when the organiser allowed it; hidden questions are absent and `position` counts the visible ones. No identifier, attempt limit or answer is ever returned.\n\nResponses: 200 · 401 `unauthenticated` · 404 `not_found` (archive off, closed, not ended or unknown) · 429 `archive_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Switch the archive on or off",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/settings/archive",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "settings",
+                "archive"
+              ]
+            },
+            "description": "Administrator only (`settings.manage`). Audited as `settings.archive`. Another process sees the change within five seconds.\n\nResponses: 204 · 400 `invalid_request` (`enabled` missing) · 401 `unauthenticated` · 403 `forbidden`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
     },
     {
       "name": "Audit trail",
