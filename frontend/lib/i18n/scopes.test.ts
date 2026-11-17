@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { AdminDictionary, AppDictionary, ParticipantDictionary, SessionDictionary } from "./client";
+import { AdminDictionary, AppDictionary, ArchiveDictionary, ParticipantDictionary, SessionDictionary } from "./client";
 
 /**
  * A Server Component cannot call or render a member of a "use client" module.
@@ -18,7 +18,7 @@ describe("dictionary scopes and the server boundary", () => {
   });
 
   test("no scope in the client module offers a method a Server Component would call", () => {
-    for (const scope of [AppDictionary, ParticipantDictionary, SessionDictionary, AdminDictionary]) {
+    for (const scope of [AppDictionary, ParticipantDictionary, SessionDictionary, AdminDictionary, ArchiveDictionary]) {
       expect("select" in scope).toBe(false);
     }
   });
@@ -29,6 +29,7 @@ describe("dictionary scopes and the server boundary", () => {
       "app/(admin)/layout.tsx",
       "app/(participant)/layout.tsx",
       "app/(session)/layout.tsx",
+      "app/(archive)/layout.tsx",
     ];
     for (const layout of layouts) {
       const source = readFileSync(resolve(__dirname, "../..", layout), "utf8");
@@ -44,6 +45,7 @@ describe("dictionary scopes and the server boundary", () => {
       "app/(admin)/layout.tsx",
       "app/(participant)/layout.tsx",
       "app/(session)/layout.tsx",
+      "app/(archive)/layout.tsx",
     ];
     for (const layout of layouts) {
       const source = readFileSync(resolve(__dirname, "../..", layout), "utf8");

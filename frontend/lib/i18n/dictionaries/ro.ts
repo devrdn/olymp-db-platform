@@ -1930,9 +1930,39 @@ const ro = {
       reference: "Referință",
     },
   },
-  /** The menu label of the contest archive; its screens add their own keys. */
+  /** The contest archive: its menu label, list and contest screens. */
   archive: {
     heading: "Arhivă",
+    lede: "Olimpiadele deja desfășurate. Deschideți una pentru a-i vedea rezultatele.",
+    loading: "Se încarcă arhiva",
+    failed: {
+      title: "Nu s-a putut încărca arhiva",
+      body: "Serverul nu a răspuns. Verificați conexiunea și încercați din nou.",
+      retry: "Încercați din nou",
+      reference: "Referință",
+    },
+    search: { label: "Căutați după titlu", submit: "Căutați", reset: "Arătați tot" },
+    columns: { title: "Olimpiada", window: "Date", status: "Stare", participants: "Participanți", results: "Rezultate" },
+    resultsOf: "Rezultatele olimpiadei {title}",
+    empty: {
+      title: "Deocamdată nu este nimic aici",
+      body: "Olimpiadele apar aici după ce se încheie, dacă organizatorii le lasă deschise.",
+    },
+    noMatch: { title: "Nu s-a găsit nimic", body: "Nicio olimpiadă din arhivă nu are asta în titlu." },
+    pastEnd: { title: "Pagina nu există", body: "Arhiva are mai puține pagini.", first: "Mergeți la prima pagină" },
+    pagination: { previous: "Înapoi", next: "Înainte", range: "{from}–{to} din {total}" },
+    participants: { one: "{n} participant", few: "{n} participanți", many: "{n} de participanți", other: "{n} de participanți" },
+    provisional: "Rezultatele se mai pot schimba până la arhivarea olimpiadei",
+    results: "Rezultate",
+    tasks: {
+      heading: "Sarcini",
+      story: "Poveste",
+      notes: "Tabele",
+      questions: "Întrebări",
+      points: { one: "{n} punct", few: "{n} puncte", many: "{n} de puncte", other: "{n} de puncte" },
+      bonus: "Bonus",
+    },
+    back: "Toată arhiva",
   },
   audit: {
     heading: "Jurnal de audit",

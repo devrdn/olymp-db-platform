@@ -7,17 +7,23 @@ import type { Locale } from "@/lib/i18n/config";
 
 import { fetchPublicStandings } from "./public-standings-request";
 
-/** The public table, kept fresh for as long as the page is open and visible. */
+/**
+ * The public table, kept fresh for as long as the page is open and visible.
+ * Without an `initial` copy it reads one at once and shows `placeholder` until
+ * a read succeeds.
+ */
 export function PublicStandings({
   contestId,
   initial,
   dict,
   locale,
+  placeholder = null,
 }: {
   contestId: string;
-  initial: Standings;
+  initial?: Standings;
   dict: StandingsDictionary;
   locale: Locale;
+  placeholder?: React.ReactNode;
 }) {
   const { standings, failed } = useStandings({
     load: () => fetchPublicStandings(contestId, locale),
@@ -25,5 +31,7 @@ export function PublicStandings({
     initial,
   });
 
-  return <StandingsView standings={standings ?? initial} dict={dict} locale={locale} variant="page" failed={failed} />;
+  const shown = standings ?? initial;
+  if (!shown) return placeholder;
+  return <StandingsView standings={shown} dict={dict} locale={locale} variant="page" failed={failed} />;
 }

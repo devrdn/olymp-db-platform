@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react";
 
-import { ADMIN_SECTIONS, APP_SECTIONS, PARTICIPANT_SECTIONS, SESSION_SECTIONS } from "./scopes";
+import { ADMIN_SECTIONS, APP_SECTIONS, ARCHIVE_SECTIONS, PARTICIPANT_SECTIONS, SESSION_SECTIONS } from "./scopes";
 
 import type { Locale } from "./config";
 import type { Dictionary } from "./dictionary";
@@ -55,6 +55,7 @@ function dictionaryScope<const Sections extends readonly (keyof Dictionary)[]>(
 export const AppDictionary = dictionaryScope("app", APP_SECTIONS);
 export const ParticipantDictionary = dictionaryScope("participant", PARTICIPANT_SECTIONS);
 export const SessionDictionary = dictionaryScope("session", SESSION_SECTIONS);
+export const ArchiveDictionary = dictionaryScope("archive", ARCHIVE_SECTIONS);
 export const AdminDictionary = dictionaryScope("admin", ADMIN_SECTIONS);
 
 
@@ -66,4 +67,5 @@ export const AdminDictionary = dictionaryScope("admin", ADMIN_SECTIONS);
 export const AppDictionaryProvider = AppDictionary.Provider;
 export const ParticipantDictionaryProvider = ParticipantDictionary.Provider;
 export const SessionDictionaryProvider = SessionDictionary.Provider;
+export const ArchiveDictionaryProvider = ArchiveDictionary.Provider;
 export const AdminDictionaryProvider = AdminDictionary.Provider;

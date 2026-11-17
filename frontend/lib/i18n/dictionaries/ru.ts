@@ -1928,9 +1928,39 @@ const ru = {
       reference: "Идентификатор",
     },
   },
-  /** The menu label of the contest archive; its screens add their own keys. */
+  /** The contest archive: its menu label, list and contest screens. */
   archive: {
     heading: "Архив",
+    lede: "Олимпиады, которые уже прошли. Откройте любую, чтобы увидеть её результаты.",
+    loading: "Загружается архив",
+    failed: {
+      title: "Не удалось загрузить архив",
+      body: "Сервер не ответил. Проверьте соединение и попробуйте ещё раз.",
+      retry: "Повторить",
+      reference: "Код обращения",
+    },
+    search: { label: "Поиск по названию", submit: "Найти", reset: "Показать все" },
+    columns: { title: "Олимпиада", window: "Даты", status: "Состояние", participants: "Участники", results: "Результаты" },
+    resultsOf: "Результаты олимпиады {title}",
+    empty: {
+      title: "Пока здесь пусто",
+      body: "Олимпиады появляются здесь после завершения, если организаторы оставили их открытыми.",
+    },
+    noMatch: { title: "Ничего не нашлось", body: "Ни в одном названии олимпиад архива нет такого текста." },
+    pastEnd: { title: "Такой страницы нет", body: "В архиве меньше страниц.", first: "На первую страницу" },
+    pagination: { previous: "Назад", next: "Далее", range: "{from}–{to} из {total}" },
+    participants: { one: "{n} участник", few: "{n} участника", many: "{n} участников", other: "{n} участника" },
+    provisional: "Результаты ещё могут измениться, пока олимпиада не перенесена в архив",
+    results: "Результаты",
+    tasks: {
+      heading: "Задачи",
+      story: "История",
+      notes: "Таблицы",
+      questions: "Вопросы",
+      points: { one: "{n} балл", few: "{n} балла", many: "{n} баллов", other: "{n} балла" },
+      bonus: "Бонус",
+    },
+    back: "Весь архив",
   },
   audit: {
     heading: "Журнал аудита",

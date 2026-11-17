@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
 import type { Standings, StandingsRow } from "@/lib/api/leaderboard";
@@ -61,5 +61,16 @@ describe("the public standings", () => {
     expect(screen.getByRole("columnheader", { name: en.leaderboard.columns.prize })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: en.leaderboard.columns.place })).toBeInTheDocument();
     expect(within(tableRowOf("beta")).getByTestId("place")).toHaveTextContent("2");
+  });
+
+  test("with no copy yet, shows the placeholder until a read brings the table", async () => {
+    fetchPublicStandings.mockResolvedValue({ kind: "ok", standings: frozen([row({ label: "alpha" })]) });
+
+    render(<PublicStandings contestId="c1" dict={en} locale="en" placeholder={<p>refused</p>} />);
+
+    expect(screen.getByText("refused")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("alpha")).toBeInTheDocument());
+    expect(screen.queryByText("refused")).not.toBeInTheDocument();
+    expect(fetchPublicStandings).toHaveBeenCalledWith("c1", "en");
   });
 });

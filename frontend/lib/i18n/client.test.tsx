@@ -75,6 +75,7 @@ describe("how the scopes are wired into the app", () => {
       AdminDictionary: "selectAdmin",
       ParticipantDictionary: "selectParticipant",
       SessionDictionary: "selectSession",
+      ArchiveDictionary: "selectArchive",
     };
 
     expect(providers.length).toBeGreaterThan(0);

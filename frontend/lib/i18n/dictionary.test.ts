@@ -103,4 +103,12 @@ describe("getDictionary", () => {
       }
     }
   });
+
+  test("the organiser's switch names the archive's tasks with the word the archive shows", async () => {
+    for (const locale of LOCALES) {
+      const dict = await getDictionary(locale);
+      const word = dict.archive.tasks.heading.toLocaleLowerCase(locale);
+      expect(dict.workspace.settings.archive.tasks.toLocaleLowerCase(locale), locale).toContain(word);
+    }
+  });
 });

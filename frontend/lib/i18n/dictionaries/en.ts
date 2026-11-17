@@ -2153,9 +2153,39 @@ const en = {
       reference: "Reference",
     },
   },
-  /** The menu label of the contest archive; its screens add their own keys. */
+  /** The contest archive: its menu label, list and contest screens. */
   archive: {
     heading: "Archive",
+    lede: "Contests already held. Open one to see its results.",
+    loading: "Loading the archive",
+    failed: {
+      title: "Could not load the archive",
+      body: "The server did not answer. Check the connection and try again.",
+      retry: "Try again",
+      reference: "Reference",
+    },
+    search: { label: "Search by title", submit: "Search", reset: "Show all" },
+    columns: { title: "Contest", window: "Dates", status: "Status", participants: "Participants", results: "Results" },
+    resultsOf: "Results of {title}",
+    empty: {
+      title: "Nothing here yet",
+      body: "Contests appear here once they end, when their organisers leave them open.",
+    },
+    noMatch: { title: "Nothing matches", body: "No contest in the archive has that in its title." },
+    pastEnd: { title: "No such page", body: "The archive has fewer pages than that.", first: "Go to the first page" },
+    pagination: { previous: "Previous", next: "Next", range: "{from}–{to} of {total}" },
+    participants: { one: "{n} participant", few: "{n} participants", many: "{n} participants", other: "{n} participants" },
+    provisional: "Results can still change until the contest is archived",
+    results: "Results",
+    tasks: {
+      heading: "Tasks",
+      story: "Story",
+      notes: "The tables",
+      questions: "Questions",
+      points: { one: "{n} point", few: "{n} points", many: "{n} points", other: "{n} points" },
+      bonus: "Bonus",
+    },
+    back: "The whole archive",
   },
   /** The two screens any route can end on, so they live outside every section. */
   audit: {

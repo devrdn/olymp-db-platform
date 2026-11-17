@@ -25,6 +25,12 @@ test("and it is still only the front page that is open", () => {
     expect(guardRedirect("/my", "", false)).toBe("/login?next=%2Fmy");
   });
 
+  test("/archive and /archive/<id> need a session", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    expect(guardRedirect("/archive", "", false)).toBe("/login?next=%2Farchive");
+    expect(guardRedirect(`/archive/${id}`, "", false)).toBe(`/login?next=%2Farchive%2F${id}`);
+  });
+
   test("leaves the liveness route reachable without a session", () => {
     expect(guardRedirect("/healthz", "", false)).toBeNull();
   });

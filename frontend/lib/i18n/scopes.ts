@@ -22,6 +22,9 @@ export const PARTICIPANT_SECTIONS = ["participant"] as const;
  */
 export const SESSION_SECTIONS = ["profile", "participant"] as const;
 
+/** The archive: its own section only, `failed` carries its own retry wording. */
+export const ARCHIVE_SECTIONS = ["archive"] as const;
+
 /** The constructor's group. */
 export const ADMIN_SECTIONS = ["contests", "accounts", "audit", "settings"] as const;
 
@@ -43,4 +46,5 @@ function slice<const Sections extends readonly (keyof Dictionary)[]>(
 export const selectApp = (dict: Dictionary) => slice(dict, APP_SECTIONS);
 export const selectParticipant = (dict: Dictionary) => slice(dict, PARTICIPANT_SECTIONS);
 export const selectSession = (dict: Dictionary) => slice(dict, SESSION_SECTIONS);
+export const selectArchive = (dict: Dictionary) => slice(dict, ARCHIVE_SECTIONS);
 export const selectAdmin = (dict: Dictionary) => slice(dict, ADMIN_SECTIONS);
