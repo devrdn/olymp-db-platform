@@ -51,7 +51,13 @@ export default async function DatabasesPage(props: PageProps<"/contests/[contest
           {t.unreachable}
         </p>
       ) : (
-        <GameDatabases contestId={contest.id} databases={databases} locale={locale} dict={dict} />
+        <GameDatabases
+          contestId={contest.id}
+          databases={databases}
+          ended={contest.status === "finished" || contest.status === "archived"}
+          locale={locale}
+          dict={dict}
+        />
       )}
     </div>
   );

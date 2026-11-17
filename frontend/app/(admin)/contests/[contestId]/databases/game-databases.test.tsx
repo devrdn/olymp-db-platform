@@ -39,11 +39,12 @@ function instance(overrides: Partial<GameInstance> = {}): GameInstance {
   };
 }
 
-function show(databases: Partial<GameInstances> = {}) {
+function show(databases: Partial<GameInstances> = {}, ended = false) {
   return render(
     <GameDatabases
       contestId={contestId}
       databases={{ instances: [instance()], truncated: false, ...databases }}
+      ended={ended}
       locale="en"
       dict={en}
     />,
@@ -61,6 +62,25 @@ afterEach(() => {
 });
 
 describe("the contest's databases", () => {
+  test("says none are built yet while the contest has not ended", () => {
+    show({ instances: [] });
+    expect(screen.getByText(t.empty)).toBeInTheDocument();
+  });
+
+  // The sweep removes every copy once the grace period passes, so an empty
+  // list after the end is the normal outcome, not a game that was never built.
+  test("says an ended contest's databases were removed, not that none were built", () => {
+    show({ instances: [] }, true);
+    expect(screen.getByText(t.reclaimed)).toBeInTheDocument();
+    expect(screen.queryByText(t.empty)).not.toBeInTheDocument();
+  });
+
+  test("still lists the copies an ended contest keeps during its grace period", () => {
+    show({}, true);
+    expect(screen.getByText("Ivan Petrov")).toBeInTheDocument();
+    expect(screen.queryByText(t.reclaimed)).not.toBeInTheDocument();
+  });
+
   test("names the participant holding a copy, not only the database", () => {
     show();
 

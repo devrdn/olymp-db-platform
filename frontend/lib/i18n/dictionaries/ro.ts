@@ -799,6 +799,7 @@ const ro = {
       heading: "Bazele care există",
       lede: "Rezerva de copii și cea în care lucrează fiecare participant. Ștergerea ia doar baza: răspunsurile, punctajul și ceasul lor sunt păstrate în altă parte, iar următoarea lor interogare reconstruiește baza sub același nume.",
       empty: "Această olimpiadă nu are încă baze. Ele apar după ce jocul este construit.",
+      reclaimed: "Olimpiada s-a încheiat, iar bazele ei au fost șterse la expirarea perioadei de păstrare. Răspunsurile, punctajele și jurnalele participanților se păstrează.",
       unreachable:
         "Lista bazelor nu a putut fi citită acum. Asta nu înseamnă că olimpiada nu are niciuna — clusterul de joc nu a răspuns. Reîncărcați peste un moment; dacă se repetă, verificați că pg-game rulează.",
       spare: "de rezervă",
