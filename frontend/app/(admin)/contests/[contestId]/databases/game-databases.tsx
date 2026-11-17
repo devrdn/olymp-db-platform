@@ -34,15 +34,20 @@ function message(code: string | undefined, dict: Dictionary): string | null {
  * The contest's databases in one table, spare and held alike, with the holder's
  * name. Only a held copy offers the drop button: the pool tender replaces a
  * broken spare on its own. The route's page supplies the heading.
+ *
+ * `ended` is true once the contest is finished or archived: the sweep then
+ * removes every copy, so an empty list means removed, not not yet built.
  */
 export function GameDatabases({
   contestId,
   databases,
+  ended,
   locale,
   dict,
 }: {
   contestId: string;
   databases: GameInstances;
+  ended: boolean;
   locale: Locale;
   dict: Dictionary;
 }) {
@@ -51,7 +56,7 @@ export function GameDatabases({
   return (
     <section className="flex flex-col gap-5">
       {databases.instances.length === 0 ? (
-        <p className="max-w-body text-body text-ink-2">{t.empty}</p>
+        <p className="max-w-body text-body text-ink-2">{ended ? t.reclaimed : t.empty}</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-lg border-collapse text-left">
