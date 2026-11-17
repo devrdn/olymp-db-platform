@@ -228,9 +228,11 @@ type CreateCommand struct {
 
 // Create registers a contest and makes its author the owner.
 func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error) {
+	enrollment := orDefault(cmd.Enrollment, EnrollmentInviteOnly)
 	c := Contest{
 		Status:       StatusDraft,
-		Enrollment:   orDefault(cmd.Enrollment, EnrollmentInviteOnly),
+		Enrollment:   enrollment,
+		Visibility:   DefaultVisibility(enrollment),
 		QuestionMode: orDefault(cmd.QuestionMode, QuestionModeMulti),
 		Progression:  orDefault(cmd.Progression, ProgressionFree),
 		Scoring:      orDefault(cmd.Scoring, ScoringPoints),
@@ -353,6 +355,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	updated := current
 	if cmd.Enrollment != "" {
 		updated.Enrollment = cmd.Enrollment
+		if updated.Enrollment == EnrollmentOpen {
+			updated.Visibility = VisibilityOpen
+		}
 	}
 	if cmd.QuestionMode != "" {
 		updated.QuestionMode = cmd.QuestionMode

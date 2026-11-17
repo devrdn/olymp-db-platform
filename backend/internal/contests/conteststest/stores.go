@@ -97,6 +97,9 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	if c.ICPCPenaltyMin == 0 {
 		c.ICPCPenaltyMin = contests.DefaultICPCPenaltyMin
 	}
+	if c.Visibility == "" {
+		c.Visibility = contests.VisibilityOpen
+	}
 	r.store(c)
 	return c
 }
@@ -287,6 +290,11 @@ func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	stored.LeaderboardFreezeMin, stored.LeaderboardNames = c.LeaderboardFreezeMin, c.LeaderboardNames
 	stored.ResultDownload = c.ResultDownload
 	stored.SchemaDiagram = c.SchemaDiagram
+	// Update never writes archive_tasks, and opens a contest that takes
+	// self-registration; the postgres Update does the same in SQL.
+	if c.Enrollment == contests.EnrollmentOpen {
+		stored.Visibility = contests.VisibilityOpen
+	}
 	if now, ok := r.now(); ok {
 		stored.UpdatedAt = now
 	}

@@ -67,6 +67,7 @@ func testContest(t *testing.T, st *stores, owner uuid.UUID, status string, start
 		Progression: contests.ProgressionFree, Scoring: contests.ScoringPoints, Timing: contests.TimingFixed,
 		StartsAt: &starts, EndsAt: &ends, CreatedBy: owner,
 		LeaderboardNames: contests.LeaderboardNamesLogin, ICPCPenaltyMin: contests.DefaultICPCPenaltyMin,
+		Visibility: contests.DefaultVisibility(contests.EnrollmentInviteOnly),
 	})
 	if err != nil {
 		t.Fatalf("create a %s contest: %v", status, err)

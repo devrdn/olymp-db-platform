@@ -210,6 +210,7 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 		ICPCPenaltyMin:   contests.DefaultICPCPenaltyMin,
 		ResultDownload:   true,
 		SchemaDiagram:    true,
+		Visibility:       contests.VisibilityClosed,
 	})
 	if err != nil {
 		return report, fmt.Errorf("create the contest: %w", err)

@@ -814,6 +814,10 @@
       "meaning": "No account with that identifier or login exists."
     },
     {
+      "code": "visibility_needs_invite_only",
+      "meaning": "A contest with self-registration is always open, so it cannot be closed. Switch its enrolment to invite-only first; the organiser may close it after that."
+    },
+    {
       "code": "weak_password",
       "meaning": "The new password does not meet the policy. The message says which rule."
     },

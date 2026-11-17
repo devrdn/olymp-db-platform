@@ -1662,3 +1662,39 @@ func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
 		}
 	})
 }
+
+func TestACreatedContestStartsClosedWhenInviteOnlyAndOpenWithSelfRegistration(t *testing.T) {
+	f := conteststest.NewFixture()
+	for enrollment, want := range map[string]string{
+		contests.EnrollmentInviteOnly: contests.VisibilityClosed,
+		contests.EnrollmentOpen:       contests.VisibilityOpen,
+	} {
+		created, err := f.Service.Create(context.Background(), contests.CreateCommand{
+			ActorID: uuid.New(), Enrollment: enrollment,
+		})
+		if err != nil {
+			t.Fatalf("Create(%s) = %v", enrollment, err)
+		}
+		if created.Visibility != want {
+			t.Errorf("visibility of a new %s contest = %q, want %q", enrollment, created.Visibility, want)
+		}
+	}
+}
+
+func TestSwitchingAClosedContestToSelfRegistrationOpensIt(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	if c.Visibility != contests.VisibilityClosed {
+		t.Fatalf("seeded visibility = %q, want closed", c.Visibility)
+	}
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.Visibility != contests.VisibilityOpen {
+		t.Errorf("visibility = %q, want open once the contest takes self-registration", updated.Visibility)
+	}
+}

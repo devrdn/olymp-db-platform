@@ -445,6 +445,8 @@ func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
 			message: "the start date cannot change while ICPC scoring is running"},
 		contests.ErrBonusNeedsPoints: {status: http.StatusConflict, code: "bonus_needs_points",
 			message: "a bonus question needs points scoring"},
+		contests.ErrVisibilityNeedsInviteOnly: {status: http.StatusConflict, code: "visibility_needs_invite_only",
+			message: "a contest with self-registration is always open"},
 		contests.ErrOwnerImmutable: {status: http.StatusConflict, code: "owner_immutable",
 			message: "the contest owner cannot be changed here"},
 		contests.ErrAlreadyEnrolled: {status: http.StatusConflict, code: "already_enrolled",

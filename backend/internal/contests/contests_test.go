@@ -156,6 +156,7 @@ func validContest() contests.Contest {
 	return contests.Contest{
 		Status:       contests.StatusDraft,
 		Enrollment:   contests.EnrollmentInviteOnly,
+		Visibility:   contests.VisibilityClosed,
 		QuestionMode: contests.QuestionModeMulti,
 		Progression:  contests.ProgressionFree,
 		Scoring:      contests.ScoringPoints,

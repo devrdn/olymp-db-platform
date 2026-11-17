@@ -2542,6 +2542,7 @@ const en = {
     freeze_already_reached: "The leaderboard has already frozen, so the end date can only move later. Every other setting can still be saved.",
     icpc_start_locked: "The start date cannot change while ICPC scoring is running, since penalties are counted from it. Every other setting can still be saved.",
     bonus_needs_points: "A bonus question only works with Points scoring. Untick the bonus questions before switching the contest to First to solve or ICPC.",
+    visibility_needs_invite_only: "A contest with self-registration is always open. Switch it to invite-only first.",
     not_publishable: "The contest is not ready to publish yet.",
     package_too_large: "The contest has more questions than one exported package holds.",
     enrollment_closed: "Enrollment for this contest is closed.",

@@ -139,9 +139,14 @@ var (
 
 // Contest is one olympiad.
 type Contest struct {
-	ID           uuid.UUID
-	Status       string
-	Enrollment   string
+	ID         uuid.UUID
+	Status     string
+	Enrollment string
+	// Visibility is VisibilityOpen or VisibilityClosed; see Listed.
+	Visibility string
+	// ArchiveTasks shows the questions in the archive. Meaningful only for an
+	// open contest.
+	ArchiveTasks bool
 	QuestionMode string
 	Progression  string
 	Scoring      string
@@ -365,6 +370,12 @@ func (c Contest) Validate() error {
 	if !slices.Contains([]string{EnrollmentOpen, EnrollmentInviteOnly}, c.Enrollment) {
 		return fmt.Errorf("%w: unknown enrollment type %q", ErrInvalidContest, c.Enrollment)
 	}
+	if err := validVisibility(c.Visibility); err != nil {
+		return err
+	}
+	if c.Enrollment == EnrollmentOpen && c.Visibility == VisibilityClosed {
+		return ErrVisibilityNeedsInviteOnly
+	}
 	if !slices.Contains([]string{QuestionModeMulti, QuestionModeSingle}, c.QuestionMode) {
 		return fmt.Errorf("%w: unknown question mode %q", ErrInvalidContest, c.QuestionMode)
 	}
@@ -459,7 +470,8 @@ func validateLanguages(langs []ContestLanguage) error {
 	return nil
 }
 
-// Filter selects a page of contests.
+// Filter selects a page of contests. A list a person browses leaves out the
+// contests Listed hides.
 type Filter struct {
 	// Query matches a substring of any translated title.
 	Query  string
@@ -538,6 +550,8 @@ type Repository interface {
 func (c Contest) auditFields() map[string]any {
 	return map[string]any{
 		"enrollment":               c.Enrollment,
+		"visibility":               c.Visibility,
+		"archive_tasks":            c.ArchiveTasks,
 		"question_mode":            c.QuestionMode,
 		"progression":              c.Progression,
 		"scoring":                  c.Scoring,

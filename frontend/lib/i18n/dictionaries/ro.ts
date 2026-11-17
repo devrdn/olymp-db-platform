@@ -2313,6 +2313,7 @@ const ro = {
     freeze_already_reached: "Clasamentul s-a înghețat deja, așa că data de final poate fi mutată doar mai târziu. Celelalte setări pot fi salvate în continuare.",
     icpc_start_locked: "Data de început nu se poate schimba cât timp olimpiada rulează cu scorul ICPC, deoarece penalizările se calculează de la ea. Celelalte setări pot fi salvate în continuare.",
     bonus_needs_points: "O întrebare bonus funcționează doar cu punctajul „Puncte”. Debifați întrebările bonus înainte de a trece olimpiada la „Primul care rezolvă” sau ICPC.",
+    visibility_needs_invite_only: "O olimpiadă cu autoînscriere este mereu deschisă. Treceți-o mai întâi la înscriere doar pe bază de invitație.",
     not_publishable: "Olimpiada încă nu este gata de publicare.",
     package_too_large: "Olimpiada are mai multe întrebări decât încape într-un pachet de export.",
     enrollment_closed: "Înscrierea la această olimpiadă este închisă.",

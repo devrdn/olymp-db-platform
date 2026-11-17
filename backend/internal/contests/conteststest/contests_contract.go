@@ -65,6 +65,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			ICPCPenaltyMin:   20,
 			ResultDownload:   true,
 			SchemaDiagram:    true,
+			Visibility:       contests.VisibilityClosed,
 			CreatedBy:        author,
 		}
 	}
@@ -93,6 +94,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			ICPCPenaltyMin:       45,
 			ResultDownload:       false,
 			SchemaDiagram:        false,
+			Visibility:           contests.VisibilityOpen,
+			ArchiveTasks:         true,
 			PrizePlaces:          contests.PrizePlaces{First: 1, Second: 2, Third: 3},
 			CreatedBy:            author,
 		}
@@ -120,6 +123,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			ICPCPenaltyMin:       5,
 			ResultDownload:       true,
 			SchemaDiagram:        true,
+			Visibility:           contests.VisibilityClosed,
 			PrizePlaces:          contests.PrizePlaces{First: 1000, Second: 0, Third: 7},
 			CreatedBy:            author,
 		}
@@ -226,7 +230,10 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		return func(c *contests.Contest) { c.Status = status }
 	}
 	withEnrollment := func(enrollment string) func(*contests.Contest) {
-		return func(c *contests.Contest) { c.Enrollment = enrollment }
+		return func(c *contests.Contest) {
+			c.Enrollment = enrollment
+			c.Visibility = contests.DefaultVisibility(enrollment)
+		}
 	}
 	startingAt := func(hour int) func(*contests.Contest) {
 		return func(c *contests.Contest) { start := at(hour); c.StartsAt = &start }
@@ -286,6 +293,8 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		check("ICPCPenaltyMin", got.ICPCPenaltyMin == want.ICPCPenaltyMin, got.ICPCPenaltyMin, want.ICPCPenaltyMin)
 		check("ResultDownload", got.ResultDownload == want.ResultDownload, got.ResultDownload, want.ResultDownload)
 		check("SchemaDiagram", got.SchemaDiagram == want.SchemaDiagram, got.SchemaDiagram, want.SchemaDiagram)
+		check("Visibility", got.Visibility == want.Visibility, got.Visibility, want.Visibility)
+		check("ArchiveTasks", got.ArchiveTasks == want.ArchiveTasks, got.ArchiveTasks, want.ArchiveTasks)
 		check("PrizePlaces", got.PrizePlaces == want.PrizePlaces, got.PrizePlaces, want.PrizePlaces)
 		check("CreatedBy", got.CreatedBy == want.CreatedBy, got.CreatedBy, want.CreatedBy)
 		return wrong
@@ -478,6 +487,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 
 			update(t, ctx, target, want)
 			want.PrizePlaces = created.PrizePlaces
+			want.Visibility, want.ArchiveTasks = created.Visibility, created.ArchiveTasks
 
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
@@ -493,8 +503,45 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 
 			update(t, ctx, target, want)
 			want.PrizePlaces = created.PrizePlaces
+			want.Visibility, want.ArchiveTasks = created.Visibility, created.ArchiveTasks
 
 			wantFields(t, byID(t, ctx, target, created.ID), want)
+		})
+	})
+
+	t.Run("Update to self-registration opens a closed contest", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, plain(author))
+			if created.Visibility != contests.VisibilityClosed {
+				t.Fatalf("Visibility = %q, want closed", created.Visibility)
+			}
+			want := created
+			want.Enrollment = contests.EnrollmentOpen
+			want.Visibility = contests.VisibilityOpen
+
+			update(t, ctx, target, want)
+
+			wantFields(t, byID(t, ctx, target, created.ID), want)
+		})
+	})
+
+	t.Run("Update with invite-only enrolment leaves visibility and archive tasks as stored", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			author := target.NewUser()
+			created := create(t, ctx, target, full(author))
+			stale := created
+			stale.Enrollment = contests.EnrollmentInviteOnly
+			stale.Visibility = contests.VisibilityClosed
+			stale.ArchiveTasks = false
+
+			update(t, ctx, target, stale)
+
+			got := byID(t, ctx, target, created.ID)
+			if got.Visibility != created.Visibility || got.ArchiveTasks != created.ArchiveTasks {
+				t.Errorf("visibility, archive tasks = %q, %v, want %q, %v as stored",
+					got.Visibility, got.ArchiveTasks, created.Visibility, created.ArchiveTasks)
+			}
 		})
 	})
 
@@ -1018,6 +1065,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			want := other(author)
 			want.Status = created.Status
 			want.PrizePlaces = created.PrizePlaces
+			want.Visibility, want.ArchiveTasks = created.Visibility, created.ArchiveTasks
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 
 			given := []contests.ContestLanguage{english, {Code: "ro"}}

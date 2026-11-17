@@ -23,6 +23,6 @@ func Errors() []error {
 		ErrRosterTooLarge, ErrQueryTooLong,
 		ErrAnswerTooLong, ErrNotAChoice, ErrQuestionClosed,
 		ErrQuestionNotOpen, ErrTooManyAttemptConflicts,
-		ErrBonusNeedsPoints,
+		ErrBonusNeedsPoints, ErrVisibilityNeedsInviteOnly,
 	}
 }

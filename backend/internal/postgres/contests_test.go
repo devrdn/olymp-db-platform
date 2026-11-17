@@ -696,3 +696,34 @@ func TestAnOrganisersFinishRecordsEachParticipationItEndedInItsTransaction(t *te
 		t.Errorf("%d entries outlived the rolled-back move, want none", survived)
 	}
 }
+
+// A row inserted with the column defaults, as the previous release does, must
+// pass the domain's checks once read back: Update starts from what the
+// repository returns and validates it (security rule 10).
+func TestAContestStoredWithColumnDefaultsCanBeUpdatedThroughTheService(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "defaults-"+uuid.NewString()[:8])
+		id := makeContest(t, ctx, author.ID)
+		service := contests.NewService(contests.ServiceConfig{
+			Contests:      NewContests(testPool),
+			Registrations: NewRegistrations(testPool),
+			Audit:         audit.New(NewAuditSink(testPool)),
+			UnitOfWork:    storage.NewUnitOfWork(testPool),
+			Gate:          contests.NewGate(0),
+			GameReadiness: NewGameInstances(testPool),
+			Covers:        NewCovers(testPool),
+			Appointees:    NewUsers(testPool),
+		})
+
+		updated, err := service.Update(ctx, contests.UpdateCommand{
+			ActorID: author.ID, ContestID: id, Progression: contests.ProgressionSequential,
+		})
+		if err != nil {
+			t.Fatalf("Update() = %v", err)
+		}
+		if updated.Visibility != contests.VisibilityOpen || updated.ArchiveTasks {
+			t.Errorf("visibility, archive tasks = %q, %v, want open, false (the column defaults)",
+				updated.Visibility, updated.ArchiveTasks)
+		}
+	})
+}

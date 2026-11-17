@@ -428,6 +428,8 @@ var contestsErrors = joined(errorTable{
 	{err: contests.ErrFreezeAlreadyReached, status: http.StatusConflict, code: codeFreezeAlreadyReached},
 	{err: contests.ErrICPCStartLocked, status: http.StatusConflict, code: codeICPCStartLocked},
 	{err: contests.ErrBonusNeedsPoints, status: http.StatusConflict, code: codeBonusNeedsPoints},
+	// 409: right once the enrolment changes, not now.
+	{err: contests.ErrVisibilityNeedsInviteOnly, status: http.StatusConflict, code: codeVisibilityNeedsInviteOnly},
 	{err: contests.ErrOwnerImmutable, status: http.StatusConflict, code: codeOwnerImmutable},
 	{err: contests.ErrAlreadyEnrolled, status: http.StatusConflict, code: codeAlreadyEnrolled},
 	{err: contests.ErrEnrollmentClosed, status: http.StatusConflict, code: codeEnrollmentClosed},
