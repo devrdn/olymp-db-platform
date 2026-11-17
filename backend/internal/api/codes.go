@@ -193,6 +193,8 @@ var (
 		"The database refused the query, in a contest that hides its schema. The reason is deliberately withheld: PostgreSQL names the relation that does not exist, which in such a contest is a way to enumerate the schema the closed catalogues were hiding.")
 	codeLeaderboardTooOften = httpx.NewCode("leaderboard_too_often",
 		"The leaderboard was asked for faster than one address or one account may ask. The table only changes every few seconds, so waiting costs nothing.")
+	codeArchiveTooOften = httpx.NewCode("archive_too_often",
+		"The archive was asked for faster than one account may ask. Nothing in it changes from one minute to the next, so waiting costs nothing.")
 	codePublicTooOften = httpx.NewCode("public_too_often",
 		"The landing page's own reads — the installation's numbers and its recent contests — were asked for faster than one address may ask. Neither answer changes more than once a minute, so waiting costs nothing. Its own code rather than the leaderboard's: this is the page a visitor sees before signing in, and \"the table is being refreshed too often\" is the wrong sentence there.")
 	codeLeaderboardNotRevealable = httpx.NewCode("leaderboard_not_revealable",

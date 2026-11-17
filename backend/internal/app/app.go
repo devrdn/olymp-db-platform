@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/api"
+	"github.com/devrdn/olymp-db-platform/backend/internal/archive"
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
@@ -576,6 +577,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			userService, limiter, authMiddleware, log),
 		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 		api.NewLeaderboardHandler(standings, limiter, authMiddleware, log, cfg.DefaultLocale),
+		api.NewArchiveHandler(archive.NewService(archive.Config{
+			Repository: postgres.NewArchive(pool),
+			Switch:     installation,
+			Stories:    postgres.NewStories(pool),
+			Notes:      postgres.NewSchemaNotes(pool),
+			Questions:  postgres.NewQuestions(pool),
+		}), limiter, authMiddleware, log, cfg.DefaultLocale),
 		api.NewResultsHandler(standings, authMiddleware, log).WithExportSlots(exportSlots),
 		api.NewAuditHandler(auditTrail, authMiddleware, log),
 		api.NewMonitorHandler(watch, limiter, authMiddleware, log).WithExportSlots(exportSlots),

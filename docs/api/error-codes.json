@@ -34,6 +34,10 @@
       "meaning": "This participant has submitted as many answers this minute as the installation allows, refused ones included. Nothing was recorded and no attempt was used; `Retry-After` says how long to wait at most."
     },
     {
+      "code": "archive_too_often",
+      "meaning": "The archive was asked for faster than one account may ask. Nothing in it changes from one minute to the next, so waiting costs nothing."
+    },
+    {
       "code": "attempt_conflict",
       "meaning": "Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response."
     },

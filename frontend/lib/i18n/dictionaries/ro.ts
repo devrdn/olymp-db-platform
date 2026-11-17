@@ -2538,6 +2538,7 @@ const ro = {
     results_too_many_rows: "Această olimpiadă are peste 2000 de participanți, prea mulți pentru un singur export.",
     results_export_too_often: "Exportul anterior încă se pregătește. Așteptați să se termine.",
     query_database_error: "Baza de date a refuzat interogarea:",
+    archive_too_often: "Arhiva este deschisă prea des. Așteptați o clipă și încercați din nou.",
     leaderboard_too_often: "Tabelul este reîmprospătat prea des. Se va actualiza într-o clipă.",
     leaderboard_not_revealable: "Rezultatele nu pot fi încă dezvăluite: olimpiada nu s-a încheiat sau tabelul nu a fost înghețat.",
     query_declined:

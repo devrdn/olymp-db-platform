@@ -2767,6 +2767,7 @@ const en = {
     results_too_many_rows: "This contest has more than 2000 participants, too many to export at once.",
     results_export_too_often: "Your previous export is still being prepared. Wait for it to finish.",
     query_database_error: "The database refused that query:",
+    archive_too_often: "The archive is being opened too often. Wait a moment and try again.",
     leaderboard_too_often: "The table is being refreshed too often. It will update again in a moment.",
     leaderboard_not_revealable: "The results cannot be revealed yet: the contest has not finished, or it was never frozen.",
     query_declined:
