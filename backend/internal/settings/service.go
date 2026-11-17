@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
@@ -15,10 +16,23 @@ type Service struct {
 	images ImageRepository
 	audit  *audit.Recorder
 	uow    storage.UnitOfWork
+
+	now     func() time.Time
+	archive archiveCache
 }
 
 func NewService(repo Repository, images ImageRepository, recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
-	return &Service{repo: repo, images: images, audit: recorder, uow: uow}
+	return &Service{repo: repo, images: images, audit: recorder, uow: uow, now: time.Now}
+}
+
+// WithClock replaces the time source the archive switch's cache reads, for
+// tests; a nil now is time.Now. It returns the service for chaining.
+func (s *Service) WithClock(now func() time.Time) *Service {
+	if now == nil {
+		now = time.Now
+	}
+	s.now = now
+	return s
 }
 
 // SaveImage stores a picture in one of the installation's slots. Only the

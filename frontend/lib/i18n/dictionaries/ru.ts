@@ -2017,6 +2017,7 @@ const ru = {
       "settings.change": "Изменил настройки установки",
       "settings.mail_test": "Отправил себе тестовое письмо",
       "settings.sign_in_provider": "Включил или выключил вход через внешний сервис",
+      "settings.archive": "Включил или выключил архив соревнований",
     },
     failureReasons: {
       invalid_credentials: "Неверный логин или пароль",

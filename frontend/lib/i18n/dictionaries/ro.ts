@@ -2019,6 +2019,7 @@ const ro = {
       "settings.change": "A schimbat setările instalării",
       "settings.mail_test": "Și-a trimis un e-mail de test",
       "settings.sign_in_provider": "A pornit sau a oprit autentificarea printr-un serviciu extern",
+      "settings.archive": "A pornit sau a oprit arhiva concursurilor",
     },
     failureReasons: {
       invalid_credentials: "Utilizator sau parolă greșită",

@@ -3,7 +3,8 @@
 // rather than a deploy.
 //
 // It also holds, outside the catalogue, the switch that turns sign-in through
-// an external provider off (switches.go); a switch is not a secret.
+// an external provider off and the one that turns the contest archive on
+// (switches.go); a switch is not a secret.
 //
 // It does not hold what the process needs to start or anything secret; those
 // stay in the environment (platform/config). A wrong value here makes the

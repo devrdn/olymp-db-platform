@@ -2243,6 +2243,7 @@ const en = {
       "settings.change": "Changed the installation's settings",
       "settings.mail_test": "Sent themselves a test email",
       "settings.sign_in_provider": "Switched sign-in through an external service on or off",
+      "settings.archive": "Switched the contest archive on or off",
     },
     // Why an auth.login_failed entry happened — the closed vocabulary
     // backend/internal/auth's Reason* constants declare. Never say more than

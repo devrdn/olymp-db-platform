@@ -170,6 +170,9 @@ const (
 	// ActionSettingsSignInProvider records an administrator switching sign-in
 	// through one external provider on or off.
 	ActionSettingsSignInProvider = "settings.sign_in_provider"
+	// ActionSettingsArchive records an administrator switching the contest
+	// archive on or off for the installation.
+	ActionSettingsArchive = "settings.archive"
 )
 
 // actions lists every action code declared above; TestEveryActionIsListed
@@ -207,6 +210,7 @@ var actions = []string{
 	ActionEventRegistrationCheckIn,
 
 	ActionSettingsChange, ActionSettingsMailTest, ActionSettingsSignInProvider,
+	ActionSettingsArchive,
 }
 
 var actionSet = func() map[string]struct{} {
