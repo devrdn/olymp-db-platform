@@ -28,6 +28,8 @@ type SettingsStore interface {
 	Image(ctx context.Context, kind string) (settings.Image, error)
 	SaveImage(ctx context.Context, actorID uuid.UUID, kind string, data []byte) (settings.Image, error)
 	RemoveImage(ctx context.Context, actorID uuid.UUID, kind string) error
+	ArchiveEnabled(ctx context.Context) (bool, error)
+	SetArchiveEnabled(ctx context.Context, actorID uuid.UUID, enabled bool) error
 }
 
 // SettingsMail is the slice of mailing.Tester these endpoints need.
@@ -80,6 +82,7 @@ func (h *SettingsHandler) Mount(r chi.Router) {
 			r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionSettingsManage))
 			r.Get("/all", h.all)
 			r.Put("/", h.save)
+			r.Put("/archive", h.switchArchive)
 			r.Post("/mail-test", h.sendTestMail)
 			r.Put("/images/{kind}", h.uploadImage)
 			r.Delete("/images/{kind}", h.removeImage)
@@ -92,6 +95,9 @@ type settingsResponse struct {
 	// Images maps a slot to the hash its URL carries, so a page can link a
 	// picture without fetching it.
 	Images map[string]string `json:"images"`
+	// Archive says whether the contest archive is on, so a menu can show its
+	// entry without a request of its own.
+	Archive bool `json:"archive"`
 	// Mail is only in the administrator's read.
 	Mail *mailStatus `json:"mail,omitempty"`
 }
@@ -115,7 +121,7 @@ func (h *SettingsHandler) public(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values, Images: h.presentImages(r)})
+	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values, Images: h.presentImages(r), Archive: h.archiveOn(r)})
 }
 
 // presentImages reports which slots hold a picture and never fails the request:
@@ -127,6 +133,44 @@ func (h *SettingsHandler) presentImages(r *http.Request) map[string]string {
 		return map[string]string{}
 	}
 	return present
+}
+
+// archiveOn reports the archive switch and never fails the request: a page that
+// cannot learn about the archive should still get the name, so a failed read
+// answers off.
+func (h *SettingsHandler) archiveOn(r *http.Request) bool {
+	on, err := h.settings.ArchiveEnabled(r.Context())
+	if err != nil {
+		h.log.WarnContext(r.Context(), "could not read the archive switch", "error", err)
+		return false
+	}
+	return on
+}
+
+type switchArchiveRequest struct {
+	// Enabled is a pointer so that a body without it is refused instead of
+	// reading as off.
+	Enabled *bool `json:"enabled"`
+}
+
+func (h *SettingsHandler) switchArchive(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFrom(r.Context())
+
+	var req switchArchiveRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "enabled is required")
+		return
+	}
+
+	if err := h.settings.SetArchiveEnabled(r.Context(), identity.UserID, *req.Enabled); err != nil {
+		h.log.ErrorContext(r.Context(), "could not switch the archive", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+	httpx.NoContent(w, r)
 }
 
 // image serves one of the installation's pictures, openly, since the sign-in
@@ -244,7 +288,7 @@ func (h *SettingsHandler) all(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, settingsResponse{
-		Values: values, Images: h.presentImages(r),
+		Values: values, Images: h.presentImages(r), Archive: h.archiveOn(r),
 		Mail: &mailStatus{Enabled: h.mail.Enabled(), From: h.mail.From()},
 	})
 }
@@ -281,7 +325,7 @@ func (h *SettingsHandler) save(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values})
+	httpx.JSON(w, r, http.StatusOK, settingsResponse{Values: values, Archive: h.archiveOn(r)})
 }
 
 // sendTestMail sends the caller the test message in the installation's mail

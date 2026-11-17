@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/png"
 	"io"
@@ -54,9 +55,20 @@ type settingsSetup struct {
 
 // settingsRepo is in-memory storage behind the real service, so the endpoint
 // carries the service's own answers about which keys and values are valid.
-type settingsRepo struct{ values settings.Values }
+type settingsRepo struct {
+	values settings.Values
+	// failAllFrom makes the nth read of the table and every later one fail;
+	// zero never fails.
+	failAllFrom int
+	reads       int
+	savedBy     uuid.UUID
+}
 
 func (r *settingsRepo) All(context.Context) (settings.Values, error) {
+	r.reads++
+	if r.failAllFrom > 0 && r.reads >= r.failAllFrom {
+		return nil, errors.New("the table is unreachable")
+	}
 	out := settings.Values{}
 	for key, value := range r.values {
 		out[key] = value
@@ -64,7 +76,8 @@ func (r *settingsRepo) All(context.Context) (settings.Values, error) {
 	return out, nil
 }
 
-func (r *settingsRepo) Save(_ context.Context, _ uuid.UUID, values settings.Values) error {
+func (r *settingsRepo) Save(_ context.Context, actorID uuid.UUID, values settings.Values) error {
+	r.savedBy = actorID
 	for key, value := range values {
 		r.values[key] = value
 	}
@@ -712,5 +725,99 @@ func TestADarkVariantCanBeUploadedAndIsListedAmongTheImages(t *testing.T) {
 	}
 	if _, ok := body.Images["logo-dark"]; !ok {
 		t.Errorf("images = %v, want logo-dark listed", body.Images)
+	}
+}
+
+func archiveOf(t *testing.T, rec *httptest.ResponseRecorder) bool {
+	t.Helper()
+	var body struct {
+		Archive bool `json:"archive"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	return body.Archive
+}
+
+func TestSettingsReadsCarryTheArchiveSwitch(t *testing.T) {
+	// The menu of every signed-in person is drawn from the public read, and
+	// the administrator's screen from the full one.
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f.store.values[settings.KeyArchiveEnabled] = "true"
+
+	for _, path := range []string{"/settings", "/settings/all"} {
+		rec := f.do(http.MethodGet, path, "", f.cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200 (%s)", path, rec.Code, rec.Body.String())
+		}
+		if !archiveOf(t, rec) {
+			t.Errorf("GET %s says the archive is off after it was switched on: %s", path, rec.Body.String())
+		}
+	}
+}
+
+func TestSavingTheSettingsAnswersTheArchiveSwitch(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	f.store.values[settings.KeyArchiveEnabled] = "true"
+
+	rec := f.do(http.MethodPut, "/settings", `{"values":{"installation.name": "Olimpiada"}}`, f.cookie)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if !archiveOf(t, rec) {
+		t.Errorf("PUT /settings says the archive is off while it is on: %s", rec.Body.String())
+	}
+}
+
+func TestAPublicSettingsReadSurvivesAFailedArchiveRead(t *testing.T) {
+	// The sign-in screen draws its chrome from this read.
+	f := newSettingsFixture(t)
+	f.store.failAllFrom = 2 // the settings read succeeds, the switch read does not
+
+	rec := f.do(http.MethodGet, "/settings", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if archiveOf(t, rec) {
+		t.Error("a failed read was answered as on")
+	}
+}
+
+func TestSwitchingTheArchiveNeedsSettingsManage(t *testing.T) {
+	f := newSettingsFixture(t)
+
+	rec := f.do(http.MethodPut, "/settings/archive", `{"enabled":true}`, f.cookie)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSwitchingTheArchiveRequiresEnabled(t *testing.T) {
+	// A body without the field must not read as "off".
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.do(http.MethodPut, "/settings/archive", `{}`, f.cookie)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_request") {
+		t.Errorf("response = %d %s, want 400 invalid_request", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSwitchingTheArchiveAnswersNoContent(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.do(http.MethodPut, "/settings/archive", `{"enabled":true}`, f.cookie)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (%s)", rec.Code, rec.Body.String())
+	}
+	if f.store.values[settings.KeyArchiveEnabled] != "true" {
+		t.Errorf("the switch was not stored: %v", f.store.values)
+	}
+	if f.store.savedBy == uuid.Nil {
+		t.Error("the change was saved with no actor")
 	}
 }
