@@ -12,7 +12,7 @@ vi.mock("@/lib/api/server", () => ({ serverRequest }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { saveSettingsAction } from "./actions";
-import { ContestPanel, PrizePanel } from "./settings-panels";
+import { ArchivePanel, ContestPanel, PrizePanel } from "./settings-panels";
 
 let dict: Dictionary;
 
@@ -702,5 +702,65 @@ describe.each(["en", "ro", "ru"] as const)("the trusted-domain texts in %s", (lo
     ]) {
       expect(text).not.toMatch(/\{domain\}|@[a-z0-9-]+\.[a-z]/i);
     }
+  });
+});
+
+describe("ArchivePanel", () => {
+  const t = () => dict.workspace.settings.archive;
+
+  test("offers closed only for an invite-only contest", () => {
+    const { rerender } = render(<ArchivePanel contest={contest({ enrollment: "open" })} archiveOn dict={dict} />);
+
+    const closed = screen.getByRole("radio", { name: t().visibilityClosed });
+    expect(closed).toBeDisabled();
+    expect(screen.getByText(t().selfRegistrationOpen)).toBeInTheDocument();
+    // The reason is bound to the control, not only shown beside it.
+    expect(closed).toHaveAccessibleDescription(t().selfRegistrationOpen);
+    expect(screen.getByRole("radio", { name: t().visibilityOpen })).toBeEnabled();
+
+    rerender(<ArchivePanel contest={contest({ enrollment: "invite_only" })} archiveOn dict={dict} />);
+
+    expect(screen.getByRole("radio", { name: t().visibilityClosed })).toBeEnabled();
+    expect(screen.queryByText(t().selfRegistrationOpen)).not.toBeInTheDocument();
+  });
+
+  test("groups the visibility choice under a legend", () => {
+    render(<ArchivePanel contest={contest()} archiveOn dict={dict} />);
+
+    expect(screen.getByRole("group", { name: t().visibility })).toBeInTheDocument();
+  });
+
+  test("shows the visibility the contest holds", () => {
+    render(<ArchivePanel contest={contest({ visibility: "closed" })} archiveOn dict={dict} />);
+
+    expect(screen.getByRole("radio", { name: t().visibilityClosed })).toBeChecked();
+    expect(screen.getByRole("radio", { name: t().visibilityOpen })).not.toBeChecked();
+  });
+
+  test("leaves the tasks switch off by default", () => {
+    render(<ArchivePanel contest={contest()} archiveOn dict={dict} />);
+
+    const tasks = screen.getByRole("checkbox", { name: t().tasks });
+    expect(tasks).not.toBeChecked();
+    expect(tasks).toHaveAccessibleDescription(t().tasksHint);
+  });
+
+  test("stays editable after the contest ends", () => {
+    render(<ArchivePanel contest={contest({ status: "archived" })} archiveOn dict={dict} />);
+
+    expect(screen.getByRole("radio", { name: t().visibilityOpen })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: t().visibilityClosed })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: t().tasks })).toBeEnabled();
+    expect(screen.getByRole("button", { name: dict.workspace.settings.save })).toBeEnabled();
+  });
+
+  test("says when the archive is switched off", () => {
+    const { rerender } = render(<ArchivePanel contest={contest()} archiveOn={false} dict={dict} />);
+
+    expect(screen.getByText(t().switchedOff)).toBeInTheDocument();
+
+    rerender(<ArchivePanel contest={contest()} archiveOn dict={dict} />);
+
+    expect(screen.queryByText(t().switchedOff)).not.toBeInTheDocument();
   });
 });

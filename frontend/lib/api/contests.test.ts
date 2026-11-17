@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  archiveSettingsFromForm,
   contentEditable,
   contestCoverSchema,
   contestListSchema,
@@ -522,5 +523,39 @@ describe("contestCoverSchema", () => {
       width: 1600,
       height: 900,
     });
+  });
+});
+
+describe("contestSchema, the archive fields", () => {
+  test("a payload without them reads as open, tasks hidden", () => {
+    const parsed = contestSchema.parse(detail);
+
+    expect(parsed.visibility).toBe("open");
+    expect(parsed.archiveTasks).toBe(false);
+  });
+
+  test("carries what the server sent", () => {
+    const parsed = contestSchema.parse({ ...detail, visibility: "closed", archive_tasks: true });
+
+    expect(parsed.visibility).toBe("closed");
+    expect(parsed.archiveTasks).toBe(true);
+  });
+});
+
+describe("archiveSettingsFromForm", () => {
+  test("reads the visibility and the switch, an absent box being off", () => {
+    expect(archiveSettingsFromForm(shapeForm({ visibility: "closed", archiveTasks: "on" }))).toEqual({
+      ok: true,
+      value: { visibility: "closed", archiveTasks: true },
+    });
+    expect(archiveSettingsFromForm(shapeForm({ visibility: "open" }))).toEqual({
+      ok: true,
+      value: { visibility: "open", archiveTasks: false },
+    });
+  });
+
+  test("refuses a visibility outside the list, or none", () => {
+    expect(archiveSettingsFromForm(shapeForm({ visibility: "public" }))).toEqual({ ok: false });
+    expect(archiveSettingsFromForm(shapeForm({}))).toEqual({ ok: false });
   });
 });

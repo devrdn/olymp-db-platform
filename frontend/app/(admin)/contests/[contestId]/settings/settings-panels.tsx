@@ -7,7 +7,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
-import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "@/lib/api/contests-terms";
+import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "@/lib/api/contests-terms";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
 import { FREEZE_UNITS, freezeForForm } from "@/lib/api/leaderboard";
 import { SQL_MODES } from "@/lib/api/policy-terms";
@@ -18,6 +18,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import {
+  saveArchiveSettingsAction,
   saveLanguagesAction,
   savePolicyAction,
   savePrizePlacesAction,
@@ -137,6 +138,7 @@ function Choices<T extends string>({
   initial,
   disabled,
   onPick,
+  unavailable,
 }: {
   name: string;
   values: readonly T[];
@@ -144,34 +146,41 @@ function Choices<T extends string>({
   initial: T;
   disabled?: boolean;
   onPick?: (value: T) => void;
+  /** Values that cannot be chosen now, each with the id of the text saying why. */
+  unavailable?: Partial<Record<T, string>>;
 }) {
   const [picked, setPicked] = useState<T>(initial);
 
   return (
     <div className="flex flex-col gap-2.5">
-      {values.map((value) => (
-        <label
-          key={value}
-          className={cn(
-            "flex items-center gap-3 text-control",
-            disabled ? "cursor-not-allowed text-ink-3" : "cursor-pointer text-ink",
-          )}
-        >
-          <input
-            type="radio"
-            name={name}
-            value={value}
-            checked={picked === value}
-            disabled={disabled}
-            onChange={() => {
-              setPicked(value);
-              onPick?.(value);
-            }}
-            className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
-          />
-          {labels[value]}
-        </label>
-      ))}
+      {values.map((value) => {
+        const reasonId = unavailable?.[value];
+        const off = disabled || reasonId !== undefined;
+        return (
+          <label
+            key={value}
+            className={cn(
+              "flex items-center gap-3 text-control",
+              off ? "cursor-not-allowed text-ink-3" : "cursor-pointer text-ink",
+            )}
+          >
+            <input
+              type="radio"
+              name={name}
+              value={value}
+              checked={picked === value}
+              disabled={off}
+              aria-describedby={reasonId}
+              onChange={() => {
+                setPicked(value);
+                onPick?.(value);
+              }}
+              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+            />
+            {labels[value]}
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -663,6 +672,80 @@ export function PrizePanel({
         </div>
 
         <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+      </Panel>
+    </form>
+  );
+}
+
+/**
+ * Whether the contest is listed once it ends, and whether the archive shows its
+ * tasks. A form of its own, open in every status: the choice is made, and
+ * changed, mostly after the contest has ended.
+ */
+export function ArchivePanel({
+  contest,
+  archiveOn,
+  dict,
+}: {
+  contest: Contest;
+  /** The installation switch; off, the choices are kept but nothing is listed. */
+  archiveOn: boolean;
+  dict: Dictionary;
+}) {
+  const t = dict.workspace.settings.archive;
+  const [state, formAction, pending] = useActionState<SettingsState, FormData>(saveArchiveSettingsAction, {});
+  const legendId = useId();
+  const reasonId = useId();
+  const tasksHintId = useId();
+
+  // Self-registration lists the contest to anyone, so it cannot be closed; the
+  // server refuses the same combination.
+  const selfRegistration = contest.enrollment === "open";
+
+  // Keyed on the choices, not updatedAt, which this save leaves alone: a save
+  // remounts the uncontrolled fields onto the server's values.
+  return (
+    <form key={`${contest.visibility}-${contest.archiveTasks}`} action={formAction} className="contents">
+      <Panel title={t.heading} help={t.help} dict={dict}>
+        <input type="hidden" name="contestId" value={contest.id} />
+
+        {archiveOn ? null : (
+          <p className="max-w-body text-small text-warn">{t.switchedOff}</p>
+        )}
+
+        <fieldset className="flex flex-col gap-3">
+          <legend className="pb-2 font-mono text-label text-ink-3 uppercase">{t.visibility}</legend>
+          <Choices
+            name="visibility"
+            values={VISIBILITIES}
+            labels={{ open: t.visibilityOpen, closed: t.visibilityClosed }}
+            initial={contest.visibility}
+            unavailable={selfRegistration ? { closed: reasonId } : undefined}
+          />
+          {selfRegistration ? (
+            <p id={reasonId} className="max-w-body text-small text-ink-3">
+              {t.selfRegistrationOpen}
+            </p>
+          ) : null}
+        </fieldset>
+
+        <div className="flex flex-col gap-2">
+          <label className="flex cursor-pointer items-center gap-3 text-control text-ink">
+            <input
+              type="checkbox"
+              name="archiveTasks"
+              defaultChecked={contest.archiveTasks}
+              aria-describedby={tasksHintId}
+              className="size-4 cursor-pointer accent-cta"
+            />
+            {t.tasks}
+          </label>
+          <p id={tasksHintId} className="max-w-body text-small text-ink-3">
+            {t.tasksHint}
+          </p>
+        </div>
+
+        <SaveRow state={state} pending={pending} editable dict={dict} />
       </Panel>
     </form>
   );

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { ApiError, failureCode } from "@/lib/api/client";
 import {
+  archiveSettingsFromForm,
   type ContestCover,
   contestCoverSchema,
   type Enrollment,
@@ -148,6 +149,29 @@ export async function savePrizePlacesAction(
   if (!places.ok) return { code: "invalid_request" };
 
   return attempt(`/contests/${contestId}/prize-places`, { method: "PUT", body: places.value }, contestId);
+}
+
+/**
+ * Saves who may find the contest in the archive and whether the archive shows
+ * its tasks. Open to every status, a finished contest included: the choice
+ * matters only after the contest ends.
+ */
+export async function saveArchiveSettingsAction(
+  _previous: SettingsState,
+  form: FormData,
+): Promise<SettingsState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const settings = archiveSettingsFromForm(form);
+  if (!settings.ok) return { code: "invalid_request" };
+
+  const { visibility, archiveTasks } = settings.value;
+  return attempt(
+    `/contests/${contestId}/archive-settings`,
+    { method: "PUT", body: { visibility, archive_tasks: archiveTasks } },
+    contestId,
+  );
 }
 
 /**

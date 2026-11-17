@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./contests-terms";
+import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "./contests-terms";
 import { SQL_MODES } from "./policy-terms";
 
-export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./contests-terms";
+export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "./contests-terms";
 
 
 /**
@@ -17,6 +17,7 @@ export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./
 export const CONTEST_STATUSES = ["draft", "published", "running", "finished", "archived"] as const;
 export type ContestStatus = (typeof CONTEST_STATUSES)[number];
 export type Enrollment = (typeof ENROLLMENTS)[number];
+export type Visibility = (typeof VISIBILITIES)[number];
 export type QuestionMode = (typeof QUESTION_MODES)[number];
 export type Timing = (typeof TIMINGS)[number];
 export type Progression = (typeof PROGRESSIONS)[number];
@@ -165,6 +166,9 @@ export const contestSchema = z
     prize_places: z
       .object({ first: z.number(), second: z.number(), third: z.number() })
       .default({ first: 0, second: 0, third: 0 }),
+    // Defaulted for a server older than the archive.
+    visibility: z.enum(VISIBILITIES).default("open"),
+    archive_tasks: z.boolean().default(false),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
     starts_at: z.string().optional(),
@@ -197,6 +201,8 @@ export const contestSchema = z
     resultDownload: raw.result_download,
     schemaDiagram: raw.schema_diagram,
     prizePlaces: raw.prize_places,
+    visibility: raw.visibility,
+    archiveTasks: raw.archive_tasks,
     timing: raw.timing,
     durationMin: raw.duration_min ?? undefined,
     startsAt: raw.starts_at,
@@ -339,6 +345,18 @@ export function prizePlacesFromForm(form: FormData): { ok: true; value: PrizePla
   }
   const [first, second, third] = counts;
   return { ok: true, value: { first, second, third } };
+}
+
+export type ArchiveSettings = { visibility: Visibility; archiveTasks: boolean };
+
+/**
+ * The archive choices as the form submitted them. A visibility outside the
+ * list refuses the save; an unticked box submits nothing, which is off.
+ */
+export function archiveSettingsFromForm(form: FormData): { ok: true; value: ArchiveSettings } | { ok: false } {
+  const visibility = enumFromForm<Visibility>(form.get("visibility"), VISIBILITIES);
+  if (visibility === undefined) return { ok: false };
+  return { ok: true, value: { visibility, archiveTasks: form.get("archiveTasks") === "on" } };
 }
 
 /**

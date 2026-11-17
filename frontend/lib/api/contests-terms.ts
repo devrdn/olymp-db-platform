@@ -4,6 +4,9 @@ import type { ContestStatus } from "./contests";
 
 export const ENROLLMENTS = ["open", "invite_only"] as const;
 
+/** What a finished contest is to everyone but its staff and participants. */
+export const VISIBILITIES = ["open", "closed"] as const;
+
 export const QUESTION_MODES = ["multi", "single"] as const;
 
 export const TIMINGS = ["fixed", "individual"] as const;

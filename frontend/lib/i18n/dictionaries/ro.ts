@@ -1170,6 +1170,17 @@ const ro = {
         hint: "Între 0 și 1000 fiecare. La egalitate locul este comun, deci o egalitate la limită primește premiul mai bun. Un participant care n-a punctat deloc nu primește premiu. Cu toate trei la 0 nimeni nu primește premiu.",
         winnerHint: "În modul câștigător aceste numere nu se aplică: singurul câștigător primește premiul I.",
       },
+      archive: {
+        heading: "Arhivă",
+        help: "Dacă această olimpiadă apare în arhivă după încheiere. Rezultatele se deschid prin link direct în ambele cazuri.",
+        visibility: "După încheierea olimpiadei",
+        visibilityOpen: "Deschisă: apare în arhivă și pe prima pagină",
+        visibilityClosed: "Închisă: nu apare în nicio listă; rezultatele se deschid doar prin link direct",
+        selfRegistrationOpen: "O olimpiadă cu autoînscriere este mereu deschisă.",
+        tasks: "Arătați sarcinile în arhivă",
+        tasksHint: "Dezactivat implicit. Activat, arhiva arată povestea și întrebările vizibile, așa cum le-au văzut participanții; răspunsurile de referință nu apar niciodată.",
+        switchedOff: "Arhiva este dezactivată pe această instalare. Alegerile de aici se aplică după ce un administrator o activează.",
+      },
       access: {
         heading: "Cine poate intra și de unde",
         help: "Verificat la fiecare încercare, față de adresa raportată de proxy-ul de încredere — niciodată față de un antet. O adresă care nu poate fi citită este refuzată, nu permisă.",

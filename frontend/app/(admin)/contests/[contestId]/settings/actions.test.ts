@@ -8,7 +8,7 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
 vi.mock("next/cache", () => ({ revalidatePath }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
-import { savePrizePlacesAction, saveSettingsAction } from "./actions";
+import { saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 
@@ -241,5 +241,51 @@ describe("saveSettingsAction, the trusted-domain limit", () => {
 
     expect(await saveSettingsAction({}, data)).toEqual({ code: "invalid_contest_id" });
     expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveArchiveSettingsAction", () => {
+  test("replaces both choices on their own endpoint", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    const state = await saveArchiveSettingsAction({}, form({ visibility: "closed", archiveTasks: "on" }));
+
+    expect(state).toEqual({ saved: true });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/archive-settings`, {
+      method: "PUT",
+      body: { visibility: "closed", archive_tasks: true },
+    });
+    expect(revalidatePath).toHaveBeenCalled();
+  });
+
+  test("sends the tasks off when the box is absent", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveArchiveSettingsAction({}, form({ visibility: "open" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body).toEqual({ visibility: "open", archive_tasks: false });
+  });
+
+  test("refuses a visibility outside the list before asking the server", async () => {
+    expect(await saveArchiveSettingsAction({}, form({ visibility: "public" }))).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("refuses a contest id that is not an identifier", async () => {
+    const data = form({ visibility: "open" });
+    data.set("contestId", "../users");
+
+    expect(await saveArchiveSettingsAction({}, data)).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal to close a self-registration contest", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    serverRequest.mockRejectedValueOnce(new ApiError("visibility_needs_invite_only", 409, "open enrolment"));
+
+    expect(await saveArchiveSettingsAction({}, form({ visibility: "closed" }))).toEqual({
+      code: "visibility_needs_invite_only",
+    });
   });
 });

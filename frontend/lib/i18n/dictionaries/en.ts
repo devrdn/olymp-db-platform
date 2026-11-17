@@ -1277,6 +1277,17 @@ const en = {
         hint: "From 0 to 1000 each. Ties share a place, so a tie on a boundary takes the better prize. A participant who scored nothing gets no prize. With all three at 0 nobody gets a prize.",
         winnerHint: "In winner mode these counts do not apply: the one winner holds the first prize.",
       },
+      archive: {
+        heading: "Archive",
+        help: "Whether this contest appears in the archive once it ends. Results open by direct link either way.",
+        visibility: "After the contest ends",
+        visibilityOpen: "Open: listed in the archive and on the front page",
+        visibilityClosed: "Closed: in no list; results by direct link only",
+        selfRegistrationOpen: "A contest with self-registration is always open.",
+        tasks: "Show the tasks in the archive",
+        tasksHint: "Off by default. On, the archive shows the story and the visible questions as participants saw them; reference answers never appear.",
+        switchedOff: "The archive is switched off on this installation. These choices take effect when an administrator turns it on.",
+      },
       access: {
         heading: "Who may enter, and from where",
         help: "Checked on every attempt, against the address the trusted proxy reports — never against a header. An address that cannot be read is refused rather than allowed.",

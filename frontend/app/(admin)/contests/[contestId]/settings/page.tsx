@@ -6,12 +6,13 @@ import {
   settingsEditable,
   shapeEditable,
 } from "@/lib/api/contests";
+import { branding } from "@/lib/api/branding";
 import { sqlPolicySchema } from "@/lib/api/policy";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
 import { CoverPanel } from "./cover-panel";
-import { ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings-panels";
+import { ArchivePanel, ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings-panels";
 
 /**
  * Configuration rather than content; the title is edited in the workspace
@@ -26,7 +27,7 @@ import { ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings
 export default async function SettingsPage(props: PageProps<"/contests/[contestId]/settings">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
 
-  const [contest, policy, cover, methods] = await Promise.all([
+  const [contest, policy, cover, methods, brand] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/sql-policy", (payload) => sqlPolicySchema.parse(payload)),
     // No cover is the ordinary state, read as an empty answer. This is the
@@ -36,6 +37,7 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
     }),
     // Never throws; null leaves the trusted-domain switch to the contest's own value.
     fetchAuthMethods(),
+    branding(),
   ]);
 
   const t = dict.workspace.settings;
@@ -56,6 +58,8 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
       />
 
       <PrizePanel contest={contest} editable={prizePlacesEditable(contest.status)} dict={dict} />
+
+      <ArchivePanel contest={contest} archiveOn={brand.archive} dict={dict} />
 
       <LanguagePanel
         contest={contest}
