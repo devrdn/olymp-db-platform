@@ -1436,6 +1436,14 @@ const en = {
     saving: "Saving",
     saved: "Saved",
     loading: "Loading the settings",
+    archive: {
+      heading: "Contest archive",
+      help: "A page, in every signed-in person's menu, listing the contests already held that their organisers left open. Off, it does not exist for anyone; what organisers chose is kept.",
+      on: "On",
+      off: "Off",
+      switchOn: "Turn the archive on",
+      switchOff: "Turn the archive off",
+    },
     integrations: {
       heading: "Integrations",
       lede: "Sign-in services this installation is connected to. Their credentials stay in the server's environment; only the switch is kept here.",

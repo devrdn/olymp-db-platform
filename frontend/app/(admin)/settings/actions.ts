@@ -10,6 +10,9 @@ import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings";
 
 export type SettingsState = { code?: string; saved?: boolean };
 
+/** After a switch is pressed: the same two answers as a save. */
+export type SwitchState = SettingsState;
+
 /** Saves the installation's settings under the API's own keys. */
 export async function saveSettingsAction(
   _previous: SettingsState,
@@ -87,6 +90,29 @@ export async function removeImageAction(
     return { code: failureCode(failure) };
   }
 
+  forgetBranding();
+  revalidatePath("/", "layout");
+  return { saved: true };
+}
+
+/** Switches the contest archive on or off for the whole installation. */
+export async function switchArchiveAction(_previous: SwitchState, form: FormData): Promise<SwitchState> {
+  const enabled = String(form.get("enabled") ?? "");
+  if (enabled !== "true" && enabled !== "false") return { code: "invalid_request" };
+
+  const failure = await serverRequest("/settings/archive", {
+    method: "PUT",
+    body: { enabled: enabled === "true" },
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  if (failure) {
+    return { code: failureCode(failure) };
+  }
+
+  // The archive's entry in every signed-in menu follows the switch.
   forgetBranding();
   revalidatePath("/", "layout");
   return { saved: true };

@@ -28,7 +28,7 @@ export const branding = cache(async (): Promise<Settings> => {
       kept = { settings, at: Date.now() };
       return settings;
     })
-    .catch(() => ({ name: "", contact: "", feedback: "", mailLanguage: "", images: {} }));
+    .catch(() => ({ name: "", contact: "", feedback: "", mailLanguage: "", images: {}, archive: false }));
 });
 
 /** For the settings actions, which run in this process, so a save shows on the next screen. */

@@ -10,7 +10,7 @@ vi.mock("@/lib/api/server", () => ({ serverRequest }));
 import { branding, forgetBranding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
 
-import { removeImageAction, saveSettingsAction, sendTestMailAction, uploadImageAction } from "./actions";
+import { removeImageAction, saveSettingsAction, sendTestMailAction, switchArchiveAction, uploadImageAction } from "./actions";
 
 function form(fields: Record<string, string>): FormData {
   const data = new FormData();
@@ -109,6 +109,40 @@ describe("a change to the installation's frame", () => {
 
     serverRequest.mockResolvedValueOnce({ values: { "installation.name": "USM Chișinău" } });
     expect((await branding()).name).toBe("USM Chișinău");
+  });
+});
+
+describe("switchArchiveAction", () => {
+  test("switches the archive on and shows it on the next screen", async () => {
+    forgetBranding();
+    serverRequest.mockResolvedValueOnce({ values: {}, archive: false });
+    expect((await branding()).archive).toBe(false);
+
+    serverRequest.mockResolvedValueOnce(undefined);
+    const state = await switchArchiveAction({}, form({ enabled: "true" }));
+
+    expect(serverRequest).toHaveBeenLastCalledWith("/settings/archive", { method: "PUT", body: { enabled: true } });
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+    expect(state).toEqual({ saved: true });
+
+    serverRequest.mockResolvedValueOnce({ values: {}, archive: true });
+    expect((await branding()).archive).toBe(true);
+  });
+
+  test("refuses a value other than true or false, without a request", async () => {
+    const state = await switchArchiveAction({}, form({ enabled: "maybe" }));
+
+    expect(state).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("passes the API's refusal through by its code, without refreshing", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("forbidden", 403, "no"));
+
+    const state = await switchArchiveAction({}, form({ enabled: "false" }));
+
+    expect(state).toEqual({ code: "forbidden" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 

@@ -1328,6 +1328,14 @@ const ro = {
     saving: "Se salvează",
     saved: "Salvat",
     loading: "Se încarcă setările",
+    archive: {
+      heading: "Arhiva olimpiadelor",
+      help: "O pagină, în meniul fiecărei persoane autentificate, cu olimpiadele deja desfășurate pe care organizatorii lor le-au lăsat deschise. Dezactivată, nu există pentru nimeni; alegerile organizatorilor se păstrează.",
+      on: "Activată",
+      off: "Dezactivată",
+      switchOn: "Activați arhiva",
+      switchOff: "Dezactivați arhiva",
+    },
     integrations: {
       heading: "Integrări",
       lede: "Serviciile de autentificare la care este conectată această instalare. Datele lor de acces rămân în mediul serverului; aici se păstrează doar comutatorul.",
@@ -2019,7 +2027,7 @@ const ro = {
       "settings.change": "A schimbat setările instalării",
       "settings.mail_test": "Și-a trimis un e-mail de test",
       "settings.sign_in_provider": "A pornit sau a oprit autentificarea printr-un serviciu extern",
-      "settings.archive": "A pornit sau a oprit arhiva concursurilor",
+      "settings.archive": "A pornit sau a oprit arhiva olimpiadelor",
     },
     failureReasons: {
       invalid_credentials: "Utilizator sau parolă greșită",

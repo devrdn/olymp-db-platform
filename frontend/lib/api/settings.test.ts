@@ -37,6 +37,16 @@ describe("the settings payload", () => {
   });
 });
 
+describe("the archive switch", () => {
+  test("is off when the payload does not say", () => {
+    expect(settingsSchema.parse({ values: {} }).archive).toBe(false);
+  });
+
+  test("reads the switch from the top level of the payload", () => {
+    expect(settingsSchema.parse({ values: {}, archive: true }).archive).toBe(true);
+  });
+});
+
 describe("the mail status", () => {
   test("says whether mail is on and the address it is sent as", () => {
     const mail = mailStatusSchema.parse({ values: {}, mail: { enabled: true, from: "noreply@usm.md" } });

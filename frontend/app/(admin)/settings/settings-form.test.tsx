@@ -25,6 +25,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   feedback: "",
   mailLanguage: "ro",
   images: {},
+  archive: false,
   ...over,
 });
 

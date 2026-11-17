@@ -22,13 +22,16 @@ export const settingsSchema = z
     values: z.record(z.string(), z.string()).default({}),
     /** Slot to content hash, for the ones that hold a picture. */
     images: z.record(z.string(), z.string()).default({}),
+    /** Whether the contest archive is on; a payload that does not say reads as off. */
+    archive: z.boolean().default(false),
   })
-  .transform(({ values, images }) => ({
+  .transform(({ values, images, archive }) => ({
     name: values[SETTING_KEYS.name] ?? "",
     contact: values[SETTING_KEYS.contact] ?? "",
     feedback: values[SETTING_KEYS.feedback] ?? "",
     mailLanguage: values[SETTING_KEYS.mailLanguage] ?? "",
     images: images as Partial<Record<ImageKind, string>>,
+    archive,
   }));
 
 export type Settings = z.infer<typeof settingsSchema>;

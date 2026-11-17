@@ -13,7 +13,7 @@ import { generateMetadata } from "./layout";
 vi.mock("@/lib/api/branding", () => ({ branding: vi.fn() }));
 
 function installation(images: Settings["images"]) {
-  vi.mocked(branding).mockResolvedValue({ name: "", contact: "", feedback: "", mailLanguage: "", images });
+  vi.mocked(branding).mockResolvedValue({ name: "", contact: "", feedback: "", mailLanguage: "", images, archive: false });
 }
 
 /** Every icon the head will carry, as rel and address. */

@@ -57,4 +57,10 @@ describe("branding", () => {
     expect((await branding()).name).toBe("");
     expect((await branding()).name).toBe("USM");
   });
+
+  test("reads the archive as off when the API cannot be reached", async () => {
+    serverRequest.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    expect((await branding()).archive).toBe(false);
+  });
 });

@@ -6,6 +6,7 @@ import { mailStatusSchema, settingsSchema } from "@/lib/api/settings";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary } from "@/lib/i18n/server";
 
+import { ArchiveSwitch } from "./archive-switch";
 import { ImageSlots } from "./image-slots";
 import { MailTest } from "./mail-test";
 import { SettingsForm } from "./settings-form";
@@ -39,6 +40,8 @@ export default async function SettingsPage() {
       </div>
 
       <SettingsForm settings={settings} dict={dict} />
+
+      <ArchiveSwitch enabled={settings.archive} dict={dict} />
 
       <MailTest mail={mail} dict={dict} />
 
