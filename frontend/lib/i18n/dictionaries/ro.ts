@@ -1930,6 +1930,10 @@ const ro = {
       reference: "Referință",
     },
   },
+  /** The menu label of the contest archive; its screens add their own keys. */
+  archive: {
+    heading: "Arhivă",
+  },
   audit: {
     heading: "Jurnal de audit",
     loading: "Se încarcă jurnalul de audit",

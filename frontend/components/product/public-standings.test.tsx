@@ -5,7 +5,7 @@ import type { Standings, StandingsRow } from "@/lib/api/leaderboard";
 import en from "@/lib/i18n/dictionaries/en";
 
 const { fetchPublicStandings } = vi.hoisted(() => ({ fetchPublicStandings: vi.fn() }));
-vi.mock("./requests", () => ({ fetchPublicStandings }));
+vi.mock("./public-standings-request", () => ({ fetchPublicStandings }));
 
 import { PublicStandings } from "./public-standings";
 

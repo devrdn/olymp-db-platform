@@ -1,3 +1,4 @@
+import { staffDestinations } from "@/components/layout/destinations";
 import { SectionNav } from "@/components/layout/section-nav";
 import { ProductShell } from "@/components/layout/product-shell";
 import { fetchIdentity } from "@/lib/auth/session";
@@ -25,26 +26,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     fetchIdentity().catch(() => null),
   ]);
 
-  // From the permissions the API reports, so a role granted audit access as
-  // data gets the link with no change here.
-  const may = (permission: string) => identity?.permissions.includes(permission) ?? false;
-  const destinations = [
-    { href: "/contests", label: dict.contests.heading },
-    ...(may("users.manage")
-      ? [
-          { href: "/users", label: dict.accounts.heading },
-          // The API answers the event registrations to the same permission.
-          { href: "/registrations", label: dict.registration.desk.heading },
-        ]
-      : []),
-    ...(may("audit.view") ? [{ href: "/audit", label: dict.audit.heading }] : []),
-    ...(may("settings.manage")
-      ? [
-          { href: "/settings", label: dict.settings.heading },
-          { href: "/integrations", label: dict.settings.integrations.heading },
-        ]
-      : []),
-  ];
+  const destinations = staffDestinations(dict, identity?.permissions ?? [], brand.archive);
 
   return (
     <ProductShell

@@ -1,4 +1,5 @@
 import { ProductShell } from "@/components/layout/product-shell";
+import { participantDestinations } from "@/components/layout/destinations";
 import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
@@ -12,7 +13,7 @@ import { activeTheme } from "@/lib/theme/server";
  * The frame of a participant's screens: the same shell as the constructor's,
  * but its mark leads home to `/my`. A student sent to `/contests` would meet
  * the author's register scoped to contests they manage, which is empty for
- * them. Two destinations, `/my` and `/open`, as navigation: "when does mine
+ * them. Its destinations, `/my` and `/open` (and the archive when on), as navigation: "when does mine
  * start" and "what can I join" are different questions.
  */
 export default async function ParticipantLayout({ children }: { children: React.ReactNode }) {
@@ -38,12 +39,7 @@ export default async function ParticipantLayout({ children }: { children: React.
       dict={dict}
       home="/my"
       nav={
-        <SectionNav
-          items={[
-            { href: "/my", label: dict.participant.mine.heading },
-            { href: "/open", label: dict.participant.open.heading },
-          ]}
-        />
+        <SectionNav items={participantDestinations(dict, brand.archive)} />
       }
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >

@@ -5,7 +5,7 @@ import { useStandings } from "@/components/product/use-standings";
 import type { Standings } from "@/lib/api/leaderboard";
 import type { Locale } from "@/lib/i18n/config";
 
-import { fetchPublicStandings } from "./requests";
+import { fetchPublicStandings } from "./public-standings-request";
 
 /** The public table, kept fresh for as long as the page is open and visible. */
 export function PublicStandings({

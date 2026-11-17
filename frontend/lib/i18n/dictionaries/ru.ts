@@ -1928,6 +1928,10 @@ const ru = {
       reference: "Идентификатор",
     },
   },
+  /** The menu label of the contest archive; its screens add their own keys. */
+  archive: {
+    heading: "Архив",
+  },
   audit: {
     heading: "Журнал аудита",
     loading: "Загружаем журнал аудита",

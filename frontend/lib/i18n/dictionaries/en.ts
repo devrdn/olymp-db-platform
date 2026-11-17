@@ -2153,6 +2153,10 @@ const en = {
       reference: "Reference",
     },
   },
+  /** The menu label of the contest archive; its screens add their own keys. */
+  archive: {
+    heading: "Archive",
+  },
   /** The two screens any route can end on, so they live outside every section. */
   audit: {
     heading: "Audit trail",

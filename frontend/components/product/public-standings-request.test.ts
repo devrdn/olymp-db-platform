@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { fetchPublicStandings } from "./requests";
+import { fetchPublicStandings } from "./public-standings-request";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 

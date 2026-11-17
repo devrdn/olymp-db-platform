@@ -7,7 +7,7 @@ import { standingsSchema, type Standings } from "@/lib/api/leaderboard";
 import { serverRequest } from "@/lib/api/server";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
-import { PublicStandings } from "./public-standings";
+import { PublicStandings } from "@/components/product/public-standings";
 import { messageForCode } from "@/lib/i18n/errors";
 
 type Loaded = { kind: "ok"; standings: Standings } | { kind: "refused"; code: string };
