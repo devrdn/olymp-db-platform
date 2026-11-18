@@ -633,9 +633,9 @@ make migrate-up
 
 ### A migration left the database dirty
 
-**Symptom.** Every later `up`, `down` or `version` stops with
-`migrate:` followed by the migration library's complaint that the database version N is dirty and must be forced, and
-`make migrate-version` reports `dirty: true`.
+**Symptom.** Every later `up` or `down` stops with `migrate:` followed by the
+migration library's complaint that the database version N is dirty and must be
+forced. `version` still answers, and reports `dirty: true`.
 
 **Cause.** A migration that fails or is interrupted leaves its version marked
 dirty until you clear it.
@@ -652,6 +652,25 @@ make migrate-up
 
 Forcing the dirty number itself skips that migration. If the failed file had
 partly applied, undo that by hand first.
+
+On a deployed stack the `migrate` service is where the dirty version shows: it
+exits non-zero and the API does not start. `make migrate-*` are development
+targets, which run Go on the host against the core database port only the
+development overlay publishes, so a server runs the same commands through that
+service instead, with `VERSION` set to the release whose migration failed (the
+one `make deploy` was given):
+
+```bash
+VERSION=v1.4.0 docker compose -f deploy/docker-compose.yml run --rm \
+  --entrypoint /usr/local/bin/migrate migrate version
+VERSION=v1.4.0 docker compose -f deploy/docker-compose.yml run --rm \
+  --entrypoint /usr/local/bin/migrate migrate force 53
+make deploy VERSION=v1.4.0
+```
+
+`--entrypoint` is needed because the service's own entrypoint already ends in
+`up`. `force` asks for no confirmation there, so check the number twice;
+`make deploy` then migrates and starts the API.
 
 ### Migration 54 refuses: accounts that differ only in case
 

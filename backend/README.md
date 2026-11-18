@@ -1598,7 +1598,8 @@ added, data included; take a dump first.
 ### Recovering from a dirty migration
 
 A migration that fails or is interrupted leaves its version marked dirty, and
-every later `up`, `down` or `version` refuses to go on.
+every later `up` or `down` refuses to go on; `version` still answers, with
+`dirty: true`.
 
 ```bash
 make migrate-version   # "version 54 (dirty: true)": 54 is the one that failed
@@ -1618,6 +1619,25 @@ make migrate-up
 
 `migrate-force` writes the version and runs no SQL, so it asks for
 `CONFIRM=yes` and takes `MIGRATION`, not `VERSION`, which names the image tag.
+
+On a deployed stack the `migrate` service is where the dirty version shows: it
+exits non-zero and the API does not start. `make migrate-*` are development
+targets, which run Go on the host against the core database port only the
+development overlay publishes, so a server runs the same commands through that
+service instead, with `VERSION` set to the release whose migration failed (the
+one `make deploy` was given):
+
+```bash
+VERSION=v1.4.0 docker compose -f deploy/docker-compose.yml run --rm \
+  --entrypoint /usr/local/bin/migrate migrate version
+VERSION=v1.4.0 docker compose -f deploy/docker-compose.yml run --rm \
+  --entrypoint /usr/local/bin/migrate migrate force 53
+make deploy VERSION=v1.4.0
+```
+
+`--entrypoint` is needed because the service's own entrypoint already ends in
+`up`. `force` asks for no confirmation there, so check the number twice;
+`make deploy` then migrates and starts the API.
 
 Migration 54 makes email addresses unique regardless of case and refuses a
 database where two live accounts share an address that differs only in case
