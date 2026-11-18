@@ -2,7 +2,6 @@ import { notFound } from "next/navigation";
 
 import { destinationsFor } from "@/components/layout/destinations";
 import { ProductShell } from "@/components/layout/product-shell";
-import { SectionNav } from "@/components/layout/section-nav";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
 import { homeFor } from "@/lib/auth/destination";
@@ -45,7 +44,7 @@ export default async function ArchiveLayout({ children }: { children: React.Reac
       theme={theme}
       dict={dict}
       home={identity ? homeFor(identity.permissions) : "/"}
-      nav={identity ? <SectionNav items={destinationsFor(identity.permissions, dict, brand.archive)} /> : undefined}
+      destinations={identity ? destinationsFor(identity.permissions, dict, brand.archive) : undefined}
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {/* The `archive` section, for the error boundary, which cannot await the dictionary. */}

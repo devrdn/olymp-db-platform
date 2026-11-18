@@ -5,6 +5,10 @@ const ro = {
     product: "OlympDB Platform",
     signOut: "Deconectare",
     language: "Limbă",
+    menu: {
+      open: "Meniu",
+      close: "Închideți meniul",
+    },
     helpLabel: "Explicație",
     theme: {
       system: "Urmați tema sistemului",

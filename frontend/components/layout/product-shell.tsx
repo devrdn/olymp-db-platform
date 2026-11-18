@@ -4,6 +4,7 @@ import type { Theme } from "@/lib/theme/config";
 
 import type { Account } from "./account-link";
 import { AppBar } from "./app-bar";
+import type { Destination } from "./destinations";
 
 /**
  * The frame for every screen behind a session. One shell for all audiences;
@@ -17,7 +18,7 @@ export function ProductShell({
   dict,
   home,
   section,
-  nav,
+  destinations,
   account,
   name,
   logo,
@@ -29,8 +30,8 @@ export function ProductShell({
   dict: Dictionary;
   home: string;
   section?: string;
-  /** Replaces the section label rather than joining it, which would say the same thing twice. */
-  nav?: React.ReactNode;
+  /** Replace the section label rather than join it, which would say the same thing twice. */
+  destinations?: Destination[];
   /** Absent when the layout could not reach `/auth/me`; the bar then says less. */
   account?: Account;
   name?: string;
@@ -42,8 +43,18 @@ export function ProductShell({
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} home={home} account={account} name={name} logo={logo} logoDark={logoDark}>
-        {nav ?? (section ? <span className="truncate text-control text-ink-2">{section}</span> : null)}
+      <AppBar
+        locale={locale}
+        theme={theme}
+        dict={dict}
+        home={home}
+        account={account}
+        name={name}
+        logo={logo}
+        logoDark={logoDark}
+        destinations={destinations}
+      >
+        {section ? <span className="truncate text-control text-ink-2">{section}</span> : null}
       </AppBar>
       <main className="flex flex-1 flex-col">{children}</main>
     </div>

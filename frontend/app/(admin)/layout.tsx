@@ -1,5 +1,4 @@
 import { staffDestinations } from "@/components/layout/destinations";
-import { SectionNav } from "@/components/layout/section-nav";
 import { ProductShell } from "@/components/layout/product-shell";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
@@ -37,7 +36,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       theme={theme}
       dict={dict}
       home="/contests"
-      nav={<SectionNav items={destinations} />}
+      destinations={destinations}
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {/* This group's dictionary sections, selected on the server so only what

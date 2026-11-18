@@ -1,5 +1,7 @@
 import { LogOut } from "lucide-react";
 
+import { cn } from "@/lib/utils";
+
 import { signOutAction } from "./session-actions";
 
 /**
@@ -8,18 +10,19 @@ import { signOutAction } from "./session-actions";
  * check. Labelled on the profile; icon-only in the bar, where it appears only
  * on the forced password change.
  */
-export function SignOutButton({ label, withLabel }: { label: string; withLabel?: boolean }) {
+export function SignOutButton({ label, withLabel, className }: { label: string; withLabel?: boolean; className?: string }) {
   return (
     <form action={signOutAction} className="flex">
       <button
         type="submit"
         title={withLabel ? undefined : label}
         aria-label={withLabel ? undefined : label}
-        className={
+        className={cn(
           withLabel
             ? "flex items-center gap-2 rounded-full text-control text-ink-2 transition-colors duration-(--t-input) ease-standard hover:text-bad"
-            : "grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink"
-        }
+            : "grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink",
+          className,
+        )}
       >
         <LogOut className="size-4 shrink-0" strokeWidth={1.75} aria-hidden />
         {withLabel ? label : null}

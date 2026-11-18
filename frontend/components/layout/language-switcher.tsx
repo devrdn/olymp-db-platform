@@ -6,7 +6,16 @@ import { chooseLocale } from "./locale-actions";
  * A form of submit buttons, so it works without JavaScript; the language is not
  * in the address, so the visitor stays where they are.
  */
-export function LanguageSwitcher({ current, label }: { current: Locale; label: string }) {
+export function LanguageSwitcher({
+  current,
+  label,
+  roomy,
+}: {
+  current: Locale;
+  label: string;
+  /** Buttons a finger can hit, for the bar's menu. */
+  roomy?: boolean;
+}) {
   return (
     <form
       action={chooseLocale}
@@ -25,7 +34,8 @@ export function LanguageSwitcher({ current, label }: { current: Locale; label: s
             aria-current={active ? "true" : undefined}
             title={LOCALE_NAMES[locale]}
             className={[
-              "px-2 py-1 font-mono text-label uppercase",
+              roomy ? "grid min-h-11 min-w-11 place-items-center px-2.5" : "px-2 py-1",
+              "font-mono text-label uppercase",
               "transition-colors duration-(--t-input) ease-standard",
               active ? "bg-cta text-cta-fg" : "text-ink-3 hover:text-ink",
             ].join(" ")}

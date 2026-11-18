@@ -5,6 +5,10 @@ const ru = {
     product: "OlympDB Platform",
     signOut: "Выйти",
     language: "Язык",
+    menu: {
+      open: "Меню",
+      close: "Закрыть меню",
+    },
     helpLabel: "Подсказка",
     theme: {
       system: "Следовать теме системы",

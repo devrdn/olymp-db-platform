@@ -22,9 +22,13 @@ vi.mock("@/lib/i18n/server", async () => {
 });
 vi.mock("@/lib/theme/server", () => ({ activeTheme: async () => "light" }));
 vi.mock("@/components/layout/product-shell", () => ({
-  ProductShell: (props: { home: string; nav: React.ReactNode; children: React.ReactNode }) => (
+  ProductShell: (props: { home: string; destinations?: { href: string; label: string }[]; children: React.ReactNode }) => (
     <div data-home={props.home}>
-      {props.nav}
+      {props.destinations?.map((item) => (
+        <a key={item.href} href={item.href}>
+          {item.label}
+        </a>
+      ))}
       {props.children}
     </div>
   ),

@@ -57,10 +57,13 @@ function applyTheme(theme: Theme) {
 export function ThemeToggle({
   current,
   labels,
+  withLabel,
 }: {
   /** The theme the server rendered with, until the browser can read the page. */
   current: Theme;
   labels: Record<Theme, string>;
+  /** Writes the name out beside the icon, on a row a finger can hit: the bar's menu. */
+  withLabel?: boolean;
 }) {
   const theme = useSyncExternalStore(subscribe, pageTheme, () => current);
   const next = nextTheme(theme);
@@ -70,11 +73,16 @@ export function ThemeToggle({
     <button
       type="button"
       onClick={() => applyTheme(next)}
-      title={labels[next]}
-      aria-label={labels[next]}
-      className="grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink"
+      title={withLabel ? undefined : labels[next]}
+      aria-label={withLabel ? undefined : labels[next]}
+      className={
+        withLabel
+          ? "flex min-h-11 items-center gap-2.5 text-left text-control text-ink-2 transition-colors duration-(--t-input) ease-standard hover:text-ink"
+          : "grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink"
+      }
     >
-      <Icon className="size-4" strokeWidth={1.75} aria-hidden />
+      <Icon className="size-4 shrink-0" strokeWidth={1.75} aria-hidden />
+      {withLabel ? labels[next] : null}
     </button>
   );
 }

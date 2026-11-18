@@ -42,7 +42,14 @@ describe("SectionNav", () => {
     screen.getByRole("link", { name: "Audit" }).focus();
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
-    // Leaves room for the 2px ring and its 2px offset on both sides of the link.
-    expect(screen.getByRole("link", { name: "Audit" }).className).toContain("max-narrow:scroll-mx-1.5");
+  });
+
+  test("lays the same destinations out as rows a finger can hit in the menu", () => {
+    render(<SectionNav items={items} layout="menu" />);
+
+    const links = screen.getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual(["Contests", "Audit"]);
+    expect(links[0]).toHaveAttribute("aria-current", "page");
+    for (const link of links) expect(link.className.split(/\s+/)).toContain("min-h-12");
   });
 });

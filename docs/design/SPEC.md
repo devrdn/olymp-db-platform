@@ -404,6 +404,20 @@ What collapses is the **band's template** — to one track, not to three of zero
 width: a hidden grid item leaves the flow entirely, and with three tracks the
 content slides into the first one and renders at 104 px inside a 375 px screen.
 
+**The bar below 1024 px.** A signed-in bar holds the destinations, the theme,
+the language and the account, and below 1024 px they no longer fit in one row.
+At 768 px, a portrait tablet, the seven destinations of a staff account with
+every permission were left 104 px between the mark and the account: one
+clipped letter each. So below `wide` the bar keeps the mark and a burger, at
+the narrow bar's 48 px, and everything else moves into a panel that hangs
+under it: the destinations as full-width rows, then the account, then the
+theme and the language, each a target a finger can hit. The panel closes on
+Escape, on a tap outside, on the burger and on navigation, so the new page is
+never hidden under it. From 760 px up the installation's name keeps one line
+and gives way with an ellipsis; below 760 px it keeps two. A screen with no
+destinations (sign-in, the public pages, the forced password change) has
+little to fold, so its controls stay in the bar at every width.
+
 **On a narrow screen the register loses columns, not rows.** Restacking a table
 into cards is the usual answer and the wrong one here: it dissolves the columns,
 and comparing down a column is the only reason this is a register and not a wall

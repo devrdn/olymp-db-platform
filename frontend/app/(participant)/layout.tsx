@@ -1,6 +1,5 @@
 import { ProductShell } from "@/components/layout/product-shell";
 import { participantDestinations } from "@/components/layout/destinations";
-import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
@@ -38,9 +37,7 @@ export default async function ParticipantLayout({ children }: { children: React.
       theme={theme}
       dict={dict}
       home="/my"
-      nav={
-        <SectionNav items={participantDestinations(dict, brand.archive)} />
-      }
+      destinations={participantDestinations(dict, brand.archive)}
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {/* The participant dictionary scope (`/my`, `/open` read `participant`),
