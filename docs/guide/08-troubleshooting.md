@@ -170,13 +170,14 @@ the provisioning DSN is not a URL, or sign-in to a database fails with a
 password that looks right.
 
 **Cause.** The database and Redis passwords are placed into connection URLs
-(`postgres://user:password@host/...`) without encoding. Base64 output, which is
-what the hint at the top of `.env.example` suggests, often contains `/`, and
-always may contain `+` and `=`.
+(`postgres://user:password@host/...`) without encoding. A password made with
+`openssl rand -base64` often contains `/` and may contain `+` and `=`, so one
+generated that way, or typed by hand with such a character, breaks the URL.
 
-**Fix.** Use URL-safe characters for the passwords that sit in URLs
-(`CORE_DB_PASSWORD`, `GAME_DB_PASSWORD`, `GAME_READER_PASSWORD`,
-`GAME_WRITER_PASSWORD`, `REDIS_PASSWORD`):
+**Fix.** Replace the password with URL-safe characters for each one that sits
+in a URL (`CORE_DB_PASSWORD`, `GAME_DB_PASSWORD`, `GAME_READER_PASSWORD`,
+`GAME_WRITER_PASSWORD`, `REDIS_PASSWORD`) and for `GAME_AUTHOR_PASSWORD`, which
+`.env.example` generates the same way:
 
 ```bash
 openssl rand -hex 32
