@@ -272,7 +272,7 @@ function hasClass(element: Element | null | undefined, utility: string) {
 /** The open panel's scrolling body, where its contents live. */
 async function openMenu() {
   await userEvent.click(screen.getByRole("button", { name: en.chrome.menu.open }));
-  const panel = screen.getByRole("button", { name: en.chrome.menu.close }).nextElementSibling as HTMLElement;
+  const panel = (await screen.findByRole("button", { name: en.chrome.menu.close })).nextElementSibling as HTMLElement;
   return panel.firstElementChild as HTMLElement;
 }
 

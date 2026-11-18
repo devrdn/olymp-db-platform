@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 
 import { Menu, X } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -9,13 +9,25 @@ import { cn } from "@/lib/utils";
 
 import { BAR_TRACKS } from "./bar-tracks";
 
+/** Safari before 17 and Firefox before 125, both still supported, have no Popover API. */
+function hasPopover() {
+  return "popover" in HTMLElement.prototype;
+}
+
+/** The panel's real state, whichever way it was opened, and whether or not a script saw it. */
+function isShown(panel: HTMLElement | null) {
+  return Boolean(panel && (panel.matches(":popover-open") || panel.hasAttribute("open")));
+}
+
 /**
  * The bar's burger: a disclosure on the browser's Popover API, not a modal.
- * The browser opens and closes it with no script (before hydration too), and
- * closes it on Escape and on a tap outside; this component adds the label and
- * `aria-expanded`, closing on navigation and on a resize that hides it, and
- * putting focus back on the button. The page behind stays live, so nothing
- * traps focus. The contents are rendered by the server.
+ * Where the API exists the browser opens and closes it with no script (before
+ * hydration too), and closes it on Escape and on a tap outside. Where it does
+ * not, the script toggles an `open` attribute instead, which the same `open:`
+ * styles read. This component adds the label and `aria-expanded`, closing on
+ * navigation and on a resize that hides it, and putting focus back on the
+ * button. The page behind stays live, so nothing traps focus. The contents are
+ * rendered by the server.
  */
 export function MenuButton({
   labels,
@@ -30,24 +42,27 @@ export function MenuButton({
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  // Mirrors `open` for the handlers, so a close is never sent to a closed panel.
-  const shown = useRef(false);
 
-  const close = useCallback(() => {
-    if (shown.current) panel.current?.hidePopover();
-  }, []);
-
-  useEffect(() => {
+  // Read from the element, so a panel opened before hydration is seen as open.
+  const subscribe = useCallback((onChange: () => void) => {
     const element = panel.current;
-    if (!element) return;
-    const onToggle = (event: Event) => {
-      shown.current = (event as ToggleEvent).newState === "open";
-      setOpen(shown.current);
-    };
-    element.addEventListener("toggle", onToggle);
-    return () => element.removeEventListener("toggle", onToggle);
+    element?.addEventListener("toggle", onChange);
+    return () => element?.removeEventListener("toggle", onChange);
   }, []);
+  const open = useSyncExternalStore(subscribe, () => isShown(panel.current), () => false);
+
+  const show = useCallback((next: boolean) => {
+    const element = panel.current;
+    if (!element || isShown(element) === next) return;
+    if (hasPopover()) {
+      if (next) element.showPopover();
+      else element.hidePopover();
+      return;
+    }
+    element.toggleAttribute("open", next);
+    element.dispatchEvent(new Event("toggle"));
+  }, []);
+  const close = useCallback(() => show(false), [show]);
 
   // Before paint, so the new page never shows under the panel.
   const pathname = usePathname();
@@ -67,8 +82,10 @@ export function MenuButton({
       close();
       button.current?.focus();
     };
+    // The scrim is outside the panel, so a tap on it closes too.
     const onPointerDown = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) close();
+      const target = event.target as Node;
+      if (!panel.current?.contains(target) && !button.current?.contains(target)) close();
     };
     // Past its breakpoint the button is hidden, and an open panel would stay up with it.
     const onResize = () => {
@@ -99,6 +116,10 @@ export function MenuButton({
         ref={button}
         type="button"
         popoverTarget={id}
+        // Where the browser has no popover, the press is handled here.
+        onClick={() => {
+          if (!hasPopover()) show(!isShown(panel.current));
+        }}
         aria-expanded={open}
         aria-controls={id}
         aria-label={open ? labels.close : labels.open}
@@ -111,17 +132,20 @@ export function MenuButton({
           <Menu className="size-5" strokeWidth={1.75} aria-hidden />
         )}
       </button>
-      {/* In the top layer, so placed against the viewport: the sticky bar is
-         always the first 48px and a rule. The panel's box covers the rest of
-         the screen but lets every pointer through, so a tap on the page or the
-         hatched fields is a tap outside. */}
+      {/* Placed against the viewport, in the top layer or, without the API,
+         as a fixed box above the scrim: the sticky bar is always the first
+         48px and a rule. The box covers the rest of the screen but lets every
+         pointer through to the scrim, so a tap on the hatched fields is a tap
+         outside. `not-open:hidden` hides it where the browser has no popover
+         rules of its own; an unknown `:popover-open` inside its `:is()` is
+         dropped, not fatal. */}
       <div
         ref={panel}
         id={id}
         popover="auto"
         className={cn(
           BAR_TRACKS,
-          "pointer-events-none fixed inset-x-0 top-12 bottom-0 m-0 mt-px h-auto w-auto max-w-none grid-rows-1 overflow-visible border-0 bg-transparent p-0 text-ink open:grid",
+          "peer pointer-events-none fixed inset-x-0 top-12 bottom-0 z-10 m-0 mt-px h-auto w-auto max-w-none grid-rows-1 overflow-visible border-0 bg-transparent p-0 text-ink not-open:hidden open:grid",
         )}
       >
         <div
@@ -139,6 +163,12 @@ export function MenuButton({
           {children}
         </div>
       </div>
+      {/* Dims the page, as a dialog's backdrop does, and takes the tap that closes the panel. */}
+      <div
+        aria-hidden
+        data-slot="app-bar-menu-scrim"
+        className="fixed inset-x-0 top-12 bottom-0 z-0 mt-px hidden bg-ink/45 peer-open:block"
+      />
     </div>
   );
 }

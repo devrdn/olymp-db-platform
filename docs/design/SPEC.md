@@ -422,9 +422,12 @@ destinations keep their full width and the installation's name is what gives
 way, to one line with an ellipsis from 760 px up (below 760 px it keeps two).
 
 The panel is the browser's popover, so it opens, and closes on Escape and on
-a tap outside, before any script has run. Script adds the rest: closing on
-navigation, so the new page is never hidden under it, and on a resize that
-hides the burger, and putting focus back on the burger. A screen with no
+a tap outside, before any script has run. Browsers older than the Popover API
+(Safari before 17, still on iOS 16 devices) get the same panel toggled by
+script instead. The page behind is dimmed, as behind a dialog, and a tap
+there closes the panel without following whatever lies under it. Script adds
+the rest: closing on navigation, so the new page is never hidden under it,
+and on a resize that hides the burger, and putting focus back on the burger. A screen with no
 destinations (sign-in, the public pages, the forced password change) has
 little to fold, so its controls stay in the bar at every width.
 
