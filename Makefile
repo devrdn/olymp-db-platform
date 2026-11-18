@@ -37,7 +37,9 @@ CORE_DB_PORT     ?= 5432
 REDIS_PORT       ?= 6379
 ADMIN_LOGIN      ?= admin
 ADMIN_NAME       ?= System Administrator
-API_PORT         ?= 8080
+# An empty `API_PORT=` in the file counts as unset: `?=` would keep it, and the
+# API would be told to listen on `:`, a port the system picks.
+API_PORT         := $(or $(API_PORT),8080)
 # Where `make run` dials the Query Runner, and so the port `make runner` listens
 # on. The port is the one thing the two must agree on — a development stack
 # where they disagree is a stack where the console is silently off — so the

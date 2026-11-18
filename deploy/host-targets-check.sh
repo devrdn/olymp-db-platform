@@ -6,6 +6,7 @@
 #     sets, through the environment and never on the echoed command line, while
 #     the container-only values (REDIS_ADDR, QUERY_RUNNER_ADDR, GAME_UPLOAD_DIR,
 #     ENV) are the host's;
+#   - an empty API_PORT still gives the API and the interface a port;
 #   - a value make cannot expand, an open `$(` or `${` such as a provider may
 #     put in a secret, changes nothing in `make backup`, `make deploy` or
 #     `make deployed`: the scheduled backup runs on servers that never run
@@ -102,6 +103,16 @@ for s in "${SECRETS[@]}"; do
 	if grep -qF "$s" "$WORK/run.out" "$WORK/runner.out"; then fail "$s is on an echoed command line"
 	else pass "$s is on no echoed command line"; fi
 done
+
+echo "== an empty API_PORT"
+noport="$(fixture noport API_PORT=)"
+rm -f "$api"
+mk "$noport" run > "$WORK/noport.out" 2>&1 || { cat "$WORK/noport.out"; fail "make run exited non-zero"; }
+[ -f "$api" ] || { fail "api was not started"; : > "$api"; }
+has "$api" HTTP_ADDR :8080
+if mk "$noport" -n front-build 2>&1 | grep -qF 'API_ORIGIN="http://localhost:8080"'; then
+	pass "front-build gets API_ORIGIN=http://localhost:8080"
+else fail "front-build gets API_ORIGIN=http://localhost:8080"; fi
 
 echo "== a value make cannot expand"
 hostile="$(fixture hostile "GITHUB_CLIENT_SECRET='ab\$(cd'" "SMTP_PASSWORD='x\${y'")"
