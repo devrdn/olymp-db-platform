@@ -322,14 +322,18 @@ describe("the bar from 1024px up", () => {
     expect(within(controls).getByRole("link", { name: "Ivan Ivanov" })).toHaveAttribute("href", "/profile");
   });
 
-  test("shows a row of up to four destinations from 1024px, and the menu only below", () => {
+  test("shows a row of up to three destinations from 1024px, and the menu only below", () => {
     // CSS rather than measurement, so the server-rendered bar is right before hydration.
+    const { container } = staffShell({ destinations: SHORT });
+
+    expect(foldPoints(container)).toEqual({ row: ["wide"], divider: ["wide"], controls: ["wide"], menu: ["wide"] });
+  });
+
+  test("keeps four destinations in the menu at 1024px, where they were measured not to fit", () => {
     const four = [...SHORT, { href: "/registrations", label: "Registrations" }];
-    for (const destinations of [SHORT, four]) {
-      const { container, unmount } = staffShell({ destinations });
-      expect(foldPoints(container)).toEqual({ row: ["wide"], divider: ["wide"], controls: ["wide"], menu: ["wide"] });
-      unmount();
-    }
+    const { container } = staffShell({ destinations: four });
+
+    expect(foldPoints(container)).toEqual({ row: ["wider"], divider: ["wider"], controls: ["wider"], menu: ["wider"] });
   });
 
   test("keeps a crowded bar in the menu until its row fits, and only then shows the row", () => {

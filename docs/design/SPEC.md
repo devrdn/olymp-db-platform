@@ -413,10 +413,11 @@ the narrow bar's 48 px, and everything else moves into a panel that hangs
 under it: the destinations as full-width rows, then the account, then the
 theme and the language, each a target a finger can hit.
 
-A crowded bar folds for longer. Up to four destinations get their row from
-`wide`; more stay behind the burger until `wider`, 1440 px, because seven fit
-beside the account only from about 1424 px in Russian, the longest of the
-three languages (1362 px in English). A row is never shown crushed: the
+A crowded bar folds for longer. Up to three destinations get their row from
+`wide`; more stay behind the burger until `wider`, 1440 px. Four were measured
+not to fit at 1024 px in English or Russian, and seven fit beside the account
+only from about 1424 px in Russian, the longest of the three languages
+(1362 px in English). A row is never shown crushed: the
 destinations keep their full width and the installation's name is what gives
 way, to one line with an ellipsis from 760 px up (below 760 px it keeps two).
 

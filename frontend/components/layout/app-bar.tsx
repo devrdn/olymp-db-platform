@@ -18,8 +18,12 @@ import { ThemeToggle } from "./theme-toggle";
 
 const LOGO_IMAGE = "h-5 w-auto max-w-32 shrink-0 object-contain";
 
-/** Up to this many destinations fit in a row from `wide`; more fold until `wider`. */
-const ROW_FROM_WIDE = 4;
+/**
+ * Up to this many destinations fit in a row from `wide`; more fold until
+ * `wider`. Four were measured not to fit beside the account at 1024px in
+ * English (354px of 337) or Russian (up to 434px).
+ */
+const ROW_FROM_WIDE = 3;
 
 /**
  * The classes of each fold point, written out whole so Tailwind finds them.
