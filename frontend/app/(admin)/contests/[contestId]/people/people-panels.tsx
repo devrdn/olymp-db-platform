@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { Scoring } from "@/lib/api/contests";
 import { removable } from "@/lib/api/people-terms";
 import { type Manager, type Participant, type RegistrationStatus } from "@/lib/api/people";
@@ -67,7 +68,7 @@ export function ManagerPanel({
         <Tooltip label={dict.chrome.helpLabel}>{t.managers.help}</Tooltip>
       </div>
 
-      <div className="overflow-x-auto">
+      <ScrollBox>
         <table className="w-full min-w-lg border-collapse text-left">
           <thead>
             <tr>
@@ -109,7 +110,7 @@ export function ManagerPanel({
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollBox>
 
       <GrantManager contestId={contestId} dict={dict} />
     </section>
@@ -218,7 +219,7 @@ export function ParticipantPanel({
           />
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <ScrollBox>
           <table className="w-full min-w-2xl border-collapse text-left">
             <thead>
               <tr>
@@ -294,7 +295,7 @@ export function ParticipantPanel({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
 
       <AddOneParticipant contestId={contestId} dict={dict} />

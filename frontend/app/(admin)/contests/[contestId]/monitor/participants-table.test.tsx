@@ -354,3 +354,14 @@ describe("a long roster", () => {
     expect(screen.queryByRole("row", { name: /Person 0003/ })).not.toBeInTheDocument();
   });
 });
+
+describe("ParticipantsTable on a phone", () => {
+  // The flag explanations and the caption are `sr-only`, which only a
+  // positioned scroller keeps from widening the page (see `ScrollBox`).
+  test("the roster's scroller is the containing block of what it holds", () => {
+    renderTable();
+
+    expect(screen.getByTestId("roster-scroller")).toHaveClass("relative", "overflow-auto");
+    expect(screen.getByRole("table").parentElement).toBe(screen.getByTestId("roster-scroller"));
+  });
+});

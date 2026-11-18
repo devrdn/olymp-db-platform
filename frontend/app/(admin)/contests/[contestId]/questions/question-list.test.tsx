@@ -132,3 +132,39 @@ describe("QuestionList, a bonus question", () => {
     expect(within(regularRow).queryByText(dict.workspace.questions.bonus)).not.toBeInTheDocument();
   });
 });
+
+describe("QuestionList on a phone", () => {
+  // The move column's header is an `sr-only` label, which only a positioned
+  // scroller keeps from widening the page (see `ScrollBox`).
+  test("keeps the table inside its own positioned scroller", () => {
+    render(
+      <QuestionList
+        contestId="c1"
+        questions={[question()]}
+        languages={["en"]}
+        editable
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+
+  // The fixed columns take 616px, so a narrower minimum leaves a title one word
+  // per line.
+  test("leaves the title column room before the box scrolls", () => {
+    render(
+      <QuestionList
+        contestId="c1"
+        questions={[question()]}
+        languages={["en"]}
+        editable={false}
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("table")).toHaveClass("min-w-3xl");
+  });
+});

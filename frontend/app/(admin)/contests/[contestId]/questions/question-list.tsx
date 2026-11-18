@@ -7,6 +7,7 @@ import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { answerable, untranslated } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
 import type { Scoring } from "@/lib/api/contests";
@@ -62,8 +63,8 @@ export function QuestionList({
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-2xl border-collapse text-left">
+      <ScrollBox>
+        <table className="w-full min-w-3xl border-collapse text-left">
           <thead>
             <tr>
               <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right")}>
@@ -155,7 +156,7 @@ export function QuestionList({
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollBox>
 
       {editable ? <AddQuestion contestId={contestId} dict={dict} /> : null}
     </div>

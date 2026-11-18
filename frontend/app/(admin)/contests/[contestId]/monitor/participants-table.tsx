@@ -5,6 +5,7 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState } 
 import Link from "next/link";
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MONITOR_FLAGS, type MonitorFlags, type RosterRow } from "@/lib/api/monitor";
 import { REGISTRATION_STATUSES } from "@/lib/api/people";
@@ -213,7 +214,7 @@ export function ParticipantsTable({
       ) : shown.length === 0 && filtered ? (
         <p className="text-body text-ink-2">{t.table.noMatch}</p>
       ) : (
-        <div
+        <ScrollBox
           ref={scrollRef}
           data-testid="roster-scroller"
           onScroll={measure}
@@ -269,7 +270,7 @@ export function ParticipantsTable({
               {bodyRows}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
     </div>
   );

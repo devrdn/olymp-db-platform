@@ -444,7 +444,16 @@ and comparing down a column is the only reason this is a register and not a wall
 of cards. So enrollment and format fold into a caption under the title, while
 state and the window stay — those are what a reader comes to a register for.
 Nothing is ever shown twice: the caption exists only at the width where its
-columns are gone.
+columns are gone. The fold holds below `wide`, not only below the mobile
+reset: at a 768 px portrait tablet the register's column is about 620 px
+against the six columns' 800, and without the fold the window, one of the two
+columns a reader comes for, sat past the edge of the box.
+
+**A wide table scrolls in a `ScrollBox`, never on the page.** The box is
+`relative` as well as a scroller, because an `sr-only` label in a header cell
+is absolutely positioned: under a scroller that is not its containing block it
+escapes the clip and widens the whole document. Four workspace screens grew to
+between 518 and 1146 px that way.
 
 **A workspace with many sections gets a navigation column, not a row of tabs.**
 The contest workspace has five sections today, and the architecture names two
@@ -885,8 +894,8 @@ panes with resizable, remembered sizes). Plus `Band` and `AppBar`, which every
 shell is built from.
 
 **Built so far:** in `components/ui`, Button, Input, Label, Field, Textarea,
-Checkbox, Combobox, Tag, Avatar, Tooltip, Dialog, Tabs, Skeleton and
-MarkdownEditor; in `components/product`, StateView, ExportMenu, CodeEditor,
+Checkbox, Combobox, Tag, Avatar, Tooltip, Dialog, Tabs, Skeleton, ScrollBox
+and MarkdownEditor; in `components/product`, StateView, ExportMenu, CodeEditor,
 SqlBlock, QueryLog, QueryRow, TabStrip, StoryText, StandingsView,
 AnswerAttempts, ContestWindow, DrawnCover and NotFoundView; in
 `components/layout`, Band, AppBar, Mark, Breadcrumbs, SectionNav,

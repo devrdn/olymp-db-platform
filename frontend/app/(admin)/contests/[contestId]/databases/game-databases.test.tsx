@@ -166,3 +166,13 @@ describe("the contest's databases", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });
+
+describe("GameDatabases on a phone", () => {
+  // The drop column's header is an `sr-only` label, which only a positioned
+  // scroller keeps from widening the page (see `ScrollBox`).
+  test("keeps the table inside its own positioned scroller", () => {
+    show();
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+});

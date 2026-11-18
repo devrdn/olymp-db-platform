@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import type { Participant } from "@/lib/api/people";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-import { ParticipantPanel } from "./people-panels";
+import { ManagerPanel, ParticipantPanel } from "./people-panels";
 
 let dict: Dictionary;
 
@@ -113,5 +113,36 @@ describe("ParticipantPanel, an address outside the site's domain", () => {
     panel([participant({ trustedEmail: undefined })], "example.edu");
 
     expect(screen.queryByText(mark("example.edu"))).not.toBeInTheDocument();
+  });
+});
+
+describe("the people tables on a phone", () => {
+  // Each table's last header is an `sr-only` label, which only a positioned
+  // scroller keeps from widening the page (see `ScrollBox`).
+  test("the participants table sits inside its own positioned scroller", () => {
+    render(
+      <ParticipantPanel
+        contestId="c1"
+        participants={[participant()]}
+        total={1}
+        locale="en"
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+
+  test("the managers table sits inside its own positioned scroller", () => {
+    render(
+      <ManagerPanel
+        contestId="c1"
+        managers={[{ userId: "u2", login: "petrova", fullName: "Anna Petrova", role: "manager", grantedAt: "2026-11-01T09:00:00Z" }]}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
   });
 });

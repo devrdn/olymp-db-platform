@@ -141,7 +141,9 @@ export function CoverPanel({
       {/* The rules precede the chooser, so a phone photo is not picked blind and refused after. */}
       <p className="max-w-body text-small text-ink-2">{t.hint}</p>
 
-      <div className="flex flex-col gap-6 narrow:flex-row narrow:items-start">
+      {/* Wraps rather than turning into a row at a breakpoint: at a 768px
+         window the workspace column is 338px, too narrow for both side by side. */}
+      <div className="flex flex-wrap items-start gap-6">
         <figure className="flex w-full max-w-80 shrink-0 flex-col gap-2">
           <div className="aspect-video w-full overflow-hidden border border-line bg-sunk">
             {chosen?.preview ?? current ? (
@@ -172,7 +174,7 @@ export function CoverPanel({
           </figcaption>
         </figure>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-5">
+        <div className="flex min-w-0 grow basis-64 flex-col gap-5">
           <form action={submit} className="flex flex-col gap-5">
             <input type="hidden" name="contestId" value={contestId} />
 

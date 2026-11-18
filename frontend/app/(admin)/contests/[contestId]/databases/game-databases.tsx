@@ -4,6 +4,7 @@ import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
 import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment } from "@/lib/format/datetime";
@@ -58,7 +59,7 @@ export function GameDatabases({
       {databases.instances.length === 0 ? (
         <p className="max-w-body text-body text-ink-2">{ended ? t.reclaimed : t.empty}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <ScrollBox>
           <table className="w-full min-w-lg border-collapse text-left">
             <thead>
               <tr>
@@ -113,7 +114,7 @@ export function GameDatabases({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
 
       {databases.truncated ? (

@@ -150,3 +150,20 @@ describe("CoverPanel, a refusal from the server", () => {
     expect(describedBy(screen.getByLabelText(t.file))).not.toContain(refusal.id);
   });
 });
+
+describe("CoverPanel in a narrow column", () => {
+  // At a 768px window the workspace column is 338px, too narrow for the picture
+  // and the form side by side; the form wraps under it rather than shrinking to
+  // nothing.
+  test("wraps the form under the picture rather than squeezing it", () => {
+    render(<CoverPanel contestId={contestId} cover={null} editable dict={dict} />);
+
+    const figure = screen.getByRole("img", { name: t.drawnAlt }).closest("figure") as HTMLElement;
+    const row = figure.parentElement as HTMLElement;
+    expect(row).toHaveClass("flex-wrap");
+    expect(row).not.toHaveClass("narrow:flex-row");
+
+    const form = screen.getByRole("button", { name: t.upload }).closest("form") as HTMLElement;
+    expect(form.parentElement).toHaveClass("min-w-0", "grow", "basis-64");
+  });
+});

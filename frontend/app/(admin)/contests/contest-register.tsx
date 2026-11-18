@@ -4,6 +4,7 @@ import { Tag } from "@/components/ui/tag";
 import { ContestWindow } from "@/components/product/contest-window";
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { ContestSummary } from "@/lib/api/contests";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -12,9 +13,9 @@ import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 /**
  * The contest listing as a real `<table>`, so rows compare down columns and
- * screen readers announce the column. On a narrow screen it stays a table:
- * enrollment and format fold under the title (shown only at that width), and
- * past that only this box scrolls sideways.
+ * screen readers announce the column. Below `wide` it stays a table:
+ * enrollment and format fold under the title (shown only at those widths; the
+ * reason is in SPEC.md §5), and past that only this box scrolls sideways.
  */
 
 /* Padding comes from the density tokens, so one register serves comfortable and compact layouts. */
@@ -78,8 +79,8 @@ export function ContestRegister({
           />
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-lg border-collapse text-left narrow:min-w-3xl">
+        <ScrollBox>
+          <table className="w-full min-w-lg border-collapse text-left wide:min-w-3xl">
             <thead>
               <tr>
                 <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right")}>
@@ -91,10 +92,10 @@ export function ContestRegister({
                 <th scope="col" className={cn(HEAD, "w-36")}>
                   {t.columns.state}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-32 max-narrow:hidden")}>
+                <th scope="col" className={cn(HEAD, "w-32 max-wide:hidden")}>
                   {t.columns.enrollment}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-40 max-narrow:hidden")}>
+                <th scope="col" className={cn(HEAD, "w-40 max-wide:hidden")}>
                   {t.columns.mode}
                 </th>
                 <th scope="col" className={cn(HEAD, "w-52")}>
@@ -125,17 +126,17 @@ export function ContestRegister({
                         {contest.description}
                       </span>
                     ) : null}
-                    <span className="mt-2 hidden font-mono text-data text-ink-3 max-narrow:block">
+                    <span className="mt-2 hidden font-mono text-data text-ink-3 max-wide:block">
                       {t.enrollment[contest.enrollment]} · {t.mode[contest.questionMode]}
                     </span>
                   </td>
                   <td className={CELL}>
                     <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{t.status[contest.status]}</Tag>
                   </td>
-                  <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2 max-narrow:hidden")}>
+                  <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2 max-wide:hidden")}>
                     {t.enrollment[contest.enrollment]}
                   </td>
-                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-3 max-narrow:hidden")}>
+                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-3 max-wide:hidden")}>
                     {t.mode[contest.questionMode]}
                   </td>
                   <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2")}>
@@ -151,7 +152,7 @@ export function ContestRegister({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
     </section>
   );

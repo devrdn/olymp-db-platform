@@ -1,4 +1,5 @@
 import { Tag } from "@/components/ui/tag";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { CellState, PublishGate } from "@/lib/api/publish-gate";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -61,7 +62,7 @@ export function PublishGateReport({
       ) : null}
 
       {gate.byLanguage.length > 0 ? (
-        <div className="overflow-x-auto">
+        <ScrollBox>
           <table className="w-full min-w-md border-collapse text-left">
             <thead>
               <tr>
@@ -104,7 +105,7 @@ export function PublishGateReport({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       ) : null}
     </div>
   );

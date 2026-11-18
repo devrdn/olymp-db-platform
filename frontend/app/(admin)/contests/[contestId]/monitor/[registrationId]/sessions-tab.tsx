@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { FeedItem, FeedPage } from "@/lib/api/monitor";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -77,7 +78,7 @@ export function SessionsTab({
       {items.length === 0 ? (
         <p className="text-body text-ink-2">{t.empty}</p>
       ) : (
-        <div className="max-h-[42rem] min-w-0 overflow-auto border-y border-line max-narrow:max-h-[70vh]">
+        <ScrollBox className="max-h-[42rem] min-w-0 overflow-auto border-y border-line max-narrow:max-h-[70vh]">
           <table className="w-full min-w-[36rem] border-separate text-left" style={{ borderSpacing: 0 }}>
             <thead>
               <tr>
@@ -98,7 +99,7 @@ export function SessionsTab({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
 
       {monitor.feed.olderAvailable ? (

@@ -131,3 +131,25 @@ describe("ContestRegister, dates", () => {
     expect(within(row).getByText(en.contests.unscheduled)).toBeInTheDocument();
   });
 });
+
+/** SPEC.md §5: the register loses columns, not rows, up to `wide`. */
+describe("ContestRegister below a desktop's width", () => {
+  test("folds enrollment and format into the caption until wide", () => {
+    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+
+    for (const name of [en.contests.columns.enrollment, en.contests.columns.mode]) {
+      expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
+    }
+    const caption = screen.getByText(
+      `${en.contests.enrollment.open} · ${en.contests.mode.multi}`,
+    );
+    expect(caption).toHaveClass("hidden", "max-wide:block");
+    expect(screen.getByRole("table")).toHaveClass("wide:min-w-3xl");
+  });
+
+  test("keeps the table inside its own positioned scroller", () => {
+    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+});

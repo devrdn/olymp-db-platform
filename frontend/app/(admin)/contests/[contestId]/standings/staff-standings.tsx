@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { ContestStatus } from "@/lib/api/contests";
 import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
@@ -156,7 +157,7 @@ export function StaffStandingsView({
       {standings.rows.length === 0 ? (
         <p className="text-body text-ink-2">{t.empty}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <ScrollBox>
           {/* Fixed layout as in the public table: the name column gives way, and
              the `narrow` min-width keeps a wide ICPC grid from squeezing it. */}
           <table
@@ -271,7 +272,7 @@ export function StaffStandingsView({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
       {standings.truncated ? (
         <p className="text-small text-warn">{t.truncated.replace("{count}", String(standings.rows.length))}</p>
