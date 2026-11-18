@@ -642,12 +642,12 @@ dirty until you clear it.
 
 **Fix.** Fix the cause first. Then force the **last version that fully applied**,
 which is the one before the dirty one (53 when 54 is dirty), and migrate again.
-There is no `make` target for `force`:
+`make migrate-force` writes the version without running SQL, so it needs
+`CONFIRM=yes`; the variable is `MIGRATION`, because `VERSION` names the image:
 
 ```bash
-cd backend && CORE_DB_DSN='postgres://USER:PASSWORD@localhost:5432/DATABASE?sslmode=disable' \
-  go run ./cmd/migrate force 53
-cd .. && make migrate-up
+make migrate-force MIGRATION=53 CONFIRM=yes
+make migrate-up
 ```
 
 Forcing the dirty number itself skips that migration. If the failed file had

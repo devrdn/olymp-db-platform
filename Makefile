@@ -154,7 +154,7 @@ GOVULN  = $(GOBIN)/govulncheck
 GOSEC   = $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-measure e2e-stack-up e2e-stack-down
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version migrate-force bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-measure e2e-stack-up e2e-stack-down
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -432,6 +432,20 @@ migrate-down: require-env ## Roll back the most recent migration
 
 migrate-version: require-env ## Print the current schema version
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate version
+
+# Rewrites the recorded schema version without running any SQL, which is how a
+# half-applied migration is cleared (backend/README.md, "Recovering from a dirty
+# migration"). The variable is MIGRATION, not VERSION: VERSION is the image tag
+# and defaults to a commit hash, so a bare `make migrate-force` must not be able
+# to force the schema to it.
+migrate-force: require-env ## Mark the schema at a version, clearing a dirty state (MIGRATION=n CONFIRM=yes)
+	@test -n "$(MIGRATION)" || { echo "usage: make migrate-force MIGRATION=<last version that fully applied> CONFIRM=yes"; exit 1; }
+	@case "$(MIGRATION)" in ''|*[!0-9]*) echo "MIGRATION must be a whole number, got: $(MIGRATION)"; exit 1;; esac
+	@test "$(CONFIRM)" = "yes" || { \
+		echo "This records the schema of $(CORE_DB_NAME) as version $(MIGRATION) without running any SQL."; \
+		echo "Force the last version that fully applied; forcing the dirty one skips that migration."; \
+		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate force $(MIGRATION)
 
 bootstrap: require-env ## Create the first administrator (idempotent; prints the password)
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/bootstrap -login $(ADMIN_LOGIN) -name "$(ADMIN_NAME)"

@@ -1595,6 +1595,42 @@ what an older release reads: take the newer migrations back first, one
 `migrate down` each with the release that ran them. That undoes what they
 added, data included; take a dump first.
 
+### Recovering from a dirty migration
+
+A migration that fails or is interrupted leaves its version marked dirty, and
+every later `up`, `down` or `version` refuses to go on.
+
+```bash
+make migrate-version   # "version 54 (dirty: true)": 54 is the one that failed
+```
+
+1. Read the error the failed run printed and fix its cause.
+2. Look at what the failed file did before it stopped. Statements outside a
+   transaction may have applied; undo them by hand, or the next run fails on
+   them again.
+3. Force the last version that fully applied, the one before the dirty number,
+   then migrate again. Forcing the dirty number itself skips that migration.
+
+```bash
+make migrate-force MIGRATION=53 CONFIRM=yes
+make migrate-up
+```
+
+`migrate-force` writes the version and runs no SQL, so it asks for
+`CONFIRM=yes` and takes `MIGRATION`, not `VERSION`, which names the image tag.
+
+Migration 54 makes email addresses unique regardless of case and refuses a
+database where two live accounts share an address that differs only in case
+(`live accounts share an email that differs only in case`). Only an upgraded or
+restored database can hit it. List the pairs, change or delete one of each, then
+force 53 as above:
+
+```sql
+SELECT lower(email), array_agg(login) FROM users
+WHERE status <> 'deleted' AND email IS NOT NULL
+GROUP BY 1 HAVING count(*) > 1;
+```
+
 ## Releases and deployment
 
 Development does not go near the registry. `make dev-up` starts PostgreSQL and
