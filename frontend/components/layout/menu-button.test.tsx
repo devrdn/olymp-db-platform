@@ -1,12 +1,14 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Link from "next/link";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { renderToString } from "react-dom/server";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({ pathname: "/contests" }));
 vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }));
 
 import { MenuButton } from "./menu-button";
+import { installPopoverStandIn } from "./popover-test-support";
 
 const labels = { open: "Menu", close: "Close menu" };
 
@@ -24,6 +26,18 @@ function menu() {
   );
 }
 
+/** Keeps a link press in the test: jsdom has no router to navigate with. */
+function stayOn(link: HTMLElement) {
+  link.addEventListener("click", (event) => event.preventDefault());
+  return link;
+}
+
+let uninstall: () => void;
+beforeAll(() => {
+  uninstall = installPopoverStandIn();
+});
+afterAll(() => uninstall());
+
 beforeEach(() => {
   navigation.pathname = "/contests";
 });
@@ -38,6 +52,18 @@ describe("the menu button", () => {
     expect(panel).not.toBeNull();
     expect(panel).not.toBeVisible();
     expect(screen.queryByRole("link", { name: "Contests" })).not.toBeInTheDocument();
+  });
+
+  test("opens and closes without JavaScript, through the browser's popover", () => {
+    // Before hydration, or with scripts off, the browser toggles the panel, and
+    // closes it on Escape and on a tap outside.
+    const html = renderToString(menu());
+    const document = new DOMParser().parseFromString(html, "text/html");
+
+    const button = document.querySelector("button")!;
+    const panel = document.getElementById(button.getAttribute("popovertarget") ?? "");
+    expect(panel?.getAttribute("popover")).toBe("auto");
+    expect(button.getAttribute("aria-controls")).toBe(panel?.id);
   });
 
   test("opens on a press and says how to close it", async () => {
@@ -78,6 +104,17 @@ describe("the menu button", () => {
     expect(button).toHaveFocus();
   });
 
+  test("gives focus to the button on Escape even when a tap never focused it", async () => {
+    // Safari does not focus a button on a click, so the browser has nothing to restore.
+    render(menu());
+
+    await userEvent.click(screen.getByRole("button", { name: labels.open }));
+    (document.activeElement as HTMLElement).blur();
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: labels.open })).toHaveFocus();
+  });
+
   test("closes on a tap outside it", async () => {
     render(menu());
 
@@ -104,6 +141,7 @@ describe("the menu button", () => {
     rerender(menu());
 
     expect(screen.getByRole("button", { name: labels.open })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: "Contests" })).not.toBeInTheDocument();
   });
 
   test("stays closed on coming back to the address it was opened at", async () => {
@@ -118,17 +156,26 @@ describe("the menu button", () => {
     expect(screen.getByRole("button", { name: labels.open })).toHaveAttribute("aria-expanded", "false");
   });
 
-  test("closes on a tap of a link, even one to the page already shown", async () => {
-    // Pressing the current destination changes no pathname, and the page must
-    // not stay hidden under the panel.
+  test("closes on a tap of a link to another page", async () => {
     render(menu());
 
     await userEvent.click(screen.getByRole("button", { name: labels.open }));
-    const link = screen.getByRole("link", { name: "Contests" });
-    link.addEventListener("click", (event) => event.preventDefault());
-    await userEvent.click(link);
+    await userEvent.click(stayOn(screen.getByRole("link", { name: "Accounts" })));
 
     expect(screen.getByRole("button", { name: labels.open })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("closes on Enter on the page already shown, and keeps focus on the button", async () => {
+    // The address does not change, and focus must not fall to the body from a hidden link.
+    render(menu());
+
+    await userEvent.click(screen.getByRole("button", { name: labels.open }));
+    stayOn(screen.getByRole("link", { name: "Contests" })).focus();
+    await userEvent.keyboard("{Enter}");
+
+    const button = screen.getByRole("button", { name: labels.open });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(button).toHaveFocus();
   });
 
   test("lets Tab reach every item in order, after the button", async () => {
@@ -152,5 +199,19 @@ describe("the menu button", () => {
 
     expect(screen.getByRole("link", { name: "outside" })).toHaveFocus();
     expect(screen.getByRole("button", { name: labels.open })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("closes when the window widens past the point where the button is hidden", async () => {
+    render(menu());
+    await userEvent.click(screen.getByRole("button", { name: labels.open }));
+
+    fireEvent(window, new Event("resize"));
+    expect(screen.getByRole("button", { name: labels.close })).toHaveAttribute("aria-expanded", "true");
+
+    // What the breakpoint class does to the button's wrapper.
+    (screen.getByRole("button", { name: labels.close }).parentElement as HTMLElement).style.display = "none";
+    fireEvent(window, new Event("resize"));
+
+    expect(screen.getByRole("button", { name: labels.open, hidden: true })).toHaveAttribute("aria-expanded", "false");
   });
 });

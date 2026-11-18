@@ -7,6 +7,7 @@ import type { Theme } from "@/lib/theme/config";
 import { cn } from "@/lib/utils";
 
 import { AccountLink, type Account } from "./account-link";
+import { BAR_TRACKS } from "./bar-tracks";
 import type { Destination } from "./destinations";
 import { LanguageSwitcher } from "./language-switcher";
 import { Logo } from "./logo";
@@ -17,11 +18,24 @@ import { ThemeToggle } from "./theme-toggle";
 
 const LOGO_IMAGE = "h-5 w-auto max-w-32 shrink-0 object-contain";
 
+/** Up to this many destinations fit in a row from `wide`; more fold until `wider`. */
+const ROW_FROM_WIDE = 4;
+
+/**
+ * The classes of each fold point, written out whole so Tailwind finds them.
+ * The row hides below the point and the menu from it, so exactly one shows.
+ */
+const FOLD = {
+  wide: { row: "max-wide:hidden", menu: "wide:hidden", grow: "max-wide:grow" },
+  wider: { row: "max-wider:hidden", menu: "wider:hidden", grow: "max-wider:grow" },
+} as const;
+
 /**
  * The bar every screen wears, on the bands' three-track grid so the mark and
  * the switcher align with the column below. With destinations, below `wide`
- * the row and the controls fold into the menu (SPEC, "The bar below 1024 px");
- * which bar shows is CSS, so the server-rendered one is right before hydration.
+ * the row and the controls fold into the menu, and a crowded one stays folded
+ * until `wider` (SPEC, "The bar below 1024 px"). Which bar shows is CSS, so
+ * the server-rendered one is right before hydration.
  */
 export function AppBar({
   locale,
@@ -59,6 +73,7 @@ export function AppBar({
   children?: React.ReactNode;
 }) {
   const items = destinations?.length ? destinations : undefined;
+  const fold = items ? FOLD[items.length > ROW_FROM_WIDE ? "wider" : "wide"] : undefined;
 
   const mark = (
     <>
@@ -88,21 +103,20 @@ export function AppBar({
   const markClass = "flex min-w-0 items-center gap-2.5 text-control font-semibold text-ink";
 
   return (
-    <header className="sticky top-0 z-20 grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line bg-bg max-narrow:grid-cols-[0_minmax(0,1fr)_0] print:hidden">
+    <header className={cn("sticky top-0 z-20 grid border-b border-line bg-bg print:hidden", BAR_TRACKS)}>
       <div />
-      {/* Positioned, so the menu's panel hangs under this column and not the whole bar. */}
-      <div className="relative flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:h-auto max-narrow:min-h-12 max-narrow:flex-wrap max-narrow:gap-x-3 max-narrow:gap-y-1 max-narrow:px-4.5">
+      {/* A folded bar holds only the mark and the burger, so it never wraps. */}
+      <div
+        className={cn(
+          "flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:h-auto max-narrow:min-h-12 max-narrow:gap-x-3 max-narrow:gap-y-1 max-narrow:px-4.5",
+          !fold && "max-narrow:flex-wrap",
+        )}
+      >
         {/* At phone width a long name takes two lines beside the controls. A row
            that wraps moves an item down before it shrinks it, so the mark claims
            no width and takes what the controls leave. Wider, the name keeps one
-           line and gives way first, up to a third of the row so the destinations
-           keep the rest. */}
-        <div
-          className={cn(
-            "flex min-w-0 items-center wide:max-w-1/3 max-narrow:min-h-12 max-narrow:grow max-narrow:basis-0",
-            items && "max-wide:grow",
-          )}
-        >
+           line and is what gives way. */}
+        <div className={cn("flex min-w-0 items-center max-narrow:min-h-12 max-narrow:grow max-narrow:basis-0", fold?.grow)}>
           {home ? (
             <Link href={home} className={markClass}>
               {mark}
@@ -114,14 +128,19 @@ export function AppBar({
 
         {items || children ? (
           <>
-            <span aria-hidden className={cn("h-4.5 w-px shrink-0 bg-line-2 max-narrow:hidden", items && "max-wide:hidden")} />
-            {/* At phone width a section's name takes a row of its own below the mark
-               and controls; destinations are in the menu by then. */}
+            <span
+              aria-hidden
+              data-slot="app-bar-divider"
+              className={cn("h-4.5 w-px shrink-0 bg-line-2 max-narrow:hidden", fold?.row)}
+            />
+            {/* Destinations keep their full width, which their fold point
+               guarantees, and the name gives way instead. At phone width a
+               section's name takes a row of its own below the mark and controls. */}
             <div
               data-slot="app-bar-nav"
               className={cn(
-                "flex min-w-0 flex-1 items-center gap-3.5 max-narrow:order-last max-narrow:basis-full",
-                items && "max-wide:hidden",
+                "flex items-center gap-3.5 max-narrow:order-last max-narrow:basis-full",
+                fold ? ["grow shrink-0", fold.row] : "min-w-0 flex-1",
               )}
             >
               {items ? <SectionNav items={items} /> : children}
@@ -133,7 +152,7 @@ export function AppBar({
 
         <div
           data-slot="app-bar-controls"
-          className={cn("flex shrink-0 items-center gap-1.5 max-narrow:ml-auto", items && "max-wide:hidden")}
+          className={cn("flex shrink-0 items-center gap-1.5 max-narrow:ml-auto", fold?.row)}
         >
           <ThemeToggle current={theme} labels={dict.chrome.theme} />
           <LanguageSwitcher current={locale} label={dict.chrome.language} />
@@ -141,8 +160,8 @@ export function AppBar({
           {!account && signedIn ? <SignOutButton label={dict.chrome.signOut} /> : null}
         </div>
 
-        {items ? (
-          <MenuButton labels={dict.chrome.menu} className="-mr-2.5 wide:hidden">
+        {items && fold ? (
+          <MenuButton labels={dict.chrome.menu} className={cn("-mr-2.5", fold.menu)}>
             <SectionNav items={items} layout="menu" />
             <hr className="my-2 border-line" />
             {account ? <AccountLink account={account} layout="menu" /> : null}

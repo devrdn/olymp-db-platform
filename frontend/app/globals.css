@@ -238,6 +238,9 @@
      an olympiad hall really has. Above it the middle pane keeps more than
      five hundred. */
   --breakpoint-wide: 64rem;
+  /* Where a staff bar's seven destinations fit in one row beside the account
+     in every locale: Russian, the longest, needs about 1424px (measured). */
+  --breakpoint-wider: 90rem;
 
   --container-column: 110rem;
   --container-head: 20ch;

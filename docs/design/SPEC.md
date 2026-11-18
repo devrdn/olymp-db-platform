@@ -411,10 +411,19 @@ every permission were left 104 px between the mark and the account: one
 clipped letter each. So below `wide` the bar keeps the mark and a burger, at
 the narrow bar's 48 px, and everything else moves into a panel that hangs
 under it: the destinations as full-width rows, then the account, then the
-theme and the language, each a target a finger can hit. The panel closes on
-Escape, on a tap outside, on the burger and on navigation, so the new page is
-never hidden under it. From 760 px up the installation's name keeps one line
-and gives way with an ellipsis; below 760 px it keeps two. A screen with no
+theme and the language, each a target a finger can hit.
+
+A crowded bar folds for longer. Up to four destinations get their row from
+`wide`; more stay behind the burger until `wider`, 1440 px, because seven fit
+beside the account only from about 1424 px in Russian, the longest of the
+three languages (1362 px in English). A row is never shown crushed: the
+destinations keep their full width and the installation's name is what gives
+way, to one line with an ellipsis from 760 px up (below 760 px it keeps two).
+
+The panel is the browser's popover, so it opens, and closes on Escape and on
+a tap outside, before any script has run. Script adds the rest: closing on
+navigation, so the new page is never hidden under it, and on a resize that
+hides the burger, and putting focus back on the burger. A screen with no
 destinations (sign-in, the public pages, the forced password change) has
 little to fold, so its controls stay in the bar at every width.
 

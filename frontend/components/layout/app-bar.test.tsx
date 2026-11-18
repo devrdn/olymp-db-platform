@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
@@ -11,13 +14,17 @@ vi.mock("./session-actions", () => ({ signOutAction: vi.fn() }));
 vi.mock("next/navigation", () => ({ usePathname: () => "/contests" }));
 
 import { FocusShell } from "./focus-shell";
+import { installPopoverStandIn } from "./popover-test-support";
 import { ProductShell } from "./product-shell";
 
 let en: Dictionary;
+let uninstall: () => void;
 
 beforeAll(async () => {
   en = await getDictionary("en");
+  uninstall = installPopoverStandIn();
 });
+afterAll(() => uninstall());
 
 describe("the product mark", () => {
   test("leads to the home of whichever audience the shell was built for", () => {
@@ -232,16 +239,26 @@ describe("the app bar", () => {
   });
 });
 
-const STAFF = [
+const SHORT = [
   { href: "/contests", label: "Contests" },
   { href: "/users", label: "Accounts" },
   { href: "/audit", label: "Audit trail" },
 ];
+/** Everything a staff account with every permission sees. */
+const CROWDED = [
+  { href: "/contests", label: "Contests" },
+  { href: "/archive", label: "Archive" },
+  { href: "/users", label: "Accounts" },
+  { href: "/registrations", label: "Registrations" },
+  { href: "/audit", label: "Audit trail" },
+  { href: "/settings", label: "Installation" },
+  { href: "/integrations", label: "Integrations" },
+];
 const ACCOUNT = { fullName: "Ivan Ivanov", login: "ivanov" };
 
-function staffShell(props: { name?: string } = {}) {
+function staffShell(props: { name?: string; destinations?: { href: string; label: string }[] } = {}) {
   return render(
-    <ProductShell locale="en" theme="system" dict={en} home="/contests" destinations={STAFF} account={ACCOUNT} {...props}>
+    <ProductShell locale="en" theme="system" dict={en} home="/contests" destinations={SHORT} account={ACCOUNT} {...props}>
       <p>rows</p>
     </ProductShell>,
   );
@@ -250,6 +267,31 @@ function staffShell(props: { name?: string } = {}) {
 /** Whether a class list carries this exact utility, not merely a longer one that contains it. */
 function hasClass(element: Element | null | undefined, utility: string) {
   return (element?.className ?? "").split(/\s+/).includes(utility);
+}
+
+/** The open panel's scrolling body, where its contents live. */
+async function openMenu() {
+  await userEvent.click(screen.getByRole("button", { name: en.chrome.menu.open }));
+  const panel = screen.getByRole("button", { name: en.chrome.menu.close }).nextElementSibling as HTMLElement;
+  return panel.firstElementChild as HTMLElement;
+}
+
+/**
+ * The breakpoint each part of the bar switches at. The row, its divider and the
+ * controls hide below it and the menu from it, so exactly one bar shows at every width.
+ */
+function foldPoints(container: HTMLElement) {
+  const below = (slot: string) => {
+    const element = container.querySelector(`[data-slot="${slot}"]`);
+    return ["wide", "wider"].filter((point) => hasClass(element, `max-${point}:hidden`));
+  };
+  const menu = container.querySelector('[data-slot="app-bar-menu"]');
+  return {
+    row: below("app-bar-nav"),
+    divider: below("app-bar-divider"),
+    controls: below("app-bar-controls"),
+    menu: ["wide", "wider"].filter((point) => hasClass(menu, `${point}:hidden`)),
+  };
 }
 
 describe("the bar from 1024px up", () => {
@@ -280,17 +322,36 @@ describe("the bar from 1024px up", () => {
     expect(within(controls).getByRole("link", { name: "Ivan Ivanov" })).toHaveAttribute("href", "/profile");
   });
 
-  test("shows the row and the controls only from 1024px, and the menu only below", () => {
+  test("shows a row of up to four destinations from 1024px, and the menu only below", () => {
     // CSS rather than measurement, so the server-rendered bar is right before hydration.
-    const { container } = staffShell();
+    const four = [...SHORT, { href: "/registrations", label: "Registrations" }];
+    for (const destinations of [SHORT, four]) {
+      const { container, unmount } = staffShell({ destinations });
+      expect(foldPoints(container)).toEqual({ row: ["wide"], divider: ["wide"], controls: ["wide"], menu: ["wide"] });
+      unmount();
+    }
+  });
 
-    expect(hasClass(container.querySelector('[data-slot="app-bar-nav"]'), "max-wide:hidden")).toBe(true);
-    expect(hasClass(container.querySelector('[data-slot="app-bar-controls"]'), "max-wide:hidden")).toBe(true);
-    expect(hasClass(container.querySelector('[data-slot="app-bar-menu"]'), "wide:hidden")).toBe(true);
+  test("keeps a crowded bar in the menu until its row fits, and only then shows the row", () => {
+    const { container } = staffShell({ destinations: CROWDED });
+
+    expect(foldPoints(container)).toEqual({ row: ["wider"], divider: ["wider"], controls: ["wider"], menu: ["wider"] });
+    expect(hasClass(container.querySelector('[data-slot="app-bar-menu"]')?.parentElement?.firstElementChild, "max-wider:grow")).toBe(true);
+  });
+
+  test("folds a crowded bar at a breakpoint the stylesheet defines, no wider than 90rem", () => {
+    // Tailwind emits nothing for a variant with no breakpoint behind it, and says nothing either.
+    const css = readFileSync(join(__dirname, "..", "..", "app", "globals.css"), "utf8");
+    const wider = /--breakpoint-wider:\s*([\d.]+)rem;/.exec(css);
+    const wide = /--breakpoint-wide:\s*([\d.]+)rem;/.exec(css);
+
+    expect(wider).not.toBeNull();
+    expect(Number(wider![1])).toBeGreaterThan(Number(wide![1]));
+    expect(Number(wider![1])).toBeLessThanOrEqual(90);
   });
 });
 
-describe("the bar below 1024px", () => {
+describe("the bar below its row", () => {
   test("offers a menu button, closed, named from the dictionary", () => {
     staffShell();
 
@@ -299,12 +360,16 @@ describe("the bar below 1024px", () => {
     expect(button).toHaveAttribute("aria-controls");
   });
 
-  test("puts the mark and the button on one row of the narrow bar's height", () => {
+  test("puts the mark and the button on one row of the narrow bar's height, which cannot wrap", () => {
     const { container } = staffShell();
 
     const menu = container.querySelector('[data-slot="app-bar-menu"]');
     const bar = menu?.parentElement as HTMLElement;
     expect(hasClass(bar, "h-12")).toBe(true);
+    expect(hasClass(bar, "max-narrow:min-h-12")).toBe(true);
+    // Below 760px the bar of a screen without a menu wraps its controls onto a
+    // second row; with only the mark and the button there is nothing to wrap.
+    expect(bar.className).not.toMatch(/(^|\s)max-narrow:flex-wrap(\s|$)/);
     // The mark takes what the button leaves.
     expect(hasClass(bar.firstElementChild, "max-wide:grow")).toBe(true);
     expect(hasClass(menu, "shrink-0")).toBe(true);
@@ -313,9 +378,7 @@ describe("the bar below 1024px", () => {
   test("opens onto every destination, with the current one marked", async () => {
     staffShell();
 
-    await userEvent.click(screen.getByRole("button", { name: en.chrome.menu.open }));
-
-    const panel = screen.getByRole("button", { name: en.chrome.menu.close }).nextElementSibling as HTMLElement;
+    const panel = await openMenu();
     const links = within(within(panel).getByRole("navigation")).getAllByRole("link");
     expect(links.map((a) => a.textContent)).toEqual(["Contests", "Accounts", "Audit trail"]);
     expect(links[0]).toHaveAttribute("aria-current", "page");
@@ -327,9 +390,7 @@ describe("the bar below 1024px", () => {
   test("holds, after a separator, the account and then the theme and the language", async () => {
     staffShell();
 
-    await userEvent.click(screen.getByRole("button", { name: en.chrome.menu.open }));
-    const panel = screen.getByRole("button", { name: en.chrome.menu.close }).nextElementSibling as HTMLElement;
-
+    const panel = await openMenu();
     const nav = within(panel).getByRole("navigation");
     const separator = within(panel).getByRole("separator");
     const account = within(panel).getByRole("link", { name: /Ivan Ivanov/ });
@@ -353,14 +414,19 @@ describe("the bar below 1024px", () => {
     }
   });
 
-  test("scrolls inside itself when taller than what the screen leaves under the bar", async () => {
+  test("hangs under the bar, on the bar's own column, and scrolls inside what the screen leaves", async () => {
     staffShell();
 
-    await userEvent.click(screen.getByRole("button", { name: en.chrome.menu.open }));
-    const panel = screen.getByRole("button", { name: en.chrome.menu.close }).nextElementSibling as HTMLElement;
-
-    expect(hasClass(panel, "overflow-y-auto")).toBe(true);
-    expect(panel.className).toMatch(/(^|\s)max-h-\[calc\(100dvh-/);
+    const body = await openMenu();
+    const panel = body.parentElement as HTMLElement;
+    // The bar is 48px and a 1px rule; the panel starts under the rule and runs to the bottom.
+    for (const utility of ["fixed", "top-12", "mt-px", "bottom-0", "inset-x-0"]) expect(hasClass(panel, utility)).toBe(true);
+    const bar = screen.getByRole("banner");
+    const tracks = (element: Element) => element.className.split(/\s+/).filter((c) => /grid-cols-/.test(c));
+    expect(tracks(panel)).toEqual(tracks(bar));
+    expect(hasClass(body, "col-start-2")).toBe(true);
+    expect(hasClass(body, "max-h-full")).toBe(true);
+    expect(hasClass(body, "overflow-y-auto")).toBe(true);
   });
 
   test("has no menu on a screen without destinations", () => {
@@ -373,7 +439,7 @@ describe("the bar below 1024px", () => {
     expect(screen.queryByRole("button", { name: en.chrome.menu.open })).not.toBeInTheDocument();
     // Its controls stay in the bar at every width, sign-out included.
     const controls = document.querySelector('[data-slot="app-bar-controls"]');
-    expect(hasClass(controls, "max-wide:hidden")).toBe(false);
+    expect(controls?.className).not.toMatch(/max-wider?:hidden/);
     expect(within(controls as HTMLElement).getByRole("button", { name: en.chrome.signOut })).toBeInTheDocument();
   });
 
@@ -386,7 +452,7 @@ describe("the bar below 1024px", () => {
 
     expect(screen.queryByRole("button", { name: en.chrome.menu.open })).not.toBeInTheDocument();
     expect(screen.getByRole("banner")).toHaveTextContent(en.contests.heading);
-    expect(hasClass(document.querySelector('[data-slot="app-bar-controls"]'), "max-wide:hidden")).toBe(false);
+    expect(document.querySelector('[data-slot="app-bar-controls"]')?.className).not.toMatch(/max-wider?:hidden/);
   });
 });
 
@@ -405,10 +471,22 @@ describe("the installation's name", () => {
     expect(hasClass(link.parentElement, "shrink-0")).toBe(false);
   });
 
-  test("leaves the destinations room beside a long name from 1024px up", () => {
-    staffShell({ name: LONG });
+  test("gives way to the destinations, which keep their full width in the row", () => {
+    const { container } = staffShell({ name: LONG });
 
-    expect(hasClass(screen.getByRole("link", { name: LONG }).parentElement, "wide:max-w-1/3")).toBe(true);
+    const row = container.querySelector('[data-slot="app-bar-nav"]');
+    expect(hasClass(row, "shrink-0")).toBe(true);
+    expect(hasClass(row, "grow")).toBe(true);
+  });
+
+  test("is not capped where there is no row to make room for", () => {
+    render(
+      <FocusShell locale="en" theme="system" dict={en} name={LONG}>
+        <p>form</p>
+      </FocusShell>,
+    );
+
+    expect(screen.getByText(LONG).closest("div")?.className).not.toMatch(/max-w-/);
   });
 
   test("takes two lines at phone width rather than push the controls onto a row of their own", () => {
