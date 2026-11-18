@@ -475,3 +475,17 @@
     margin: 18mm;
   }
 }
+
+/**
+ * iOS Safari zooms the page when a focused field is set under 16px, and the
+ * scale's `control` step is 15px. The code editor and the prose editor are
+ * already 17px and 18px, so they are left alone. Unlayered on purpose: a layered rule would
+ * lose to the `text-control` utility on the element. Matches `narrow`.
+ */
+@media (width < 47.5rem) {
+  input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="range"], [type="color"]),
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+}
