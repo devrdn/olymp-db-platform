@@ -217,19 +217,23 @@ the `SMTP_*` settings, `SELF_SIGNUP_ENABLED`, `DEVICE_COOKIE_SECRET`, the
 session, login-throttle and rate settings, the `GAME_*` limits and the
 `QUERY_*` settings (the runner takes the `QUERY_*` limits and the game-cluster
 memory settings, the API the rest). A value left empty is not forwarded, so the
-program's default applies. Computed for the host, whatever the file says:
-the database and Redis addresses, the upload and cover directories,
-`PUBLIC_ORIGINS`, `TRUSTED_PROXIES`, `QUERY_RUNNER_ADDR`, `ENV` and `LOG_LEVEL`,
-and the API's listen port, which follows `API_PORT`. `COOKIE_SECURE` and
+program's default applies. Computed for the host, whatever the file says: the
+Redis address, the upload and cover directories, `PUBLIC_ORIGINS`,
+`TRUSTED_PROXIES`, `ENV` and `LOG_LEVEL`, the API's listen port (from
+`API_PORT`) and the Query Runner's address (`localhost` and the port of the
+file's `QUERY_RUNNER_ADDR`). The database addresses are built from the file's
+credentials and ports; a `CORE_DB_DSN` or `GAME_DB_DSN` the file sets itself is
+used as written. `COOKIE_SECURE` and
 `INTERNAL_ADDR` are not forwarded either: the first would make a browser drop
 the session cookie over plain http, the second would move the port the dev
 Prometheus job scrapes. `make front` and `make front-start` pass `API_ORIGIN`
 only; the interface's other settings are the stack's (`INGRESS_SECRET`) or are
 set by the target (`COOKIE_SECURE`).
 
-**Fix.** A setting outside those lists goes in the shell for that command:
-`SOME_SETTING=value make run`. For a configuration that reads the whole file,
-use the stack.
+**Fix.** A setting outside those lists goes on the make command line:
+`make SOME_SETTING=value run`. A variable there beats the file; one in the
+shell does not, because the Makefile reads the file itself. For a configuration
+that reads the whole file, use the stack.
 
 ### `still carries the placeholder from deploy/.env.example`
 

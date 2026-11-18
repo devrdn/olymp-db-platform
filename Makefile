@@ -44,7 +44,11 @@ API_PORT         ?= 8080
 # runner's listen address is derived from this one. The host is not: the
 # runner listens on loopback, because it runs whatever database and policy a
 # request names and a laptop in a lecture hall is on that hall's network.
-QUERY_RUNNER_ADDR ?= localhost:9100
+#
+# The file's value is the compose service's (`queryrunner:9100`), which a host
+# process cannot resolve, so only its port is taken. `:=` for the reason
+# REDIS_ADDR below is; a command-line assignment still wins.
+QUERY_RUNNER_ADDR := localhost:$(or $(lastword $(subst :, ,$(QUERY_RUNNER_ADDR))),9100)
 QUERY_RUNNER_LISTEN ?= 127.0.0.1:$(lastword $(subst :, ,$(QUERY_RUNNER_ADDR)))
 # The same reasoning for the runner's metrics listener, which is unauthenticated:
 # only its port is taken from deploy/.env's value, and `off` passes through
@@ -401,7 +405,6 @@ run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
 		HTTP_ADDR=":$(API_PORT)" \
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
-		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		GAME_UPLOAD_DIR="$(GAME_UPLOAD_DIR)" \
 		COVER_DIR="$(COVER_DIR)" \
 		PUBLIC_ORIGINS="$(FRONT_ORIGIN)" \
@@ -813,11 +816,13 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 # echoes and which would put the secrets among them in `ps`. A setting the file
 # leaves empty is not exported, so the program's own default applies.
 #
-# Not forwarded, because the file's value is the container's: CORE_DB_DSN,
-# REDIS_ADDR, GAME_PROVISIONER_DSN, GAME_DB_DSN, GAME_DB_WRITER_DSN,
-# QUERY_RUNNER_ADDR, QUERY_RUNNER_METRICS_ADDR, GAME_UPLOAD_DIR, COVER_DIR,
-# PUBLIC_ORIGINS and TRUSTED_PROXIES are computed above or in the recipes for
-# the host. ENV and LOG_LEVEL stay development and debug. COOKIE_SECURE=true
+# Not forwarded, because the file's value is the container's: REDIS_ADDR,
+# QUERY_RUNNER_ADDR, GAME_UPLOAD_DIR and COVER_DIR are computed above whatever
+# the file says, and PUBLIC_ORIGINS, TRUSTED_PROXIES and the runner's listen
+# addresses are set in the recipes. CORE_DB_DSN and GAME_DB_DSN (which
+# GAME_PROVISIONER_DSN is built from) are built from the file's credentials and
+# ports, and a value the file gives for them itself is used as written.
+# QUERY_RUNNER_METRICS_ADDR contributes only its port. ENV and LOG_LEVEL stay development and debug. COOKIE_SECURE=true
 # would stop a browser keeping the cookie over plain http, and INTERNAL_ADDR
 # would move the port the dev Prometheus job scrapes.
 #
