@@ -105,14 +105,15 @@ and run (`npm ci && npm run dev`); only those two checks need `docs/api/`.
 
 ### `node_modules` is a symlink to another checkout
 
-**Symptom.** `make front-install` does nothing although dependencies are wrong,
-or the bundler complains about files outside the project.
+**Symptom.** The bundler complains about files outside the project, or
+dependencies are those of another checkout.
 
-**Cause.** The target only checks that `frontend/node_modules` exists; a
-symlink satisfies it.
+**Cause.** `frontend/node_modules` is a symlink, so what it holds is the other
+checkout's install.
 
-**Fix.** `rm frontend/node_modules && make front-install`, so this checkout has
-its own install.
+**Fix.** `make front-install`. A symlinked `node_modules` is never trusted: the
+target runs `npm ci`, which replaces the link with an install of this checkout's
+own.
 
 ## Configuration
 
@@ -761,31 +762,29 @@ builds the address from `GAME_DB_USER`, `GAME_DB_PASSWORD`, `GAME_DB_PORT` and
 
 ## Frontend
 
-### The first `make front` is slow, and stale after a pull
+### The first `make front` is slow
 
-**Symptom.** The first run spends a while installing; after pulling new commits
-the build says a module cannot be resolved.
+**Symptom.** The first run spends a while installing.
 
-**Cause.** `make front-install` runs `npm ci` only when `frontend/node_modules` is
-missing. It never notices a changed `package-lock.json`.
+**Cause.** `make front-install` runs `npm ci` when `frontend/node_modules` is
+missing, or when the hash of `package-lock.json` differs from the one stamped in
+`frontend/node_modules/.lockfile.sha256` after the last install. After a pull
+that changes the lockfile the next `make front` reinstalls by itself.
 
-**Fix.**
-
-```bash
-cd frontend && npm ci
-```
-
-Use `npm ci`, not `npm install`, so the lockfile is not rewritten.
+**Fix.** None needed. To force a reinstall, delete `frontend/node_modules`; run
+`npm ci`, not `npm install`, so the lockfile is not rewritten.
 
 ### Node is too old
 
 **Symptom.** Next.js says your Node.js version is below its minimum, or `npm ci`
 fails.
 
-**Cause.** The repository does not pin Node. The project is built and tested on
-Node 22.
+**Cause.** The project is built and tested on Node 22, which `engines` in
+`frontend/package.json` (`>=22 <23`) and `frontend/.nvmrc` declare. npm only
+warns about another version, so a different one can install and then fail later.
 
-**Fix.** Install Node 22 LTS.
+**Fix.** Install Node 22 LTS; with nvm, `nvm use` in `frontend/` reads
+`.nvmrc`.
 
 ### Type checking fails on a fresh checkout
 

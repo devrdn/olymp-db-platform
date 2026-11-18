@@ -13,6 +13,10 @@ page reads and writes, the play screen, and step-by-step recipes.
 
 ## Running it
 
+Node 22 is required, the version CI and the image use: `engines` in
+`package.json` and `.nvmrc` declare it, and `nvm use` here selects it. npm
+warns about any other version rather than refusing it.
+
 From the repository root, which is where the environment lives:
 
 ```bash

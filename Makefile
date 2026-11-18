@@ -450,8 +450,19 @@ bootstrap: require-env ## Create the first administrator (idempotent; prints the
 front: front-install ## Run the interface against the dev API
 	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" npm run dev
 
-front-install: ## Install the interface's dependencies if they are missing
-	@test -d $(FRONTEND)/node_modules || (cd $(FRONTEND) && npm ci)
+# The stamp is the lockfile's hash, written inside node_modules after a
+# successful `npm ci`, so deleting node_modules deletes it. npm's own
+# node_modules/.package-lock.json is not a substitute: it describes the installed
+# tree, not package-lock.json, and a symlinked node_modules carries another
+# checkout's copy. A symlink is therefore always reinstalled, which replaces it
+# with a directory of this checkout's own.
+front-install: ## Install the interface's dependencies when missing or the lockfile changed
+	@cd $(FRONTEND) && \
+	stamp=node_modules/.lockfile.sha256; \
+	want=$$( { sha256sum package-lock.json 2>/dev/null || shasum -a 256 package-lock.json; } | cut -d' ' -f1 ) && \
+	if [ -L node_modules ] || [ ! -f "$$stamp" ] || [ "$$(cat "$$stamp")" != "$$want" ]; then \
+		npm ci && echo "$$want" > "$$stamp"; \
+	fi
 
 # API_ORIGIN is needed here as well as at start: the /api/* rewrite is computed
 # when `next build` runs, and a build without it adds no rule.
