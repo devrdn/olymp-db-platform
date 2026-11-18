@@ -6,6 +6,7 @@
 #     sets, through the environment and never on the echoed command line, while
 #     the container-only values (REDIS_ADDR, QUERY_RUNNER_ADDR, GAME_UPLOAD_DIR,
 #     ENV) are the host's;
+#   - a value on the make command line beats the file, and the shell does not;
 #   - an empty API_PORT still gives the API and the interface a port;
 #   - a value make cannot expand, an open `$(` or `${` such as a provider may
 #     put in a secret, changes nothing in `make backup`, `make deploy` or
@@ -103,6 +104,24 @@ for s in "${SECRETS[@]}"; do
 	if grep -qF "$s" "$WORK/run.out" "$WORK/runner.out"; then fail "$s is on an echoed command line"
 	else pass "$s is on no echoed command line"; fi
 done
+
+echo "== a value on the make command line"
+# What the troubleshooting page tells a developer to type: the command line
+# beats the file, an empty value included, and the shell does not.
+rm -f "$api"
+env -i PATH="$WORK/bin:/usr/bin:/bin" HOST_CHECK_DUMP="$WORK" SMTP_PORT=9999 \
+	"$MAKE_BIN" --no-print-directory -C "$ROOT" ENV_FILE="$normal" \
+	SMTP_HOST=localhost SMTP_TLS=none QUERY_PER_MINUTE=120 run > "$WORK/cli.out" 2>&1 ||
+	{ cat "$WORK/cli.out"; fail "make run exited non-zero"; }
+[ -f "$api" ] || { fail "api was not started"; : > "$api"; }
+has "$api" SMTP_HOST localhost
+has "$api" SMTP_TLS none
+has "$api" QUERY_PER_MINUTE 120
+has "$api" SMTP_PORT 2525
+rm -f "$api"
+mk "$normal" SMTP_PORT= run > "$WORK/blank.out" 2>&1 || { cat "$WORK/blank.out"; fail "make run exited non-zero"; }
+[ -f "$api" ] || { fail "api was not started"; : > "$api"; }
+has "$api" SMTP_PORT ""
 
 echo "== an empty API_PORT"
 noport="$(fixture noport API_PORT=)"

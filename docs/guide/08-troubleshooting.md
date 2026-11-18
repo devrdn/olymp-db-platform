@@ -53,7 +53,7 @@ The ports the project uses on your machine:
 | 5433 | Game cluster (PostgreSQL) | `make dev-up`, on loopback | `GAME_DB_PORT` |
 | 5434 | Test game cluster | `make test-game` and friends only | `GAME_TEST_DB_PORT` |
 | 6379 | Redis | `make dev-up`, on loopback | `REDIS_PORT` |
-| 8080 | Core API | `make run` | none: `HTTP_ADDR` is read from the shell |
+| 8080 | Core API | `make run` | `API_PORT`, which `make run` turns into `HTTP_ADDR` |
 | 9090 | API metrics, `/healthz`, `/readyz` | `make run` | none: `INTERNAL_ADDR` is read from the shell |
 | 9100, 9101 | Query Runner (gRPC, metrics), on loopback | `make runner` | the port of `QUERY_RUNNER_ADDR` |
 | 3000 | Interface | `make front`, `make front-start` | `FRONT_PORT` only sets the origin `make run` accepts (`FRONT_ORIGIN`); it does not move the interface, which listens on `PORT` |
@@ -410,9 +410,11 @@ mail off there is no "Forgot password?" and no password sign-up, and
 `SELF_SIGNUP_ENABLED=true` logs that password sign-up is not offered.
 
 **Fix.** Host without a port, `SMTP_FROM` and `PUBLIC_URL` set, the username and
-password together. For local work, run a catch-all SMTP sink and use
-`SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=none` with `ENV=development`
-(passed in the shell for `make run`, see above).
+password together. For local work, run a catch-all SMTP sink and pass its
+settings on the make command line, `make SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=none run`
+(`make run` already sets `ENV=development`). The shell does not beat
+`deploy/.env`, and in the file `SMTP_TLS=none` would refuse the stack's start;
+see [how the host targets read `deploy/.env`](#a-setting-in-deployenv-does-not-reach-make-run-make-runner-or-make-front).
 
 ### Sign-in provider settings
 
@@ -986,7 +988,8 @@ values. In the stack open `https://localhost` rather than `http://`. If you set
 3. `QUERY_RUNNER_TOKEN` differs between the API and the runner. The runner logs
    `query runner refused a call without a valid token`.
 4. `QUERY_RUNNER_ADDR` names a host that exists only in Compose
-   (`queryrunner:9100`) while the API runs on your machine.
+   (`queryrunner:9100`) for an API started by hand on your machine; `make run`
+   keeps only its port.
 5. In the stack, `queryrunner` is not healthy; look at `game-prepare` first.
 
 `/readyz` does not check the runner, so a green `/readyz` proves nothing here.
@@ -1013,16 +1016,19 @@ the result is too large, or `query_busy`.
 a minute per registration. A refused query still counts against the rate.
 
 **Fix.** Wait a moment, or narrow the query with `WHERE` or fewer columns. The
-API and the runner read the same `QUERY_PER_MINUTE`; in development set it in the
-shell for both processes.
+API and the runner read the same `QUERY_PER_MINUTE`, and `make run` and
+`make runner` both take it from `deploy/.env`. Change it there, or pass the same
+value to both on the make command line (`make QUERY_PER_MINUTE=120 run`, then
+`make QUERY_PER_MINUTE=120 runner`); see [how the host targets read `deploy/.env`](#a-setting-in-deployenv-does-not-reach-make-run-make-runner-or-make-front).
 
 ### Mail does not send
 
 **Symptom.** No password-setup, sign-up or reset mail; "Forgot password?" or the
 sign-up link is missing from the sign-in page.
 
-**Cause.** Mail is off (log `mail is off: SMTP_HOST is not set`; remember that
-`make run` does not read `SMTP_*` from `deploy/.env`), or the relay refuses
+**Cause.** Mail is off (log `mail is off: SMTP_HOST is not set`; `make run` takes
+`SMTP_*` from `deploy/.env` or the make command line, never the shell, see
+[how the host targets read `deploy/.env`](#a-setting-in-deployenv-does-not-reach-make-run-make-runner-or-make-front)), or the relay refuses
 messages (the answer is in the API log and in the administrator's test message),
 or a startup refusal (see Configuration), or the per-minute cap
 (`SMTP_MAX_PER_MINUTE`) is reached.

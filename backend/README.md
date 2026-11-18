@@ -783,6 +783,10 @@ curl -s localhost:8080/api/v1/version && curl -s localhost:9090/readyz
 rest of what the configuration reads), except the ones whose value is the
 container's: addresses, directories, `ENV`, `LOG_LEVEL`, `COOKIE_SECURE`. The
 API listens on `API_PORT`. A value left empty keeps the program's default.
+A file shared with a stack therefore makes the host API act on the stack's
+settings: with its relay and `PUBLIC_URL` set, `make run` sends real mail with
+links to that site, to a restored production dump's accounts too. Turn mail off
+for local work on the command line: `make SMTP_HOST= run`.
 
 Note that `make run` sets `ENV=development`, which turns off the Secure flag on
 the session cookie. That is required locally: a browser discards a Secure cookie
