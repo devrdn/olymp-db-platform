@@ -127,9 +127,11 @@ never start. Read the message, then fix the variable it names.
 ### The `deploy/.env` file
 
 **Symptom.** `deploy/.env is missing. Create it first:`, from a `make` target
-that checks for it (`run`, `runner`, `migrate-up`, `bootstrap`, `game-roles`
-and others). `make dev-up` and `make stack-up` do not check; there Docker
-Compose says a required variable such as `CORE_DB_USER` is missing a value.
+that checks for it (`run`, `runner`, `migrate-up`, `bootstrap`, `game-roles`,
+`dev-up`, `stack-up`, `stack-down` and others). Only `make deployed`, which
+merely lists what is running, goes without. A file written by hand with fewer
+variables passes that check and then Docker Compose says a required variable
+such as `CORE_DB_USER` is missing a value.
 
 **Cause.** The file was never created, or it was written by hand with fewer
 variables than Compose requires. Compose reads the whole file for every command
@@ -497,20 +499,21 @@ file (see the `API_PORT` entry above).
 
 ### `make stack-bootstrap` or another stack command cannot find its images
 
-**Symptom.** After `make stack-up` worked, `make stack-bootstrap` (or a
-`docker compose -f deploy/docker-compose.yml ...` command typed by hand) tries to
+**Symptom.** After `make stack-up` worked, a
+`docker compose -f deploy/docker-compose.yml ...` command typed by hand tries to
 pull `db-contest-backend:dev` from the registry and fails, or says the image tag
 does not exist.
 
 **Cause.** `make stack-up` builds and tags the images with the output of
-`git describe` (for example `v0.10.1-6-gabc1234` or `abc1234-dirty`). The other
-commands do not pass that value, so Compose falls back to the tag `dev`, which
-does not exist. Without a `.git` directory both use `dev` and it works.
+`git describe` (for example `v0.10.1-6-gabc1234` or `abc1234-dirty`). Every
+`stack-*` target passes that same value to Compose; a command typed by hand does
+not, so Compose falls back to the tag `dev`, which does not exist. Without a
+`.git` directory both use `dev` and it works.
 
-**Fix.** Pass the same value to every command:
+**Fix.** Prefer the `make` target. For a command of your own, pass the same value:
 
 ```bash
-VERSION=$(git describe --tags --always --dirty) make stack-bootstrap
+VERSION=$(git describe --tags --always --dirty) docker compose -f deploy/docker-compose.yml ps
 ```
 
 ### The subnet is taken
@@ -609,14 +612,17 @@ anyway, accept emulation: `DOCKER_DEFAULT_PLATFORM=linux/amd64 make deploy VERSI
 **Symptom.** `migrate: initialise migration driver: ...` with a refused
 connection, or PostgreSQL saying it is starting up.
 
-**Cause.** `make dev-up` returns as soon as the containers are created; the core
-database takes seconds on a first start.
+**Cause.** `make dev-up` waits for the core database, the game cluster and Redis
+to pass their health checks, so `make dev-up && make migrate-up` is safe. This
+happens when the database was started some other way (a bare
+`docker compose up -d`, which returns as soon as the containers are created), or
+when `make dev-up` itself timed out and printed which service is unhealthy.
 
 **Fix.** Wait until it is healthy, then run it again (`migrate up` is safe to
 repeat):
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps pg-core
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml ps pg-core
 make migrate-up
 ```
 

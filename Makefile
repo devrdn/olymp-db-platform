@@ -808,8 +808,10 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 # The API and the runner share one token (see `run` above).
 run runner: export QUERY_RUNNER_TOKEN := $(QUERY_RUNNER_TOKEN)
 
-dev-up: ## Start PostgreSQL and Redis for local development
-	$(COMPOSE_DEV) up -d pg-core pg-game redis
+# --wait returns once pg-core, pg-game and redis pass their health checks, so
+# `make dev-up && make migrate-up` does not race a cold start.
+dev-up: require-env ## Start PostgreSQL and Redis for local development
+	$(COMPOSE_DEV) up -d --wait pg-core pg-game redis
 
 # Prometheus, Loki, Promtail and Grafana, without pulling in the containerized
 # api/caddy/pg-core (same reasoning as stack-observability below). Combine
@@ -826,16 +828,16 @@ dev-up: ## Start PostgreSQL and Redis for local development
 # containers; a bare `go run` process on the host has no container to find.
 # Watch its own terminal (or your own `tee` to a file) for dev logs — the
 # Loki/Grafana log view only ever shows the containerized api.
-dev-observability: ## Add Prometheus, Loki, Promtail and Grafana to the dev stack
+dev-observability: require-env ## Add Prometheus, Loki, Promtail and Grafana to the dev stack
 	$(COMPOSE_DEV) --profile observability up -d prometheus loki promtail grafana
 
 # A browser UI for the core database (Adminer) — dev only. Its login screen
 # already knows the server (pg-core); type in CORE_DB_USER / CORE_DB_PASSWORD
 # / CORE_DB_NAME from deploy/.env to connect.
-dev-db-ui: ## Add a database browser (Adminer) to the dev stack
+dev-db-ui: require-env ## Add a database browser (Adminer) to the dev stack
 	$(COMPOSE_DEV) --profile dbui up -d adminer
 
-dev-down: ## Stop the development infrastructure
+dev-down: require-env ## Stop the development infrastructure
 	# dev-up starts redis by naming it, which activates its "shared" profile for
 	# that command only. A plain `down` does not re-activate the profile, so it
 	# would leave redis running and then refuse to remove the network it is still
@@ -843,7 +845,7 @@ dev-down: ## Stop the development infrastructure
 	# the test targets' own game cluster included.
 	$(COMPOSE_DEV) --profile shared --profile observability --profile dbui --profile full --profile test down
 
-dev-logs: ## Follow the development infrastructure logs
+dev-logs: require-env ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
 
 images: ## Build the release images from this working tree
@@ -907,20 +909,23 @@ deployed: ## Print the versions currently running
 # `stack-up` is not "production": it is production's shape, from your code.
 # A server runs `make deploy VERSION=...`, which cannot build anything at all.
 
-stack-up: ## Build the whole stack from this working tree and start it
+# Every stack-* target passes the VERSION stack-up tags the images with: without
+# it Compose looks for the tag `dev`, which a build from a git checkout never
+# made. Typed by hand, the same command needs the same prefix.
+stack-up: require-env ## Build the whole stack from this working tree and start it
 	VERSION=$(VERSION) $(COMPOSE_BUILD) up -d --build
 
 stack-bootstrap: require-env ## Create the first administrator inside the stack
-	$(COMPOSE) --profile bootstrap run --rm bootstrap
+	VERSION=$(VERSION) $(COMPOSE) --profile bootstrap run --rm bootstrap
 
-stack-observability: ## Add Prometheus, Loki, Promtail and Grafana without touching the rest
+stack-observability: require-env ## Add Prometheus, Loki, Promtail and Grafana without touching the rest
 	# Services with no `profiles:` key (api, caddy, pg-core, migrate) are
 	# Compose's "default" set and start on ANY `up`, profile flag or not —
 	# `--profile` only lifts the gate on profiled services, it never narrows
 	# the run. Naming the services explicitly is what actually limits `up`
 	# to them; --profile is still required or these four would be skipped
 	# as "not in an active profile".
-	$(COMPOSE) --profile observability up -d prometheus loki promtail grafana
+	VERSION=$(VERSION) $(COMPOSE) --profile observability up -d prometheus loki promtail grafana
 
-stack-down: ## Stop the full stack
-	$(COMPOSE) --profile bootstrap --profile observability --profile shared down
+stack-down: require-env ## Stop the full stack
+	VERSION=$(VERSION) $(COMPOSE) --profile bootstrap --profile observability --profile shared down
