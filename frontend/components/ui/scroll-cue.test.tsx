@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { scrollCue } from "./scroll-cue";
+import { SCROLL_DRIVEN_CUE, scrollCue } from "./scroll-cue";
 import { cuedEdges, measureScroller, scrollRowTo } from "./scroll-cue-test-support";
 
 function Row({ items = ["Story", "Questions", "Notes"] }: { items?: string[] }) {
@@ -85,7 +88,7 @@ describe("the scroll cue", () => {
 
   // There the stylesheet follows the scroll position by itself, before any script.
   test("leaves the row to the stylesheet where the browser has scroll-driven animations", () => {
-    vi.stubGlobal("CSS", { supports: (query: string) => query.startsWith("animation-timeline") });
+    vi.stubGlobal("CSS", { supports: (query: string) => query === SCROLL_DRIVEN_CUE });
     measureScroller({ scrollWidth: 446, clientWidth: 375 });
     render(<Row />);
     const row = screen.getByTestId("row");
@@ -93,5 +96,39 @@ describe("the scroll cue", () => {
     scrollRowTo(row, 30);
 
     expect(cuedEdges(row)).toEqual([]);
+  });
+
+  // A timeline without ranges or an `auto` duration would fade the start edge
+  // of a row that has not moved, so the stylesheet does not take it either.
+  test("marks the edges itself where the browser has scroll timelines but not the rest", () => {
+    vi.stubGlobal("CSS", { supports: (query: string) => query === "animation-timeline: scroll()" });
+    measureScroller({ scrollWidth: 446, clientWidth: 375 });
+    render(<Row />);
+
+    expect(cuedEdges(screen.getByTestId("row"))).toEqual(["end"]);
+  });
+});
+
+/** The rule itself, read from globals.css: jsdom applies no stylesheet. */
+describe("the scroll-cue utility", () => {
+  const css = readFileSync(path.resolve(__dirname, "../../app/globals.css"), "utf8");
+  const utility = css.slice(css.indexOf("@utility scroll-cue"), css.indexOf("@keyframes scroll-cue-start"));
+
+  test("animates under the same condition the script tests, so exactly one of them runs", () => {
+    expect(utility).toContain(`@supports ${SCROLL_DRIVEN_CUE} {`);
+  });
+
+  // Where `@property` is missing, an unset width would void the whole mask.
+  test("reads each fade width with a fallback of no fade", () => {
+    const reads = utility.match(/var\(--scroll-cue-(?:start|end)[^)]*\)/g) ?? [];
+
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) expect(read).toMatch(/, 0px\)$/);
+  });
+
+  // `scrollIntoView` and focus would otherwise park a tab, or the dot on it,
+  // under the fade it is being brought out of.
+  test("keeps what is scrolled into view clear of the fade", () => {
+    expect(utility).toContain("scroll-padding-inline: var(--scroll-cue);");
   });
 });

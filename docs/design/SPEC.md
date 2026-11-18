@@ -460,6 +460,8 @@ row showed four and a half, with nothing to say the others exist. A row of
 tabs that scrolls sideways (the sections on a phone, the side panel's tabs,
 the SQL tabs, a `TabStrip`) fades the edge more tabs are hidden past, and only
 while they are: the `scroll-cue` utility, with `scrollCue` as the row's `ref`.
+A tab scrolled into view, by selection or by an unread dot, stops clear of
+the fade.
 A scroll-driven animation follows the scroll where the browser has one, and a
 script marks the edges where it has not. Where neither runs nothing fades, so
 the cue can go missing but never hide a tab.

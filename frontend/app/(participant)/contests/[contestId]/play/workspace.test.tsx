@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
+import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
@@ -227,7 +228,8 @@ describe("the play workspace", () => {
     show();
 
     for (const name of [en.participant.play.workspace.tabs.result, en.participant.play.workspace.tabs.log]) {
-      expect(screen.getByRole("button", { name })).toHaveClass(
+      expectTouchTarget(
+        screen.getByRole("button", { name }),
         "pointer-coarse:min-h-11",
         "pointer-coarse:relative",
         "pointer-coarse:after:absolute",

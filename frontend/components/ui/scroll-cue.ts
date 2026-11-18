@@ -38,6 +38,14 @@ export function scrollCue(row: HTMLElement | null): (() => void) | undefined {
   };
 }
 
+/**
+ * What the stylesheet needs to follow the scroll itself, and the condition of
+ * its `@supports` rule (globals.css). A browser with a timeline but no ranges
+ * or no `auto` duration would fade the start of a row that has not moved.
+ */
+export const SCROLL_DRIVEN_CUE =
+  "(animation-timeline: scroll()) and (animation-range: 0 100%) and (animation-duration: auto)";
+
 function followsScrollInCss(): boolean {
-  return typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("animation-timeline: scroll()");
+  return typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports(SCROLL_DRIVEN_CUE);
 }

@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
+import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 import type { GameSchema } from "@/lib/api/schema";
 
@@ -111,19 +112,17 @@ describe("the schema panel", () => {
     expect(scroller!.className).toMatch(/(^|\s)relative(\s|$)/);
   });
 
-  // jsdom matches no media query, so the class is the contract; a browser at
-  // 375px with touch measured the target.
   test("a table's row is 44px high on a touch screen, and so are both its buttons", () => {
     panel();
 
     const row = chevron("guests").parentElement;
-    expect(row).toHaveClass("pointer-coarse:min-h-11");
+    expectTouchTarget(row, "pointer-coarse:min-h-11");
     // The row is a flex line; a button that did not stretch would leave the
     // rest of its height to nobody.
-    expect(chevron("guests")).toHaveClass("self-stretch", "pointer-coarse:min-w-11");
-    expect(nameButton("guests")).toHaveClass("pointer-coarse:self-stretch");
+    expectTouchTarget(chevron("guests"), "self-stretch", "pointer-coarse:min-w-11");
+    expectTouchTarget(nameButton("guests"), "pointer-coarse:self-stretch");
     // The wider chevron pushes the name right; the columns follow it.
-    expect(screen.getByText("full_name").closest("li")).toHaveClass("pl-7", "pointer-coarse:pl-12");
+    expectTouchTarget(screen.getByText("full_name").closest("li"), "pl-7", "pointer-coarse:pl-12");
   });
 
   test("a table is collapsed and opened again by its chevron", async () => {

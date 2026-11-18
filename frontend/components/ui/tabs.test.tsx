@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
+import { expectTouchTarget } from "./touch-target-test-support";
 
 function Harness({ defaultValue }: { defaultValue: string }) {
   return (
@@ -20,11 +21,10 @@ function Harness({ defaultValue }: { defaultValue: string }) {
 }
 
 describe("the hand-rolled tabs", () => {
-  // jsdom matches no media query, so the class is the contract.
   test("gives every tab a 44px target on a touch screen", () => {
     render(<Harness defaultValue="one" />);
 
-    for (const tab of screen.getAllByRole("tab")) expect(tab).toHaveClass("pointer-coarse:min-h-11");
+    for (const tab of screen.getAllByRole("tab")) expectTouchTarget(tab, "pointer-coarse:min-h-11");
   });
 
   // State inside a hidden panel survives only if the panel stays in the DOM.

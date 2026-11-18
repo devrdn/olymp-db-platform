@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import type { ResetState } from "./requests";
@@ -40,7 +41,7 @@ describe("ResetDatabase", () => {
   test("is 44px high on a touch screen", () => {
     show();
 
-    expect(screen.getByRole("button", { name: t.open })).toHaveClass("pointer-coarse:h-11");
+    expectTouchTarget(screen.getByRole("button", { name: t.open }), "pointer-coarse:h-11");
   });
 
   test("asks first, saying the tables return to the start and the participant's changes are lost", async () => {

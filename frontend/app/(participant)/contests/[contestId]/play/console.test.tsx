@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
+import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
@@ -124,12 +125,10 @@ describe("the SQL editor", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  // jsdom matches no media query, so the class is the contract; a browser at
-  // 375px with touch measured the target.
   test("the run button is 44px high on a touch screen and keeps its size under a mouse", () => {
     render(<ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: en.participant.console.run })).toHaveClass("h-7", "pointer-coarse:h-11");
+    expectTouchTarget(screen.getByRole("button", { name: en.participant.console.run }), "h-7", "pointer-coarse:h-11");
   });
 
   test("disables the run button while a query is in flight", async () => {

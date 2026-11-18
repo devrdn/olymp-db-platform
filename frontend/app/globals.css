@@ -30,13 +30,18 @@
 
 @utility scroll-cue {
   --scroll-cue: --spacing(8);
+  /* The fallbacks are for browsers without `@property`, where an unset
+     width would void the whole mask. */
   mask-image: linear-gradient(
     to right,
     transparent,
-    black var(--scroll-cue-start),
-    black calc(100% - var(--scroll-cue-end)),
+    black var(--scroll-cue-start, 0px),
+    black calc(100% - var(--scroll-cue-end, 0px)),
     transparent
   );
+  /* What `scrollIntoView` or focus brings in, such as a tab with an unread
+     dot, stops clear of the fade rather than under it. */
+  scroll-padding-inline: var(--scroll-cue);
 
   &[data-cue-start] {
     --scroll-cue-start: var(--scroll-cue);
@@ -47,8 +52,10 @@
   }
 
   /* Each fade grows over the first or last stretch of the scroll. A row that
-     does not scroll has an inactive timeline, so neither fade appears. */
-  @supports (animation-timeline: scroll()) {
+     does not scroll has an inactive timeline, so neither fade appears. The
+     condition is `SCROLL_DRIVEN_CUE` in scroll-cue.ts, word for word: a
+     browser short of any part gets the script instead. */
+  @supports (animation-timeline: scroll()) and (animation-range: 0 100%) and (animation-duration: auto) {
     /* Longhands: the build expands the shorthand with a duration of 0s,
        which jumps each fade to its end at once. `auto` fills the range. */
     animation-name: scroll-cue-start, scroll-cue-end;

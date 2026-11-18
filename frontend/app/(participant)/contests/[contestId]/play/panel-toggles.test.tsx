@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider, useSchemaPanel } from "./panel-toggles";
@@ -65,13 +66,11 @@ describe("the panel toggles", () => {
     }
   });
 
-  // jsdom matches no media query, so the class is the contract; a browser at
-  // 375px with touch measured the target.
   test("grow to a 44px target on a touch screen and stay 24px under a mouse", () => {
     show(aContest());
 
     for (const name of [t.schema, t.side, t.bottom]) {
-      expect(screen.getByRole("button", { name })).toHaveClass("size-6", "pointer-coarse:size-11");
+      expectTouchTarget(screen.getByRole("button", { name }), "size-6", "pointer-coarse:size-11");
     }
   });
 
