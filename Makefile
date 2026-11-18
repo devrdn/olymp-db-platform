@@ -336,6 +336,13 @@ scheduled-backup-check: ## Prove the backup rotation, the scheduled run and its 
 edge-check: ## Prove what deploy/Caddyfile forwards, with and without an edge proxy
 	deploy/edge-check.sh
 
+# What `make run` and `make runner` take from deploy/.env, and that a value make
+# cannot expand stops no other target, on a throwaway env file with `go`
+# stubbed. Needs neither Docker nor Go; never reads deploy/.env.
+.PHONY: host-targets-check
+host-targets-check: ## Prove what the host targets take from deploy/.env, and that nothing else expands it
+	deploy/host-targets-check.sh
+
 # The alert rules and the dashboard to import (deploy/observability/import):
 # every series they read is one the services register, the rules load and
 # their unit tests pass, and every dashboard query parses. promtool runs in a
@@ -852,8 +859,15 @@ HOST_RUNNER_SETTINGS := \
 	QUERY_QUEUE_WAIT QUERY_PER_MINUTE QUERY_CONN_IDLE_TIMEOUT QUERY_IDLE_CONNS \
 	QUERY_EXTRA_FUNCTIONS GAME_DB_MEMORY_BYTES GAME_DB_PROCESS_MEMORY_BYTES
 
+# Expanded only when the goal names the target: testing a value expands it, and
+# a value make cannot expand (a secret with an open `$(`) would otherwise stop
+# every target, the scheduled `make backup` on a server among them.
+ifneq ($(filter run,$(MAKECMDGOALS)),)
 $(foreach v,$(HOST_API_SETTINGS),$(if $($(v)),$(eval run: export $(v) := $$($(v)))))
+endif
+ifneq ($(filter runner,$(MAKECMDGOALS)),)
 $(foreach v,$(HOST_RUNNER_SETTINGS),$(if $($(v)),$(eval runner: export $(v) := $$($(v)))))
+endif
 
 # --wait returns once pg-core, pg-game and redis pass their health checks, so
 # `make dev-up && make migrate-up` does not race a cold start.
