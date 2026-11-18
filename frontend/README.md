@@ -30,8 +30,12 @@ only worth showing on a screen where queries can be run. The deployed stack
 already runs it (`deploy/docker-compose.yml`); only development had to be
 told to.
 
-`make front` derives `API_ORIGIN` from `deploy/.env`, the same file the API and
-the containers read, so a port changes in one place. `make front-check` runs
+`make front`, `make front-build` and `make front-start` derive `API_ORIGIN` from
+`API_PORT` in `deploy/.env`, the same file the API and the containers read, so a
+port changes in one place; the build needs it too, because the `/api/*` rewrite
+is computed then. They pass no other setting. `make run` and `make runner` forward
+the settings the API and the runner read, and say in the Makefile which they
+leave out. `make front-check` runs
 everything CI runs except the smoke test, and `make front-build` +
 `make front-start` serve the production build locally — which is the only way
 to see the behaviour that differs there, the content policy among it.

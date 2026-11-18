@@ -394,12 +394,12 @@ require-env:
 # treats a forwarded header the same way production does the moment something
 # does send one.
 #
-# QUERY_RUNNER_TOKEN, when deploy/.env sets it, is exported to `run` and
-# `runner` alike (below), so the two present and expect the same token.
-# Exported rather than written on the command line, which make echoes. Without
-# it both run unauthenticated in development and each warns at start-up.
+# The rest of what the API reads from deploy/.env reaches it through the
+# exports below `runner`, so the host processes see the settings the
+# containers do. Only the API's listen address is written here, from API_PORT.
 run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
+		HTTP_ADDR=":$(API_PORT)" \
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
 		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		GAME_UPLOAD_DIR="$(GAME_UPLOAD_DIR)" \
@@ -441,8 +441,10 @@ front: front-install ## Run the interface against the dev API
 front-install: ## Install the interface's dependencies if they are missing
 	@test -d $(FRONTEND)/node_modules || (cd $(FRONTEND) && npm ci)
 
+# API_ORIGIN is needed here as well as at start: the /api/* rewrite is computed
+# when `next build` runs, and a build without it adds no rule.
 front-build: front-install ## Build the interface for production
-	cd $(FRONTEND) && npm run build
+	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" npm run build
 
 # COOKIE_SECURE=false is not optional here, and it is the whole reason this
 # line has a comment. `next start` sets NODE_ENV=production, but this serves
@@ -805,8 +807,48 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 		QUERY_RUNNER_METRICS_ADDR="$(QUERY_RUNNER_METRICS_LISTEN)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
 
-# The API and the runner share one token (see `run` above).
-run runner: export QUERY_RUNNER_TOKEN := $(QUERY_RUNNER_TOKEN)
+# What deploy/.env gives the two host processes: every setting the API
+# (config.Load) and the runner (config.LoadRunner) read whose value means the
+# same on the host. Exported, never written on the command line, which make
+# echoes and which would put the secrets among them in `ps`. A setting the file
+# leaves empty is not exported, so the program's own default applies.
+#
+# Not forwarded, because the file's value is the container's: CORE_DB_DSN,
+# REDIS_ADDR, GAME_PROVISIONER_DSN, GAME_DB_DSN, GAME_DB_WRITER_DSN,
+# QUERY_RUNNER_ADDR, QUERY_RUNNER_METRICS_ADDR, GAME_UPLOAD_DIR, COVER_DIR,
+# PUBLIC_ORIGINS and TRUSTED_PROXIES are computed above or in the recipes for
+# the host. ENV and LOG_LEVEL stay development and debug. COOKIE_SECURE=true
+# would stop a browser keeping the cookie over plain http, and INTERNAL_ADDR
+# would move the port the dev Prometheus job scrapes.
+#
+# QUERY_RUNNER_TOKEN is in both lists so that the two present and expect the
+# same token; without one both run unauthenticated and each warns at start-up.
+HOST_API_SETTINGS := \
+	QUERY_RUNNER_TOKEN DEVICE_COOKIE_SECRET GAME_AUTHOR_PASSWORD \
+	PUBLIC_URL DEFAULT_LOCALE METRICS_BACKEND SHUTDOWN_TIMEOUT \
+	CORE_DB_POOL_MAX EXPORT_CONCURRENCY \
+	EVENT_REGISTRATION_ENABLED SELF_SIGNUP_ENABLED TRUSTED_EMAIL_DOMAIN \
+	MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET MICROSOFT_TENANT MICROSOFT_HOME_TENANT_ID \
+	GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_HOME_DOMAIN \
+	GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET \
+	SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD SMTP_FROM SMTP_TLS SMTP_MAX_PER_MINUTE \
+	SESSION_TTL SESSION_MAX_LIFETIME SESSION_ACCOUNT_CACHE_TTL \
+	DEVICE_COOKIE_TTL MAX_LOGIN_ATTEMPTS_PER_ADDRESS MAX_LOGIN_ATTEMPTS_PER_ACCOUNT \
+	MAX_LOGIN_ATTEMPTS_PER_DEVICE MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT \
+	PASSWORD_HASH_CONCURRENCY PASSWORD_HASH_MAX_WAIT \
+	QUERY_PER_MINUTE PLAY_READ_PER_MINUTE ANSWER_RATE_PER_MINUTE DEADLINE_GRACE \
+	GAME_POOL_DEPTH GAME_POOL_MAX GAME_CLUSTER_MAX_BYTES GAME_PROVISION_WORKERS \
+	GAME_BUILD_TIMEOUT GAME_TEMPLATE_MAX_BYTES GAME_INSTANCE_GRACE_MIN GAME_COPY_STRATEGY \
+	GAME_UPLOAD_MAX_FILE_BYTES GAME_UPLOAD_MAX_DIR_BYTES GAME_UPLOAD_TABLE_MAX_DIR_BYTES \
+	GAME_UPLOAD_CHUNK_BYTES GAME_UPLOAD_ABANDONED_AFTER
+HOST_RUNNER_SETTINGS := \
+	QUERY_RUNNER_TOKEN SHUTDOWN_TIMEOUT \
+	QUERY_DEADLINE QUERY_MAX_ROWS QUERY_MAX_BYTES QUERY_CONCURRENT QUERY_QUEUE_DEPTH \
+	QUERY_QUEUE_WAIT QUERY_PER_MINUTE QUERY_CONN_IDLE_TIMEOUT QUERY_IDLE_CONNS \
+	QUERY_EXTRA_FUNCTIONS GAME_DB_MEMORY_BYTES GAME_DB_PROCESS_MEMORY_BYTES
+
+$(foreach v,$(HOST_API_SETTINGS),$(if $($(v)),$(eval run: export $(v) := $$($(v)))))
+$(foreach v,$(HOST_RUNNER_SETTINGS),$(if $($(v)),$(eval runner: export $(v) := $$($(v)))))
 
 # --wait returns once pg-core, pg-game and redis pass their health checks, so
 # `make dev-up && make migrate-up` does not race a cold start.

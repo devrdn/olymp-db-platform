@@ -777,6 +777,13 @@ make dev-up && make migrate-up && make bootstrap && make run
 curl -s localhost:8080/api/v1/version && curl -s localhost:9090/readyz
 ```
 
+`make run` and `make runner` hand the API and the Query Runner the settings
+`deploy/.env` gives them (the sign-in providers, `SMTP_*`, `PUBLIC_URL`,
+`SELF_SIGNUP_ENABLED`, `DEVICE_COOKIE_SECRET`, the `QUERY_*` limits and the
+rest of what the configuration reads), except the ones whose value is the
+container's: addresses, directories, `ENV`, `LOG_LEVEL`, `COOKIE_SECURE`. The
+API listens on `API_PORT`. A value left empty keeps the program's default.
+
 Note that `make run` sets `ENV=development`, which turns off the Secure flag on
 the session cookie. That is required locally: a browser discards a Secure cookie
 delivered over plain HTTP, so signing in would appear to work and then fail on

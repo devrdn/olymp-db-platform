@@ -205,42 +205,31 @@ syntax, keeps quote characters, treats `#` as the start of a comment and expands
 `#` inside a password. For an SMTP password that must contain `$`, single-quote
 it (`SMTP_PASSWORD='...'`); that only helps the containers.
 
-### `make run`, `make runner` and `make front` ignore most of `deploy/.env`
+### A setting in `deploy/.env` does not reach `make run`, `make runner` or `make front`
 
-**Symptom.** You set `SMTP_HOST`, `PUBLIC_URL`, `SELF_SIGNUP_ENABLED`, a sign-in
-provider, `DEVICE_COOKIE_SECRET` or a `QUERY_*` limit in `deploy/.env`, restart
-the host process, and nothing changes. The API logs `mail is off: SMTP_HOST is not set`.
+**Symptom.** You set a value in `deploy/.env`, restart the host process, and
+nothing changes.
 
-**Cause.** The Makefile reads `deploy/.env` for its own variables and hands each
-host process a fixed list. `make run` passes the database and Redis addresses,
-the game-cluster address and author password, the upload and cover directories,
-`PUBLIC_ORIGINS`, `QUERY_RUNNER_ADDR`, `TRUSTED_PROXIES`, the Query Runner token,
-`ENV=development` and `LOG_LEVEL=debug`. `make runner` passes its two game-role
-addresses, its listen addresses and the token. `make front` passes only
-`API_ORIGIN`. Everything else comes from your shell. The containers of the stack
-read the whole file.
+**Cause.** The host targets forward the settings the API and the Query Runner
+read, and compute the rest for the host rather than copying the container's
+value. Forwarded, when the file sets them: the sign-in providers, `PUBLIC_URL`,
+the `SMTP_*` settings, `SELF_SIGNUP_ENABLED`, `DEVICE_COOKIE_SECRET`, the
+session, login-throttle and rate settings, the `GAME_*` limits and the
+`QUERY_*` settings (the runner takes the `QUERY_*` limits and the game-cluster
+memory settings, the API the rest). A value left empty is not forwarded, so the
+program's default applies. Computed for the host, whatever the file says:
+the database and Redis addresses, the upload and cover directories,
+`PUBLIC_ORIGINS`, `TRUSTED_PROXIES`, `QUERY_RUNNER_ADDR`, `ENV` and `LOG_LEVEL`,
+and the API's listen port, which follows `API_PORT`. `COOKIE_SECURE` and
+`INTERNAL_ADDR` are not forwarded either: the first would make a browser drop
+the session cookie over plain http, the second would move the port the dev
+Prometheus job scrapes. `make front` and `make front-start` pass `API_ORIGIN`
+only; the interface's other settings are the stack's (`INGRESS_SECRET`) or are
+set by the target (`COOKIE_SECURE`).
 
-**Fix.** Put the setting in the shell for that command:
-
-```bash
-SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=none SMTP_FROM=dev@example.edu \
-  PUBLIC_URL=http://localhost:3000 SELF_SIGNUP_ENABLED=true make run
-```
-
-For a configuration that reads the whole file, use the stack.
-
-### `API_PORT` does not move the API
-
-**Symptom.** After `API_PORT=8090` in `deploy/.env`, the interface shows
-`The server is unreachable. Check your connection.` while the API still listens
-on 8080.
-
-**Cause.** `API_PORT` tells `make front` where to look and sets the published
-port of the container form of the API. `make run` never passes `HTTP_ADDR`, whose
-default is `:8080`.
-
-**Fix.** Leave `API_PORT` at 8080, or move both ends: `HTTP_ADDR=:8090 make run`
-with `API_PORT=8090` in the file.
+**Fix.** A setting outside those lists goes in the shell for that command:
+`SOME_SETTING=value make run`. For a configuration that reads the whole file,
+use the stack.
 
 ### `still carries the placeholder from deploy/.env.example`
 
@@ -448,9 +437,9 @@ production build has no default. In the stack Compose sets it to
 `http://api:8080`, which is wrong on your machine because `api` exists only
 inside Compose.
 
-**Fix.** In the stack, leave it. For a production build on your host:
-`API_ORIGIN=http://localhost:8080 make front-start`. To run `npm run dev` by
-hand: `cp frontend/.env.example frontend/.env.local`.
+**Fix.** In the stack, leave it. For a production build on your host, use
+`make front-start`, which sets it for the build and the server from `API_PORT`.
+To run `npm run dev` by hand: `cp frontend/.env.example frontend/.env.local`.
 
 ## Ports and containers
 
@@ -498,8 +487,8 @@ lsof -nP -iTCP:5432 -sTCP:LISTEN
 
 Or move this project's ports in `deploy/.env` (`CORE_DB_PORT`, `GAME_DB_PORT`,
 `REDIS_PORT`, `HTTP_PORT`, `HTTPS_PORT`); the Makefile derives its addresses from
-them. The API, Query Runner and interface ports are not all configurable from the
-file (see the `API_PORT` entry above).
+them. The API's port follows `API_PORT` too; the Query Runner's follows the port in
+`QUERY_RUNNER_ADDR`.
 
 ### `make stack-bootstrap` or another stack command cannot find its images
 
@@ -813,20 +802,20 @@ code the API can answer; the code list is generated from the Go source.
 **Fix.** Run `make api-contract` to regenerate the file, then add the missing
 sentence to every locale ([5. Frontend](05-frontend.md) walks through it).
 
-### `make front-start`: `/api/*` answers an HTML 404
+### `/api/*` answers an HTML 404 under a production build
 
-**Symptom.** Pages and sign-in work under `make front-start`, but requests the
-browser sends straight to `/api/*` (cover images, logos, upload chunks) get the
-interface's HTML 404.
+**Symptom.** Pages and sign-in work, but requests the browser sends straight to
+`/api/*` (cover images, logos, upload chunks) get the interface's HTML 404.
 
 **Cause.** The `/api/*` rewrite is computed when `next build` runs, and it adds
-no rule when `API_ORIGIN` is not set at that moment. `make front-start` passes
-`API_ORIGIN` only to the start step, not to the build that precedes it.
+no rule when `API_ORIGIN` is not set at that moment. `make front-build` and
+`make front-start` set it for the build from `API_PORT`; a build run by hand
+with `npm run build` does not.
 
-**Fix.** Set it in the environment so the build sees it:
+**Fix.** Build with `make front-build`, or set it for your own build:
 
 ```bash
-API_ORIGIN=http://localhost:8080 make front-start
+API_ORIGIN=http://localhost:8080 npm run build
 ```
 
 ### `npm run start` on its own refuses
