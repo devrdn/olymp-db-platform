@@ -454,13 +454,15 @@ front: front-install ## Run the interface against the dev API
 # successful `npm ci`, so deleting node_modules deletes it. npm's own
 # node_modules/.package-lock.json is not a substitute: it describes the installed
 # tree, not package-lock.json, and a symlinked node_modules carries another
-# checkout's copy. A symlink is therefore always reinstalled, which replaces it
-# with a directory of this checkout's own.
+# checkout's copy. A symlink is therefore always reinstalled, and the link is
+# removed first: `npm ci` empties the directory it finds, which through a link
+# is the other checkout's install.
 front-install: ## Install the interface's dependencies when missing or the lockfile changed
 	@cd $(FRONTEND) && \
 	stamp=node_modules/.lockfile.sha256; \
 	want=$$( { sha256sum package-lock.json 2>/dev/null || shasum -a 256 package-lock.json; } | cut -d' ' -f1 ) && \
 	if [ -L node_modules ] || [ ! -f "$$stamp" ] || [ "$$(cat "$$stamp")" != "$$want" ]; then \
+		if [ -L node_modules ]; then rm node_modules; fi; \
 		npm ci && echo "$$want" > "$$stamp"; \
 	fi
 

@@ -112,8 +112,8 @@ dependencies are those of another checkout.
 checkout's install.
 
 **Fix.** `make front-install`. A symlinked `node_modules` is never trusted: the
-target runs `npm ci`, which replaces the link with an install of this checkout's
-own.
+target removes the link itself, leaving the other checkout's install untouched,
+and runs `npm ci`, so this checkout gets an install of its own.
 
 ## Configuration
 
