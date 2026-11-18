@@ -34,14 +34,24 @@ describe("SectionNav", () => {
     for (const link of screen.getAllByRole("link")) expect(link).not.toHaveAttribute("tabindex", "-1");
   });
 
-  test("scrolls a focused link fully into view inside its scroller", async () => {
+  test("scrolls a focused link fully into view inside the menu, which scrolls", () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    render(<SectionNav items={items} layout="menu" />);
+
+    screen.getByRole("link", { name: "Audit" }).focus();
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+  });
+
+  test("leaves focus alone in the row, which has nothing to scroll", () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
     render(<SectionNav items={items} />);
 
     screen.getByRole("link", { name: "Audit" }).focus();
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   test("lays the same destinations out as rows a finger can hit in the menu", () => {

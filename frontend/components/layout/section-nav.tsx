@@ -31,7 +31,11 @@ export function SectionNav({ items, layout = "row" }: { items: Destination[]; la
             // Chromium leaves a partly visible focus target where it is, so a link
             // cut off by the menu's scroller is scrolled fully in. Default
             // behaviour, so a reduced-motion preference is not overridden.
-            onFocus={(event) => event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })}
+            onFocus={
+              layout === "menu"
+                ? (event) => event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })
+                : undefined
+            }
             className={cn(
               "text-control transition-colors duration-(--t-input) ease-standard",
               // A menu row wraps a long label rather than cut it: it has the full width.
