@@ -128,10 +128,14 @@ never start. Read the message, then fix the variable it names.
 
 **Symptom.** `deploy/.env is missing. Create it first:`, from a `make` target
 that checks for it (`run`, `runner`, `migrate-up`, `bootstrap`, `game-roles`,
-`dev-up`, `stack-up`, `stack-down` and others). Only `make deployed`, which
-merely lists what is running, goes without. A file written by hand with fewer
-variables passes that check and then Docker Compose says a required variable
-such as `CORE_DB_USER` is missing a value.
+`dev-up`, `stack-up`, `stack-down`, `test-db` and others). The targets that
+need neither a database nor the stack's settings go without it: `make deployed`,
+which merely lists what is running, `build`, `test`, `check`, the checks that
+run on the code or on throwaway containers (`fmt-check`, `edge-check` and the
+like), the `front*` interface targets, `make images` and the throwaway
+`e2e-stack-*` stack. A file written by hand with fewer variables passes that
+check and then Docker Compose says a required variable such as `CORE_DB_USER` is
+missing a value.
 
 **Cause.** The file was never created, or it was written by hand with fewer
 variables than Compose requires. Compose reads the whole file for every command
@@ -515,6 +519,11 @@ not, so Compose falls back to the tag `dev`, which does not exist. Without a
 ```bash
 VERSION=$(git describe --tags --always --dirty) docker compose -f deploy/docker-compose.yml ps
 ```
+
+The `make` targets read `git describe` when they run, not when the images were
+built: after a new commit, or once the tree turns dirty or clean, run
+`make stack-up` again first. On a server, which runs released images, pass the
+tag `make deployed` prints, for example `make stack-bootstrap VERSION=v1.4.0`.
 
 ### The subnet is taken
 
