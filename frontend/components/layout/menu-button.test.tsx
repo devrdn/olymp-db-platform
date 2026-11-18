@@ -122,16 +122,32 @@ describe.each([
     await burger(false);
   });
 
-  test("dims the page behind it, and closes on a tap there", async () => {
+  test("dims the page behind it from inside the panel, and closes on a tap there", async () => {
+    const { container } = render(menu());
+
+    const button = await openIt();
+    const scrim = container.querySelector('[data-slot="app-bar-menu-scrim"]') as HTMLElement;
+    expect(scrim).toHaveAttribute("aria-hidden", "true");
+    expect(scrim).toHaveAttribute("tabindex", "-1");
+    expect(scrim.className.split(/\s+/)).toContain("bg-ink/45");
+    expect(document.getElementById(button.getAttribute("aria-controls")!)).toContainElement(scrim);
+    await userEvent.click(scrim);
+
+    await burger(false);
+  });
+
+  test("keeps the dim under the finger until the tap is over, so the tap never reaches the page", async () => {
+    // A touch's click lands on whatever is under the finger by then.
     const { container } = render(menu());
 
     await openIt();
     const scrim = container.querySelector('[data-slot="app-bar-menu-scrim"]') as HTMLElement;
-    expect(scrim).toHaveAttribute("aria-hidden", "true");
-    expect(scrim.className.split(/\s+/)).toContain("bg-ink/45");
-    await userEvent.click(scrim);
+    fireEvent.pointerDown(scrim);
+    fireEvent.pointerUp(scrim);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
-    await burger(false);
+    expect(await burger(true)).toBeInTheDocument();
+    expect(scrim).toBeVisible();
   });
 
   test("stays open on a tap inside it that goes nowhere", async () => {
@@ -241,6 +257,9 @@ describe("the menu button before hydration", () => {
     const panel = document.getElementById(button.getAttribute("popovertarget") ?? "");
     expect(panel?.getAttribute("popover")).toBe("auto");
     expect(button.getAttribute("aria-controls")).toBe(panel?.id);
+    const scrim = panel?.querySelector('[data-slot="app-bar-menu-scrim"]');
+    expect(scrim?.getAttribute("popovertarget")).toBe(panel?.id);
+    expect(scrim?.getAttribute("popovertargetaction")).toBe("hide");
   });
 
   test("takes over a panel the browser opened before the page was hydrated", async () => {

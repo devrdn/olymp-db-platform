@@ -14,9 +14,14 @@ function hasPopover() {
   return "popover" in HTMLElement.prototype;
 }
 
-/** The panel's real state, whichever way it was opened, and whether or not a script saw it. */
+/**
+ * The panel's real state, whether or not a script saw it open. A browser
+ * without the API throws on `:popover-open`, as on any pseudo-class it does not
+ * know, so there only the attribute is read.
+ */
 function isShown(panel: HTMLElement | null) {
-  return Boolean(panel && (panel.matches(":popover-open") || panel.hasAttribute("open")));
+  if (!panel) return false;
+  return hasPopover() ? panel.matches(":popover-open") : panel.hasAttribute("open");
 }
 
 /**
@@ -82,7 +87,7 @@ export function MenuButton({
       close();
       button.current?.focus();
     };
-    // The scrim is outside the panel, so a tap on it closes too.
+    // Only the bar lies outside the panel: the dim under it is the panel's own.
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!panel.current?.contains(target) && !button.current?.contains(target)) close();
@@ -133,10 +138,8 @@ export function MenuButton({
         )}
       </button>
       {/* Placed against the viewport, in the top layer or, without the API,
-         as a fixed box above the scrim: the sticky bar is always the first
-         48px and a rule. The box covers the rest of the screen but lets every
-         pointer through to the scrim, so a tap on the hatched fields is a tap
-         outside. `not-open:hidden` hides it where the browser has no popover
+         as a fixed box over the page: the sticky bar is always the first 48px
+         and a rule. `not-open:hidden` hides it where the browser has no popover
          rules of its own; an unknown `:popover-open` inside its `:is()` is
          dropped, not fatal. */}
       <div
@@ -145,9 +148,26 @@ export function MenuButton({
         popover="auto"
         className={cn(
           BAR_TRACKS,
-          "peer pointer-events-none fixed inset-x-0 top-12 bottom-0 z-10 m-0 mt-px h-auto w-auto max-w-none grid-rows-1 overflow-visible border-0 bg-transparent p-0 text-ink not-open:hidden open:grid",
+          "fixed inset-x-0 top-12 bottom-0 z-10 m-0 mt-px h-auto w-auto max-w-none grid-rows-1 overflow-visible border-0 bg-transparent p-0 text-ink not-open:hidden open:grid",
         )}
       >
+        {/* Dims the page as a dialog's backdrop does. It is part of the panel,
+           so a tap on it is not a tap outside: nothing closes until the tap's
+           click, which therefore lands here and never on the page beneath. A
+           button, so the browser closes the panel on it with no script. */}
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden
+          data-slot="app-bar-menu-scrim"
+          popoverTarget={id}
+          popoverTargetAction="hide"
+          onClick={() => {
+            close();
+            button.current?.focus();
+          }}
+          className="absolute inset-0 cursor-default bg-ink/45"
+        />
         <div
           // A tap on a link closes it, and on the page already shown keeps focus
           // on the button rather than drop it from a hidden link to the body.
@@ -158,17 +178,11 @@ export function MenuButton({
             if (new URL(link.href, window.location.href).pathname === pathname) button.current?.focus();
           }}
           // A pixel wider on each side, so its edges lie on the hatched fields' rules.
-          className="pointer-events-auto col-start-2 -mx-px max-h-full self-start overflow-y-auto overscroll-contain border-x border-b border-line bg-bg px-10 py-2 max-narrow:mx-0 max-narrow:border-x-0 max-narrow:px-4.5"
+          className="relative col-start-2 -mx-px max-h-full self-start overflow-y-auto overscroll-contain border-x border-b border-line bg-bg px-10 py-2 max-narrow:mx-0 max-narrow:border-x-0 max-narrow:px-4.5"
         >
           {children}
         </div>
       </div>
-      {/* Dims the page, as a dialog's backdrop does, and takes the tap that closes the panel. */}
-      <div
-        aria-hidden
-        data-slot="app-bar-menu-scrim"
-        className="fixed inset-x-0 top-12 bottom-0 z-0 mt-px hidden bg-ink/45 peer-open:block"
-      />
     </div>
   );
 }

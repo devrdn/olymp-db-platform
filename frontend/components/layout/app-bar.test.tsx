@@ -273,7 +273,8 @@ function hasClass(element: Element | null | undefined, utility: string) {
 async function openMenu() {
   await userEvent.click(screen.getByRole("button", { name: en.chrome.menu.open }));
   const panel = (await screen.findByRole("button", { name: en.chrome.menu.close })).nextElementSibling as HTMLElement;
-  return panel.firstElementChild as HTMLElement;
+  // After the dim, which is the panel's first child.
+  return panel.lastElementChild as HTMLElement;
 }
 
 /**
