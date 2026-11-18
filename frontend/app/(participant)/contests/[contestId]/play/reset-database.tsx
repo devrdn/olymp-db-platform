@@ -57,6 +57,7 @@ export function ResetDatabase({
         type="button"
         variant="quiet"
         size="sm"
+        className="pointer-coarse:h-11"
         onClick={() => {
           setAskedAt(state);
           setOpen(true);

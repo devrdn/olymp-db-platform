@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { scrollCue } from "@/components/ui/scroll-cue";
 import { cn } from "@/lib/utils";
 
 export type NavItem = {
@@ -26,11 +27,14 @@ export function ContestNav({ groups }: { groups: NavGroup[] }) {
 
   return (
     <nav
+      ref={scrollCue}
       aria-label="Contest sections"
       className={cn(
         "flex flex-col gap-6",
-        // Below the breakpoint the column becomes one scrolling row.
-        "max-narrow:flex-row max-narrow:gap-5 max-narrow:overflow-x-auto max-narrow:border-b max-narrow:border-line max-narrow:pb-0",
+        // Below the breakpoint the column becomes one scrolling row, and only
+        // the row wears the cue: the column never scrolls, and a mask would
+        // clip its focus ring.
+        "max-narrow:flex-row max-narrow:gap-5 max-narrow:overflow-x-auto max-narrow:border-b max-narrow:border-line max-narrow:pb-0 max-narrow:scroll-cue",
       )}
     >
       {groups.map((group, index) => (

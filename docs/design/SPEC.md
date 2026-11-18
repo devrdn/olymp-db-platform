@@ -455,6 +455,21 @@ is absolutely positioned: under a scroller that is not its containing block it
 escapes the clip and widens the whole document. Four workspace screens grew to
 between 518 and 1146 px that way.
 
+**A row of tabs that scrolls says so.** The contest's ten sections in a 339 px
+row showed four and a half, with nothing to say the others exist. A row of
+tabs that scrolls sideways (the sections on a phone, the side panel's tabs,
+the SQL tabs, a `TabStrip`) fades the edge more tabs are hidden past, and only
+while they are: the `scroll-cue` utility, with `scrollCue` as the row's `ref`.
+A scroll-driven animation follows the scroll where the browser has one, and a
+script marks the edges where it has not. Where neither runs nothing fades, so
+the cue can go missing but never hide a tab.
+
+**Under a finger, the play screen's controls are 44 px.** The panel toggles,
+Run and the buttons beside it, the SQL tabs with their cross and "+", the side
+panel's tabs and the schema's table rows grow to a 44 px target on a coarse
+pointer (`pointer-coarse:`). Under a mouse they keep their dense sizes, where
+24 px is the floor WCAG 2.5.8 sets, and no box on the desktop layout moves.
+
 **A workspace with many sections gets a navigation column, not a row of tabs.**
 The contest workspace has five sections today, and the architecture names two
 more admin screens for the same contest — the query log (section 9.1) and the

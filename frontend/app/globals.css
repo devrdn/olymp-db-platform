@@ -10,6 +10,77 @@
 }
 
 /**
+ * Fades whichever edge of a horizontal row has content hidden past it, so a
+ * row of tabs cut between two labels still says there is more. A
+ * scroll-driven animation moves the two fade widths where the browser has
+ * one; elsewhere `scrollCue` (components/ui/scroll-cue.ts) marks the edges
+ * from script. Unset, both widths are zero and the mask hides nothing.
+ */
+@property --scroll-cue-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-cue-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@utility scroll-cue {
+  --scroll-cue: --spacing(8);
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black var(--scroll-cue-start),
+    black calc(100% - var(--scroll-cue-end)),
+    transparent
+  );
+
+  &[data-cue-start] {
+    --scroll-cue-start: var(--scroll-cue);
+  }
+
+  &[data-cue-end] {
+    --scroll-cue-end: var(--scroll-cue);
+  }
+
+  /* Each fade grows over the first or last stretch of the scroll. A row that
+     does not scroll has an inactive timeline, so neither fade appears. */
+  @supports (animation-timeline: scroll()) {
+    /* Longhands: the build expands the shorthand with a duration of 0s,
+       which jumps each fade to its end at once. `auto` fills the range. */
+    animation-name: scroll-cue-start, scroll-cue-end;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(self inline);
+    animation-range:
+      0 var(--scroll-cue),
+      calc(100% - var(--scroll-cue)) 100%;
+  }
+}
+
+@keyframes scroll-cue-start {
+  from {
+    --scroll-cue-start: 0px;
+  }
+  to {
+    --scroll-cue-start: var(--scroll-cue);
+  }
+}
+
+@keyframes scroll-cue-end {
+  from {
+    --scroll-cue-end: var(--scroll-cue);
+  }
+  to {
+    --scroll-cue-end: 0px;
+  }
+}
+
+/**
  * shadcn/ui wears this project's design system rather than its own.
  *
  * Its components read a fixed set of semantic variable names. Those names are

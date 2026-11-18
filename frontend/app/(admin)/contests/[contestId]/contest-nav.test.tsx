@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { cuedEdges, measureScroller } from "@/components/ui/scroll-cue-test-support";
 
 const usePathname = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ usePathname }));
@@ -83,5 +85,22 @@ describe("ContestNav, what a section still owes", () => {
     render(<ContestNav groups={groups} />);
 
     expect(screen.getByRole("link", { name: "Story" })).toHaveTextContent(/^Story$/);
+  });
+});
+
+describe("ContestNav, as a row on a phone", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  // Ten sections in a 339px row: without a cue the last six are simply absent.
+  test("fades the edge the remaining sections are hidden past", () => {
+    usePathname.mockReturnValue(`/contests/${ID}`);
+    measureScroller({ scrollWidth: 924, clientWidth: 339 });
+    render(<ContestNav groups={groups} />);
+
+    const row = screen.getByRole("navigation");
+    // Only as a row: the column never scrolls, and a mask would clip its focus ring.
+    expect(row).toHaveClass("max-narrow:scroll-cue");
+    expect(row).not.toHaveClass("scroll-cue");
+    expect(cuedEdges(row)).toEqual(["end"]);
   });
 });

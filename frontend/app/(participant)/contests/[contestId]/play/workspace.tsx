@@ -474,6 +474,9 @@ function ToolbarButton({
       aria-pressed={active}
       className={cn(
         "rounded-full px-2.5 py-1 text-control-sm transition-colors duration-(--t-input) ease-standard",
+        // 44px high under a finger. A tap is hit-tested against the pill's
+        // rounded ends, so a square layer over it takes the corners back.
+        "pointer-coarse:relative pointer-coarse:min-h-11 pointer-coarse:after:absolute pointer-coarse:after:inset-0",
         active ? "bg-sunk text-ink" : "text-ink-2 hover:bg-sunk hover:text-ink",
       )}
     >

@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { cuedEdges, measureScroller, scrollRowTo } from "@/components/ui/scroll-cue-test-support";
 
 import { TabStrip } from "./tab-strip";
 
@@ -8,6 +10,8 @@ const tabs = [
   { href: "/report?tab=queries", label: "My queries" },
   { href: "/report?tab=notes", label: "My notes" },
 ];
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("a strip of tabs", () => {
   test("names the group, links every tab and marks the one in the address", () => {
@@ -25,5 +29,17 @@ describe("a strip of tabs", () => {
     render(<TabStrip label="What you did" tabs={tabs} current="/report" />);
 
     expect(screen.getByRole("navigation")).toHaveClass("overflow-x-auto");
+  });
+
+  test("fades the edge the remaining tabs are hidden past, until the strip reaches it", () => {
+    measureScroller({ scrollWidth: 524, clientWidth: 339 });
+    render(<TabStrip label="What you did" tabs={tabs} current="/report" />);
+    const strip = screen.getByRole("navigation");
+
+    expect(strip).toHaveClass("scroll-cue");
+    expect(cuedEdges(strip)).toEqual(["end"]);
+
+    scrollRowTo(strip, 185);
+    expect(cuedEdges(strip)).toEqual(["start"]);
   });
 });

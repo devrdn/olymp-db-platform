@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { StoryText } from "@/components/product/story-text";
+import { cuedEdges, measureScroller, scrollRowTo } from "@/components/ui/scroll-cue-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
@@ -316,6 +317,23 @@ test("keeps the tab strip from widening the page at any pane width", () => {
   const tablist = screen.getByRole("tablist");
   expect(tablist.className).toMatch(/(^|\s)overflow-x-auto(\s|$)/);
   expect(tablist.parentElement?.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+});
+
+describe("the side panel's tab strip", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  // Six labels in a 375px phone or a 252px pane: the last ones are out of sight.
+  test("fades the edge that more tabs are hidden past", () => {
+    measureScroller({ scrollWidth: 446, clientWidth: 375 });
+    show();
+    const tablist = screen.getByRole("tablist");
+
+    expect(tablist).toHaveClass("scroll-cue");
+    expect(cuedEdges(tablist)).toEqual(["end"]);
+
+    scrollRowTo(tablist, 71);
+    expect(cuedEdges(tablist)).toEqual(["start"]);
+  });
 });
 
 // The strip can be scrolled past the selected tab, so selecting one must

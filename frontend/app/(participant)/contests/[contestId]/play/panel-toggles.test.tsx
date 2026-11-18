@@ -65,6 +65,16 @@ describe("the panel toggles", () => {
     }
   });
 
+  // jsdom matches no media query, so the class is the contract; a browser at
+  // 375px with touch measured the target.
+  test("grow to a 44px target on a touch screen and stay 24px under a mouse", () => {
+    show(aContest());
+
+    for (const name of [t.schema, t.side, t.bottom]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("size-6", "pointer-coarse:size-11");
+    }
+  });
+
   test("each tooltip names the shortcut that works it", () => {
     show(aContest());
 

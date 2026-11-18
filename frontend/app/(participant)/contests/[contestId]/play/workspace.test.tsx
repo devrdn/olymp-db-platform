@@ -221,6 +221,21 @@ describe("the play workspace", () => {
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
   });
 
+  // Beside Run in the toolbar, at its height on a touch screen. A tap is
+  // hit-tested against a pill's rounded ends, so a square layer covers them.
+  test("the result and log buttons are 44px high on a touch screen, corners included", () => {
+    show();
+
+    for (const name of [en.participant.play.workspace.tabs.result, en.participant.play.workspace.tabs.log]) {
+      expect(screen.getByRole("button", { name })).toHaveClass(
+        "pointer-coarse:min-h-11",
+        "pointer-coarse:relative",
+        "pointer-coarse:after:absolute",
+        "pointer-coarse:after:inset-0",
+      );
+    }
+  });
+
   test("offers the table descriptions on their own tab only when the page has them", () => {
     const { unmount } = show();
     expect(screen.queryByRole("tab", { name: en.participant.play.workspace.tabs.tables })).not.toBeInTheDocument();

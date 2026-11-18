@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 
+import { scrollCue } from "@/components/ui/scroll-cue";
 import { cn } from "@/lib/utils";
 
 export type Tab = {
@@ -11,8 +14,9 @@ export type Tab = {
  * Linkable tabs: the address, not state, holds the tab, so it can be shared and
  * reloaded and the server reads only that tab's data. `aria-current="page"`
  * marks the current one. The strip scrolls sideways inside itself so the page
- * never does at 375px. The caller passes the current href, since each screen
- * knows its own `?tab=` default.
+ * never does at 375px, with a fade at the edge more tabs are hidden past; that
+ * cue is why this is a client component. The caller passes the current href,
+ * since each screen knows its own `?tab=` default.
  */
 export function TabStrip({
   label,
@@ -26,8 +30,9 @@ export function TabStrip({
 }) {
   return (
     <nav
+      ref={scrollCue}
       aria-label={label}
-      className="flex min-w-0 gap-6 overflow-x-auto border-b border-line max-narrow:gap-5"
+      className="scroll-cue flex min-w-0 gap-6 overflow-x-auto border-b border-line max-narrow:gap-5"
     >
       {tabs.map((tab) => (
         <Link

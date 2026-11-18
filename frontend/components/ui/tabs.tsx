@@ -74,15 +74,13 @@ function Tabs({
  * Owns the roving tabindex: arrows move focus (wrapping), Home/End jump to the
  * ends. Moving focus never selects.
  */
-function TabsList({ className, children, onKeyDown, ...props }: React.ComponentPropsWithoutRef<"div">) {
-  const listRef = React.useRef<HTMLDivElement>(null);
-
+function TabsList({ className, children, onKeyDown, ...props }: React.ComponentProps<"div">) {
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(event);
     if (event.defaultPrevented) return;
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
 
-    const tabs = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []);
+    const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
     if (tabs.length === 0) return;
     const currentIndex = tabs.indexOf(document.activeElement as HTMLElement);
 
@@ -98,7 +96,6 @@ function TabsList({ className, children, onKeyDown, ...props }: React.ComponentP
 
   return (
     <div
-      ref={listRef}
       data-slot="tabs-list"
       role="tablist"
       onKeyDown={handleKeyDown}
@@ -135,7 +132,7 @@ function TabsTrigger({
         setValue(value);
       }}
       className={cn(
-        "-mb-px border-b-2 border-transparent px-3 py-2 font-mono text-label text-ink-3 uppercase",
+        "-mb-px border-b-2 border-transparent px-3 py-2 font-mono text-label text-ink-3 uppercase pointer-coarse:min-h-11",
         "transition-colors duration-(--t-input) ease-standard",
         "hover:text-ink",
         isSelected && "border-ink text-ink",

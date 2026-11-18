@@ -191,13 +191,20 @@ function TableRow({
 
   return (
     <li>
-      <div className={cn("flex w-full items-center text-ink", open && "bg-accent-wash font-medium text-accent")}>
+      <div
+        className={cn(
+          "flex w-full items-center text-ink pointer-coarse:min-h-11",
+          open && "bg-accent-wash font-medium text-accent",
+        )}
+      >
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={open}
           aria-label={(open ? t.collapse : t.expand).replace("{table}", table.name)}
-          className="shrink-0 self-stretch pr-1 pl-3 text-ink-3 hover:bg-sunk hover:text-ink"
+          // At least 44px wide under a finger, with the glyph left where a
+          // mouse sees it rather than centred in the wider box.
+          className="shrink-0 self-stretch pr-1 pl-3 text-ink-3 hover:bg-sunk hover:text-ink pointer-coarse:min-w-11 pointer-coarse:text-left"
         >
           <span aria-hidden="true">{open ? "▾" : "▸"}</span>
         </button>
@@ -206,7 +213,7 @@ function TableRow({
           onClick={() => onQuery(table.name)}
           aria-label={query}
           title={query}
-          className="flex min-w-0 flex-1 items-center gap-2 pr-3 text-left hover:bg-sunk"
+          className="flex min-w-0 flex-1 items-center gap-2 pr-3 text-left hover:bg-sunk pointer-coarse:self-stretch"
         >
           <span className="truncate">{table.name}</span>
           {foreignKeys > 0 ? (
@@ -220,7 +227,8 @@ function TableRow({
       {open ? (
         <ul>
           {table.columns.map((column) => (
-            <li key={column.name} className="flex items-baseline gap-2 py-px pr-3 pl-7 text-ink-2">
+            // Indented under the name, which a finger's wider chevron moves right.
+            <li key={column.name} className="flex items-baseline gap-2 py-px pr-3 pl-7 text-ink-2 pointer-coarse:pl-12">
               <span className="truncate" title={column.name}>
                 {column.name}
               </span>

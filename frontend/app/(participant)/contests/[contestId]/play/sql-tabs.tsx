@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState, useSyncExternalStore } from "react";
 
+import { scrollCue } from "@/components/ui/scroll-cue";
 import { MAX_TABS, TAB_TITLE_MAX_CHARS } from "@/lib/api/workspace";
 import { cn } from "@/lib/utils";
 
@@ -144,10 +145,11 @@ export function SqlTabStrip({
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-line pr-3">
       <div
+        ref={scrollCue}
         role="tablist"
         aria-label={t.tablist}
         aria-orientation="horizontal"
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        className="scroll-cue flex min-w-0 flex-1 items-stretch overflow-x-auto"
       >
         {tabs.map((tab, index) => {
           const active = tab.id === activeId;
@@ -206,6 +208,8 @@ export function SqlTabStrip({
               onKeyDown={(event) => onTabKeyDown(event, tab, index)}
               className={cn(
                 "relative flex min-w-0 shrink-0 cursor-pointer items-center gap-1.5 border-r border-line px-3 py-1.5",
+                // A finger's 44px, all of it height the ✕ can stretch into.
+                "pointer-coarse:min-h-11 pointer-coarse:py-0",
                 "text-control-sm transition-colors duration-(--t-input) ease-standard",
                 // No focus style here: globals.css gives every focusable element
                 // the same `:focus-visible` ring.
@@ -268,7 +272,7 @@ export function SqlTabStrip({
                     event.stopPropagation();
                     onClose(tab.id);
                   }}
-                  className="shrink-0 px-1 text-ink-3 hover:text-ink"
+                  className="shrink-0 px-1 text-ink-3 hover:text-ink pointer-coarse:min-w-11 pointer-coarse:self-stretch"
                 >
                   <span aria-hidden="true">✕</span>
                 </button>
@@ -293,7 +297,7 @@ export function SqlTabStrip({
             aria-label={t.newTab}
             title={full ? undefined : t.newTab}
             aria-describedby={full ? limitId : undefined}
-            className="px-2 py-1 text-control-sm text-ink-2 hover:text-ink disabled:cursor-not-allowed disabled:text-ink-3"
+            className="px-2 py-1 text-control-sm text-ink-2 hover:text-ink disabled:cursor-not-allowed disabled:text-ink-3 pointer-coarse:size-11"
           >
             <span aria-hidden="true">+</span>
           </button>

@@ -36,6 +36,13 @@ async function openAndConfirm() {
 }
 
 describe("ResetDatabase", () => {
+  // It sits in the toolbar beside Run, at the same height on a touch screen.
+  test("is 44px high on a touch screen", () => {
+    show();
+
+    expect(screen.getByRole("button", { name: t.open })).toHaveClass("pointer-coarse:h-11");
+  });
+
   test("asks first, saying the tables return to the start and the participant's changes are lost", async () => {
     show();
 

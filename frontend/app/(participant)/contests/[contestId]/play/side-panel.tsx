@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExportMenu } from "@/components/product/export-menu";
 import { StandingsView } from "@/components/product/standings";
 import { useStandings } from "@/components/product/use-standings";
+import { scrollCue } from "@/components/ui/scroll-cue";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Scoring } from "@/lib/api/contests";
 import type { WorkspaceNotes } from "@/lib/api/workspace";
@@ -124,7 +125,7 @@ export function SidePanel({
           `overflow-x-auto` keeps the overflow inside the strip, and `min-w-0`
           lifts the flex item's automatic min-content floor. */}
       <div ref={tabListWrapRef} className="min-w-0">
-        <TabsList className="overflow-x-auto">
+        <TabsList ref={scrollCue} className="scroll-cue overflow-x-auto">
           <TabsTrigger value="story" className="px-2">{t.story}</TabsTrigger>
           {schemaNotes !== null ? (
             <TabsTrigger value="tables" className="px-2">{t.tables}</TabsTrigger>

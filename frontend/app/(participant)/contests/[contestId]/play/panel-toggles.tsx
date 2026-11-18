@@ -395,8 +395,9 @@ function Toggle({
       title={marked ? `${tooltip} · ${marked}` : tooltip}
       onClick={onClick}
       className={cn(
-        // 24px, the smallest target WCAG 2.5.8 accepts; the hall has tablets.
-        "relative inline-flex size-6 items-center justify-center rounded-md",
+        // 24px under a mouse, the smallest target WCAG 2.5.8 accepts; 44px
+        // under a finger, on the phones and tablets a hall has.
+        "relative inline-flex size-6 items-center justify-center rounded-md pointer-coarse:size-11",
         "transition-colors duration-(--t-input) ease-standard",
         showing ? "text-ink" : "text-ink-3",
         "hover:bg-sunk hover:text-ink",
@@ -408,7 +409,7 @@ function Toggle({
           <span
             aria-hidden
             data-testid="side-panel-marker"
-            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-accent"
+            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-accent pointer-coarse:top-3 pointer-coarse:right-3"
           />
           <span id={noteId} className="sr-only">
             {marked}

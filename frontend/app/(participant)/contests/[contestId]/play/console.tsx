@@ -182,7 +182,7 @@ export function ConsoleEditor({
         <button
           type="submit"
           disabled={running}
-          className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
+          className={cn(buttonVariants({ variant: "primary", size: "sm" }), "pointer-coarse:h-11")}
         >
           {running ? t.running : t.run}
           {/* Decorative: the shortcut is bound in the editor. */}

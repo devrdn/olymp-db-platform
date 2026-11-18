@@ -111,6 +111,21 @@ describe("the schema panel", () => {
     expect(scroller!.className).toMatch(/(^|\s)relative(\s|$)/);
   });
 
+  // jsdom matches no media query, so the class is the contract; a browser at
+  // 375px with touch measured the target.
+  test("a table's row is 44px high on a touch screen, and so are both its buttons", () => {
+    panel();
+
+    const row = chevron("guests").parentElement;
+    expect(row).toHaveClass("pointer-coarse:min-h-11");
+    // The row is a flex line; a button that did not stretch would leave the
+    // rest of its height to nobody.
+    expect(chevron("guests")).toHaveClass("self-stretch", "pointer-coarse:min-w-11");
+    expect(nameButton("guests")).toHaveClass("pointer-coarse:self-stretch");
+    // The wider chevron pushes the name right; the columns follow it.
+    expect(screen.getByText("full_name").closest("li")).toHaveClass("pl-7", "pointer-coarse:pl-12");
+  });
+
   test("a table is collapsed and opened again by its chevron", async () => {
     const user = userEvent.setup();
     panel();

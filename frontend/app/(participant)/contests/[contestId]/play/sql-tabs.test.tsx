@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi, type Mock } from "vitest";
 
+import { cuedEdges, measureScroller } from "@/components/ui/scroll-cue-test-support";
 import { MAX_TABS } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
 
@@ -175,6 +176,28 @@ describe("the SQL tab strip", () => {
     expect(line.className).toContain("min-w-0");
     expect(line.className).toMatch(/max-w-/);
     expect(line.className).not.toContain("shrink-0");
+  });
+
+  // jsdom matches no media query, so the class is the contract; a browser at
+  // 375px with touch measured the target.
+  test("gives a finger 44px to hit on each tab, its ✕ and the +", () => {
+    show();
+
+    for (const name of ["Query 1", "Suspects", "Alibis"]) expect(tab(name)).toHaveClass("pointer-coarse:min-h-11");
+    expect(screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") })).toHaveClass(
+      "pointer-coarse:min-w-11",
+      "pointer-coarse:self-stretch",
+    );
+    expect(screen.getByRole("button", { name: t.newTab })).toHaveClass("pointer-coarse:size-11");
+  });
+
+  test("fades the edge more tabs are hidden past", () => {
+    measureScroller({ scrollWidth: 600, clientWidth: 282 });
+    show();
+    const strip = screen.getByRole("tablist");
+
+    expect(strip).toHaveClass("scroll-cue");
+    expect(cuedEdges(strip)).toEqual(["end"]);
   });
 
   test("refuses an eleventh tab, and says why", () => {
