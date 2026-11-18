@@ -8,8 +8,9 @@ import { cn } from "@/lib/utils";
 import type { Destination } from "./destinations";
 
 /**
- * Destinations in the bar, for any signed-in role: a row from 1024px up, and
- * full-width rows in the menu below that. Only what the account may open,
+ * Destinations in the bar, for any signed-in role: a row from the bar's fold
+ * point up (`wide`, or `wider` for a crowded bar), and full-width rows in the
+ * menu below it. Only what the account may open,
  * decided by the layout from the permissions the API reports; a link that
  * answers 403 discloses the screen. A client component only to mark the
  * current destination.
