@@ -25,7 +25,7 @@ Check these first; most first-run failures are one of them.
 |---|---|---|
 | Go | 1.26.11 (the exact patch in `backend/go.mod`) | Go 1.21 or newer downloads that toolchain on first use if it can reach the network; older Go cannot read `go.mod` at all |
 | A C compiler | `gcc` or `clang` | The Query Runner, `make check`, `make test` and `make build` link PostgreSQL's own parser through cgo |
-| Node.js | 22 (what CI and `frontend/Dockerfile` use; the interface is Next.js 16 on React 19) | Nothing in the repository pins it, so an older Node fails inside Next |
+| Node.js | 22 (what CI and `frontend/Dockerfile` use; the interface is Next.js 16 on React 19) | `engines` in `frontend/package.json` and `frontend/.nvmrc` declare it, but npm only warns, so an older Node installs and then fails inside Next |
 | Docker with Compose v2 | the `docker compose` plugin | Every target calls `docker compose`; the standalone `docker-compose` v1 is not supported |
 | `make` | GNU Make | The one that ships with macOS and Linux is what the Makefile was run with |
 | `openssl` | any | To generate secrets |

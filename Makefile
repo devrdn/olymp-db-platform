@@ -338,9 +338,10 @@ scheduled-backup-check: ## Prove the backup rotation, the scheduled run and its 
 edge-check: ## Prove what deploy/Caddyfile forwards, with and without an edge proxy
 	deploy/edge-check.sh
 
-# What `make run` and `make runner` take from deploy/.env, and that a value make
-# cannot expand stops no other target, on a throwaway env file with `go`
-# stubbed. Needs neither Docker nor Go; never reads deploy/.env.
+# What `make run` and `make runner` take from deploy/.env, when
+# `make front-install` reinstalls, and that a value make cannot expand stops no
+# other target, on a throwaway env file with `go` and `npm` stubbed. Needs
+# neither Docker, Go nor Node; never reads deploy/.env or touches frontend/.
 .PHONY: host-targets-check
 host-targets-check: ## Prove what the host targets take from deploy/.env, and that nothing else expands it
 	deploy/host-targets-check.sh
@@ -460,7 +461,8 @@ front: front-install ## Run the interface against the dev API
 front-install: ## Install the interface's dependencies when missing or the lockfile changed
 	@cd $(FRONTEND) && \
 	stamp=node_modules/.lockfile.sha256; \
-	want=$$( { sha256sum package-lock.json 2>/dev/null || shasum -a 256 package-lock.json; } | cut -d' ' -f1 ) && \
+	want=$$( { sha256sum package-lock.json 2>/dev/null || shasum -a 256 package-lock.json 2>/dev/null; } | cut -d' ' -f1 ) && \
+	{ test -n "$$want" || { echo "front-install needs sha256sum or shasum to tell whether package-lock.json changed"; exit 1; }; } && \
 	if [ -L node_modules ] || [ ! -f "$$stamp" ] || [ "$$(cat "$$stamp")" != "$$want" ]; then \
 		if [ -L node_modules ]; then rm node_modules; fi; \
 		npm ci && echo "$$want" > "$$stamp"; \

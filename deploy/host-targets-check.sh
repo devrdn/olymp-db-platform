@@ -8,6 +8,8 @@
 #     ENV) are the host's;
 #   - a value on the make command line beats the file, and the shell does not;
 #   - an empty API_PORT still gives the API and the interface a port;
+#   - `make front-install` installs once per lockfile, and refuses rather than
+#     install when it has no tool to hash the lockfile with;
 #   - a value make cannot expand, an open `$(` or `${` such as a provider may
 #     put in a secret, changes nothing in `make backup`, `make deploy` or
 #     `make deployed`: the scheduled backup runs on servers that never run
@@ -132,6 +134,43 @@ has "$api" HTTP_ADDR :8080
 if mk "$noport" -n front-build 2>&1 | grep -qF 'API_ORIGIN="http://localhost:8080"'; then
 	pass "front-build gets API_ORIGIN=http://localhost:8080"
 else fail "front-build gets API_ORIGIN=http://localhost:8080"; fi
+
+echo "== front-install"
+# Against a lockfile of its own, never frontend/: the target removes a
+# symlinked node_modules, which in a worktree may be another checkout's.
+mkdir "$WORK/front"
+echo '{"lockfileVersion": 3}' > "$WORK/front/package-lock.json"
+cat > "$WORK/bin/npm" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$HOST_CHECK_DUMP/npm.calls"
+mkdir -p node_modules
+STUB
+chmod 700 "$WORK/bin/npm"
+npm_calls() { if [ -f "$WORK/npm.calls" ]; then wc -l < "$WORK/npm.calls" | tr -d ' '; else echo 0; fi; }
+front() { # PATH, then make arguments
+	local path="$1"
+	shift
+	env -i PATH="$path" HOST_CHECK_DUMP="$WORK" \
+		"$MAKE_BIN" --no-print-directory -C "$ROOT" ENV_FILE="$normal" FRONTEND="$WORK/front" "$@"
+}
+front "$WORK/bin:/usr/bin:/bin:/usr/sbin:/sbin" front-install > "$WORK/front1.out" 2>&1 ||
+	{ cat "$WORK/front1.out"; fail "front-install exited non-zero"; }
+front "$WORK/bin:/usr/bin:/bin:/usr/sbin:/sbin" front-install > "$WORK/front2.out" 2>&1 ||
+	{ cat "$WORK/front2.out"; fail "front-install exited non-zero"; }
+if [ "$(npm_calls)" = 1 ]; then pass "front-install installs once for one lockfile"
+else fail "front-install installs once for one lockfile, ran npm $(npm_calls) times"; fi
+# With neither hashing tool the stamp could not tell one lockfile from another.
+mkdir "$WORK/nohash"
+for tool in cat cut rm; do ln -s "$(command -v "$tool")" "$WORK/nohash/$tool"; done
+ln -s "$WORK/bin/npm" "$WORK/nohash/npm"
+rm -rf "$WORK/front/node_modules" "$WORK/npm.calls"
+if front "$WORK/nohash" front-install > "$WORK/front3.out" 2>&1; then
+	fail "front-install refuses without sha256sum or shasum, exited 0"
+elif [ "$(npm_calls)" != 0 ]; then
+	fail "front-install refuses without sha256sum or shasum, ran npm first"
+else
+	pass "front-install refuses without sha256sum or shasum: $(grep -v '^make' "$WORK/front3.out" | head -1)"
+fi
 
 echo "== a value make cannot expand"
 hostile="$(fixture hostile "GITHUB_CLIENT_SECRET='ab\$(cd'" "SMTP_PASSWORD='x\${y'")"
