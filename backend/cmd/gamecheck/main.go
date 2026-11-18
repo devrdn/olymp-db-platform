@@ -69,7 +69,7 @@ func run(args []string) error {
 	}
 	defer corePool.Close()
 
-	gamePool, err := storage.NewPool(ctx, gameDSN)
+	gamePool, err := storage.NewGamePool(ctx, gameDSN)
 	if err != nil {
 		return fmt.Errorf("open the game cluster: %w", err)
 	}

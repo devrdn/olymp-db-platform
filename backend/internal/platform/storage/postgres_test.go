@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +156,47 @@ func TestPoolConfigWithMaxConnsFallsBackToTheServiceDefaultWhenUnset(t *testing.
 	}
 	if cfg.MaxConns != defaultMaxConns {
 		t.Errorf("MaxConns = %d, want the service default %d", cfg.MaxConns, defaultMaxConns)
+	}
+}
+
+func TestGameClusterPoolsNameTheGameClusterWhenItIsUnreachable(t *testing.T) {
+	const dsn = "postgres://app:secret@127.0.0.1:1/game?connect_timeout=1"
+
+	opens := map[string]func(context.Context) error{
+		"NewGamePool": func(ctx context.Context) error {
+			_, err := NewGamePool(ctx, dsn)
+			return err
+		},
+		"NewMaintenancePool": func(ctx context.Context) error {
+			_, err := NewMaintenancePool(ctx, dsn, time.Minute)
+			return err
+		},
+	}
+	for name, open := range opens {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			err := open(ctx)
+			if err == nil {
+				t.Fatal("open returned nil error for an address nothing listens on")
+			}
+			if !strings.Contains(err.Error(), "game cluster is unreachable") {
+				t.Errorf("error = %q, want it to name the game cluster", err)
+			}
+			if strings.Contains(err.Error(), "core database") {
+				t.Errorf("error = %q, must not blame the core database", err)
+			}
+		})
+	}
+}
+
+func TestNewPoolNamesTheCoreDatabaseWhenItIsUnreachable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := NewPool(ctx, "postgres://app:secret@127.0.0.1:1/core?connect_timeout=1")
+	if err == nil || !strings.Contains(err.Error(), "core database is unreachable") {
+		t.Fatalf("error = %v, want core database is unreachable", err)
 	}
 }

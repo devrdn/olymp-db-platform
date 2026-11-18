@@ -118,28 +118,45 @@ func NewPoolWithMaxConns(ctx context.Context, dsn string, maxConns int32) (*pgxp
 	if err != nil {
 		return nil, err
 	}
-	return openPool(ctx, cfg)
+	return openPool(ctx, cfg, coreName)
 }
 
-// NewMaintenancePool opens a pool for administrative statements, such as the
-// game cluster's provisioner, with the given statement timeout.
+// NewGamePool opens a pool to the game cluster with the service defaults, for
+// a tool that only reads from it.
+func NewGamePool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	cfg, err := PoolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	return openPool(ctx, cfg, gameClusterName)
+}
+
+// NewMaintenancePool opens a pool to the game cluster for administrative
+// statements, such as the provisioner's, with the given statement timeout.
 func NewMaintenancePool(ctx context.Context, dsn string, statementTimeout time.Duration) (*pgxpool.Pool, error) {
 	cfg, err := MaintenancePoolConfig(dsn, statementTimeout)
 	if err != nil {
 		return nil, err
 	}
-	return openPool(ctx, cfg)
+	return openPool(ctx, cfg, gameClusterName)
 }
 
-func openPool(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+// The names an operator sees in a connection error, so a failure points at the
+// database that was being opened.
+const (
+	coreName        = "core database"
+	gameClusterName = "game cluster"
+)
+
+func openPool(ctx context.Context, cfg *pgxpool.Config, name string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("open core database pool: %w", err)
+		return nil, fmt.Errorf("open %s pool: %w", name, err)
 	}
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("core database is unreachable: %w", err)
+		return nil, fmt.Errorf("%s is unreachable: %w", name, err)
 	}
 
 	return pool, nil

@@ -740,11 +740,9 @@ user owns.
 
 ### The API cannot reach the game cluster
 
-**Symptom.** `fatal: connect to the game cluster: core database is unreachable: ...`.
+**Symptom.** `fatal: connect to the game cluster: game cluster is unreachable: ...`.
 
-**Cause.** `GAME_PROVISIONER_DSN` is wrong or `pg-game` is down. The wording says
-"core database" because the same helper opens every PostgreSQL pool; the cluster
-meant is the game cluster.
+**Cause.** `GAME_PROVISIONER_DSN` is wrong or `pg-game` is down.
 
 **Fix.** Check that `pg-game` is healthy and that `GAME_DB_PORT` matches. `make run`
 builds the address from `GAME_DB_USER`, `GAME_DB_PASSWORD`, `GAME_DB_PORT` and
