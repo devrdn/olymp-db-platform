@@ -517,10 +517,14 @@ It is **not** a panel, and that is the part worth not losing. There is no fill,
 no border box and no shadow: the column is held by a single hairline in a 1 px
 grid track — the same device the sign-in screen is built from, and the same one
 this section means by "panels are separated by a rule". A `13rem` column, a 1 px
-track, and the rest to the work. Below the mobile reset the grid collapses like
-every other asymmetric one here: the column becomes a single scrolling row with
-the same links in the same order, and the group labels are dropped rather than
-stacked, because at that width they cost a line each and name two items.
+track, and the rest to the work. The column is a desktop arrangement: below
+1024 px (`wide`), not at the mobile reset, the grid collapses and the column
+becomes a single scrolling row above the work, with the same links in the same
+order and the scroll cue at its edge. The group labels are dropped rather than
+stacked, because at that width they cost a line each and name two items. The
+split is at `wide` because a tablet gains nothing from a column: at 768 px it
+would leave the work about 340 px, no wider than a phone's, while the row costs
+one line.
 
 **The sign-in screen splits at 1280 px, not at the mobile reset.** Between 760
 and 1280 two columns technically fit and read badly: the heading column and the

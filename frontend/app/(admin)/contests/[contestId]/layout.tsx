@@ -112,9 +112,9 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
 
       {/* The rule is a 1px grid track, so it runs the full height of the taller
          side and never collapses. */}
-      <Band fill className="grid content-start gap-x-9 gap-y-8 py-9 narrow:grid-cols-[13rem_1px_minmax(0,1fr)] narrow:content-stretch">
+      <Band fill className="grid content-start gap-x-9 gap-y-8 py-9 wide:grid-cols-[13rem_1px_minmax(0,1fr)] wide:content-stretch">
         <ContestNav groups={groups} label={t.sections} />
-        <div aria-hidden className="hidden bg-line narrow:block" />
+        <div aria-hidden className="hidden bg-line wide:block" />
         <div className="flex min-w-0 flex-col">{props.children}</div>
       </Band>
     </>

@@ -129,3 +129,16 @@ describe("the section list", () => {
     expect(screen.getByRole("navigation", { name: sections })).toBeInTheDocument();
   });
 });
+
+describe("the workspace grid", () => {
+  test("is a column and a rule from wide up, and one stack below it", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayMonitor: false });
+    await renderLayout();
+
+    const grid = screen.getByRole("navigation", { name: (await getDictionary("en")).workspace.sections })
+      .parentElement as HTMLElement;
+    expect(grid).toHaveClass("wide:grid-cols-[13rem_1px_minmax(0,1fr)]");
+    expect(grid).not.toHaveClass("narrow:grid-cols-[13rem_1px_minmax(0,1fr)]");
+    expect(grid.querySelector("[aria-hidden].bg-line")).toHaveClass("hidden", "wide:block");
+  });
+});

@@ -97,7 +97,7 @@ describe("ContestNav, what a section still owes", () => {
   });
 });
 
-describe("ContestNav, as a row on a phone", () => {
+describe("ContestNav, as a row below the wide breakpoint", () => {
   afterEach(() => vi.restoreAllMocks());
 
   // Ten sections in a 339px row: without a cue the last six are simply absent.
@@ -108,8 +108,21 @@ describe("ContestNav, as a row on a phone", () => {
 
     const row = screen.getByRole("navigation");
     // Only as a row: the column never scrolls, and a mask would clip its focus ring.
-    expect(row).toHaveClass("max-narrow:scroll-cue");
+    expect(row).toHaveClass("max-wide:scroll-cue");
     expect(row).not.toHaveClass("scroll-cue");
     expect(cuedEdges(row)).toEqual(["end"]);
+  });
+});
+
+describe("ContestNav, where the row and the column switch", () => {
+  test("switches at wide, not at narrow, so a tablet keeps the whole width for the work", () => {
+    usePathname.mockReturnValue(`/contests/${ID}`);
+    render(<ContestNav groups={groups} label={LABEL} />);
+
+    const nav = screen.getByRole("navigation");
+    expect(nav).toHaveClass("max-wide:flex-row");
+    expect(screen.getByText("Content")).toHaveClass("max-wide:hidden");
+    expect(screen.getByRole("link", { name: "Story" })).toHaveClass("max-wide:border-b-2");
+    expect(nav.outerHTML).not.toContain("max-narrow:");
   });
 });
