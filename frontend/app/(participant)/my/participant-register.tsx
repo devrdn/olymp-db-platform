@@ -146,7 +146,7 @@ export function ParticipantRegister({
                     <span className="mt-2 hidden max-narrow:block">
                       <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
                     </span>
-                    <span className="mt-2 hidden font-mono text-data text-ink-2 max-narrow:block">
+                    <span data-caption className="mt-2 hidden font-mono text-data text-ink-2 max-narrow:block">
                       <ContestWindow
                         startsAt={contest.startsAt}
                         endsAt={contest.endsAt}
@@ -155,7 +155,7 @@ export function ParticipantRegister({
                         until={shared.until}
                       />
                     </span>
-                    <span className="mt-2 block font-mono text-data text-ink-3">
+                    <span data-caption className="mt-2 block font-mono text-data text-ink-3">
                       {shared.mode[contest.questionMode]}
                     </span>
                   </td>

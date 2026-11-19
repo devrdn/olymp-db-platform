@@ -613,3 +613,30 @@
     }
   }
 }
+
+/**
+ * Small copy is 14px on a phone. `data` is also a tabular figure, whose columns
+ * must still fit, and the text of a drawn diagram, whose boxes are sized for
+ * the 13px advance: both keep the desktop size, and a caption a register folds
+ * under its first cell (`data-caption`) is prose again. The step is redefined
+ * rather than each use, so every one follows; the field rule above, on the
+ * element itself, still draws 16px.
+ */
+@layer base {
+  @media (width < 47.5rem) {
+    :root {
+      --text-small: 0.875rem;
+      --text-label: 0.875rem;
+      --text-data: 0.875rem;
+    }
+
+    table,
+    svg {
+      --text-data: 0.8125rem;
+    }
+
+    table [data-caption] {
+      --text-data: 0.875rem;
+    }
+  }
+}

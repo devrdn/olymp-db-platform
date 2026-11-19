@@ -110,3 +110,33 @@ describe("the page under an open menu", () => {
     expect(block(':root[data-scroll-lock="keep-gutter"] {')).toContain("scrollbar-gutter: stable;");
   });
 });
+
+// jsdom cannot evaluate a media query, so this asserts the rule; the computed
+// sizes outside and inside tables were measured in a real browser.
+describe("small copy on a phone", () => {
+  const PHONE_ONLY = "@media (width < 47.5rem) {";
+  const rules = block(PHONE_ONLY);
+
+  test("raises small, label and data to 14px below narrow", () => {
+    for (const name of ["small", "label", "data"]) {
+      expect(rules, name).toMatch(new RegExp(`--text-${name}:\\s*0\\.875rem;`));
+    }
+  });
+
+  test("keeps a tabular figure and a drawn diagram at the data step's own size", () => {
+    const keep = /([^{}]*)\{[^{}]*--text-data:\s*0\.8125rem;/.exec(rules);
+    expect(keep, "a rule restores data to 13px").not.toBeNull();
+    for (const selector of ["table", "svg"]) expect(keep![1]).toContain(selector);
+  });
+
+  test("leaves the field rule alone, so a field still draws 16px", () => {
+    expect(rules).not.toContain("input");
+    expect(block(PHONE)).toMatch(/--text-small:\s*1rem;/);
+  });
+
+  test("is a base-layer rule below narrow only", () => {
+    const layer = css.lastIndexOf("@layer base", css.indexOf(PHONE_ONLY));
+    expect(blockFrom(layer)).toContain(PHONE_ONLY);
+    expect(css.indexOf(PHONE_ONLY)).toBe(css.lastIndexOf(PHONE_ONLY));
+  });
+});

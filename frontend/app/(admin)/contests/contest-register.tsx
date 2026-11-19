@@ -126,7 +126,7 @@ export function ContestRegister({
                         {contest.description}
                       </span>
                     ) : null}
-                    <span className="mt-2 hidden font-mono text-data text-ink-3 max-wide:block">
+                    <span data-caption className="mt-2 hidden font-mono text-data text-ink-3 max-wide:block">
                       {t.enrollment[contest.enrollment]} · {t.mode[contest.questionMode]}
                     </span>
                   </td>

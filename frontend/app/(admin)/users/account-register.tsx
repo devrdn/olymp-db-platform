@@ -158,11 +158,11 @@ export function AccountRegister({
                       >
                         {account.fullName}
                       </Link>
-                      <span className="mt-1 block font-mono text-data text-ink-3 wrap-anywhere">
+                      <span data-caption className="mt-1 block font-mono text-data text-ink-3 wrap-anywhere">
                         {account.login}
                         {account.email ? ` · ${account.email}` : ""}
                       </span>
-                      <span className="mt-1 hidden font-mono text-data text-ink-3 max-wide:block">
+                      <span data-caption className="mt-1 hidden font-mono text-data text-ink-3 max-wide:block">
                         {roleNames ?? t.noRoles} ·{" "}
                         <span className="whitespace-nowrap">{lastSeen ?? t.never}</span>
                       </span>

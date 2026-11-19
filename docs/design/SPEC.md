@@ -268,6 +268,14 @@ keeps its own size, and a field that names no step still gets at least 16 px.
 Buttons, checkboxes and all other text keep the sizes in the table. The rule
 closes `app/globals.css`.
 
+**Below `narrow`, small copy is 14 px.** `small` is already 14 px; `label`
+rises from 12.5 to 14 px, and `data` from 13 to 14 px wherever it is prose: a
+count, a status line, a login under a name, a folded caption in a register
+(`data-caption`). A tabular `data` keeps 13 px, so every `data` inside a
+`table` does, and so does the text of a drawn diagram, whose boxes are sized for
+that width. The phone rule only redefines the three steps, so every use follows,
+and a field still draws 16 px by the rule above. `control-sm` is untouched.
+
 **The scale was revised upward after the first run on real screens.** The first
 set of values was taken from the Tailwind CSS documentation and inherited its
 sizes — but that is a page made of prose, and this is a register, a query log and

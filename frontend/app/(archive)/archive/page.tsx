@@ -167,7 +167,7 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
                       <span className="mt-2 hidden max-narrow:block">
                         <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
                       </span>
-                      <span className="mt-2 hidden font-mono text-data text-ink-2 max-wide:block">
+                      <span data-caption className="mt-2 hidden font-mono text-data text-ink-2 max-wide:block">
                         <ContestWindow
                           startsAt={contest.startsAt}
                           endsAt={contest.endsAt}
