@@ -380,6 +380,17 @@ describe("the bar below its row", () => {
     expect(hasClass(menu, "shrink-0")).toBe(true);
   });
 
+  // The panel hangs at `top-12`, which is right only while the bar is one row.
+  test("never lets a folded bar wrap, at any width, whatever the number of destinations", () => {
+    for (const destinations of [SHORT, CROWDED]) {
+      const { container, unmount } = staffShell({ destinations });
+
+      const bar = container.querySelector('[data-slot="app-bar-menu"]')?.parentElement as HTMLElement;
+      expect(bar.className.split(/\s+/).filter((utility) => /(^|:)flex-wrap$/.test(utility))).toEqual([]);
+      unmount();
+    }
+  });
+
   test("opens onto every destination, with the current one marked", async () => {
     staffShell();
 
