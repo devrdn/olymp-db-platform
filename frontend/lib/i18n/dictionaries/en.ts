@@ -18,7 +18,7 @@ const en = {
     product: "OlympDB Platform",
     signOut: "Sign out",
     language: "Language",
-    /** The bar's burger below 1024px, named for what a press does. */
+    /** The bar's burger wherever its destinations are folded, named for what a press does. */
     menu: {
       open: "Menu",
       close: "Close menu",
