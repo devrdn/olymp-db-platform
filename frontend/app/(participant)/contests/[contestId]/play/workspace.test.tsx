@@ -1455,21 +1455,93 @@ describe("one pane at a time on a phone", () => {
     expect(box.scrollTop).toBe(120);
   });
 
+  /** The result pane's own control: which of the result and the log it shows. */
+  function shows(name: string) {
+    const control = screen.getByRole("group", { name: en.participant.play.workspace.panels.bottom, hidden: true });
+    return within(control).getByRole("button", { name, hidden: true });
+  }
+  const tabs = en.participant.play.workspace.tabs;
+
   test("the result part shows the result even after the log was looked at", async () => {
     showOnAPhone();
-    const pressed = (name: string) =>
-      screen.getByRole("button", { name, hidden: true }).getAttribute("aria-pressed");
-    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
+    await userEvent.click(screen.getByRole("button", { name: tabs.log }));
     expect(part(sw.result)).toBeChecked();
-    expect(pressed(en.participant.play.workspace.tabs.log)).toBe("true");
+    expect(shows(tabs.log)).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(part(sw.editor));
-    // Nothing is pressed while neither is on screen.
-    expect(pressed(en.participant.play.workspace.tabs.log)).toBe("false");
     await userEvent.click(part(sw.result));
 
-    expect(pressed(en.participant.play.workspace.tabs.result)).toBe("true");
-    expect(pressed(en.participant.play.workspace.tabs.log)).toBe("false");
+    expect(shows(tabs.result)).toHaveAttribute("aria-pressed", "true");
+    expect(shows(tabs.log)).toHaveAttribute("aria-pressed", "false");
+  });
+
+  // A radio that is already checked fires no change, and the part says Result.
+  test("the result part, tapped while its pane shows the log, brings the result back", async () => {
+    showOnAPhone();
+    await userEvent.click(screen.getByRole("button", { name: tabs.log }));
+    expect(shows(tabs.log)).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(part(sw.result));
+
+    expect(part(sw.result)).toBeChecked();
+    expect(shows(tabs.result)).toHaveAttribute("aria-pressed", "true");
+    expect(shows(tabs.log)).toHaveAttribute("aria-pressed", "false");
+  });
+
+  // The editor's toolbar is hidden with the editor, so the pane that holds
+  // the result and the log says which it shows and offers the other.
+  test("the result pane switches between the result and the log by itself", async () => {
+    showOnAPhone();
+    await userEvent.click(part(sw.result));
+    expect(shows(tabs.result)).toBeVisible();
+    expect(shows(tabs.result)).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(shows(tabs.log));
+    expect(shows(tabs.log)).toHaveAttribute("aria-pressed", "true");
+    expect(part(sw.result)).toBeChecked();
+
+    await userEvent.click(shows(tabs.result));
+    expect(shows(tabs.result)).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // The mark says a result waits unseen; looking at the log is not seeing it.
+  test("the mark on the result part outlives a look at the log and goes when the result is shown", async () => {
+    const settle = await startRun();
+    await userEvent.click(part(sw.side));
+    await settle();
+    await waitFor(() => expect(part(sw.result)).toHaveAccessibleDescription(sw.resultMarked));
+
+    await userEvent.click(part(sw.editor));
+    await userEvent.click(screen.getByRole("button", { name: tabs.log }));
+    expect(part(sw.result)).toBeChecked();
+    expect(part(sw.result)).toHaveAccessibleDescription(sw.resultMarked);
+
+    await userEvent.click(shows(tabs.result));
+    expect(part(sw.result)).not.toHaveAccessibleDescription();
+    expect(screen.getByRole("table")).toBeVisible();
+  });
+
+  // The switch's own parts hold the focus of somebody who works it by
+  // keyboard; the focus follows the pane rather than stay on a part that is
+  // no longer the checked one.
+  test("a run that settles with the focus on the editor's part moves it to the result's", async () => {
+    const settle = await startRun();
+    part(sw.editor).focus();
+
+    await settle();
+
+    await waitFor(() => expect(part(sw.result)).toBeChecked());
+    expect(part(sw.result)).toHaveFocus();
+  });
+
+  test("a shortcut pressed with the focus on one part moves it to the part it chooses", () => {
+    showOnAPhone();
+    part(sw.editor).focus();
+
+    fireEvent.keyDown(window, { key: "b", code: "KeyB", ctrlKey: true });
+
+    expect(part(sw.schema)).toBeChecked();
+    expect(part(sw.schema)).toHaveFocus();
   });
 
   test("a table's name writes its query and brings the editor back", async () => {
@@ -1572,6 +1644,10 @@ describe("from the narrow breakpoint up", () => {
     expect(screen.getByRole("radiogroup", { name: en.participant.play.workspace.phone.label })).toHaveClass(
       "narrow:hidden",
     );
+    // The result pane's own result/log control is a phone's alone.
+    expect(
+      screen.queryByRole("group", { name: en.participant.play.workspace.panels.bottom, hidden: true }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: en.participant.console.label })).toBeVisible();
     expect(screen.getByText(en.participant.play.workspace.resultEmpty)).toBeVisible();
     expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeVisible();

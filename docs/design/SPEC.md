@@ -370,8 +370,10 @@ header's three toggles are not drawn at this width.
   their caret and their soft keyboard, and the Result part carries a dot (and
   a description for a screen reader) until they open it.
 - **The Result and Query log buttons beside Run** lead to the same pane
-  showing the one asked for, and the switch's Result part always means the
-  result.
+  showing the one asked for. That toolbar is hidden with the editor, so on a
+  phone the pane carries the same two buttons itself. The switch's Result part
+  always means the result, tapped again included, and its dot goes only when
+  the result is on screen: looking at the log is not seeing the result.
 - **A hidden pane is not being read.** The questions pane, hidden, counts no
   announcement as seen, so the dot on its part rises for one that arrives
   while the organisers' tab was left open, and it fetches no standings.

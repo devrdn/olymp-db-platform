@@ -47,6 +47,25 @@ describe("the pane switch", () => {
     expect(onChange).toHaveBeenCalledWith("side");
   });
 
+  // A checked radio fires no change, but its pane can hold more than one
+  // thing, and the part's name says which is meant.
+  test("a tap on the part already shown asks for its pane again", async () => {
+    const { onChange } = show({ value: "result" });
+
+    await userEvent.click(screen.getByRole("radio", { name: t.result }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("result");
+  });
+
+  test("a tap on another part asks once, not twice", async () => {
+    const { onChange } = show();
+
+    await userEvent.click(screen.getByRole("radio", { name: t.side }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
   test("an arrow key asks for the next pane, as in any radio group", async () => {
     const { onChange } = show();
 

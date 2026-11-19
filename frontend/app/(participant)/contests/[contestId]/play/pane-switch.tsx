@@ -59,6 +59,11 @@ export function PaneSwitch({
             value={pane}
             checked={value === pane}
             onChange={() => onChange(pane)}
+            // A checked radio fires no change; a tap on it still asks for its
+            // pane, which may be showing something other than its name says.
+            onClick={() => {
+              if (value === pane) onChange(pane);
+            }}
             aria-describedby={marks[pane] ? `${notePrefix}-${pane}` : undefined}
             className="peer sr-only"
           />

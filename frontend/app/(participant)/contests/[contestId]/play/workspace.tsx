@@ -151,7 +151,6 @@ export function Workspace({
     phonePane,
     showPhonePane,
     revealResult,
-    resultMarked,
     registerPhoneSwitch,
     present,
     sideMarked,
@@ -166,6 +165,13 @@ export function Workspace({
   const showSide = phone ? phonePane === "side" : !collapsed.side;
   const showBottom = phone ? phonePane === "result" : !collapsed.bottom;
   const showEditor = !phone || phonePane === "editor";
+
+  // A result that arrived while a phone showed another pane, not seen yet:
+  // the switch marks its part. It is the result that must be seen, so the
+  // log in the same pane does not count. Cleared during render, as derived
+  // state, the moment the result is on screen.
+  const [resultUnseen, setResultUnseen] = useState(false);
+  if (resultUnseen && (!phone || (showBottom && bottomTab === "result"))) setResultUnseen(false);
   /** The class half of the phone's hiding; see the component's comment. */
   const offPhone = (pane: PhonePane) => phonePane !== pane && "max-narrow:hidden";
 
@@ -256,7 +262,7 @@ export function Workspace({
             schema={schema !== null}
             marks={{
               ...(sideMarked ? { side: t.panels.sideMarked } : null),
-              ...(resultMarked ? { result: t.phone.resultMarked } : null),
+              ...(resultUnseen ? { result: t.phone.resultMarked } : null),
             }}
             switchRef={registerPhoneSwitch}
             dict={dict}
@@ -397,7 +403,7 @@ export function Workspace({
                     // not ask for this moment, so it must not move them or their focus
                     // off a pane they went to meanwhile.
                     setBottomTab("result");
-                    revealResult();
+                    if (!revealResult()) setResultUnseen(true);
                   }
                 }}
               />
@@ -434,6 +440,22 @@ export function Workspace({
               hidden={!showBottom}
               className={cn("min-h-0", showBottom && "flex flex-col", offPhone("result"))}
             >
+              {/* On a phone the toolbar that chooses between the result and the log
+                is hidden with the editor, so the pane carries the choice itself. */}
+              {phone ? (
+                <div
+                  role="group"
+                  aria-label={t.panels.bottom}
+                  className="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1"
+                >
+                  <ToolbarButton active={bottomTab === "result"} onClick={() => setBottomTab("result")}>
+                    {t.tabs.result}
+                  </ToolbarButton>
+                  <ToolbarButton active={bottomTab === "log"} onClick={() => setBottomTab("log")}>
+                    {t.tabs.log}
+                  </ToolbarButton>
+                </div>
+              ) : null}
               <div
                 className={cn(
                   "min-h-0 flex-1 overflow-hidden",
