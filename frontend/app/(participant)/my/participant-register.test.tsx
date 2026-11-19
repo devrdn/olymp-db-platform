@@ -122,7 +122,8 @@ describe("the register itself", () => {
 
     const row = screen.getAllByRole("row")[1];
     expect(within(row).getByText("The Greenhouse")).toBeInTheDocument();
-    expect(within(row).getByText(en.contests.status.running)).toBeInTheDocument();
+    // Once in its column and once in the phone's caption; one shows at a time.
+    expect(within(row).getAllByText(en.contests.status.running)).toHaveLength(2);
   });
 });
 
@@ -228,5 +229,61 @@ describe("the way to a contest's table", () => {
     render_([contest({ status: "published" })]);
 
     expect(screen.queryByRole("link", { name: label("The Greenhouse") })).not.toBeInTheDocument();
+  });
+});
+
+/** SPEC.md §5: the register loses columns, not rows. */
+describe("the register below a desktop's width", () => {
+  const cellsOf = () => within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+  const [INDEX, CONTEST, STATE, WINDOW, ACTION] = [0, 1, 2, 3, 4];
+
+  test("folds the window into a caption under the title until wide", () => {
+    render_([contest()]);
+
+    expect(screen.getByRole("columnheader", { name: en.contests.columns.starts })).toHaveClass(
+      "max-wide:hidden",
+    );
+    // A cell that kept its column while the header went would shift the row.
+    expect(cellsOf()[WINDOW]).toHaveClass("max-wide:hidden");
+
+    const folded = within(cellsOf()[CONTEST]).getByText(/2026/);
+    expect(folded.closest(".max-wide\\:block")).toHaveClass("hidden");
+  });
+
+  test("folds the state into the caption on a phone, and drops the row number", () => {
+    render_([contest({ status: "running" })]);
+
+    for (const name of [en.contests.columns.index, en.contests.columns.state]) {
+      expect(screen.getByRole("columnheader", { name })).toHaveClass("max-narrow:hidden");
+    }
+    expect(cellsOf()[INDEX]).toHaveClass("max-narrow:hidden");
+    expect(cellsOf()[STATE]).toHaveClass("max-narrow:hidden");
+
+    const folded = within(cellsOf()[CONTEST]).getByText(en.contests.status.running);
+    expect(folded.closest(".max-narrow\\:block")).toHaveClass("hidden");
+  });
+
+  test("gives the way in only the room it needs on a phone, and the title the rest", () => {
+    render_([contest()]);
+
+    expect(screen.getByRole("columnheader", { name: en.participant.columns.action })).toHaveClass(
+      "max-narrow:w-px",
+    );
+  });
+
+  test("keeps the contest and the way in at every width", () => {
+    render_([contest()]);
+
+    for (const name of [en.contests.columns.contest, en.participant.columns.action]) {
+      expect(screen.getByRole("columnheader", { name }).className).not.toMatch(/hidden/);
+    }
+    expect(cellsOf()[CONTEST].className).not.toMatch(/hidden/);
+    expect(cellsOf()[ACTION].className).not.toMatch(/hidden/);
+  });
+
+  test("scrolls in its own box, never the page", () => {
+    render_([contest()]);
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
   });
 });

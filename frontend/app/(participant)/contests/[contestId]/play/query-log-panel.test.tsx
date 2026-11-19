@@ -54,6 +54,12 @@ describe("the query log panel", () => {
     expect(fetchQueryLog).not.toHaveBeenCalled();
   });
 
+  test("scrolls the log in its own box, which clips whatever sits inside it", () => {
+    show();
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-auto");
+  });
+
   test("says nothing has run yet when the log is empty", () => {
     show({ initial: { items: [], total: 0, failed: false } });
 

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ExportMenu } from "@/components/product/export-menu";
 import { CopyButton, SqlBlock } from "@/components/product/sql-block";
 import { buttonVariants } from "@/components/ui/button";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { API_PREFIX } from "@/lib/api/client";
 import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
@@ -168,7 +169,7 @@ export function QueryLogPanel({
         ]}
         className="self-end"
       />
-      <div className="min-h-0 flex-1 overflow-auto">
+      <ScrollBox className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-body">
           {/* Opaque, or the rows would show through the sticky head. */}
           <thead className="sticky top-0 bg-bg">
@@ -186,7 +187,7 @@ export function QueryLogPanel({
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollBox>
 
       {failed ? (
         <div className="flex items-center gap-3">

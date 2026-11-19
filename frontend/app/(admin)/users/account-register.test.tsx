@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test } from "vitest";
 
 import type { Account, Role } from "@/lib/api/accounts";
+import { formatMoment } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 import { AccountRegister } from "./account-register";
@@ -134,5 +135,73 @@ describe("AccountRegister", () => {
     );
     expect(screen.getByRole("link", { name: en.accounts.newerPage })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.accounts.olderPage })).not.toBeInTheDocument();
+  });
+});
+
+/** SPEC.md §5: the register loses columns, not rows. */
+describe("AccountRegister below a desktop's width", () => {
+  const cellsOf = () => within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+
+  test("folds the roles and the last sign-in into a caption under the account until wide", () => {
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+
+    for (const name of [en.accounts.columns.roles, en.accounts.columns.lastSeen]) {
+      expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
+    }
+    // A cell that kept its column while the header went would shift the row.
+    const [, , , , rolesCell, lastSeenCell] = cellsOf();
+    expect(rolesCell).toHaveClass("max-wide:hidden");
+    expect(lastSeenCell).toHaveClass("max-wide:hidden");
+
+    const caption = screen.getByText(
+      `Student · ${formatMoment("2026-03-01T10:00:00Z", { locale: "en" })}`,
+    );
+    expect(caption).toHaveClass("hidden", "max-wide:block");
+  });
+
+  test("says in the caption, too, that there is no role and no sign-in", () => {
+    renderRegister(
+      <AccountRegister accounts={[account({ roles: [], lastLoginAt: undefined })]} {...props} dict={en} />,
+    );
+
+    expect(screen.getByText(`${en.accounts.noRoles} · ${en.accounts.never}`)).toHaveClass(
+      "hidden",
+      "max-wide:block",
+    );
+  });
+
+  test("drops the row number on a phone, where the name needs the room", () => {
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+
+    expect(screen.getByRole("columnheader", { name: en.accounts.columns.index })).toHaveClass(
+      "max-narrow:hidden",
+    );
+    expect(cellsOf()[1]).toHaveClass("max-narrow:hidden");
+  });
+
+  test("gives the account the room on a phone: half the side padding, the state its narrowest", () => {
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+
+    expect(screen.getByRole("table")).toHaveClass("max-narrow:[--row-px:--spacing(2)]");
+    expect(screen.getByRole("columnheader", { name: en.accounts.columns.state })).toHaveClass(
+      "max-narrow:w-px",
+    );
+  });
+
+  test("keeps the account and its state at every width", () => {
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+
+    for (const name of [en.accounts.columns.account, en.accounts.columns.state]) {
+      expect(screen.getByRole("columnheader", { name }).className).not.toMatch(/hidden/);
+    }
+    const [, , accountCell, stateCell] = cellsOf();
+    expect(accountCell.className).not.toMatch(/hidden/);
+    expect(stateCell.className).not.toMatch(/hidden/);
+  });
+
+  test("scrolls in its own box, never the page", () => {
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
   });
 });

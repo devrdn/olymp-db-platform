@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import type { Account, AccountStatus, Role } from "@/lib/api/accounts";
 import { formatMoment } from "@/lib/format/datetime";
@@ -18,7 +19,9 @@ import { RowCheckbox, SelectAllCheckbox } from "./selection";
 /**
  * The installation's accounts as a register. Role codes are shown by catalogue
  * name; an unknown code is shown raw, since an empty cell would deny a role the
- * account holds.
+ * account holds. Below `wide` the roles and the last sign-in fold into a
+ * caption under the account (SPEC.md §5); on a phone the row number goes and
+ * the side padding halves, so a login keeps its own line beside the state.
  */
 
 /** Rows per page; matches the API's default. */
@@ -92,8 +95,8 @@ export function AccountRegister({
           />
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-lg border-collapse text-left narrow:min-w-3xl">
+        <ScrollBox>
+          <table className="w-full border-collapse text-left max-narrow:[--row-px:--spacing(2)] wide:min-w-3xl">
             <thead>
               <tr>
                 <th scope="col" className={cn(HEAD, "w-8 pr-0")}>
@@ -103,86 +106,94 @@ export function AccountRegister({
                     label={t.selection.pickPage}
                   />
                 </th>
-                <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right")}>
+                <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right max-narrow:hidden")}>
                   {t.columns.index}
                 </th>
                 <th scope="col" className={HEAD}>
                   {t.columns.account}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-40")}>
+                {/* As narrow as its widest word on a phone, so the account takes the rest. */}
+                <th scope="col" className={cn(HEAD, "w-40 max-narrow:w-px")}>
                   {t.columns.state}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-48")}>
+                <th scope="col" className={cn(HEAD, "w-48 max-wide:hidden")}>
                   {t.columns.roles}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-44")}>
+                <th scope="col" className={cn(HEAD, "w-44 max-wide:hidden")}>
                   {t.columns.lastSeen}
                 </th>
               </tr>
             </thead>
             <tbody>
-              {accounts.map((account, index) => (
-                <tr
-                  key={account.id}
-                  className="transition-colors duration-(--t-input) ease-standard hover:bg-panel"
-                >
-                  <td className={cn(CELL, "w-8 pr-0 align-middle")}>
-                    <RowCheckbox
-                      id={account.id}
-                      label={t.selection.pickAccount.replace("{name}", account.fullName)}
-                      display={account.login}
-                    />
-                  </td>
+              {accounts.map((account, index) => {
+                const roleNames =
+                  account.roles.length === 0
+                    ? null
+                    : account.roles.map((code) => nameOf.get(code) ?? code).join(", ");
+                const lastSeen = account.lastLoginAt
+                  ? formatMoment(account.lastLoginAt, { locale })
+                  : null;
 
-                  <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3")}>
-                    {String(offset + index + 1).padStart(2, "0")}
-                  </td>
+                return (
+                  <tr
+                    key={account.id}
+                    className="transition-colors duration-(--t-input) ease-standard hover:bg-panel"
+                  >
+                    <td className={cn(CELL, "w-8 pr-0 align-middle")}>
+                      <RowCheckbox
+                        id={account.id}
+                        label={t.selection.pickAccount.replace("{name}", account.fullName)}
+                        display={account.login}
+                      />
+                    </td>
 
-                  <td className={CELL}>
-                    <Link
-                      href={`/users/${account.id}`}
-                      className="block text-row text-ink transition-colors duration-(--t-input) ease-standard hover:text-accent"
-                    >
-                      {account.fullName}
-                    </Link>
-                    <span className="mt-1 block font-mono text-data text-ink-3">
-                      {account.login}
-                      {account.email ? ` · ${account.email}` : ""}
-                    </span>
-                  </td>
+                    <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3 max-narrow:hidden")}>
+                      {String(offset + index + 1).padStart(2, "0")}
+                    </td>
 
-                  <td className={CELL}>
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      <Tag tone={STATUS_TONE[account.status]}>{t.status[account.status]}</Tag>
-                      {/* Still carrying an issued password that must be changed. */}
-                      {account.mustChangePassword ? (
-                        <Tag tone="warn">{t.handoverPending}</Tag>
-                      ) : null}
-                    </span>
-                  </td>
-
-                  <td className={CELL}>
-                    {account.roles.length === 0 ? (
-                      <span className="font-mono text-data text-ink-3">{t.noRoles}</span>
-                    ) : (
-                      <span className="font-mono text-data text-ink-2">
-                        {account.roles.map((code) => nameOf.get(code) ?? code).join(", ")}
+                    <td className={CELL}>
+                      <Link
+                        href={`/users/${account.id}`}
+                        className="block text-row text-ink transition-colors duration-(--t-input) ease-standard hover:text-accent"
+                      >
+                        {account.fullName}
+                      </Link>
+                      <span className="mt-1 block font-mono text-data text-ink-3">
+                        {account.login}
+                        {account.email ? ` · ${account.email}` : ""}
                       </span>
-                    )}
-                  </td>
+                      <span className="mt-1 hidden font-mono text-data text-ink-3 max-wide:block">
+                        {roleNames ?? t.noRoles} · {lastSeen ?? t.never}
+                      </span>
+                    </td>
 
-                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2")}>
-                    {account.lastLoginAt ? (
-                      formatMoment(account.lastLoginAt, { locale })
-                    ) : (
-                      <span className="text-ink-3">{t.never}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    <td className={CELL}>
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <Tag tone={STATUS_TONE[account.status]}>{t.status[account.status]}</Tag>
+                        {/* Still carrying an issued password that must be changed. */}
+                        {account.mustChangePassword ? (
+                          <Tag tone="warn">{t.handoverPending}</Tag>
+                        ) : null}
+                      </span>
+                    </td>
+
+                    <td className={cn(CELL, "max-wide:hidden")}>
+                      {roleNames === null ? (
+                        <span className="font-mono text-data text-ink-3">{t.noRoles}</span>
+                      ) : (
+                        <span className="font-mono text-data text-ink-2">{roleNames}</span>
+                      )}
+                    </td>
+
+                    <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2 max-wide:hidden")}>
+                      {lastSeen ?? <span className="text-ink-3">{t.never}</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </div>
+        </ScrollBox>
       )}
 
       {total > ACCOUNTS_PAGE ? (

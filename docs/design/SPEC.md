@@ -455,11 +455,33 @@ reset: at a 768 px portrait tablet the register's column is about 620 px
 against the six columns' 800, and without the fold the window, one of the two
 columns a reader comes for, sat past the edge of the box.
 
+The same rule holds on every register, and each folds below `wide`, because
+none of their full sets fits the column between `narrow` and `wide`:
+
+- the accounts (`/users`) keep the name and login and the state, and fold the
+  roles and the last sign-in;
+- the audit trail keeps when, who and what, and folds the subject and the
+  address under the action;
+- a participant's contests (`/my`, `/open`) keep the title, the state and the
+  way in, and fold the window under the title;
+- the archive keeps the title, the status and the results link, and folds the
+  window and the participants.
+
+A phone's 339 px holds the identifying column and one more. So below `narrow`
+a second column follows into the caption: the state on `/my`, `/open` and the
+archive, and the actor under the moment on the audit trail. The row number
+goes, and these registers halve the side padding (`--row-px`). That lets a
+login of two dozen characters keep one line beside the state, so a row of
+accounts is its name, its login and the caption.
+
 **A wide table scrolls in a `ScrollBox`, never on the page.** The box is
 `relative` as well as a scroller, because an `sr-only` label in a header cell
 is absolutely positioned: under a scroller that is not its containing block it
 escapes the clip and widens the whole document. Four workspace screens grew to
-between 518 and 1146 px that way.
+between 518 and 1146 px that way. So every table that can scroll sits in one,
+not only those with such a label today: the registers, the standings, the
+profile's questions, and the console's result and query log, which scroll both
+ways.
 
 **A row of tabs that scrolls says so.** The contest's ten sections in a 339 px
 row showed four and a half, with nothing to say the others exist. A row of

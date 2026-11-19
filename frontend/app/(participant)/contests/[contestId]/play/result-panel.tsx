@@ -3,6 +3,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { copyText } from "@/lib/clipboard";
 import { toCsv, toTsv } from "@/lib/format/csv";
 import type { PlayDictionary } from "./dictionary";
@@ -556,7 +557,7 @@ function ResultTable({
   return (
     // `flex-1` gives this its share of the column below `narrow`; inert in the
     // grid.
-    <div ref={scrollRef} onScroll={measure} className="min-h-0 flex-1 overflow-auto">
+    <ScrollBox ref={scrollRef} onScroll={measure} className="min-h-0 flex-1 overflow-auto">
       {/* `table-fixed` keeps every row a known height, and `font-mono` on the
           table lets the widths be stated in `ch`, which resolves against the
           element it is written on. `aria-rowcount` and each row's
@@ -650,7 +651,7 @@ function ResultTable({
           ) : null}
         </tbody>
       </table>
-    </div>
+    </ScrollBox>
   );
 }
 

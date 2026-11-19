@@ -62,6 +62,11 @@ function answer(body: unknown) {
   serverRequest.mockResolvedValue(body);
 }
 
+/** The first contest's cells: title, window, status, participants, results. */
+function cellsOfFirstRow() {
+  return within(screen.getByRole("row", { name: /SQL Joins Cup/ })).getAllByRole("cell");
+}
+
 async function renderPage(search: Record<string, string | string[]> = {}) {
   render(await ArchivePage({ params: Promise.resolve({}), searchParams: Promise.resolve(search) } as PageProps<"/archive">));
 }
@@ -87,10 +92,10 @@ describe("the archive list", () => {
     expect(title).toHaveAttribute("href", `/archive/${ID}`);
     const results = screen.getByRole("link", { name: "Results of SQL Joins Cup" });
     expect(results).toHaveAttribute("href", `/archive/${ID}#results`);
-    expect(screen.getByText("archived")).toBeInTheDocument();
-    expect(screen.getByText("12 participants")).toBeInTheDocument();
-    const tableRow = screen.getByRole("row", { name: /SQL Joins Cup/ });
-    expect(within(tableRow).getByText(/2026/)).toBeInTheDocument();
+    const [, windowCell, statusCell, participantsCell] = cellsOfFirstRow();
+    expect(within(statusCell).getByText("archived")).toBeInTheDocument();
+    expect(within(participantsCell).getByText("12 participants")).toBeInTheDocument();
+    expect(within(windowCell).getByText(/2026/)).toBeInTheDocument();
   });
 
   test("does not prefetch a contest's page, whose every read spends the reader's budget", async () => {
@@ -199,5 +204,65 @@ describe("the archive list", () => {
 
   test("keeps the page out of search engines", async () => {
     expect(await generateMetadata()).toMatchObject({ robots: { index: false, follow: false } });
+  });
+});
+
+/** SPEC.md §5: the register loses columns, not rows. */
+describe("the archive list below a desktop's width", () => {
+  test("folds the window and the participants into a caption under the title until wide", async () => {
+    answer({ items: [row()], total: 1 });
+    await renderPage();
+
+    for (const name of [en.archive.columns.window, en.archive.columns.participants]) {
+      expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
+    }
+    // A cell that kept its column while the header went would shift the row.
+    const [title, windowCell, , participantsCell] = cellsOfFirstRow();
+    expect(windowCell).toHaveClass("max-wide:hidden");
+    expect(participantsCell).toHaveClass("max-wide:hidden");
+
+    const caption = within(title).getByText("12 participants").parentElement;
+    expect(caption).toHaveClass("hidden", "max-wide:block");
+    expect(within(caption!).getByText(/2026/)).toBeInTheDocument();
+  });
+
+  test("folds the status into the caption on a phone", async () => {
+    answer({ items: [row()], total: 1 });
+    await renderPage();
+
+    expect(screen.getByRole("columnheader", { name: en.archive.columns.status })).toHaveClass(
+      "max-narrow:hidden",
+    );
+    const [title, , statusCell] = cellsOfFirstRow();
+    expect(statusCell).toHaveClass("max-narrow:hidden");
+    expect(within(title).getByText("archived").closest(".max-narrow\\:block")).toHaveClass("hidden");
+  });
+
+  test("gives the results link only the room it needs on a phone, and the title the rest", async () => {
+    answer({ items: [row()], total: 1 });
+    await renderPage();
+
+    expect(screen.getByRole("columnheader", { name: en.archive.columns.results })).toHaveClass(
+      "max-narrow:w-px",
+    );
+  });
+
+  test("keeps the title and the way to the results at every width", async () => {
+    answer({ items: [row()], total: 1 });
+    await renderPage();
+
+    for (const name of [en.archive.columns.title, en.archive.columns.results]) {
+      expect(screen.getByRole("columnheader", { name }).className).not.toMatch(/hidden/);
+    }
+    const [title, , , , results] = cellsOfFirstRow();
+    expect(title.className).not.toMatch(/hidden/);
+    expect(results.className).not.toMatch(/hidden/);
+  });
+
+  test("scrolls in its own box, never the page", async () => {
+    answer({ items: [row()], total: 1 });
+    await renderPage();
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
   });
 });

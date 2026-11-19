@@ -667,3 +667,13 @@ describe.each(["en", "ro", "ru"] as const)("the place badge in %s", (locale) => 
     expect(columns.place).not.toBe(columns.prize);
   });
 });
+
+describe("the standings on a phone", () => {
+  // The table's caption is `sr-only`: under a scroller that is not its
+  // containing block it would widen the page.
+  test.each(["panel", "page"] as const)("scroll in their own box, never the page (%s)", (variant) => {
+    show(standings(), variant);
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+});

@@ -1,3 +1,4 @@
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import type { ProfileReport, ProfileReportQuestion, ProfileReportResult } from "@/lib/api/profile";
 import { readableDuration } from "@/lib/format/bytes";
@@ -144,7 +145,7 @@ function Questions({
         <p className="max-w-body text-body text-ink-2">{t.questions.empty}</p>
       ) : (
         <>
-          <div className="min-w-0 overflow-x-auto">
+          <ScrollBox className="min-w-0">
             <table aria-label={t.questions.heading} className="w-full min-w-[34rem] border-collapse text-left">
               <thead>
                 <tr className="border-b border-line">
@@ -179,7 +180,7 @@ function Questions({
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollBox>
           {questions.some((question) => question.isBonus) ? (
             <p className="max-w-body text-small text-ink-3">{t.questions.bonusNote}</p>
           ) : null}

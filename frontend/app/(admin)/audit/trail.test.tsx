@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test } from "vitest";
 
 import type { AuditEntry } from "@/lib/api/audit";
@@ -26,6 +26,13 @@ function entry(overrides: Partial<AuditEntry> = {}): AuditEntry {
   };
 }
 
+/** The entry's cell in a column, by position: when, who, what, about, from. */
+function cellOf(column: number) {
+  return within(screen.getAllByRole("row")[1]).getAllByRole("cell")[column];
+}
+
+const [WHEN, WHO, WHAT, ABOUT, FROM] = [0, 1, 2, 3, 4];
+
 const props = {
   total: 1,
   offset: 0,
@@ -39,7 +46,7 @@ describe("AuditTrailRegister", () => {
     render(<AuditTrailRegister entries={[entry()]} {...props} dict={dict} />);
 
     expect(screen.getByText("Blocked an account")).toBeInTheDocument();
-    expect(screen.getByText("root")).toBeInTheDocument();
+    expect(within(cellOf(WHO)).getByText("root")).toBeInTheDocument();
   });
 
   test("shows a code it has no wording for rather than dropping the line", () => {
@@ -61,7 +68,7 @@ describe("AuditTrailRegister", () => {
       />,
     );
 
-    expect(screen.getByText(dict.audit.system)).toBeInTheDocument();
+    expect(within(cellOf(WHO)).getByText(dict.audit.system)).toBeInTheDocument();
   });
 
   test("offers the way out of a filter that matched nothing", () => {
@@ -247,6 +254,8 @@ describe("AuditTrailRegister, why a sign-in failed", () => {
   });
 });
 
+// The subject and the actor are also in the captions that stand in for their
+// columns at narrower widths, so these read the column's own cell.
 describe("AuditTrailRegister, what the action was about", () => {
   test("names the contest and links to it", () => {
     // The reader needs which contest, as a link.
@@ -265,7 +274,7 @@ describe("AuditTrailRegister, what the action was about", () => {
       />,
     );
 
-    expect(screen.getByRole("link", { name: "Night in the archive" })).toHaveAttribute(
+    expect(within(cellOf(ABOUT)).getByRole("link", { name: "Night in the archive" })).toHaveAttribute(
       "href",
       "/contests/c-1",
     );
@@ -280,8 +289,8 @@ describe("AuditTrailRegister, what the action was about", () => {
       />,
     );
 
-    expect(screen.getByText("root")).toBeInTheDocument();
-    expect(screen.getByText("s.popescu")).toBeInTheDocument();
+    expect(within(cellOf(WHO)).getByText("root")).toBeInTheDocument();
+    expect(within(cellOf(ABOUT)).getByText("s.popescu")).toBeInTheDocument();
   });
 
   test("keeps the identifier of something that no longer exists", () => {
@@ -296,7 +305,7 @@ describe("AuditTrailRegister, what the action was about", () => {
       />,
     );
 
-    expect(screen.getByText("c-gone")).toBeInTheDocument();
+    expect(within(cellOf(ABOUT)).getByText("c-gone")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "c-gone" })).not.toBeInTheDocument();
   });
 });
@@ -338,5 +347,84 @@ describe("AuditTrailRegister, an edit that touched many fields", () => {
     // Closed, the first few; open, every one.
     expect(screen.getByText("a_one, b_two, c_three +1")).toBeInTheDocument();
     expect(screen.getByText("d_four")).toBeInTheDocument();
+  });
+});
+
+/** SPEC.md §5: the register loses columns, not rows. */
+describe("AuditTrailRegister below a desktop's width", () => {
+  const aboutAccount = entry({ action: "user.block", entity_label: "s.popescu" });
+
+  test("folds the subject and the address into a caption under the action until wide", () => {
+    render(<AuditTrailRegister entries={[aboutAccount]} {...props} dict={dict} />);
+
+    for (const name of [dict.audit.columns.about, dict.audit.columns.where]) {
+      expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
+    }
+    // A cell that kept its column while the header went would shift the row.
+    expect(cellOf(ABOUT)).toHaveClass("max-wide:hidden");
+    expect(cellOf(FROM)).toHaveClass("max-wide:hidden");
+
+    const caption = within(cellOf(WHAT)).getByText("10.20.30.40").parentElement;
+    expect(caption).toHaveClass("hidden", "max-wide:block");
+    expect(within(caption!).getByText("s.popescu")).toBeInTheDocument();
+  });
+
+  test("leaves the caption out when there is neither a subject nor an address", () => {
+    render(
+      <AuditTrailRegister
+        entries={[entry({ entity: undefined, entity_id: undefined, ip: undefined })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(cellOf(WHAT).querySelector(".max-wide\\:block")).toBeNull();
+  });
+
+  test("folds the actor into a caption under the moment on a phone", () => {
+    render(<AuditTrailRegister entries={[aboutAccount]} {...props} dict={dict} />);
+
+    expect(screen.getByRole("columnheader", { name: dict.audit.columns.who })).toHaveClass(
+      "max-narrow:hidden",
+    );
+    expect(cellOf(WHO)).toHaveClass("max-narrow:hidden");
+    const folded = within(cellOf(WHEN)).getByText("root");
+    expect(folded.closest(".max-narrow\\:block")).toHaveClass("hidden");
+  });
+
+  test("names the system in that caption, too, when nobody acted", () => {
+    render(
+      <AuditTrailRegister
+        entries={[entry({ actor_id: undefined, actor_login: undefined })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(within(cellOf(WHEN)).getByText(dict.audit.system)).toBeInTheDocument();
+  });
+
+  test("breaks the moment between the day and the time, never inside either", () => {
+    render(<AuditTrailRegister entries={[aboutAccount]} {...props} dict={dict} />);
+
+    const pieces = cellOf(WHEN).querySelectorAll(":scope > .whitespace-nowrap");
+    // ICU puts a narrow no-break space before the day period.
+    expect([...pieces].map((piece) => piece.textContent)).toEqual(["Mar 1, 2026", "10:00\u202fAM"]);
+  });
+
+  test("keeps the moment and the action at every width", () => {
+    render(<AuditTrailRegister entries={[aboutAccount]} {...props} dict={dict} />);
+
+    for (const name of [dict.audit.columns.when, dict.audit.columns.what]) {
+      expect(screen.getByRole("columnheader", { name }).className).not.toMatch(/hidden/);
+    }
+    expect(cellOf(WHEN).className).not.toMatch(/hidden/);
+    expect(cellOf(WHAT).className).not.toMatch(/hidden/);
+  });
+
+  test("scrolls in its own box, never the page", () => {
+    render(<AuditTrailRegister entries={[aboutAccount]} {...props} dict={dict} />);
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
   });
 });

@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import {
   AUDIT_PAGE,
   blockedProblems,
@@ -16,7 +17,9 @@ import { cn } from "@/lib/utils";
 /**
  * The audit trail as a register, scanned down a column. Action codes are
  * translated from the dictionary; an untranslated code is shown raw, since
- * dropping a line would make the record lie.
+ * dropping a line would make the record lie. Below `wide` the subject and the
+ * address fold into a caption under the action, and on a phone the actor
+ * folds under the moment (SPEC.md §5).
  */
 
 const HEAD =
@@ -75,23 +78,23 @@ export function AuditTrailRegister({
     <div className="flex flex-col gap-6">
       <p className="font-mono text-data text-ink-3">{t.counted.replace("{n}", String(total))}</p>
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-lg border-collapse text-left">
+      <ScrollBox>
+        <table className="w-full border-collapse text-left max-narrow:[--row-px:--spacing(2)] wide:min-w-3xl">
           <thead>
             <tr>
-              <th scope="col" className={cn(HEAD, "w-44")}>
+              <th scope="col" className={cn(HEAD, "w-44 max-narrow:w-auto")}>
                 {t.columns.when}
               </th>
-              <th scope="col" className={cn(HEAD, "w-40")}>
+              <th scope="col" className={cn(HEAD, "w-40 max-narrow:hidden")}>
                 {t.columns.who}
               </th>
               <th scope="col" className={HEAD}>
                 {t.columns.what}
               </th>
-              <th scope="col" className={cn(HEAD, "w-56")}>
+              <th scope="col" className={cn(HEAD, "w-56 max-wide:hidden")}>
                 {t.columns.about}
               </th>
-              <th scope="col" className={cn(HEAD, "w-32")}>
+              <th scope="col" className={cn(HEAD, "w-32 max-wide:hidden")}>
                 {t.columns.where}
               </th>
             </tr>
@@ -99,16 +102,14 @@ export function AuditTrailRegister({
           <tbody>
             {entries.map((entry) => (
               <tr key={entry.id}>
-                <td className={cn(CELL, "font-mono text-data text-ink-2 whitespace-nowrap")}>
-                  {timestamp.format(new Date(entry.created_at))}
+                <td className={cn(CELL, "font-mono text-data text-ink-2 narrow:whitespace-nowrap")}>
+                  <Moment format={timestamp} iso={entry.created_at} />
+                  <span className="mt-1 hidden max-narrow:block">
+                    <Actor entry={entry} dict={dict} />
+                  </span>
                 </td>
-                <td className={CELL}>
-                  {entry.actor_login ? (
-                    <span className="font-mono text-data text-ink">{entry.actor_login}</span>
-                  ) : (
-                    /* No actor means the system acted. */
-                    <span className="text-small text-ink-3 italic">{t.system}</span>
-                  )}
+                <td className={cn(CELL, "max-narrow:hidden")}>
+                  <Actor entry={entry} dict={dict} />
                 </td>
                 <td className={cn(CELL, "text-body text-ink")}>
                   {(t.actions as Record<string, string>)[entry.action] ?? (
@@ -120,16 +121,23 @@ export function AuditTrailRegister({
                   <ChangeSummary payload={entry.payload} label={t.unchanged} />
                   <BlockedProblems payload={entry.payload} dict={dict} />
                   <LoginFailureReason payload={entry.payload} dict={dict} />
+                  {entry.entity || entry.ip ? (
+                    <span className="mt-1.5 hidden text-small text-ink-2 wrap-anywhere max-wide:block">
+                      <Subject entry={entry} dict={dict} />
+                      {entry.entity && entry.ip ? " · " : null}
+                      {entry.ip ? <span className="font-mono text-data text-ink-3">{entry.ip}</span> : null}
+                    </span>
+                  ) : null}
                 </td>
-                <td className={cn(CELL, "text-small text-ink-2")}>
+                <td className={cn(CELL, "text-small text-ink-2 max-wide:hidden")}>
                   <Subject entry={entry} dict={dict} />
                 </td>
-                <td className={cn(CELL, "font-mono text-data text-ink-3")}>{entry.ip}</td>
+                <td className={cn(CELL, "font-mono text-data text-ink-3 max-wide:hidden")}>{entry.ip}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollBox>
 
       {total > AUDIT_PAGE ? (
         <nav className="flex items-center gap-2.5" aria-label={t.heading}>
@@ -154,6 +162,39 @@ export function AuditTrailRegister({
         </nav>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The moment in two unbreakable pieces, the day and the time, so a narrow
+ * column breaks it between them. The joiner is the locale's own.
+ */
+function Moment({ format, iso }: { format: Intl.DateTimeFormat; iso: string }) {
+  const parts = format.formatToParts(new Date(iso));
+  const hour = parts.findIndex((part) => part.type === "hour");
+  if (hour < 1) return <span className="whitespace-nowrap">{format.format(new Date(iso))}</span>;
+
+  const text = (from: number, to?: number) =>
+    parts
+      .slice(from, to)
+      .map((part) => part.value)
+      .join("");
+
+  return (
+    <>
+      <span className="whitespace-nowrap">{text(0, hour - 1)}</span>
+      {parts[hour - 1].value}
+      <span className="whitespace-nowrap">{text(hour)}</span>
+    </>
+  );
+}
+
+/** Who acted; no actor means the system did. */
+function Actor({ entry, dict }: { entry: AuditEntry; dict: Dictionary }) {
+  return entry.actor_login ? (
+    <span className="font-mono text-data text-ink">{entry.actor_login}</span>
+  ) : (
+    <span className="text-small text-ink-3 italic">{dict.audit.system}</span>
   );
 }
 

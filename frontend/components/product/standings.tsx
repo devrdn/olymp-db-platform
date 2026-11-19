@@ -1,3 +1,4 @@
+import { ScrollBox } from "@/components/ui/scroll-box";
 import type { Prize, Standings, StandingsCell, StandingsRow } from "@/lib/api/leaderboard";
 import { identityHue } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
@@ -378,7 +379,7 @@ export function StandingsView({
           {variant === "page" ? (
             <Podium rows={rows} dict={dict} scoring={standings.scoring} />
           ) : null}
-          <div className="overflow-x-auto">
+          <ScrollBox>
             {/* Fixed layout, so the name column gives way instead of pushing the
                points off a phone. The `narrow` min-width keeps a wide ICPC grid
                from squeezing it to nothing. */}
@@ -467,7 +468,7 @@ export function StandingsView({
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollBox>
           {standings.truncated ? (
             <p className="text-small text-warn">
               {t.truncated.replace("{count}", String(rows.length))}

@@ -7,6 +7,7 @@ import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import { ARCHIVE_PAGE_SIZE, ARCHIVE_QUERY_MAX, archivePageSchema, archiveSearch } from "@/lib/api/archive";
 import { branding } from "@/lib/api/branding";
@@ -32,6 +33,9 @@ export async function generateMetadata() {
  * Contests already held. A Server Component with no client state: the search
  * is a GET form and paging is links, so a view is an address that can be
  * shared and works without JavaScript.
+ *
+ * Below `wide` the window and the participants fold into a caption under the
+ * title, and on a phone the status follows them (SPEC.md §5).
  */
 export default async function ArchivePage(props: PageProps<"/archive">) {
   const [params, brand, dict, locale] = await Promise.all([
@@ -127,23 +131,23 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-lg border-collapse text-left narrow:min-w-3xl">
+          <ScrollBox>
+            <table className="w-full border-collapse text-left max-narrow:[--row-px:--spacing(2)] wide:min-w-3xl">
               <thead>
                 <tr>
                   <th scope="col" className={HEAD}>
                     {t.columns.title}
                   </th>
-                  <th scope="col" className={cn(HEAD, "w-52")}>
+                  <th scope="col" className={cn(HEAD, "w-52 max-wide:hidden")}>
                     {t.columns.window}
                   </th>
-                  <th scope="col" className={cn(HEAD, "w-36")}>
+                  <th scope="col" className={cn(HEAD, "w-36 max-narrow:hidden")}>
                     {t.columns.status}
                   </th>
-                  <th scope="col" className={cn(HEAD, "w-40")}>
+                  <th scope="col" className={cn(HEAD, "w-40 max-wide:hidden")}>
                     {t.columns.participants}
                   </th>
-                  <th scope="col" className={cn(HEAD, "w-32")}>
+                  <th scope="col" className={cn(HEAD, "w-32 max-narrow:w-px")}>
                     {t.columns.results}
                   </th>
                 </tr>
@@ -160,8 +164,21 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
                       >
                         {contest.title}
                       </Link>
+                      <span className="mt-2 hidden max-narrow:block">
+                        <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
+                      </span>
+                      <span className="mt-2 hidden font-mono text-data text-ink-2 max-wide:block">
+                        <ContestWindow
+                          startsAt={contest.startsAt}
+                          endsAt={contest.endsAt}
+                          locale={locale}
+                          unscheduled={dict.contests.unscheduled}
+                          until={dict.contests.until}
+                        />
+                        <span className="block text-ink-3">{plural(t.participants, contest.participants, locale)}</span>
+                      </span>
                     </td>
-                    <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2")}>
+                    <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2 max-wide:hidden")}>
                       <ContestWindow
                         startsAt={contest.startsAt}
                         endsAt={contest.endsAt}
@@ -170,10 +187,10 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
                         until={dict.contests.until}
                       />
                     </td>
-                    <td className={CELL}>
+                    <td className={cn(CELL, "max-narrow:hidden")}>
                       <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
                     </td>
-                    <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2")}>
+                    <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2 max-wide:hidden")}>
                       {plural(t.participants, contest.participants, locale)}
                     </td>
                     <td className={CELL}>
@@ -190,7 +207,7 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollBox>
 
           <nav aria-label={t.heading} className="flex flex-wrap items-center justify-between gap-3">
             <span className="font-mono text-data text-ink-3">

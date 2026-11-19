@@ -307,3 +307,12 @@ describe("a participant who never started", () => {
     expect(figure(t().result.worked)).toBe(t().result.noWorked);
   });
 });
+
+describe("the questions on a phone", () => {
+  test("scroll in their own box, never the page", () => {
+    renderSummary();
+
+    const table = screen.getByRole("table", { name: t().questions.heading });
+    expect(table.parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+});

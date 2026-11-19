@@ -753,6 +753,12 @@ describe("opening one row of the result", () => {
     ).not.toBeInTheDocument();
   });
 
+  test("scrolls the answer in its own box, which clips whatever sits inside it", () => {
+    show(answer(5));
+
+    expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-auto");
+  });
+
   // Below `narrow` the bottom panel has only a `max-height`, so a grid share
   // resolves as `auto` and pushes the open row out of view; there the two
   // become a flex column. jsdom has no media queries, so both arrangements
