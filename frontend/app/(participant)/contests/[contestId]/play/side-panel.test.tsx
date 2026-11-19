@@ -175,6 +175,17 @@ describe("the side panel", () => {
     );
   });
 
+  // The panel is narrower than the two controls side by side in every
+  // locale. The print control moves under the download whole rather than
+  // break its sentence, and breaks only in a panel narrower than the sentence.
+  test("the print control keeps its words on one line, on a row of its own when it must", () => {
+    show();
+
+    const print = screen.getByRole("button", { name: en.participant.play.workspace.story.print, hidden: true });
+    expect(print).toHaveClass("shrink-0", "max-w-full");
+    expect(print.parentElement).toHaveClass("flex-wrap");
+  });
+
   // A button that opens the print dialog in place, not a link.
   describe("the print control", () => {
     // Read inside the mock, so the title is proven set before the call itself,

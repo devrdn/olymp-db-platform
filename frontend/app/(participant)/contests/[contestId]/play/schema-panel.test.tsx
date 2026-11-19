@@ -64,6 +64,21 @@ describe("the schema panel", () => {
     expectTouchTarget(button.closest("header"), "pointer-coarse:min-h-11", "pointer-coarse:py-0");
   });
 
+  // The column is narrower than its header's words in every locale. The
+  // header stays one line: the controls keep their width, and the language
+  // wraps out of a box one line high rather than push the header to two.
+  test("keeps its header on one line by letting the language drop out whole", () => {
+    panel();
+
+    const header = screen.getByRole("region", { name: t.heading }).querySelector("header")!;
+    const language = within(header).getByText(`· ${t.language}`);
+    const box = language.parentElement!;
+    expect(box).toHaveClass("flex-wrap", "overflow-hidden", "max-h-[1lh]", "min-w-0", "flex-1");
+    expect(box).toHaveAttribute("title", `${t.heading} · ${t.language}`);
+    expect(within(box).getByText(t.heading)).toHaveClass("truncate");
+    expect(screen.getByRole("button", { name: t.diagram.openLabel }).parentElement).toHaveClass("shrink-0");
+  });
+
   // The setting removes a view: the tables, columns and foreign keys stay in the list.
   test("leaves the diagram out when the contest has switched it off", () => {
     panel(schema(), vi.fn(), false);

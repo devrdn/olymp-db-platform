@@ -99,10 +99,18 @@ export function SchemaPanel({
     <section aria-label={t.heading} className="flex min-h-0 flex-1 flex-col">
       {/* Under a finger the diagram button fills the header's height, so the header drops its padding rather than grow past 44px. */}
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2 font-mono text-label text-ink-3 uppercase pointer-coarse:min-h-11 pointer-coarse:py-0">
-        <span>
-          {t.heading} · {t.language}
+        {/* One line at any column width. The box is one line high and clips, so
+            a language that does not fit beside the heading wraps out of sight
+            whole instead of being cut mid-word; the tooltip keeps it. A browser
+            without the `lh` unit shows the second line instead. */}
+        <span
+          title={`${t.heading} · ${t.language}`}
+          className="flex max-h-[1lh] min-w-0 flex-1 flex-wrap gap-x-2 overflow-hidden"
+        >
+          <span className="min-w-0 truncate">{t.heading}</span>
+          <span className="whitespace-nowrap">· {t.language}</span>
         </span>
-        <span className="flex items-center gap-3">
+        <span className="flex shrink-0 items-center gap-3">
           {diagram ? <SchemaDiagramDialog schema={schema} contestId={contestId} dict={dict} /> : null}
           <span>{schema.tables.length}</span>
         </span>

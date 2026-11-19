@@ -160,7 +160,10 @@ export function SidePanel({
             {/* The picture heads the story (SPEC.md §10), above the export
                 row. */}
             {storyCover}
-            <div className="mb-4 flex items-center justify-between gap-3">
+            {/* The print control keeps its width and wraps under the download when
+                the two do not fit; `max-w-full` lets its words break only in a
+                panel narrower than the sentence. */}
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <ExportMenu
                 heading={storyT.export.heading}
                 linkClassName="pointer-coarse:h-11"
@@ -175,7 +178,7 @@ export function SidePanel({
               <button
                 type="button"
                 onClick={() => printStory(contestId)}
-                className="text-small text-accent underline underline-offset-4 pointer-coarse:min-h-11"
+                className="max-w-full shrink-0 text-small text-accent underline underline-offset-4 pointer-coarse:min-h-11"
               >
                 {storyT.print}
               </button>
