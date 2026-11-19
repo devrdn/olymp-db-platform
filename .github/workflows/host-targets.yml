@@ -1,0 +1,33 @@
+name: host-targets
+
+# The Makefile's host targets and the check that proves them. They need only
+# make and bash, so this runs on the runner's GNU Make 4.x: together with a
+# developer's macOS run on Make 3.81, the check covers both.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Makefile"
+      - "deploy/**"
+      - ".github/workflows/host-targets.yml"
+  pull_request:
+    paths:
+      - "Makefile"
+      - "deploy/**"
+      - ".github/workflows/host-targets.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  host-targets-check:
+    name: host targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - run: shellcheck deploy/host-targets-check.sh
+
+      - run: make --version
+
+      - run: make host-targets-check
