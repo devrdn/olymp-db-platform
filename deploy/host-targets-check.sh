@@ -12,6 +12,9 @@
 #   - an empty API_PORT still gives the API and the interface a port;
 #   - `make migrate-force` takes MIGRATION only from its own command line and
 #     only as a version number, and hands it to the program as a value;
+#   - `migrate-force`, `restore`, `restore-covers` and `restore-game-uploads`
+#     take CONFIRM, and the restores FILE, only from the command line, so a
+#     value the shell exported answers none of them;
 #   - the targets that need the file refuse an empty CORE_DB_PASSWORD, and
 #     `dev-down`, `dev-logs` and `stack-down` accept a file other accounts
 #     can read and hand Compose a CORE_DB_PASSWORD given on the command line,
@@ -275,6 +278,39 @@ if forced "" MIGRATION=4242 -n && ! grep -qF 4242 "$WORK/force.out"; then
 else
 	fail "make -n migrate-force writes no MIGRATION into the shell text: $(grep -F 4242 "$WORK/force.out" | head -1)"
 fi
+
+echo "== CONFIRM and FILE come from the command line"
+# Real runs with docker stubbed: a refusal must stop before docker, and the
+# same answers typed on the command line must get past the questions to it.
+mkdir "$WORK/archive"
+echo cover > "$WORK/archive/a"
+tar -czf "$WORK/archive.tar.gz" -C "$WORK/archive" .
+echo PGDMP > "$WORK/core.dump"
+asked() { # VAR=value ... for the environment, --, then make arguments
+	local inherited=()
+	while [ "$1" != -- ]; do inherited+=("$1"); shift; done
+	shift
+	rm -f "$WORK/docker.calls" "$WORK/migrate.args"
+	# The empty-array form, which bash 3.2 under `set -u` requires.
+	env -i PATH="$WORK/bin:/usr/bin:/bin" HOST_CHECK_DUMP="$WORK" ${inherited[@]+"${inherited[@]}"} \
+		"$MAKE_BIN" --no-print-directory -C "$ROOT" ENV_FILE="$normal" "$@" > "$WORK/asked.out" 2>&1
+}
+not_answered() { # what, then asked's arguments
+	local what="$1"
+	shift
+	if asked "$@"; then fail "$what is refused, exited 0"
+	elif [ -e "$WORK/docker.calls" ] || [ -e "$WORK/migrate.args" ]; then fail "$what is refused, but ran docker or go"
+	else pass "$what is refused: $(grep -v '^make' "$WORK/asked.out" | tail -1)"; fi
+}
+for target in restore restore-covers restore-game-uploads; do
+	if [ "$target" = restore ]; then file="$WORK/core.dump"; else file="$WORK/archive.tar.gz"; fi
+	not_answered "$target with CONFIRM=yes from the shell" CONFIRM=yes -- "$target" FILE="$file"
+	not_answered "$target with FILE from the shell" FILE="$file" -- "$target" CONFIRM=yes
+	asked -- "$target" FILE="$file" CONFIRM=yes || true
+	if [ -s "$WORK/docker.calls" ]; then pass "$target with both on the command line reaches docker"
+	else fail "$target with both on the command line reaches docker: $(grep -v '^make' "$WORK/asked.out" | tail -1)"; fi
+done
+not_answered "migrate-force with CONFIRM=yes from the shell" CONFIRM=yes -- migrate-force MIGRATION=7
 
 echo "== the env file's checks, and teardown"
 # A file other accounts can read, as a plain `cp` leaves it: stopping the stack

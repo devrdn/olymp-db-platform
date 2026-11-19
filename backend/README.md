@@ -1619,8 +1619,9 @@ make migrate-up
 
 `migrate-force` writes the version and runs no SQL, so it asks for
 `CONFIRM=yes` and takes `MIGRATION`, not `VERSION`, which names the image tag.
-`MIGRATION` counts only on the `make` command line, not exported from the
-shell, and only as a version number without a leading zero.
+`MIGRATION` and `CONFIRM` count only on the `make` command line, not exported
+from the shell, and `MIGRATION` only as a version number without a leading
+zero.
 
 On a deployed stack the `migrate` service is where the dirty version shows: it
 exits non-zero and the API does not start. `make migrate-*` are development
@@ -1716,6 +1717,10 @@ make restore-covers       FILE=deploy/backups/covers-....tar.gz       CONFIRM=ye
 make restore-game-uploads FILE=deploy/backups/game-uploads-....tar.gz CONFIRM=yes
 make game-check                               # built templates the game cluster lacks
 ```
+
+The three restores take `FILE` and `CONFIRM` from the `make` command line only:
+values the shell exported for an earlier command answer none of their
+questions.
 
 `backup` dumps from inside the container, so no PostgreSQL client is needed on
 the host, and refuses to keep a dump without pg_dump's custom-format header,

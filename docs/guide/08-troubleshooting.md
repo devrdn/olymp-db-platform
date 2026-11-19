@@ -665,8 +665,9 @@ make migrate-force MIGRATION=53 CONFIRM=yes
 make migrate-up
 ```
 
-`MIGRATION` is read from the `make` command line only, never from a variable
-the shell exported, and must be a version number: `0` and `053` are refused.
+`MIGRATION` and `CONFIRM` are read from the `make` command line only, not from
+variables of those names the shell exported, and `MIGRATION` must be a version
+number: `0` and `053` are refused.
 Forcing the dirty number itself skips that migration. If the failed file had
 partly applied, undo that by hand first.
 

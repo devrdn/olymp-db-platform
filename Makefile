@@ -342,10 +342,11 @@ edge-check: ## Prove what deploy/Caddyfile forwards, with and without an edge pr
 
 # What `make run` and `make runner` take from deploy/.env, that no target shows
 # a password on its echoed command line, migrate-force's and teardown's checks,
-# when `make front-install` reinstalls, and that a value make cannot expand
-# stops no other target, on throwaway env files with `go`, `docker` and `npm`
-# stubbed. Needs neither Docker, Go nor Node; never reads deploy/.env or
-# touches frontend/.
+# that CONFIRM and FILE come only from the command line, when
+# `make front-install` reinstalls, and that a value make cannot expand stops no
+# other target, on throwaway env files with `go`, `docker` and `npm` stubbed.
+# Needs neither Docker, Go nor Node; never reads deploy/.env or touches
+# frontend/.
 .PHONY: host-targets-check
 host-targets-check: ## Prove what the host targets take from deploy/.env, and that nothing else expands it
 	deploy/host-targets-check.sh
@@ -447,26 +448,32 @@ migrate-down: require-env ## Roll back the most recent migration
 migrate-version: require-env ## Print the current schema version
 	cd $(BACKEND) && go run ./cmd/migrate version
 
+# A target that changes data irreversibly takes MIGRATION, FILE and CONFIRM
+# only from the make command line (a parent make's included): a CONFIRM=yes or
+# a FILE the shell exported for an earlier command must not answer its question
+# for whoever types the next one. This is a shell test for that.
+from-command-line = test "$(origin $(1))" = "command line"
+FROM_COMMAND_LINE_NOTE = is taken from the make command line, not from a variable of that name in the environment.
+
 # Rewrites the recorded schema version without running any SQL, which is how a
 # half-applied migration is cleared (backend/README.md, "Recovering from a dirty
 # migration"). The variable is MIGRATION, not VERSION: VERSION is the image tag
 # and defaults to a commit hash, so a bare `make migrate-force` must not be able
 # to force the schema to it.
 #
-# MIGRATION counts only when it is on this command line, which make places in
-# the recipe's environment: a value the shell exported long ago is refused, and
-# the recipe reads "$$MIGRATION" as a value, never as shell text. It must be a
+# Make places a command-line MIGRATION in the recipe's environment, so the
+# recipe reads "$$MIGRATION" as a value, never as shell text. It must be a
 # version number, so 0 and 007 are refused too.
 migrate-force: require-env ## Mark the schema at a version, clearing a dirty state (MIGRATION=n CONFIRM=yes)
-	@test "$(origin MIGRATION)" = "command line" || { \
+	@$(call from-command-line,MIGRATION) || { \
 		echo "usage: make migrate-force MIGRATION=<last version that fully applied> CONFIRM=yes"; \
-		echo "MIGRATION is taken from the make command line only, never from the environment."; exit 1; }
+		echo "MIGRATION $(FROM_COMMAND_LINE_NOTE)"; exit 1; }
 	@case "$$MIGRATION" in ''|0*|*[!0-9]*) \
 		echo "MIGRATION must be a version number such as 53, got: $$MIGRATION"; exit 1;; esac
-	@test "$(CONFIRM)" = "yes" || { \
+	@$(call from-command-line,CONFIRM) && test "$(CONFIRM)" = "yes" || { \
 		echo "This records the schema of $(CORE_DB_NAME) as version $$MIGRATION without running any SQL."; \
 		echo "Force the last version that fully applied; forcing the dirty one skips that migration."; \
-		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
+		echo "Re-run with CONFIRM=yes on the make command line when that is what you mean."; exit 1; }
 	cd $(BACKEND) && go run ./cmd/migrate force "$$MIGRATION"
 
 bootstrap: require-env ## Create the first administrator (idempotent; prints the password)
@@ -706,12 +713,14 @@ restore-check: require-env ## Verify a dump can be loaded (FILE=path)
 # the restore worked or not — and if that fails, it says so, because a silent
 # "restored" over a service that never came back is the worst of both.
 restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM=yes)
-	@test -n "$(FILE)" || { echo "usage: make restore FILE=$(BACKUP_DIR)/....dump CONFIRM=yes"; exit 1; }
+	@$(call from-command-line,FILE) && test -n "$(FILE)" || { \
+		echo "usage: make restore FILE=$(BACKUP_DIR)/....dump CONFIRM=yes"; \
+		echo "FILE $(FROM_COMMAND_LINE_NOTE)"; exit 1; }
 	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
-	@test "$(CONFIRM)" = "yes" || { \
+	@$(call from-command-line,CONFIRM) && test "$(CONFIRM)" = "yes" || { \
 		echo "This REPLACES the contents of $(CORE_DB_NAME) with $(FILE)."; \
 		echo "Everything currently in it — participants, answers, results — is lost."; \
-		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
+		echo "Re-run with CONFIRM=yes on the make command line when that is what you mean."; exit 1; }
 	@serving=$$($(COMPOSE) ps --status=running --services 2>/dev/null | grep -cx api || true); \
 		if [ "$$serving" = "1" ]; then echo "stopping api for the restore"; $(COMPOSE) stop api; fi; \
 		$(COMPOSE) exec -T pg-core \
@@ -747,12 +756,14 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 # It is additive and does not empty the directory first; each target below
 # says why that is safe for its volume.
 define restore-volume
-	@test -n "$(FILE)" || { echo "usage: make $@ FILE=$(BACKUP_DIR)/$(2)-....tar.gz CONFIRM=yes"; exit 1; }
+	@$(call from-command-line,FILE) && test -n "$(FILE)" || { \
+		echo "usage: make $@ FILE=$(BACKUP_DIR)/$(2)-....tar.gz CONFIRM=yes"; \
+		echo "FILE $(FROM_COMMAND_LINE_NOTE)"; exit 1; }
 	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
-	@test "$(CONFIRM)" = "yes" || { \
+	@$(call from-command-line,CONFIRM) && test "$(CONFIRM)" = "yes" || { \
 		echo "This copies $(FILE) into the $(1) volume at $(3)."; \
 		$(if $(4),echo "$($(4))";) \
-		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
+		echo "Re-run with CONFIRM=yes on the make command line when that is what you mean."; exit 1; }
 	@staging=$$(mktemp -d); packed=$$staging.tar; \
 		tar -xzf "$(FILE)" -C $$staging || { echo "$(FILE) is not a readable archive"; rm -rf $$staging; exit 1; }; \
 		api=$$($(COMPOSE) ps -aq api); \

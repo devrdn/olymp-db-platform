@@ -288,7 +288,7 @@ or readable by other accounts.
 | `make front-check` | lint, contrast, type-scale, error-codes, typecheck, tests, build (not `smoke`) | Node |
 | `make restore-covers-check`, `make game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
 | `make e2e-smoke` | the browser smoke test against `E2E_BASE_URL` or `E2E_ENV_FILE` ([above](#the-browser-smoke-test)) | Node and a running stack; `make e2e-stack-up` for a throwaway one (Docker) |
-| `make host-targets-check` | what `make run` and `make runner` take from `deploy/.env`, that no target shows a password on its echoed command line, the checks of `make migrate-force` and of the teardown targets, when `make front-install` reinstalls, and that a value make cannot expand stops no other target, on throwaway env files with `go`, `docker` and `npm` stubbed | make and a shell |
+| `make host-targets-check` | what `make run` and `make runner` take from `deploy/.env`, that no target shows a password on its echoed command line, the checks of `make migrate-force` and of the teardown targets, that the restores and `migrate-force` take `CONFIRM` and `FILE` only from the command line, when `make front-install` reinstalls, and that a value make cannot expand stops no other target, on throwaway env files with `go`, `docker` and `npm` stubbed | make and a shell |
 | `make scheduled-backup-check` | the backup rotation, the scheduled run and its systemd units, on synthetic sets in a throwaway container | Docker |
 
 One test or one package, from `backend/`:
