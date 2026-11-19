@@ -521,7 +521,9 @@ track, and the rest to the work. The column is a desktop arrangement: below
 1024 px (`wide`), not at the mobile reset, the grid collapses and the column
 becomes a single scrolling row above the work, with the same links in the same
 order and the scroll cue at its edge. The group labels are dropped rather than
-stacked, because at that width they cost a line each and name two items. The
+stacked, because at that width they cost a line each and name two items; the
+notes are not, and stay as a small warning-coloured suffix on the tab, since
+they are the publish gate's blockers and the questions waiting. The
 split is at `wide` because a tablet gains nothing from a column: at 768 px it
 would leave the work about 340 px, no wider than a phone's, while the row costs
 one line.

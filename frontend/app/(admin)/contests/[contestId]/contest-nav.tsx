@@ -75,10 +75,16 @@ export function ContestNav({
               >
                 <span>{item.label}</span>
 
+                {/* The space gives the link's name a break before the note. In
+                   the row the note stays, as a suffix: it carries the publish
+                   gate's blockers and the waiting questions. */}
                 {item.note ? (
-                  <span className="shrink-0 font-mono text-label text-warn max-wide:hidden">
-                    {item.note}
-                  </span>
+                  <>
+                    {" "}
+                    <span className="shrink-0 font-mono text-label text-warn max-wide:ml-1.5">
+                      {item.note}
+                    </span>
+                  </>
                 ) : null}
               </Link>
             );

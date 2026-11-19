@@ -126,3 +126,29 @@ describe("ContestNav, where the row and the column switch", () => {
     expect(nav.outerHTML).not.toContain("max-narrow:");
   });
 });
+
+describe("ContestNav, the notes in the row", () => {
+  test("keeps what a section owes visible beside its tab and in its accessible name", () => {
+    usePathname.mockReturnValue(`/contests/${ID}`);
+    render(
+      <ContestNav
+        label={LABEL}
+        groups={[
+          {
+            items: [
+              { href: `/contests/${ID}/story`, label: "Story", note: "none" },
+              { href: `/contests/${ID}/questions`, label: "Questions", note: "3" },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "Questions 3" });
+    const note = screen.getByText("3");
+    expect(link).toContainElement(note);
+    expect(note.className).not.toMatch(/hidden/);
+    expect(note).toHaveClass("text-warn");
+    expect(screen.getByRole("link", { name: "Story none" })).toBeInTheDocument();
+  });
+});
