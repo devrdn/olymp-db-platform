@@ -48,8 +48,9 @@ API_PORT         := $(or $(API_PORT),8080)
 # request names and a laptop in a lecture hall is on that hall's network.
 #
 # The file's value is the compose service's (`queryrunner:9100`), which a host
-# process cannot resolve, so only its port is taken. `:=` for the reason
-# REDIS_ADDR below is; a command-line assignment still wins.
+# process cannot resolve, so only its port is taken. Assigned whatever the file
+# says, for the reason REDIS_ADDR below is, and with `:=` because it reads the
+# file's own value; a command-line assignment still wins.
 QUERY_RUNNER_ADDR := localhost:$(or $(lastword $(subst :, ,$(QUERY_RUNNER_ADDR))),9100)
 QUERY_RUNNER_LISTEN ?= 127.0.0.1:$(lastword $(subst :, ,$(QUERY_RUNNER_ADDR)))
 # The same reasoning for the runner's metrics listener, which is unauthenticated:
@@ -92,7 +93,11 @@ GAME_TEST_DB_DSN  ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(
 # on the command line (`make REDIS_ADDR=... run`) still wins — Make always
 # prefers a command-line assignment over one written in a makefile, no matter
 # where in the file it appears.
-REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0,)
+#
+# Recursive, so the password is expanded only by a target that reads the
+# address (`make run`): a REDIS_PASSWORD make cannot expand, an open `$(`,
+# must not stop the scheduled `make backup`.
+REDIS_ADDR = $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0,)
 
 # Where the uploads are INSIDE the api container, which is what `make backup`
 # copies the game-uploads-data volume out of. Captured before GAME_UPLOAD_DIR

@@ -19,9 +19,9 @@
 #   - `make front-install` installs once per lockfile, and refuses rather than
 #     install when it cannot hash the lockfile;
 #   - a value make cannot expand, an open `$(` or `${` such as a provider may
-#     put in a secret, changes nothing in `make backup`, `make deploy` or
-#     `make deployed`: the scheduled backup runs on servers that never run
-#     `make run`.
+#     put in a secret, changes nothing in `make backup`, the deploys, the
+#     restores, `make game-check` or teardown: the scheduled backup runs on
+#     servers that never run `make run`.
 #
 # `go` and `docker` are stubs on PATH that record their environment and
 # arguments, so nothing is compiled, started or reached; the other targets are
@@ -371,9 +371,11 @@ echo "== a value make cannot expand"
 # The database passwords are among them, so the DSN exports and require-env's
 # password check are shown to stay as lazy as the settings' are.
 hostile="$(fixture hostile "${NORMAL[@]}" "GITHUB_CLIENT_SECRET='ab\$(cd'" "SMTP_PASSWORD='x\${y'" \
-	"CORE_DB_PASSWORD='c\$(cd'" "GAME_DB_PASSWORD='g\$(cd'" \
+	"CORE_DB_PASSWORD='c\$(cd'" "GAME_DB_PASSWORD='g\$(cd'" "REDIS_PASSWORD='p\$(cd'" \
 	"GAME_READER_PASSWORD='r\${y'" "GAME_WRITER_PASSWORD='w\$(cd'")"
-for goal in backup "deploy VERSION=v1.2.3" "deploy-api VERSION=v1.2.3" deployed; do
+for goal in backup "deploy VERSION=v1.2.3" "deploy-api VERSION=v1.2.3" "deploy-web VERSION=v1.2.3" \
+	deployed game-check "restore-check FILE=x" "restore FILE=x CONFIRM=yes" \
+	"restore-covers FILE=x CONFIRM=yes" "restore-game-uploads FILE=x CONFIRM=yes" stack-down dev-down; do
 	# The dry runs name their env file, so each is compared with the other's
 	# path written in.
 	# shellcheck disable=SC2086 # a goal and its assignment are two words
