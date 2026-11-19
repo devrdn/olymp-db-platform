@@ -57,6 +57,16 @@ describe("text entry on a phone", () => {
     expect(rules).not.toMatch(/font-size:\s*1rem/);
   });
 
+  // A dense mono field is `h-7`: its line at the desktop leading would be taller
+  // than the box between its two borders, and the descenders would be cut.
+  test("sets a data field's line short enough for its box at 16px", () => {
+    const leading = /--text-data--line-height:\s*([\d.]+);/.exec(rules);
+    expect(leading, "the data step's leading is set on a phone").not.toBeNull();
+    const box = 28 - 2;
+
+    expect(Number(leading![1]) * 16).toBeLessThanOrEqual(box);
+  });
+
   test("sits in the base layer, so a step at or above 16px on the field itself still wins", () => {
     const layer = css.lastIndexOf("@layer base", css.indexOf(PHONE));
     expect(layer).toBeGreaterThanOrEqual(0);
@@ -77,5 +87,26 @@ describe("text entry on a phone", () => {
   test("matches the narrow and wide breakpoint tokens", () => {
     expect(css).toContain("--breakpoint-narrow: 47.5rem");
     expect(css).toContain("--breakpoint-wide: 64rem");
+  });
+});
+
+describe("the overlay", () => {
+  // The menu's dim and a dialog's backdrop are one surface, from one token.
+  test("is a colour utility read from its token", () => {
+    expect(block("@theme inline {")).toContain("--color-overlay: var(--overlay);");
+  });
+});
+
+// The menu marks the root while its panel is open (menu-button.tsx).
+describe("the page under an open menu", () => {
+  test("cannot scroll, nor carry a pull past its edge to the browser", () => {
+    const rules = block(":root[data-scroll-lock] {");
+
+    expect(rules).toContain("overflow: hidden;");
+    expect(rules).toContain("overscroll-behavior: none;");
+  });
+
+  test("keeps the room of the scrollbar it hides, only where one showed", () => {
+    expect(block(':root[data-scroll-lock="keep-gutter"] {')).toContain("scrollbar-gutter: stable;");
   });
 });

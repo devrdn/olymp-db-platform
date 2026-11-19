@@ -21,7 +21,7 @@ export default async function Loading() {
         {[0, 1, 2, 3].map((row) => (
           <div key={row} className="flex items-start gap-3.5 border-b border-line px-3.5 py-3.5">
             <Skeleton className="mt-1 h-2.5 w-5 shrink-0" />
-            <div className="flex flex-1 flex-col gap-2">
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
               <Skeleton className="h-3.5 w-56 max-w-full" />
               <Skeleton className="h-3 w-80 max-w-full" />
             </div>

@@ -30,9 +30,9 @@ function isShown(panel: HTMLElement | null) {
  * hydration too), and closes it on Escape and on a tap outside. Where it does
  * not, the script toggles an `open` attribute instead, which the same `open:`
  * styles read. This component adds the label and `aria-expanded`, closing on
- * navigation and on a resize that hides it, and putting focus back on the
- * button. The page behind stays live, so nothing traps focus. The contents are
- * rendered by the server.
+ * navigation and on a resize that hides it, putting focus back on the button,
+ * and holding the page behind still. That page does not scroll but stays live,
+ * so nothing traps focus. The contents are rendered by the server.
  */
 export function MenuButton({
   labels,
@@ -77,6 +77,17 @@ export function MenuButton({
     shownAt.current = pathname;
     close();
   }, [pathname, close]);
+
+  // The page under the dim holds still while the panel is up (globals.css).
+  // `open` follows the toggle event, so every way of closing frees it,
+  // the browser's own light dismiss included.
+  useEffect(() => {
+    if (!open) return;
+    const page = document.documentElement;
+    const scrollbar = window.innerWidth > page.clientWidth;
+    page.setAttribute("data-scroll-lock", scrollbar ? "keep-gutter" : "");
+    return () => page.removeAttribute("data-scroll-lock");
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -166,7 +177,7 @@ export function MenuButton({
             close();
             button.current?.focus();
           }}
-          className="absolute inset-0 cursor-default bg-ink/45"
+          className="absolute inset-0 cursor-default bg-overlay"
         />
         <div
           // A tap on a link closes it, and on the page already shown keeps focus

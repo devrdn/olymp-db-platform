@@ -55,3 +55,13 @@ describe("Dialog dismissible", () => {
     expect(screen.queryByText("Title")).not.toBeInTheDocument();
   });
 });
+
+describe("Dialog backdrop", () => {
+  // The token is dark in both themes, so the page behind darkens at night too.
+  test("dims the page with the overlay the menu uses", () => {
+    render(<Harness dismissible />);
+
+    const backdrop = document.querySelector('[data-slot="dialog-backdrop"]');
+    expect(backdrop).toHaveClass("bg-overlay");
+  });
+});

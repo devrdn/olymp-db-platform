@@ -107,6 +107,14 @@ const EXEMPT = [
   ["glow", "bg", "decorative light, never what makes text legible"],
 ];
 
+/**
+ * What lies under a modal surface: each token here must come out darker over
+ * every listed surface, in both themes. An overlay drawn from the ink would
+ * lighten a dark page instead, and a page lit from behind reads as the thing
+ * to look at.
+ */
+const DIMS = [["overlay", ["bg", "panel", "sunk", "ink"]]];
+
 function parse(css) {
   const light = new Map();
   const dark = new Map();
@@ -143,9 +151,12 @@ function channels(value) {
 
 /** A translucent token is only ever seen over the page ground; measure it there. */
 function flatten(value, ground) {
+  return over(value, channels(ground));
+}
+
+/** `value` drawn over an opaque colour given as channels. */
+function over(value, [br, bg, bb]) {
   const [r, g, b, a] = channels(value);
-  if (a === 1) return [r, g, b];
-  const [br, bg, bb] = channels(ground);
   return [r * a + br * (1 - a), g * a + bg * (1 - a), b * a + bb * (1 - a)];
 }
 
@@ -190,6 +201,21 @@ for (const [theme, get] of themes) {
     console.log(
       `  ${ok ? "ok" : "NO"}  --${fg} on --${bgName}  ${value.toFixed(2)}:1  (needs ${threshold})`,
     );
+  }
+
+  for (const [dim, surfaces] of DIMS) {
+    const dimValue = get(dim);
+    if (!dimValue) {
+      console.log(`  ??  --${dim}: token missing`);
+      failures += 1;
+      continue;
+    }
+    for (const surface of surfaces) {
+      const under = flatten(get(surface), ground);
+      const ok = luminance(over(dimValue, under)) < luminance(under);
+      if (!ok) failures += 1;
+      console.log(`  ${ok ? "ok" : "NO"}  --${dim} over --${surface}  ${ok ? "darkens" : "does not darken"}`);
+    }
   }
 
   for (const [fg, bgName, why] of EXEMPT) {

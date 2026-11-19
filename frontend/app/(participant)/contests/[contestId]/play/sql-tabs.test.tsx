@@ -200,6 +200,13 @@ describe("the SQL tab strip", () => {
     expect(cuedEdges(strip)).toEqual(["end"]);
   });
 
+  // Its rule is drawn by the row around it, so nothing at its foot needs sparing.
+  test("fades the whole height of a tab at the edge, with no strip kept for a rule", () => {
+    show();
+
+    expect(screen.getByRole("tablist")).toHaveClass("[--scroll-cue-keep:0px]");
+  });
+
   test("refuses an eleventh tab, and says why", () => {
     const tabs = Array.from({ length: MAX_TABS }, (_, i) => ({ id: `t${i}`, title: `Query ${i + 1}` }));
     show({ tabs, activeId: "t0" });

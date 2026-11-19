@@ -30,8 +30,15 @@ export function scrollCue(row: HTMLElement | null): (() => void) | undefined {
   resized?.observe(row);
   const changed = new MutationObserver(sync);
   changed.observe(row, { childList: true, characterData: true, subtree: true });
+  // A web font that lands after the first layout changes the labels' widths
+  // and nothing either observer watches.
+  let followed = true;
+  document.fonts?.ready.then(() => {
+    if (followed) sync();
+  });
 
   return () => {
+    followed = false;
     row.removeEventListener("scroll", sync);
     resized?.disconnect();
     changed.disconnect();

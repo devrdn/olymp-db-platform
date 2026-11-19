@@ -46,7 +46,7 @@ export function SchemaDiagramDialog({
         title={t.openLabel}
         onPointerEnter={preload}
         onFocus={preload}
-        className="shrink-0 font-mono text-label text-ink-3 uppercase hover:text-ink"
+        className="shrink-0 font-mono text-label text-ink-3 uppercase hover:text-ink pointer-coarse:min-h-11 pointer-coarse:min-w-11"
       >
         {t.open}
       </DialogTrigger>

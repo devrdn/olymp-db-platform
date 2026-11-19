@@ -17,7 +17,7 @@ export default async function Loading() {
       <div aria-hidden className="border-t border-line-2">
         {[0, 1, 2, 3].map((row) => (
           <div key={row} className="flex items-start gap-3.5 border-b border-line px-3.5 py-3.5">
-            <div className="flex flex-1 flex-col gap-2">
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
               <Skeleton className="h-3.5 w-56 max-w-full" />
               <Skeleton className="h-3 w-40 max-w-full" />
             </div>

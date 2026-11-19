@@ -44,6 +44,11 @@ async function openIt() {
   return burger(true);
 }
 
+/** Whether the page under the panel is held still, and how (globals.css reads it). */
+function pageLock() {
+  return document.documentElement.getAttribute("data-scroll-lock");
+}
+
 beforeEach(() => {
   navigation.pathname = "/contests";
 });
@@ -56,7 +61,10 @@ describe.each([
   beforeEach(() => {
     uninstall = installPopoverStandIn({ supported });
   });
-  afterEach(() => uninstall());
+  afterEach(() => {
+    uninstall();
+    vi.restoreAllMocks();
+  });
 
   test("starts closed, naming what it opens and the panel it controls", () => {
     const { container } = render(menu());
@@ -129,11 +137,93 @@ describe.each([
     const scrim = container.querySelector('[data-slot="app-bar-menu-scrim"]') as HTMLElement;
     expect(scrim).toHaveAttribute("aria-hidden", "true");
     expect(scrim).toHaveAttribute("tabindex", "-1");
-    expect(scrim.className.split(/\s+/)).toContain("bg-ink/45");
+    expect(scrim.className.split(/\s+/)).toContain("bg-overlay");
     expect(document.getElementById(button.getAttribute("aria-controls")!)).toContainElement(scrim);
     await userEvent.click(scrim);
 
     await burger(false);
+  });
+
+  test("holds the page under it still while it is open, and frees it once closed", async () => {
+    render(menu());
+    expect(pageLock()).toBeNull();
+
+    await openIt();
+    expect(pageLock()).not.toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: labels.close }));
+    await burger(false);
+    expect(pageLock()).toBeNull();
+  });
+
+  test("frees the page when it closes on Escape", async () => {
+    render(menu());
+    await openIt();
+
+    await userEvent.keyboard("{Escape}");
+
+    await burger(false);
+    expect(pageLock()).toBeNull();
+  });
+
+  test("frees the page when a tap on the dim closes it", async () => {
+    const { container } = render(menu());
+    await openIt();
+
+    await userEvent.click(container.querySelector('[data-slot="app-bar-menu-scrim"]') as HTMLElement);
+
+    await burger(false);
+    expect(pageLock()).toBeNull();
+  });
+
+  test("frees the page when it closes on navigation", async () => {
+    const { rerender } = render(menu());
+    await openIt();
+
+    navigation.pathname = "/users";
+    rerender(menu());
+
+    await burger(false);
+    expect(pageLock()).toBeNull();
+  });
+
+  test("frees the page when a resize hides the button", async () => {
+    render(menu());
+    await openIt();
+
+    (screen.getByRole("button", { name: labels.close }).parentElement as HTMLElement).style.display = "none";
+    fireEvent(window, new Event("resize"));
+
+    await burger(false);
+    expect(pageLock()).toBeNull();
+  });
+
+  test("frees the page when it is unmounted open", async () => {
+    const { unmount } = render(menu());
+    await openIt();
+
+    unmount();
+
+    expect(pageLock()).toBeNull();
+  });
+
+  // Hiding the scrollbar would otherwise widen the page under the dim.
+  test("keeps the room of a scrollbar the page shows", async () => {
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(window.innerWidth - 11);
+    render(menu());
+
+    await openIt();
+
+    expect(pageLock()).toBe("keep-gutter");
+  });
+
+  test("keeps no room for a scrollbar the page does not show", async () => {
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(window.innerWidth);
+    render(menu());
+
+    await openIt();
+
+    expect(pageLock()).toBe("");
   });
 
   test("keeps the dim under the finger until the tap is over, so the tap never reaches the page", async () => {
@@ -238,6 +328,28 @@ describe.each([
     fireEvent(window, new Event("resize"));
 
     await burger(false);
+  });
+});
+
+describe("the menu button, closed by the browser itself", () => {
+  let uninstall: () => void;
+  beforeEach(() => {
+    uninstall = installPopoverStandIn();
+  });
+  afterEach(() => uninstall());
+
+  // Light dismiss and the browser's own Escape close the popover with no call
+  // from the page; only the toggle event says so.
+  test("frees the page when the browser closes the panel on its own", async () => {
+    const { container } = render(menu());
+    const button = await openIt();
+
+    act(() => {
+      (container.ownerDocument.getElementById(button.getAttribute("aria-controls")!) as HTMLElement).hidePopover();
+    });
+
+    await burger(false);
+    expect(pageLock()).toBeNull();
   });
 });
 

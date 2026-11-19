@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { StoryText } from "@/components/product/story-text";
 import { cuedEdges, measureScroller, scrollRowTo } from "@/components/ui/scroll-cue-test-support";
+import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
@@ -159,6 +160,19 @@ describe("the side panel", () => {
     expect(link).toHaveAttribute("href", "/contests/c1/play/story.md");
     expect(link).toHaveAttribute("download");
     expect(link).toHaveTextContent("Markdown");
+  });
+
+  test("gives a finger 44px to hit on the download and the print control", () => {
+    show();
+
+    expectTouchTarget(
+      screen.getByRole("link", { name: en.participant.play.workspace.story.export.label, hidden: true }),
+      "pointer-coarse:h-11",
+    );
+    expectTouchTarget(
+      screen.getByRole("button", { name: en.participant.play.workspace.story.print, hidden: true }),
+      "pointer-coarse:min-h-11",
+    );
   });
 
   // A button that opens the print dialog in place, not a link.

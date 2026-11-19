@@ -163,6 +163,7 @@ export function SidePanel({
             <div className="mb-4 flex items-center justify-between gap-3">
               <ExportMenu
                 heading={storyT.export.heading}
+                linkClassName="pointer-coarse:h-11"
                 formats={[
                   {
                     format: "Markdown",
@@ -174,7 +175,7 @@ export function SidePanel({
               <button
                 type="button"
                 onClick={() => printStory(contestId)}
-                className="text-small text-accent underline underline-offset-4"
+                className="text-small text-accent underline underline-offset-4 pointer-coarse:min-h-11"
               >
                 {storyT.print}
               </button>

@@ -149,7 +149,8 @@ export function SqlTabStrip({
         role="tablist"
         aria-label={t.tablist}
         aria-orientation="horizontal"
-        className="scroll-cue flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        // The rule under these tabs is drawn by the row around them, so the fade spares nothing at their foot.
+        className="scroll-cue flex min-w-0 flex-1 items-stretch overflow-x-auto [--scroll-cue-keep:0px]"
       >
         {tabs.map((tab, index) => {
           const active = tab.id === activeId;

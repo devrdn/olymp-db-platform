@@ -112,6 +112,11 @@
   --scrim-a: rgb(255 255 255 / 0.97);
   --scrim-b: rgb(255 255 255 / 0.72);
 
+  /* What dims the page under a modal surface: the menu's panel and a dialog.
+     Black in both themes, since a dim drawn from the ink would lighten a
+     dark page. */
+  --overlay: rgb(0 0 0 / 0.45);
+
   /* Selection is a surface the page did not draw but still owns. Left alone it
      ships the browser's blue, which belongs to no design system on earth. */
   --select-bg: var(--accent-wash);
@@ -196,6 +201,8 @@
   --dark-glow: rgb(94 208 188 / 0.22);
   --dark-scrim-a: rgb(10 11 15 / 0.97);
   --dark-scrim-b: rgb(10 11 15 / 0.72);
+  /* A dark ground has less light left to take away, so the dim is deeper. */
+  --dark-overlay: rgb(0 0 0 / 0.6);
   --dark-logo-ink: #f5ecdb;
   --dark-logo-chalk: #1e1a18;
   --dark-show-light: none;
@@ -274,6 +281,7 @@
     --glow: var(--dark-glow);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
+    --overlay: var(--dark-overlay);
     --logo-ink: var(--dark-logo-ink);
     --logo-chalk: var(--dark-logo-chalk);
     --show-light: var(--dark-show-light);
@@ -341,6 +349,7 @@
     --glow: var(--dark-glow);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
+    --overlay: var(--dark-overlay);
     --logo-ink: var(--dark-logo-ink);
     --logo-chalk: var(--dark-logo-chalk);
     --show-light: var(--dark-show-light);

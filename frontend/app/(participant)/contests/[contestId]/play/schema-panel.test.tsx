@@ -55,6 +55,15 @@ describe("the schema panel", () => {
     expect(await screen.findByRole("dialog", { name: t.diagram.title })).toBeInTheDocument();
   });
 
+  // The header grows to hold it, rather than the target spilling onto the search below.
+  test("gives a finger 44px to hit on the diagram's button", () => {
+    panel();
+
+    const button = screen.getByRole("button", { name: t.diagram.openLabel });
+    expectTouchTarget(button, "pointer-coarse:min-h-11", "pointer-coarse:min-w-11");
+    expectTouchTarget(button.closest("header"), "pointer-coarse:min-h-11", "pointer-coarse:py-0");
+  });
+
   // The setting removes a view: the tables, columns and foreign keys stay in the list.
   test("leaves the diagram out when the contest has switched it off", () => {
     panel(schema(), vi.fn(), false);

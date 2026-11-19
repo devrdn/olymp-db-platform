@@ -57,7 +57,7 @@ function DialogBackdrop({ className, ...props }: DialogPrimitive.Backdrop.Props)
     <DialogPrimitive.Backdrop
       data-slot="dialog-backdrop"
       className={cn(
-        "fixed inset-0 z-50 bg-ink/45",
+        "fixed inset-0 z-50 bg-overlay",
         "transition-opacity duration-(--t-input) ease-standard",
         "data-starting-style:opacity-0 data-ending-style:opacity-0",
         className,

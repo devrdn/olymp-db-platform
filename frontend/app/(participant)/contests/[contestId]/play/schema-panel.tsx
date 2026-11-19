@@ -97,7 +97,8 @@ export function SchemaPanel({
 
   return (
     <section aria-label={t.heading} className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2 font-mono text-label text-ink-3 uppercase">
+      {/* Under a finger the diagram button fills the header's height, so the header drops its padding rather than grow past 44px. */}
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2 font-mono text-label text-ink-3 uppercase pointer-coarse:min-h-11 pointer-coarse:py-0">
         <span>
           {t.heading} · {t.language}
         </span>

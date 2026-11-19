@@ -30,15 +30,22 @@
 
 @utility scroll-cue {
   --scroll-cue: --spacing(8);
+  /* The strip at the foot that stays opaque: the row's hairline and the
+     current tab's underline are what the tabs stand on, not more tabs. A row
+     whose rule is drawn outside it sets this to zero. */
+  --scroll-cue-keep: --spacing(0.5);
   /* The fallbacks are for browsers without `@property`, where an unset
      width would void the whole mask. */
-  mask-image: linear-gradient(
+  mask-image: linear-gradient(black, black), linear-gradient(
     to right,
     transparent,
     black var(--scroll-cue-start, 0px),
     black calc(100% - var(--scroll-cue-end, 0px)),
     transparent
   );
+  mask-size: 100% var(--scroll-cue-keep), 100% 100%;
+  mask-position: bottom, 0 0;
+  mask-repeat: no-repeat;
   /* What `scrollIntoView` or focus brings in, such as a tab with an unread
      dot, stops clear of the fade rather than under it. */
   scroll-padding-inline: var(--scroll-cue);
@@ -193,6 +200,8 @@
      else's photograph. */
   --color-scrim-a: var(--scrim-a);
   --color-scrim-b: var(--scrim-b);
+  /* The dim under the menu's panel and a dialog (tokens.css). */
+  --color-overlay: var(--overlay);
 
 
   /* Aliases shadcn components resolve against. */
@@ -555,6 +564,24 @@
 }
 
 /**
+ * The page under the open menu holds still: `MenuButton` marks the root while
+ * its panel is up. Hiding the root's overflow keeps its scroll position, so
+ * the page does not jump when it is freed, as a fixed body would. A classic
+ * scrollbar would vanish with it and widen the page under the dim, so where
+ * one showed its room is kept.
+ */
+@layer base {
+  :root[data-scroll-lock] {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  :root[data-scroll-lock="keep-gutter"] {
+    scrollbar-gutter: stable;
+  }
+}
+
+/**
  * iOS Safari zooms the page when a focused field is set under 16px. On a
  * phone held either way (on its side it is a touch screen below `wide`), a
  * field's steps under 16px mean 16px, and a field that names no step inherits
@@ -572,6 +599,8 @@
       --text-control-sm: 1rem;
       --text-label: 1rem;
       --text-data: 1rem;
+      /* The column's own leading would not fit a dense `h-7` field at 16px. */
+      --text-data--line-height: 1.5;
       font-size: max(1rem, 1em);
     }
   }

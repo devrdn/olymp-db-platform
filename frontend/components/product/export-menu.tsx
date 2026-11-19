@@ -24,11 +24,14 @@ export function ExportMenu({
   heading,
   formats,
   className,
+  linkClassName,
 }: {
   /** Names the group for a screen reader; the visible label is on the links. */
   heading: string;
   formats: ExportFormat[];
   className?: string;
+  /** Added to each link, such as a larger target under a finger. */
+  linkClassName?: string;
 }) {
   if (formats.length === 0) return null;
 
@@ -40,7 +43,7 @@ export function ExportMenu({
           href={format.href}
           download
           aria-label={format.label}
-          className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}
+          className={cn(buttonVariants({ variant: "quiet", size: "sm" }), linkClassName)}
         >
           {format.format}
         </a>

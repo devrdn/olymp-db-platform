@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
 
 import { SCROLL_DRIVEN_CUE, scrollCue } from "./scroll-cue";
 import { cuedEdges, measureScroller, scrollRowTo } from "./scroll-cue-test-support";
@@ -15,6 +15,26 @@ function Row({ items = ["Story", "Questions", "Notes"] }: { items?: string[] }) 
       ))}
     </div>
   );
+}
+
+/** `document.fonts`, whose `ready` settles when the test says the fonts have loaded. */
+function stubFonts() {
+  let settle = () => {};
+  const ready = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  // jsdom has no `document.fonts` to spy on.
+  Object.defineProperty(document, "fonts", { configurable: true, value: { ready } });
+  onTestFinished(() => {
+    Reflect.deleteProperty(document, "fonts");
+  });
+  return {
+    load: async () => {
+      settle();
+      await ready;
+      await Promise.resolve();
+    },
+  };
 }
 
 afterEach(() => {
@@ -75,6 +95,34 @@ describe("the scroll cue", () => {
     await vi.waitFor(() => expect(cuedEdges(row)).toEqual(["end"]));
   });
 
+  // A row first laid out in a fallback face grows or shrinks when the web font
+  // lands, and neither the row's box nor its children change for an observer.
+  test("measures again once the web fonts have loaded", async () => {
+    const fonts = stubFonts();
+    measureScroller({ scrollWidth: 375, clientWidth: 375 });
+    render(<Row />);
+    const row = screen.getByTestId("row");
+    expect(cuedEdges(row)).toEqual([]);
+
+    measureScroller({ scrollWidth: 446, clientWidth: 375 });
+    await fonts.load();
+
+    expect(cuedEdges(row)).toEqual(["end"]);
+  });
+
+  test("does not measure a row that is gone by the time the fonts load", async () => {
+    const fonts = stubFonts();
+    measureScroller({ scrollWidth: 375, clientWidth: 375 });
+    const { unmount } = render(<Row />);
+    const row = screen.getByTestId("row");
+    unmount();
+
+    measureScroller({ scrollWidth: 446, clientWidth: 375 });
+    await fonts.load();
+
+    expect(cuedEdges(row)).toEqual([]);
+  });
+
   test("stops following the row once it is gone", () => {
     measureScroller({ scrollWidth: 446, clientWidth: 375 });
     const { unmount } = render(<Row />);
@@ -124,6 +172,16 @@ describe("the scroll-cue utility", () => {
 
     expect(reads.length).toBeGreaterThan(0);
     for (const read of reads) expect(read).toMatch(/, 0px\)$/);
+  });
+
+  // The row's hairline and the current tab's underline are the rule the tabs
+  // stand on, not tabs hidden past the edge.
+  test("leaves the bottom strip that holds the rule and the underline unfaded", () => {
+    expect(utility).toContain("--scroll-cue-keep: --spacing(0.5);");
+    expect(utility).toMatch(/mask-image:\s*linear-gradient\(black, black\),\s*linear-gradient\(\s*to right,/);
+    expect(utility).toMatch(/mask-size:\s*100% var\(--scroll-cue-keep\),\s*100% 100%;/);
+    expect(utility).toMatch(/mask-position:\s*bottom,\s*0 0;/);
+    expect(utility).toContain("mask-repeat: no-repeat;");
   });
 
   // `scrollIntoView` and focus would otherwise park a tab, or the dot on it,

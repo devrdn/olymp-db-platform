@@ -71,6 +71,7 @@ semantics are described wrongly, and the semantics are what gets fixed.
 | `--color-edge` | `#838587` | `#6c6f70` | **boundary of an interactive control** |
 | `--color-pattern` | `rgb(13 17 23 / 0.05)` | `rgb(255 255 255 / 0.10)` | hatched fields, dotted grid |
 | `--color-ann` | `rgb(13 17 23 / 0.24)` | `rgb(255 255 255 / 0.26)` | decorative annotation caption |
+| `--color-overlay` | `rgb(0 0 0 / 0.45)` | `rgb(0 0 0 / 0.6)` | the dim under the open menu and a dialog; black in both themes, so it darkens a dark page too |
 | `--color-cta-bg` | `#0d1117` | `#262b36` | ground of the primary action |
 | `--color-cta-fg` | `#ffffff` | `#ffffff` | text of the primary action |
 | `--color-accent` | `#0e5048` | `#5ed0bc` | the accent — only for what is live |
@@ -257,12 +258,15 @@ Google declares is identical for every font and guarantees nothing by itself.
 | `data` (mono) | `13px` / `1.85` | 400 | — | `tabular-nums` |
 | `narrative` (Literata) | `18px` / `1.7` | 400 | — | 58ch |
 
-**On a phone, a field that takes typing never uses a step under 16 px.** iOS
-Safari zooms the page into a focused field set smaller. So below `narrow`, and
-on a touch screen below `wide` (a phone on its side), a text field, a select
-or a text area draws `control`, `control-sm`, `small`, `label` and `data` at
-16 px; one on `body` or `narrative` keeps its own size. Buttons, checkboxes and
-all other text keep the sizes in the table. The rule closes `app/globals.css`.
+**On a phone or a tablet, a field that takes typing never uses a step under
+16 px.** iOS Safari zooms the page into a focused field set smaller. So below
+`narrow`, and on a touch screen below `wide` (a phone on its side, a tablet
+held upright), a text field, a select or a text area draws `control`,
+`control-sm`, `small`, `label` and `data` at 16 px, and `data` on a leading of
+1.5 so its line still fits a dense 28 px field. Every step at or above 16 px
+keeps its own size, and a field that names no step still gets at least 16 px.
+Buttons, checkboxes and all other text keep the sizes in the table. The rule
+closes `app/globals.css`.
 
 **The scale was revised upward after the first run on real screens.** The first
 set of values was taken from the Tailwind CSS documentation and inherited its
@@ -431,10 +435,12 @@ way, to one line with an ellipsis from 760 px up (below 760 px it keeps two).
 The panel is the browser's popover, so it opens, and closes on Escape and on
 a tap outside, before any script has run. Browsers older than the Popover API
 (Safari before 17, still on iOS 16 devices) get the same panel toggled by
-script instead. The page behind is dimmed, as behind a dialog, and a tap
-there closes the panel without following whatever lies under it. Script adds
-the rest: closing on navigation, so the new page is never hidden under it,
-and on a resize that hides the burger, and putting focus back on the burger. A screen with no
+script instead. The page behind is dimmed with the same `--color-overlay` as
+behind a dialog, and a tap there closes the panel without following whatever
+lies under it. Script adds the rest: holding the page behind still while the
+panel is open, at the place it was scrolled to; closing on navigation, so the
+new page is never hidden under it, and on a resize that hides the burger; and
+putting focus back on the burger. A screen with no
 destinations (sign-in, the public pages, the forced password change) has
 little to fold, so its controls stay in the bar at every width.
 
@@ -461,14 +467,17 @@ tabs that scrolls sideways (the sections on a phone, the side panel's tabs,
 the SQL tabs, a `TabStrip`) fades the edge more tabs are hidden past, and only
 while they are: the `scroll-cue` utility, with `scrollCue` as the row's `ref`.
 A tab scrolled into view, by selection or by an unread dot, stops clear of
-the fade.
+the fade. The fade stops short of the row's foot, so the hairline under the
+tabs and the current tab's underline run unbroken to both edges.
 A scroll-driven animation follows the scroll where the browser has one, and a
-script marks the edges where it has not. Where neither runs nothing fades, so
+script marks the edges where it has not, measuring again once the web fonts
+have loaded. Where neither runs nothing fades, so
 the cue can go missing but never hide a tab.
 
 **Under a finger, the play screen's controls are 44 px.** The panel toggles,
 Run and the buttons beside it, the SQL tabs with their cross and "+", the side
-panel's tabs and the schema's table rows grow to a 44 px target on a coarse
+panel's tabs, the schema's table rows and its Diagram button, and the story's
+download and print controls grow to a 44 px target on a coarse
 pointer (`pointer-coarse:`). Under a mouse they keep their dense sizes, where
 24 px is the floor WCAG 2.5.8 sets, and no box on the desktop layout moves.
 
