@@ -117,8 +117,7 @@ describe("ParticipantPanel, an address outside the site's domain", () => {
 });
 
 describe("the people tables on a phone", () => {
-  // Each table's last header is an `sr-only` label, which only a positioned
-  // scroller keeps from widening the page (see `ScrollBox`).
+  // Positioned for the reason given on `ScrollBox`.
   test("the participants table sits inside its own positioned scroller", () => {
     render(
       <ParticipantPanel

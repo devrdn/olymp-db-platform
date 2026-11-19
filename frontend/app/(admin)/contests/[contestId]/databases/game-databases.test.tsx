@@ -168,8 +168,7 @@ describe("the contest's databases", () => {
 });
 
 describe("GameDatabases on a phone", () => {
-  // The drop column's header is an `sr-only` label, which only a positioned
-  // scroller keeps from widening the page (see `ScrollBox`).
+  // Positioned for the reason given on `ScrollBox`.
   test("keeps the table inside its own positioned scroller", () => {
     show();
 

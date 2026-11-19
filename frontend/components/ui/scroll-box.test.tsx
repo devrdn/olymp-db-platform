@@ -5,9 +5,8 @@ import { describe, expect, test } from "vitest";
 import { ScrollBox } from "./scroll-box";
 
 describe("the scroll box", () => {
-  // jsdom has no layout, so the contract is the class: `relative` makes the box
-  // the containing block of an `sr-only` label inside it, which otherwise sits
-  // at its static position past the box's edge and widens the whole page.
+  // jsdom has no layout, so the contract is the class; `ScrollBox` says why it
+  // is `relative`.
   test("scrolls sideways and is the containing block of what it holds", () => {
     render(
       <ScrollBox data-testid="box">

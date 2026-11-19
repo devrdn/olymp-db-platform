@@ -134,8 +134,7 @@ describe("QuestionList, a bonus question", () => {
 });
 
 describe("QuestionList on a phone", () => {
-  // The move column's header is an `sr-only` label, which only a positioned
-  // scroller keeps from widening the page (see `ScrollBox`).
+  // Positioned for the reason given on `ScrollBox`.
   test("keeps the table inside its own positioned scroller", () => {
     render(
       <QuestionList
@@ -151,8 +150,8 @@ describe("QuestionList on a phone", () => {
     expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
   });
 
-  // The fixed columns take 616px, so a narrower minimum leaves a title one word
-  // per line.
+  // The fixed columns would take nearly all of a narrower minimum and leave the
+  // title one word per line.
   test("leaves the title column room before the box scrolls", () => {
     render(
       <QuestionList

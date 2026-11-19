@@ -141,8 +141,8 @@ export function CoverPanel({
       {/* The rules precede the chooser, so a phone photo is not picked blind and refused after. */}
       <p className="max-w-body text-small text-ink-2">{t.hint}</p>
 
-      {/* Wraps rather than turning into a row at a breakpoint: at a 768px
-         window the workspace column is 338px, too narrow for both side by side. */}
+      {/* Wraps by the room it has rather than at a window breakpoint: on a
+         tablet the workspace column is too narrow for both side by side. */}
       <div className="flex flex-wrap items-start gap-6">
         <figure className="flex w-full max-w-80 shrink-0 flex-col gap-2">
           <div className="aspect-video w-full overflow-hidden border border-line bg-sunk">

@@ -356,8 +356,7 @@ describe("a long roster", () => {
 });
 
 describe("ParticipantsTable on a phone", () => {
-  // The flag explanations and the caption are `sr-only`, which only a
-  // positioned scroller keeps from widening the page (see `ScrollBox`).
+  // Positioned for the reason given on `ScrollBox`.
   test("the roster's scroller is the containing block of what it holds", () => {
     renderTable();
 
