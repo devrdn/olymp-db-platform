@@ -5,7 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import type { Account, AccountStatus, Role } from "@/lib/api/accounts";
-import { formatMoment } from "@/lib/format/datetime";
+import { formatDay, formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -164,7 +164,18 @@ export function AccountRegister({
                       </span>
                       <span data-caption className="mt-1 hidden font-mono text-data text-ink-3 max-wide:block">
                         {roleNames ?? t.noRoles} ·{" "}
-                        <span className="whitespace-nowrap">{lastSeen ?? t.never}</span>
+                        {/* The moment as `formatMoment` joins it, in two unbreakable
+                            pieces: whole, it is wider than a phone's column in the
+                            longer locales, so it may break between the day and the
+                            time and nowhere else. */}
+                        {account.lastLoginAt ? (
+                          <>
+                            <span className="whitespace-nowrap">{formatDay(account.lastLoginAt, { locale })},</span>{" "}
+                            <span className="whitespace-nowrap">{formatTime(account.lastLoginAt, { locale })}</span>
+                          </>
+                        ) : (
+                          <span className="whitespace-nowrap">{t.never}</span>
+                        )}
                       </span>
                     </td>
 

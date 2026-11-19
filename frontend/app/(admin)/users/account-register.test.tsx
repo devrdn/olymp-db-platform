@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test } from "vitest";
 
 import type { Account, Role } from "@/lib/api/accounts";
-import { formatMoment } from "@/lib/format/datetime";
+import { formatDay, formatMoment, formatTime } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 import { AccountRegister } from "./account-register";
@@ -154,12 +154,19 @@ describe("AccountRegister below a desktop's width", () => {
     expect(lastSeenCell).toHaveClass("max-wide:hidden");
 
     const [, , accountCell] = cellsOf();
-    const moment = within(accountCell).getByText(formatMoment("2026-03-01T10:00:00Z", { locale: "en" }));
-    // The caption breaks before the moment, never inside it.
-    expect(moment).toHaveClass("whitespace-nowrap");
-    const caption = moment.parentElement;
+    // The caption may break before the moment and between its day and its
+    // time, never inside either: whole, the moment is wider than a phone's
+    // column in the longer locales.
+    const day = within(accountCell).getByText(`${formatDay("2026-03-01T10:00:00Z", { locale: "en" })},`);
+    const time = within(accountCell).getByText(formatTime("2026-03-01T10:00:00Z", { locale: "en" }));
+    expect(day).toHaveClass("whitespace-nowrap");
+    expect(time).toHaveClass("whitespace-nowrap");
+    expect(day).not.toContainElement(time);
+    const caption = day.parentElement;
+    expect(time.parentElement).toBe(caption);
     expect(caption).toHaveClass("hidden", "max-wide:block");
-    expect(caption).toHaveTextContent(`Student · ${moment.textContent}`);
+    // Read as one, it is the moment the wide column shows.
+    expect(caption).toHaveTextContent(`Student · ${formatMoment("2026-03-01T10:00:00Z", { locale: "en" })}`);
   });
 
   test("says in the caption, too, that there is no role and no sign-in", () => {
