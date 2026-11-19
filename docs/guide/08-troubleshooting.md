@@ -159,20 +159,27 @@ files are both refused.
 
 **Fix.** `chmod 600 deploy/.env`.
 
-This check and the next one are skipped by `make dev-down`, `make dev-logs`
-and `make stack-down`, which need only the file to exist, so a stack can be
-stopped and its logs read while the file is being fixed.
+`make dev-down`, `make dev-logs` and `make stack-down` skip this check, so a
+stack can be stopped and its logs read before the file is fixed.
 
 ### `CORE_DB_PASSWORD is not set in deploy/.env.`
 
-**Symptom.** That sentence, from any target that checks the file except the
-three teardown targets above.
+**Symptom.** That sentence, from any target that checks the file. The three
+teardown targets above do not check it, but Docker Compose then stops them with
+`required variable CORE_DB_PASSWORD is missing a value`.
 
 **Cause.** The value is empty.
 
 **Fix.** Give it any non-empty value. In development the placeholders
 (`change-me-before-first-run`) are accepted, so a first run needs no edits. See
 the next entry before changing them.
+
+To stop the stack before the file is fixed, give the password on the command
+line. `down` and `logs` do not use it, so any value will do:
+
+```bash
+make stack-down CORE_DB_PASSWORD=unused
+```
 
 ### A password with `/`, `@`, `:`, `?`, `#` or `%` in it
 

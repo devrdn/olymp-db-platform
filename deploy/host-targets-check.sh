@@ -12,7 +12,10 @@
 #   - an empty API_PORT still gives the API and the interface a port;
 #   - `make migrate-force` takes MIGRATION only from its own command line and
 #     only as a version number, and hands it to the program as a value;
-#   - `dev-down`, `dev-logs` and `stack-down` need the file only to exist;
+#   - the targets that need the file refuse an empty CORE_DB_PASSWORD, and
+#     `dev-down`, `dev-logs` and `stack-down` accept a file other accounts
+#     can read and hand Compose a CORE_DB_PASSWORD given on the command line,
+#     the way past Compose's own refusal of an empty one;
 #   - `make front-install` installs once per lockfile, and refuses rather than
 #     install when it cannot hash the lockfile;
 #   - a value make cannot expand, an open `$(` or `${` such as a provider may
@@ -49,6 +52,7 @@ STUB
 cat > "$WORK/bin/docker" <<'STUB'
 #!/bin/sh
 echo "$*" >> "$HOST_CHECK_DUMP/docker.calls"
+env > "$HOST_CHECK_DUMP/docker.env"
 STUB
 chmod 700 "$WORK/bin/go" "$WORK/bin/docker"
 
@@ -146,7 +150,11 @@ echo "== no password in a dry run"
 targets="$(sed -nE 's/^([a-z][a-z0-9-]*):.*require-env.*/\1/p' "$ROOT/Makefile")"
 [ -n "$targets" ] || fail "no target depends on require-env"
 for t in $targets; do
-	out="$(mk "$normal" -n "$t" MIGRATION=4242 CONFIRM=yes FILE=x 2>&1)" || true
+	# A dry run that stops early prints nothing to find, so it fails.
+	if ! out="$(mk "$normal" -n "$t" MIGRATION=4242 CONFIRM=yes FILE=x 2>&1)"; then
+		fail "make -n $t exited non-zero: $(echo "$out" | tail -1)"
+		continue
+	fi
 	leaked=
 	for s in "${SECRETS[@]}"; do case "$out" in *"$s"*) leaked="$leaked $s" ;; esac; done
 	if [ -n "$leaked" ]; then fail "make -n $t shows$leaked"; else pass "make -n $t shows no password"; fi
@@ -268,31 +276,49 @@ else
 	fail "make -n migrate-force writes no MIGRATION into the shell text: $(grep -F 4242 "$WORK/force.out" | head -1)"
 fi
 
-echo "== teardown with a broken env file"
-# Readable by others and without CORE_DB_PASSWORD, as an incident may leave
-# it: stopping the stack must still work, and starting it must not.
-broken="$(fixture broken CORE_DB_PASSWORD=)"
-chmod 644 "$broken"
+echo "== the env file's checks, and teardown"
+# A file other accounts can read, as a plain `cp` leaves it: stopping the stack
+# must still work, and starting it must not.
+readable="$(fixture readable "${NORMAL[@]}")"
+chmod 644 "$readable"
+# A private file with no CORE_DB_PASSWORD. make lets teardown through, but
+# Compose refuses an empty one itself, so what is proven here is the way past
+# it: a value on the command line reaches Compose.
+nopass="$(fixture nopass "${NORMAL[@]}" CORE_DB_PASSWORD=)"
+refuses() { # what the output must say, the env file, then make arguments
+	local says="$1" file="$2"
+	shift 2
+	rm -f "$WORK/docker.calls" "$WORK"/*.args
+	if mk "$file" "$@" > "$WORK/refuses.out" 2>&1; then
+		fail "make $* with $(basename "$file") is refused, exited 0"
+	elif [ -e "$WORK/docker.calls" ] || ls "$WORK"/*.args > /dev/null 2>&1; then
+		fail "make $* with $(basename "$file") is refused, but ran docker or go"
+	elif ! grep -qF "$says" "$WORK/refuses.out"; then
+		fail "make $* with $(basename "$file") is refused saying \"$says\", says: $(head -1 "$WORK/refuses.out")"
+	else
+		pass "make $* with $(basename "$file") is refused: $(grep -F "$says" "$WORK/refuses.out" | head -1)"
+	fi
+}
 for goal in dev-down dev-logs stack-down; do
 	rm -f "$WORK/docker.calls"
-	if mk "$broken" "$goal" > "$WORK/teardown.out" 2>&1 && [ -s "$WORK/docker.calls" ]; then
-		pass "$goal runs with a broken env file"
+	if mk "$readable" "$goal" > "$WORK/teardown.out" 2>&1 && [ -s "$WORK/docker.calls" ]; then
+		pass "$goal runs with a file other accounts can read"
 	else
-		fail "$goal runs with a broken env file: $(grep -v '^make' "$WORK/teardown.out" | head -1)"
+		fail "$goal runs with a file other accounts can read: $(grep -v '^make' "$WORK/teardown.out" | head -1)"
 	fi
-	rm -f "$WORK/docker.calls"
-	if mk "$WORK/absent.env" "$goal" > "$WORK/teardown.out" 2>&1 || [ -e "$WORK/docker.calls" ]; then
-		fail "$goal refuses a missing env file"
-	else
-		pass "$goal refuses a missing env file: $(head -1 "$WORK/teardown.out")"
-	fi
+	refuses "absent.env is missing" "$WORK/absent.env" "$goal"
+	rm -f "$WORK/docker.env"
+	mk "$nopass" "$goal" CORE_DB_PASSWORD=unused > "$WORK/teardown.out" 2>&1 ||
+		fail "$goal CORE_DB_PASSWORD=unused exited non-zero: $(head -1 "$WORK/teardown.out")"
+	[ -f "$WORK/docker.env" ] || : > "$WORK/docker.env"
+	has "$WORK/docker.env" CORE_DB_PASSWORD unused
 done
-rm -f "$WORK/docker.calls"
-if mk "$broken" dev-up > "$WORK/teardown.out" 2>&1 || [ -e "$WORK/docker.calls" ]; then
-	fail "dev-up still refuses a broken env file"
-else
-	pass "dev-up still refuses a broken env file: $(head -1 "$WORK/teardown.out")"
-fi
+refuses "readable by other accounts" "$readable" dev-up
+refuses "CORE_DB_PASSWORD is not set" "$nopass" dev-up
+refuses "CORE_DB_PASSWORD is not set" "$nopass" migrate-up
+# Into a directory of its own, so a guard that let it through writes nothing
+# into the checkout.
+refuses "CORE_DB_PASSWORD is not set" "$nopass" backup BACKUP_DIR="$WORK/backups"
 
 echo "== front-install"
 # Against a lockfile of its own, never frontend/: the target removes a
@@ -342,10 +368,11 @@ unhashable "without sha256sum or shasum" "$WORK/nohash" front-install
 unhashable "without a lockfile" "$WORK/bin:/usr/bin:/bin:/usr/sbin:/sbin" FRONTEND="$WORK/nolock" front-install
 
 echo "== a value make cannot expand"
-# The game passwords are among them, so the DSN exports are shown to stay as
-# lazy as the settings' are.
+# The database passwords are among them, so the DSN exports and require-env's
+# password check are shown to stay as lazy as the settings' are.
 hostile="$(fixture hostile "${NORMAL[@]}" "GITHUB_CLIENT_SECRET='ab\$(cd'" "SMTP_PASSWORD='x\${y'" \
-	"GAME_DB_PASSWORD='g\$(cd'" "GAME_READER_PASSWORD='r\${y'" "GAME_WRITER_PASSWORD='w\$(cd'")"
+	"CORE_DB_PASSWORD='c\$(cd'" "GAME_DB_PASSWORD='g\$(cd'" \
+	"GAME_READER_PASSWORD='r\${y'" "GAME_WRITER_PASSWORD='w\$(cd'")"
 for goal in backup "deploy VERSION=v1.2.3" "deploy-api VERSION=v1.2.3" deployed; do
 	# The dry runs name their env file, so each is compared with the other's
 	# path written in.

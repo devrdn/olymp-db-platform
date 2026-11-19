@@ -373,11 +373,14 @@ test-all: fmt-check tidy-check vet test-race build vuln sec ## Run everything CI
 # database with empty credentials and report an authentication failure. It also
 # refuses a file other accounts can read: it holds every secret of the
 # installation, and a copy made with plain `cp` is world-readable. The password
-# is tested by make, so a dry run prints `:` rather than the password.
+# is tested by make on its unexpanded text, so a dry run prints `:` rather than
+# the password, and a `$(` in it stops no target that does not hand it on.
 #
-# Stopping the stack and reading its logs need only require-env-file: Compose
-# cannot interpolate without the file, and during an incident they must not
-# wait for its mode or a password to be fixed.
+# Stopping the stack and reading its logs need only require-env-file, so during
+# an incident they do not wait for the file's mode to be fixed. Compose still
+# interpolates the whole file for them and refuses an empty CORE_DB_PASSWORD;
+# `down` and `logs` use none, so any value on the command line gets past it:
+# `make stack-down CORE_DB_PASSWORD=unused`.
 .PHONY: require-env require-env-file
 require-env-file:
 	@test -f $(ENV_FILE) || { \
@@ -391,7 +394,7 @@ require-env: require-env-file
 		echo "$(ENV_FILE) is readable by other accounts, and it holds every secret. Run:"; \
 		echo "  chmod 600 $(ENV_FILE)"; \
 		exit 1; }
-	@$(if $(CORE_DB_PASSWORD),:,{ echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; })
+	@$(if $(value CORE_DB_PASSWORD),:,{ echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; })
 
 # GAME_PROVISIONER_DSN is what turns the whole game circuit on: without it the
 # composition root skips provisioning entirely, so a contest's game cannot be
