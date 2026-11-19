@@ -186,7 +186,8 @@ The same goes for any other variable Compose names as missing a value, such as
 
 ### A password with `/`, `@`, `:`, `?`, `#` or `%` in it
 
-**Symptom.** The API stops with `fatal: parse core database DSN: invalid connection string`,
+**Symptom.** The API stops with `fatal: parse core database DSN: invalid connection string`
+(`parse game cluster DSN` when the game cluster's password is the one),
 `migrate` and `bootstrap` fail to parse the address, the game-prepare job says
 the provisioning DSN is not a URL, or sign-in to a database fails with a
 password that looks right.

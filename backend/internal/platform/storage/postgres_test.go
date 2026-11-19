@@ -191,6 +191,45 @@ func TestGameClusterPoolsNameTheGameClusterWhenItIsUnreachable(t *testing.T) {
 	}
 }
 
+func TestGameClusterPoolsNameTheGameClusterWhenTheDSNIsMalformed(t *testing.T) {
+	const dsn = "postgres://app:sup3rs3cret@localhost:99999/game"
+
+	opens := map[string]func(context.Context) error{
+		"NewGamePool": func(ctx context.Context) error {
+			_, err := NewGamePool(ctx, dsn)
+			return err
+		},
+		"NewMaintenancePool": func(ctx context.Context) error {
+			_, err := NewMaintenancePool(ctx, dsn, time.Minute)
+			return err
+		},
+	}
+	for name, open := range opens {
+		t.Run(name, func(t *testing.T) {
+			err := open(context.Background())
+			if err == nil {
+				t.Fatal("open returned nil error for a malformed DSN")
+			}
+			if !strings.Contains(err.Error(), "parse game cluster DSN") {
+				t.Errorf("error = %q, want it to name the game cluster", err)
+			}
+			if strings.Contains(err.Error(), "core database") {
+				t.Errorf("error = %q, must not blame the core database", err)
+			}
+			if strings.Contains(err.Error(), "sup3rs3cret") {
+				t.Errorf("error leaks the password: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewPoolNamesTheCoreDatabaseWhenTheDSNIsMalformed(t *testing.T) {
+	_, err := NewPool(context.Background(), "postgres://app:secret@localhost:99999/core")
+	if err == nil || !strings.Contains(err.Error(), "parse core database DSN") {
+		t.Fatalf("error = %v, want parse core database DSN", err)
+	}
+}
+
 func TestNewPoolNamesTheCoreDatabaseWhenItIsUnreachable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

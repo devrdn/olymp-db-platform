@@ -53,26 +53,28 @@ func dsnSetsPoolMaxConns(dsn string) bool {
 // PoolConfig parses the DSN and applies the service pool defaults; settings
 // present in the DSN win. Errors omit the DSN because it carries the password.
 func PoolConfig(dsn string) (*pgxpool.Config, error) {
-	return poolConfig(dsn, coreStatementTimeout, 0)
+	return poolConfig(dsn, coreName, coreStatementTimeout, 0)
 }
 
 // PoolConfigWithMaxConns is PoolConfig with a configured pool size. maxConns
 // <= 0 keeps the default, and pool_max_conns in the DSN still wins.
 func PoolConfigWithMaxConns(dsn string, maxConns int32) (*pgxpool.Config, error) {
-	return poolConfig(dsn, coreStatementTimeout, maxConns)
+	return poolConfig(dsn, coreName, coreStatementTimeout, maxConns)
 }
 
-// MaintenancePoolConfig is PoolConfig with the given statement timeout. CREATE
-// DATABASE ... TEMPLATE copies a whole template and can outlast the core
-// ten-second cap (CLAUDE.md rule 15).
+// MaintenancePoolConfig is PoolConfig for the game cluster with the given
+// statement timeout. CREATE DATABASE ... TEMPLATE copies a whole template and
+// can outlast the core ten-second cap (CLAUDE.md rule 15).
 func MaintenancePoolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, error) {
-	return poolConfig(dsn, statementTimeout, 0)
+	return poolConfig(dsn, gameClusterName, statementTimeout, 0)
 }
 
-func poolConfig(dsn string, statementTimeout time.Duration, maxConns int32) (*pgxpool.Config, error) {
+// poolConfig names the database being configured in its error, as openPool
+// does, so a malformed game cluster DSN is not reported as the core one's.
+func poolConfig(dsn, name string, statementTimeout time.Duration, maxConns int32) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("parse core database DSN: invalid connection string")
+		return nil, fmt.Errorf("parse %s DSN: invalid connection string", name)
 	}
 
 	if !dsnSetsPoolMaxConns(dsn) {
@@ -131,7 +133,7 @@ func NewPoolWithMaxConns(ctx context.Context, dsn string, maxConns int32) (*pgxp
 // NewGamePool opens a pool to the game cluster with the service defaults, for
 // a tool that only reads from it.
 func NewGamePool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	cfg, err := PoolConfig(dsn)
+	cfg, err := poolConfig(dsn, gameClusterName, coreStatementTimeout, 0)
 	if err != nil {
 		return nil, err
 	}
