@@ -181,6 +181,9 @@ line. `down` and `logs` do not use it, so any value will do:
 make stack-down CORE_DB_PASSWORD=unused
 ```
 
+The same goes for any other variable Compose names as missing a value, such as
+`REDIS_PASSWORD` or `GRAFANA_PASSWORD`: add each to the command line.
+
 ### A password with `/`, `@`, `:`, `?`, `#` or `%` in it
 
 **Symptom.** The API stops with `fatal: parse core database DSN: invalid connection string`,

@@ -383,9 +383,9 @@ test-all: fmt-check tidy-check vet test-race build vuln sec ## Run everything CI
 #
 # Stopping the stack and reading its logs need only require-env-file, so during
 # an incident they do not wait for the file's mode to be fixed. Compose still
-# interpolates the whole file for them and refuses an empty CORE_DB_PASSWORD;
-# `down` and `logs` use none, so any value on the command line gets past it:
-# `make stack-down CORE_DB_PASSWORD=unused`.
+# interpolates the whole file for them and refuses an empty CORE_DB_PASSWORD
+# or any other variable it requires; `down` and `logs` use none, so any value
+# on the command line gets past it: `make stack-down CORE_DB_PASSWORD=unused`.
 .PHONY: require-env require-env-file
 require-env-file:
 	@test -f $(ENV_FILE) || { \
