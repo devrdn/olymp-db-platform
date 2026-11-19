@@ -37,7 +37,7 @@ told to.
 `make front`, `make front-build` and `make front-start` derive `API_ORIGIN` from
 `API_PORT` in `deploy/.env`, the same file the API and the containers read, so a
 port changes in one place; the build needs it too, because the `/api/*` rewrite
-is computed then. They pass no other setting. `make run` and `make runner` forward
+is computed then. They pass no other setting from `deploy/.env`; `front-start` sets only `COOKIE_SECURE=false` and `ALLOW_MISSING_INGRESS_SECRET=true` itself, for a production build served locally over http. `make run` and `make runner` forward
 the settings the API and the runner read, and say in the Makefile which they
 leave out. `make front-check` runs
 everything CI runs except the smoke test, and `make front-build` +

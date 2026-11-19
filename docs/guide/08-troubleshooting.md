@@ -219,8 +219,14 @@ syntax, keeps quote characters, treats `#` as the start of a comment and expands
 `$`.
 
 **Fix.** Write each value bare: no quotes, no trailing comment, and no `$` or
-`#` inside a password. For an SMTP password that must contain `$`, single-quote
-it (`SMTP_PASSWORD='...'`); that only helps the containers.
+`#` inside a password. Quotes do not rescue a `$`: Compose would strip them, but
+Make keeps them and still expands `$x`, so a value like that breaks the host
+targets. On the host, turn mail off (`make SMTP_HOST= run`) or use a local
+sink; never put a secret on the `make` command line.
+
+`ENV_FILE` (the Makefile's variable for this path) changes only which file Make
+includes; Compose still reads `deploy/.env`, so a different file does not move
+the stack.
 
 ### A setting in `deploy/.env` does not reach `make run`, `make runner` or `make front`
 
@@ -428,8 +434,10 @@ mail off there is no "Forgot password?" and no password sign-up, and
 
 **Fix.** Host without a port, `SMTP_FROM` and `PUBLIC_URL` set, the username and
 password together. For local work, run a catch-all SMTP sink and pass its
-settings on the make command line, `make SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=none run`
-(`make run` already sets `ENV=development`). The shell does not beat
+settings on the make command line,
+`make SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=none SMTP_USERNAME= SMTP_PASSWORD= run`
+(`make run` already sets `ENV=development`). Empty the relay's credentials as
+shown: with them left in, `SMTP_TLS=none` refuses to start. The shell does not beat
 `deploy/.env`, and in the file `SMTP_TLS=none` would refuse the stack's start;
 see [how the host targets read `deploy/.env`](#a-setting-in-deployenv-does-not-reach-make-run-make-runner-or-make-front).
 
@@ -654,7 +662,8 @@ migration library's complaint that the database version N is dirty and must be
 forced. `version` still answers, and reports `dirty: true`.
 
 **Cause.** A migration that fails or is interrupted leaves its version marked
-dirty until you clear it.
+dirty until you clear it. The new API does not start meanwhile, while the old
+container, if one is still running, may keep serving against the dirty schema.
 
 **Fix.** Fix the cause first. Then force the **last version that fully applied**,
 which is the one before the dirty one (53 when 54 is dirty), and migrate again.
@@ -670,7 +679,9 @@ make migrate-up
 variables of those names the shell exported, and `MIGRATION` must be a version
 number: `0` and `053` are refused.
 Forcing the dirty number itself skips that migration. If the failed file had
-partly applied, undo that by hand first.
+partly applied, undo that by hand first. Only a migration without its own
+transaction can be left partly applied; one that runs in a transaction rolls
+back whole.
 
 On a deployed stack the `migrate` service is where the dirty version shows: it
 exits non-zero and the API does not start. `make migrate-*` are development
@@ -790,7 +801,7 @@ user owns.
 
 ### The API cannot reach the game cluster
 
-**Symptom.** `fatal: connect to the game cluster: game cluster is unreachable: ...`.
+**Symptom.** `fatal: game cluster is unreachable: ...`.
 
 **Cause.** `GAME_PROVISIONER_DSN` is wrong or `pg-game` is down.
 

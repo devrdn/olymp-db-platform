@@ -230,7 +230,9 @@ PUBLIC_URL=https://olympdb.usm.md
 - Compose expands `$` in an unquoted or double-quoted value of
   `deploy/.env`, so a password containing one goes in single quotes:
   `SMTP_PASSWORD='…'`. Unquoted, it reaches the relay altered, and the
-  relay answers 535.
+  relay answers 535. Make keeps the quotes and expands `$x` itself, so on the
+  host such a value breaks: turn mail off (`make SMTP_HOST= run`) or use a
+  local sink.
 
 ### Self-service accounts
 
@@ -786,7 +788,9 @@ API listens on `API_PORT`. A value left empty keeps the program's default.
 A file shared with a stack therefore makes the host API act on the stack's
 settings: with its relay and `PUBLIC_URL` set, `make run` sends real mail with
 links to that site, to a restored production dump's accounts too. Turn mail off
-for local work on the command line: `make SMTP_HOST= run`.
+for local work on the command line: `make SMTP_HOST= run`. `ENV_FILE`, the
+Makefile's name for that path, is covered in
+[the troubleshooting guide](../docs/guide/08-troubleshooting.md#the-values-in-deployenv-are-not-what-compose-and-make-read).
 
 Note that `make run` sets `ENV=development`, which turns off the Secure flag on
 the session cookie. That is required locally: a browser discards a Secure cookie
