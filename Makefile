@@ -193,15 +193,15 @@ test-race: ## Run the tests with the race detector
 # round trip of a migration, which runs on a scratch database of its own
 # because rolling back drops tables the other packages are using.
 test-db: require-env test-db-reset ## Run the repository tests against a fresh test database
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go test -count=1 ./cmd/migrate/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
+	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" go test -count=1 ./cmd/migrate/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
 
 # Once per run and before any test binary starts: `go test` runs packages in
 # parallel, and they share this database. The migrations are applied by the
 # same command a deployment uses.
 .PHONY: test-db-reset
 test-db-reset: require-env
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go run ./cmd/testdb
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go run ./cmd/migrate up
+	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" go run ./cmd/testdb
+	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" go run ./cmd/migrate up
 
 # The game cluster tests connect as the participant's own database role and
 # provoke what it must not be able to do. They cannot be faked: every guarantee
@@ -211,14 +211,11 @@ test-db-reset: require-env
 # shared game_reader, game_writer and game_author roles, and on pg-game those
 # are what `make runner` authenticates as: a test run there once took a
 # running Query Runner's credentials away and broke the installation. The
-# three role passwords still travel with the DSN, because preparing the
-# cluster states them and the tests refuse to invent any
-# (internal/gamedb/gamedbtest); deploy/.env's are as good as any on a cluster
-# nothing else uses.
-GAME_ROLE_PASSWORDS := GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)"
-
+# three role passwords still reach the tests, because preparing the cluster
+# states them and the tests refuse to invent any (internal/gamedb/gamedbtest);
+# deploy/.env's are as good as any on a cluster nothing else uses.
 test-game: require-env test-game-cluster ## Run the game cluster tests against a fresh test cluster
-	cd $(BACKEND) && GAME_DB_DSN="$(GAME_TEST_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
+	cd $(BACKEND) && GAME_DB_DSN="$$GAME_TEST_DB_DSN" \
 		go test -count=1 ./internal/gamedb/... ./internal/queryrunner/... ./internal/rpc/...
 
 # Recreated, not merely started: its data lives in memory, so a new container
@@ -235,7 +232,7 @@ test-game-cluster: require-env
 # caller at all.
 .PHONY: test-game-build
 test-game-build: require-env test-db-reset test-game-cluster
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" GAME_DB_DSN="$(GAME_TEST_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
+	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" GAME_DB_DSN="$$GAME_TEST_DB_DSN" \
 		go test -count=1 -run TestAScriptSavedInTheCoreDatabase ./internal/provisioning/
 
 # The contract between the Core API and the Query Runner. Generated code is
@@ -338,10 +335,12 @@ scheduled-backup-check: ## Prove the backup rotation, the scheduled run and its 
 edge-check: ## Prove what deploy/Caddyfile forwards, with and without an edge proxy
 	deploy/edge-check.sh
 
-# What `make run` and `make runner` take from deploy/.env, when
-# `make front-install` reinstalls, and that a value make cannot expand stops no
-# other target, on a throwaway env file with `go` and `npm` stubbed. Needs
-# neither Docker, Go nor Node; never reads deploy/.env or touches frontend/.
+# What `make run` and `make runner` take from deploy/.env, that no target shows
+# a password on its echoed command line, migrate-force's and teardown's checks,
+# when `make front-install` reinstalls, and that a value make cannot expand
+# stops no other target, on throwaway env files with `go`, `docker` and `npm`
+# stubbed. Needs neither Docker, Go nor Node; never reads deploy/.env or
+# touches frontend/.
 .PHONY: host-targets-check
 host-targets-check: ## Prove what the host targets take from deploy/.env, and that nothing else expands it
 	deploy/host-targets-check.sh
@@ -373,20 +372,26 @@ test-all: fmt-check tidy-check vet test-race build vuln sec ## Run everything CI
 # require-env fails with an explanation instead of letting the command reach the
 # database with empty credentials and report an authentication failure. It also
 # refuses a file other accounts can read: it holds every secret of the
-# installation, and a copy made with plain `cp` is world-readable.
-.PHONY: require-env
-require-env:
+# installation, and a copy made with plain `cp` is world-readable. The password
+# is tested by make, so a dry run prints `:` rather than the password.
+#
+# Stopping the stack and reading its logs need only require-env-file: Compose
+# cannot interpolate without the file, and during an incident they must not
+# wait for its mode or a password to be fixed.
+.PHONY: require-env require-env-file
+require-env-file:
 	@test -f $(ENV_FILE) || { \
 		echo "$(ENV_FILE) is missing. Create it first:"; \
 		echo "  install -m 600 deploy/.env.example $(ENV_FILE)"; \
 		echo "then fill in the passwords."; \
 		exit 1; }
+
+require-env: require-env-file
 	@test -z "$$(find -L $(ENV_FILE) \( -perm -040 -o -perm -004 \))" || { \
 		echo "$(ENV_FILE) is readable by other accounts, and it holds every secret. Run:"; \
 		echo "  chmod 600 $(ENV_FILE)"; \
 		exit 1; }
-	@test -n "$(CORE_DB_PASSWORD)" || { \
-		echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; }
+	@$(if $(CORE_DB_PASSWORD),:,{ echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; })
 
 # GAME_PROVISIONER_DSN is what turns the whole game circuit on: without it the
 # composition root skips provisioning entirely, so a contest's game cannot be
@@ -410,11 +415,12 @@ require-env:
 #
 # The rest of what the API reads from deploy/.env reaches it through the
 # exports below `runner`, so the host processes see the settings the
-# containers do. Only the API's listen address is written here, from API_PORT.
+# containers do, CORE_DB_DSN and REDIS_ADDR among them. Only the API's listen
+# address is written here, from API_PORT, and GAME_PROVISIONER_DSN, which the
+# shell copies from the exported GAME_DB_DSN.
 run: require-env ## Run the API against the dev infrastructure
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
-		HTTP_ADDR=":$(API_PORT)" \
-		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
+	cd $(BACKEND) && HTTP_ADDR=":$(API_PORT)" \
+		GAME_PROVISIONER_DSN="$$GAME_DB_DSN" \
 		GAME_UPLOAD_DIR="$(GAME_UPLOAD_DIR)" \
 		COVER_DIR="$(COVER_DIR)" \
 		PUBLIC_ORIGINS="$(FRONT_ORIGIN)" \
@@ -425,30 +431,38 @@ run: require-env ## Run the API against the dev infrastructure
 ## --- Migrations -------------------------------------------------------------
 
 migrate-up: require-env ## Apply pending migrations
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate up
+	cd $(BACKEND) && go run ./cmd/migrate up
 
 migrate-down: require-env ## Roll back the most recent migration
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate down
+	cd $(BACKEND) && go run ./cmd/migrate down
 
 migrate-version: require-env ## Print the current schema version
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate version
+	cd $(BACKEND) && go run ./cmd/migrate version
 
 # Rewrites the recorded schema version without running any SQL, which is how a
 # half-applied migration is cleared (backend/README.md, "Recovering from a dirty
 # migration"). The variable is MIGRATION, not VERSION: VERSION is the image tag
 # and defaults to a commit hash, so a bare `make migrate-force` must not be able
 # to force the schema to it.
+#
+# MIGRATION counts only when it is on this command line, which make places in
+# the recipe's environment: a value the shell exported long ago is refused, and
+# the recipe reads "$$MIGRATION" as a value, never as shell text. It must be a
+# version number, so 0 and 007 are refused too.
 migrate-force: require-env ## Mark the schema at a version, clearing a dirty state (MIGRATION=n CONFIRM=yes)
-	@test -n "$(MIGRATION)" || { echo "usage: make migrate-force MIGRATION=<last version that fully applied> CONFIRM=yes"; exit 1; }
-	@case "$(MIGRATION)" in ''|*[!0-9]*) echo "MIGRATION must be a whole number, got: $(MIGRATION)"; exit 1;; esac
+	@test "$(origin MIGRATION)" = "command line" || { \
+		echo "usage: make migrate-force MIGRATION=<last version that fully applied> CONFIRM=yes"; \
+		echo "MIGRATION is taken from the make command line only, never from the environment."; exit 1; }
+	@case "$$MIGRATION" in ''|0*|*[!0-9]*) \
+		echo "MIGRATION must be a version number such as 53, got: $$MIGRATION"; exit 1;; esac
 	@test "$(CONFIRM)" = "yes" || { \
-		echo "This records the schema of $(CORE_DB_NAME) as version $(MIGRATION) without running any SQL."; \
+		echo "This records the schema of $(CORE_DB_NAME) as version $$MIGRATION without running any SQL."; \
 		echo "Force the last version that fully applied; forcing the dirty one skips that migration."; \
 		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate force $(MIGRATION)
+	cd $(BACKEND) && go run ./cmd/migrate force "$$MIGRATION"
 
 bootstrap: require-env ## Create the first administrator (idempotent; prints the password)
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/bootstrap -login $(ADMIN_LOGIN) -name "$(ADMIN_NAME)"
+	cd $(BACKEND) && go run ./cmd/bootstrap -login $(ADMIN_LOGIN) -name "$(ADMIN_NAME)"
 
 
 ## --- Interface --------------------------------------------------------------
@@ -476,7 +490,7 @@ front-install: ## Install the interface's dependencies when missing or the lockf
 	@cd $(FRONTEND) && \
 	stamp=node_modules/.lockfile.sha256; \
 	want=$$( { sha256sum package-lock.json 2>/dev/null || shasum -a 256 package-lock.json 2>/dev/null; } | cut -d' ' -f1 ) && \
-	{ test -n "$$want" || { echo "front-install needs sha256sum or shasum to tell whether package-lock.json changed"; exit 1; }; } && \
+	{ test -n "$$want" || { echo "front-install cannot hash package-lock.json: it is missing, or neither sha256sum nor shasum is installed"; exit 1; }; } && \
 	if [ -L node_modules ] || [ ! -f "$$stamp" ] || [ "$$(cat "$$stamp")" != "$$want" ]; then \
 		if [ -L node_modules ]; then rm node_modules; fi; \
 		npm ci && echo "$$want" > "$$stamp"; \
@@ -781,10 +795,7 @@ restore-game-uploads: require-env ## Restore the game uploads volume from an arc
 # is why the API above is given the provisioner's and never these.
 .PHONY: game-roles
 game-roles: require-env ## Create the game cluster's participant roles
-	cd $(BACKEND) && GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
-		GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" \
-		GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" \
-		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
+	cd $(BACKEND) && GAME_DB_ADMIN_DSN="$$GAME_DB_DSN" \
 		ENV=development go run ./cmd/gamedb
 
 # The repair for what the installation leaves behind: a database the core
@@ -800,7 +811,7 @@ game-roles: require-env ## Create the game cluster's participant roles
 # on a laptop sweeps the same volume that laptop's API writes to.
 .PHONY: game-orphans
 game-orphans: require-env ## List (ARGS=-apply to remove) dropped databases still on the cluster and cover files nothing refers to
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
+	cd $(BACKEND) && GAME_DB_ADMIN_DSN="$$GAME_DB_DSN" \
 		COVER_DIR="$(COVER_DIR)" \
 		go run ./cmd/gameorphans $(ARGS)
 
@@ -835,15 +846,15 @@ game-check: require-env ## List contests whose built template is missing from th
 # participant roles' credentials, which stay with the Query Runner.
 .PHONY: loadtest
 loadtest: require-env ## Load the SQL console with synthetic participants (ARGS=... see cmd/consoleload)
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
+	cd $(BACKEND) && GAME_PROVISIONER_DSN="$$GAME_DB_DSN" \
 		LOADTEST_API="http://localhost:$(API_PORT)" \
 		go run ./cmd/consoleload $(ARGS)
 
 .PHONY: runner
 runner: require-env ## Run the Query Runner against the dev game cluster
 	cd $(BACKEND) && \
-		GAME_DB_DSN="postgres://game_reader:$(GAME_READER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
-		GAME_DB_WRITER_DSN="postgres://game_writer:$(GAME_WRITER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
+		GAME_DB_DSN="postgres://game_reader:$$GAME_READER_PASSWORD@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
+		GAME_DB_WRITER_DSN="postgres://game_writer:$$GAME_WRITER_PASSWORD@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_LISTEN)" \
 		QUERY_RUNNER_METRICS_ADDR="$(QUERY_RUNNER_METRICS_LISTEN)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
@@ -859,10 +870,11 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 # the file says, and PUBLIC_ORIGINS, TRUSTED_PROXIES and the runner's listen
 # addresses are set in the recipes. CORE_DB_DSN and GAME_DB_DSN (which
 # GAME_PROVISIONER_DSN is built from) are built from the file's credentials and
-# ports, and a value the file gives for them itself is used as written.
-# QUERY_RUNNER_METRICS_ADDR contributes only its port. ENV and LOG_LEVEL stay development and debug. COOKIE_SECURE=true
-# would stop a browser keeping the cookie over plain http, and INTERNAL_ADDR
-# would move the port the dev Prometheus job scrapes.
+# ports, a value the file gives for them itself is used as written, and they
+# are exported with the other credentials below. QUERY_RUNNER_METRICS_ADDR
+# contributes only its port. ENV and LOG_LEVEL stay development and debug.
+# COOKIE_SECURE=true would stop a browser keeping the cookie over plain http,
+# and INTERNAL_ADDR would move the port the dev Prometheus job scrapes.
 #
 # QUERY_RUNNER_TOKEN is in both lists so that the two present and expect the
 # same token; without one both run unauthenticated and each warns at start-up.
@@ -900,6 +912,23 @@ ifneq ($(filter runner,$(MAKECMDGOALS)),)
 $(foreach v,$(HOST_RUNNER_SETTINGS),$(if $($(v)),$(eval runner: export $(v) := $$($(v)))))
 endif
 
+# The DSNs and passwords each target hands its program, kept off the command
+# line for the same reason and expanded under the same condition: only for a
+# target the goals name, whose prerequisites inherit them. An empty value is
+# exported as well, so the program sees it empty rather than whatever the shell
+# exported, an empty REDIS_ADDR among them. Each goes under its own make name;
+# a recipe that hands one on under another copies it in the shell
+# ("$$GAME_DB_DSN"), so a command-line CORE_DB_DSN or GAME_DB_DSN cannot point
+# the tests or the runner at another database.
+export-for = $(foreach t,$(filter $(1),$(MAKECMDGOALS)),$(foreach v,$(2),$(eval $(t): export $(v) := $$($(v)))))
+$(call export-for,run migrate-up migrate-down migrate-version migrate-force bootstrap game-orphans loadtest,CORE_DB_DSN)
+$(call export-for,run,REDIS_ADDR)
+$(call export-for,run game-roles game-orphans loadtest,GAME_DB_DSN)
+$(call export-for,test-db test-db-reset test-game-build,CORE_TEST_DB_DSN)
+$(call export-for,test-game test-game-build,GAME_TEST_DB_DSN)
+$(call export-for,test-game test-game-build game-roles,GAME_READER_PASSWORD GAME_WRITER_PASSWORD GAME_AUTHOR_PASSWORD)
+$(call export-for,runner,GAME_READER_PASSWORD GAME_WRITER_PASSWORD)
+
 # --wait returns once pg-core, pg-game and redis pass their health checks, so
 # `make dev-up && make migrate-up` does not race a cold start.
 dev-up: require-env ## Start PostgreSQL and Redis for local development
@@ -929,7 +958,7 @@ dev-observability: require-env ## Add Prometheus, Loki, Promtail and Grafana to 
 dev-db-ui: require-env ## Add a database browser (Adminer) to the dev stack
 	$(COMPOSE_DEV) --profile dbui up -d adminer
 
-dev-down: require-env ## Stop the development infrastructure
+dev-down: require-env-file ## Stop the development infrastructure
 	# dev-up starts redis by naming it, which activates its "shared" profile for
 	# that command only. A plain `down` does not re-activate the profile, so it
 	# would leave redis running and then refuse to remove the network it is still
@@ -937,7 +966,7 @@ dev-down: require-env ## Stop the development infrastructure
 	# the test targets' own game cluster included.
 	$(COMPOSE_DEV) --profile shared --profile observability --profile dbui --profile full --profile test down
 
-dev-logs: require-env ## Follow the development infrastructure logs
+dev-logs: require-env-file ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
 
 images: ## Build the release images from this working tree
@@ -1019,5 +1048,5 @@ stack-observability: require-env ## Add Prometheus, Loki, Promtail and Grafana w
 	# as "not in an active profile".
 	VERSION=$(VERSION) $(COMPOSE) --profile observability up -d prometheus loki promtail grafana
 
-stack-down: require-env ## Stop the full stack
+stack-down: require-env-file ## Stop the full stack
 	VERSION=$(VERSION) $(COMPOSE) --profile bootstrap --profile observability --profile shared down

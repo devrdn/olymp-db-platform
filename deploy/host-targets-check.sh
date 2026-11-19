@@ -6,17 +6,23 @@
 #     sets, through the environment and never on the echoed command line, while
 #     the container-only values (REDIS_ADDR, QUERY_RUNNER_ADDR, GAME_UPLOAD_DIR,
 #     ENV) are the host's;
+#   - no target that reads the file shows a password in `make -n`, and those
+#     that hand a DSN or a password to a process still hand it the same one;
 #   - a value on the make command line beats the file, and the shell does not;
 #   - an empty API_PORT still gives the API and the interface a port;
+#   - `make migrate-force` takes MIGRATION only from its own command line and
+#     only as a version number, and hands it to the program as a value;
+#   - `dev-down`, `dev-logs` and `stack-down` need the file only to exist;
 #   - `make front-install` installs once per lockfile, and refuses rather than
-#     install when it has no tool to hash the lockfile with;
+#     install when it cannot hash the lockfile;
 #   - a value make cannot expand, an open `$(` or `${` such as a provider may
 #     put in a secret, changes nothing in `make backup`, `make deploy` or
 #     `make deployed`: the scheduled backup runs on servers that never run
 #     `make run`.
 #
-# `go` is a stub on PATH that records its environment, so nothing is compiled
-# or started, and the other targets are dry runs. deploy/.env is never read.
+# `go` and `docker` are stubs on PATH that record their environment and
+# arguments, so nothing is compiled, started or reached; the other targets are
+# dry runs. deploy/.env is never read.
 #
 # Usage: deploy/host-targets-check.sh   (or `make host-targets-check`).
 set -euo pipefail
@@ -33,11 +39,18 @@ pass() { echo "ok   $*"; }
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
 
 mkdir "$WORK/bin"
+# `go run ./cmd/api` records as api, `go test` as test.
 cat > "$WORK/bin/go" <<'STUB'
 #!/bin/sh
-env > "$HOST_CHECK_DUMP/$(basename "$2").env"
+case "$1" in run) name="$(basename "$2")" ;; *) name="$1" ;; esac
+env > "$HOST_CHECK_DUMP/$name.env"
+echo "$*" > "$HOST_CHECK_DUMP/$name.args"
 STUB
-chmod 700 "$WORK/bin/go"
+cat > "$WORK/bin/docker" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$HOST_CHECK_DUMP/docker.calls"
+STUB
+chmod 700 "$WORK/bin/go" "$WORK/bin/docker"
 
 # Nothing from the caller's environment reaches make, so a variable the caller
 # happens to export cannot stand in for one the file is meant to give.
@@ -68,16 +81,32 @@ lacks() { # file name
 	else pass "$(basename "$1" .env) has no $2"; fi
 }
 
-SECRETS=(check-github-secret check-author-password check-device-secret check-runner-token)
-normal="$(fixture normal \
-	API_PORT=8085 \
-	QUERY_RUNNER_ADDR=queryrunner:9300 \
-	GITHUB_CLIENT_SECRET=check-github-secret \
-	GAME_AUTHOR_PASSWORD=check-author-password \
-	DEVICE_COOKIE_SECRET=check-device-secret \
-	QUERY_RUNNER_TOKEN=check-runner-token \
-	SMTP_PORT=2525 \
-	QUERY_PER_MINUTE=77)"
+# Every secret is distinct, so finding one names it.
+SECRETS=(check-github-secret check-author-password check-device-secret check-runner-token
+	check-core-password check-game-password check-redis-password
+	check-reader-password check-writer-password)
+NORMAL=(
+	API_PORT=8085
+	QUERY_RUNNER_ADDR=queryrunner:9300
+	GITHUB_CLIENT_SECRET=check-github-secret
+	GAME_AUTHOR_PASSWORD=check-author-password
+	DEVICE_COOKIE_SECRET=check-device-secret
+	QUERY_RUNNER_TOKEN=check-runner-token
+	CORE_DB_PASSWORD=check-core-password
+	GAME_DB_PASSWORD=check-game-password
+	REDIS_PASSWORD=check-redis-password
+	GAME_READER_PASSWORD=check-reader-password
+	GAME_WRITER_PASSWORD=check-writer-password
+	SMTP_PORT=2525
+	QUERY_PER_MINUTE=77
+)
+normal="$(fixture normal "${NORMAL[@]}")"
+CORE_DSN="postgres://dbcontest:check-core-password@localhost:5432/dbcontest_core?sslmode=disable"
+CORE_TEST_DSN="postgres://dbcontest:check-core-password@localhost:5432/dbcontest_core_test?sslmode=disable"
+GAME_DSN="postgres://dbcontest_game:check-game-password@localhost:5433/dbcontest_game?sslmode=disable"
+GAME_TEST_DSN="postgres://dbcontest_game:check-game-password@localhost:5434/dbcontest_game_test?sslmode=disable"
+READER_DSN="postgres://game_reader:check-reader-password@localhost:5433/postgres?sslmode=disable"
+WRITER_DSN="postgres://game_writer:check-writer-password@localhost:5433/postgres?sslmode=disable"
 
 echo "== make run and make runner"
 mk "$normal" run > "$WORK/run.out" 2>&1 || { cat "$WORK/run.out"; fail "make run exited non-zero"; }
@@ -94,18 +123,87 @@ has "$api" SMTP_PORT 2525
 has "$api" QUERY_PER_MINUTE 77
 has "$api" HTTP_ADDR :8085
 has "$api" QUERY_RUNNER_ADDR localhost:9300
-has "$api" REDIS_ADDR "redis://:0123456789abcdef@localhost:6379/0"
+has "$api" CORE_DB_DSN "$CORE_DSN"
+has "$api" REDIS_ADDR "redis://:check-redis-password@localhost:6379/0"
+has "$api" GAME_PROVISIONER_DSN "$GAME_DSN"
 has "$api" GAME_UPLOAD_DIR "$ROOT/deploy/game-uploads"
 has "$api" ENV development
 lacks "$api" SMTP_HOST
 has "$runner" QUERY_RUNNER_TOKEN check-runner-token
 has "$runner" QUERY_PER_MINUTE 77
 has "$runner" QUERY_RUNNER_ADDR 127.0.0.1:9300
+has "$runner" GAME_DB_DSN "$READER_DSN"
+has "$runner" GAME_DB_WRITER_DSN "$WRITER_DSN"
 lacks "$runner" GITHUB_CLIENT_SECRET
 for s in "${SECRETS[@]}"; do
 	if grep -qF "$s" "$WORK/run.out" "$WORK/runner.out"; then fail "$s is on an echoed command line"
 	else pass "$s is on no echoed command line"; fi
 done
+
+echo "== no password in a dry run"
+# Every target that reads the file, taken from the Makefile rather than listed
+# here, so a target added later is checked too.
+targets="$(sed -nE 's/^([a-z][a-z0-9-]*):.*require-env.*/\1/p' "$ROOT/Makefile")"
+[ -n "$targets" ] || fail "no target depends on require-env"
+for t in $targets; do
+	out="$(mk "$normal" -n "$t" MIGRATION=4242 CONFIRM=yes FILE=x 2>&1)" || true
+	leaked=
+	for s in "${SECRETS[@]}"; do case "$out" in *"$s"*) leaked="$leaked $s" ;; esac; done
+	if [ -n "$leaked" ]; then fail "make -n $t shows$leaked"; else pass "make -n $t shows no password"; fi
+done
+
+echo "== the processes still get their DSNs"
+# Real runs with go and docker stubbed: each target hands its process the
+# value it no longer writes on the command line.
+started() { # the name go records, then make arguments
+	local name="$1"
+	shift
+	rm -f "$WORK/$name.env"
+	mk "$normal" "$@" > "$WORK/started.out" 2>&1 || { cat "$WORK/started.out"; fail "make $* exited non-zero"; }
+	[ -f "$WORK/$name.env" ] || { fail "make $* did not start $name"; : > "$WORK/$name.env"; }
+	for s in "${SECRETS[@]}"; do
+		if grep -qF "$s" "$WORK/started.out"; then fail "make $* echoes $s"; fi
+	done
+}
+for t in migrate-up migrate-down migrate-version; do
+	started migrate "$t"
+	has "$WORK/migrate.env" CORE_DB_DSN "$CORE_DSN"
+done
+started bootstrap bootstrap
+has "$WORK/bootstrap.env" CORE_DB_DSN "$CORE_DSN"
+started gameorphans game-orphans
+has "$WORK/gameorphans.env" CORE_DB_DSN "$CORE_DSN"
+has "$WORK/gameorphans.env" GAME_DB_ADMIN_DSN "$GAME_DSN"
+started consoleload loadtest
+has "$WORK/consoleload.env" CORE_DB_DSN "$CORE_DSN"
+has "$WORK/consoleload.env" GAME_PROVISIONER_DSN "$GAME_DSN"
+started gamedb game-roles
+has "$WORK/gamedb.env" GAME_DB_ADMIN_DSN "$GAME_DSN"
+has "$WORK/gamedb.env" GAME_READER_PASSWORD check-reader-password
+has "$WORK/gamedb.env" GAME_WRITER_PASSWORD check-writer-password
+has "$WORK/gamedb.env" GAME_AUTHOR_PASSWORD check-author-password
+started test test-db
+has "$WORK/test.env" CORE_DB_DSN "$CORE_TEST_DSN"
+has "$WORK/testdb.env" CORE_DB_DSN "$CORE_TEST_DSN"
+has "$WORK/migrate.env" CORE_DB_DSN "$CORE_TEST_DSN"
+lacks "$WORK/test.env" GAME_DB_DSN
+started test test-game
+has "$WORK/test.env" GAME_DB_DSN "$GAME_TEST_DSN"
+has "$WORK/test.env" GAME_READER_PASSWORD check-reader-password
+has "$WORK/test.env" GAME_WRITER_PASSWORD check-writer-password
+has "$WORK/test.env" GAME_AUTHOR_PASSWORD check-author-password
+started test test-game-build
+has "$WORK/test.env" CORE_DB_DSN "$CORE_TEST_DSN"
+has "$WORK/test.env" GAME_DB_DSN "$GAME_TEST_DSN"
+has "$WORK/test.env" GAME_READER_PASSWORD check-reader-password
+# A command-line value of the name the program reads does not redirect the
+# tests or the runner: make derives theirs, as it did on the command line.
+started test test-db CORE_DB_DSN=postgres://elsewhere/dbcontest_core
+has "$WORK/test.env" CORE_DB_DSN "$CORE_TEST_DSN"
+started test test-game GAME_DB_DSN=postgres://elsewhere/dbcontest_game
+has "$WORK/test.env" GAME_DB_DSN "$GAME_TEST_DSN"
+started queryrunner runner GAME_DB_DSN=postgres://elsewhere/dbcontest_game
+has "$WORK/queryrunner.env" GAME_DB_DSN "$READER_DSN"
 
 echo "== a value on the make command line"
 # What the troubleshooting page tells a developer to type: the command line
@@ -135,6 +233,67 @@ if mk "$noport" -n front-build 2>&1 | grep -qF 'API_ORIGIN="http://localhost:808
 	pass "front-build gets API_ORIGIN=http://localhost:8080"
 else fail "front-build gets API_ORIGIN=http://localhost:8080"; fi
 
+echo "== migrate-force"
+forced() { # the environment's MIGRATION or "", then make arguments
+	local inherited="$1"
+	shift
+	rm -f "$WORK/migrate.args"
+	env -i PATH="$WORK/bin:/usr/bin:/bin" HOST_CHECK_DUMP="$WORK" ${inherited:+MIGRATION="$inherited"} \
+		"$MAKE_BIN" --no-print-directory -C "$ROOT" ENV_FILE="$normal" migrate-force CONFIRM=yes "$@" \
+		> "$WORK/force.out" 2>&1
+}
+refused() { # what, then forced's arguments
+	local what="$1"
+	shift
+	if forced "$@"; then fail "migrate-force refuses $what, exited 0"
+	elif [ -f "$WORK/migrate.args" ]; then fail "migrate-force refuses $what, ran $(cat "$WORK/migrate.args")"
+	else pass "migrate-force refuses $what: $(grep -v '^make' "$WORK/force.out" | head -1)"; fi
+}
+refused "no MIGRATION" ""
+refused "MIGRATION=0" "" MIGRATION=0
+refused "MIGRATION=007" "" MIGRATION=007
+refused "MIGRATION=7x" "" MIGRATION=7x
+refused "a MIGRATION carrying a command" "" "MIGRATION=7\"; touch $WORK/ran; echo \""
+if [ -e "$WORK/ran" ]; then fail "a MIGRATION carrying a command ran it"; fi
+refused "a MIGRATION from the environment" 7
+if forced "" MIGRATION=4242 && [ "$(cat "$WORK/migrate.args" 2>/dev/null)" = "run ./cmd/migrate force 4242" ]; then
+	pass "migrate-force MIGRATION=4242 runs migrate force 4242"
+else
+	fail "migrate-force MIGRATION=4242 runs migrate force 4242, ran: $(cat "$WORK/migrate.args" 2>/dev/null || tail -1 "$WORK/force.out")"
+fi
+has "$WORK/migrate.env" CORE_DB_DSN "$CORE_DSN"
+if forced "" MIGRATION=4242 -n && ! grep -qF 4242 "$WORK/force.out"; then
+	pass "make -n migrate-force writes no MIGRATION into the shell text"
+else
+	fail "make -n migrate-force writes no MIGRATION into the shell text: $(grep -F 4242 "$WORK/force.out" | head -1)"
+fi
+
+echo "== teardown with a broken env file"
+# Readable by others and without CORE_DB_PASSWORD, as an incident may leave
+# it: stopping the stack must still work, and starting it must not.
+broken="$(fixture broken CORE_DB_PASSWORD=)"
+chmod 644 "$broken"
+for goal in dev-down dev-logs stack-down; do
+	rm -f "$WORK/docker.calls"
+	if mk "$broken" "$goal" > "$WORK/teardown.out" 2>&1 && [ -s "$WORK/docker.calls" ]; then
+		pass "$goal runs with a broken env file"
+	else
+		fail "$goal runs with a broken env file: $(grep -v '^make' "$WORK/teardown.out" | head -1)"
+	fi
+	rm -f "$WORK/docker.calls"
+	if mk "$WORK/absent.env" "$goal" > "$WORK/teardown.out" 2>&1 || [ -e "$WORK/docker.calls" ]; then
+		fail "$goal refuses a missing env file"
+	else
+		pass "$goal refuses a missing env file: $(head -1 "$WORK/teardown.out")"
+	fi
+done
+rm -f "$WORK/docker.calls"
+if mk "$broken" dev-up > "$WORK/teardown.out" 2>&1 || [ -e "$WORK/docker.calls" ]; then
+	fail "dev-up still refuses a broken env file"
+else
+	pass "dev-up still refuses a broken env file: $(head -1 "$WORK/teardown.out")"
+fi
+
 echo "== front-install"
 # Against a lockfile of its own, never frontend/: the target removes a
 # symlinked node_modules, which in a worktree may be another checkout's.
@@ -159,21 +318,34 @@ front "$WORK/bin:/usr/bin:/bin:/usr/sbin:/sbin" front-install > "$WORK/front2.ou
 	{ cat "$WORK/front2.out"; fail "front-install exited non-zero"; }
 if [ "$(npm_calls)" = 1 ]; then pass "front-install installs once for one lockfile"
 else fail "front-install installs once for one lockfile, ran npm $(npm_calls) times"; fi
-# With neither hashing tool the stamp could not tell one lockfile from another.
+# With neither hashing tool, or with no lockfile, the stamp could not tell one
+# lockfile from another.
 mkdir "$WORK/nohash"
 for tool in cat cut rm; do ln -s "$(command -v "$tool")" "$WORK/nohash/$tool"; done
 ln -s "$WORK/bin/npm" "$WORK/nohash/npm"
-rm -rf "$WORK/front/node_modules" "$WORK/npm.calls"
-if front "$WORK/nohash" front-install > "$WORK/front3.out" 2>&1; then
-	fail "front-install refuses without sha256sum or shasum, exited 0"
-elif [ "$(npm_calls)" != 0 ]; then
-	fail "front-install refuses without sha256sum or shasum, ran npm first"
-else
-	pass "front-install refuses without sha256sum or shasum: $(grep -v '^make' "$WORK/front3.out" | head -1)"
-fi
+mkdir "$WORK/nolock"
+unhashable() { # what, the PATH, then make arguments
+	local what="$1"
+	shift
+	rm -rf "$WORK/front/node_modules" "$WORK/nolock/node_modules" "$WORK/npm.calls"
+	if front "$@" > "$WORK/front3.out" 2>&1; then
+		fail "front-install refuses $what, exited 0"
+	elif [ "$(npm_calls)" != 0 ]; then
+		fail "front-install refuses $what, ran npm first"
+	elif ! grep -qF "cannot hash package-lock.json" "$WORK/front3.out"; then
+		fail "front-install refuses $what, saying: $(grep -v '^make' "$WORK/front3.out" | head -1)"
+	else
+		pass "front-install refuses $what: $(grep -v '^make' "$WORK/front3.out" | head -1)"
+	fi
+}
+unhashable "without sha256sum or shasum" "$WORK/nohash" front-install
+unhashable "without a lockfile" "$WORK/bin:/usr/bin:/bin:/usr/sbin:/sbin" FRONTEND="$WORK/nolock" front-install
 
 echo "== a value make cannot expand"
-hostile="$(fixture hostile "GITHUB_CLIENT_SECRET='ab\$(cd'" "SMTP_PASSWORD='x\${y'")"
+# The game passwords are among them, so the DSN exports are shown to stay as
+# lazy as the settings' are.
+hostile="$(fixture hostile "${NORMAL[@]}" "GITHUB_CLIENT_SECRET='ab\$(cd'" "SMTP_PASSWORD='x\${y'" \
+	"GAME_DB_PASSWORD='g\$(cd'" "GAME_READER_PASSWORD='r\${y'" "GAME_WRITER_PASSWORD='w\$(cd'")"
 for goal in backup "deploy VERSION=v1.2.3" "deploy-api VERSION=v1.2.3" deployed; do
 	# The dry runs name their env file, so each is compared with the other's
 	# path written in.

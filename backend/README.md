@@ -1619,6 +1619,8 @@ make migrate-up
 
 `migrate-force` writes the version and runs no SQL, so it asks for
 `CONFIRM=yes` and takes `MIGRATION`, not `VERSION`, which names the image tag.
+`MIGRATION` counts only on the `make` command line, not exported from the
+shell, and only as a version number without a leading zero.
 
 On a deployed stack the `migrate` service is where the dirty version shows: it
 exits non-zero and the API does not start. `make migrate-*` are development

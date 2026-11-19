@@ -159,9 +159,14 @@ files are both refused.
 
 **Fix.** `chmod 600 deploy/.env`.
 
+This check and the next one are skipped by `make dev-down`, `make dev-logs`
+and `make stack-down`, which need only the file to exist, so a stack can be
+stopped and its logs read while the file is being fixed.
+
 ### `CORE_DB_PASSWORD is not set in deploy/.env.`
 
-**Symptom.** That sentence, from any target that checks the file.
+**Symptom.** That sentence, from any target that checks the file except the
+three teardown targets above.
 
 **Cause.** The value is empty.
 
@@ -650,6 +655,8 @@ make migrate-force MIGRATION=53 CONFIRM=yes
 make migrate-up
 ```
 
+`MIGRATION` is read from the `make` command line only, never from a variable
+the shell exported, and must be a version number: `0` and `053` are refused.
 Forcing the dirty number itself skips that migration. If the failed file had
 partly applied, undo that by hand first.
 
