@@ -1,7 +1,8 @@
 import { activeDictionary } from "@/lib/i18n/server";
+import { cn } from "@/lib/utils";
 
 import { playDictionary } from "./dictionary";
-import { PlayHeaderSkeleton, WorkspaceSkeleton } from "./skeleton";
+import { PLAY_SHELL, PlayHeaderSkeleton, WorkspaceSkeleton } from "./skeleton";
 
 /**
  * What is on screen between the click and the workspace; Next renders it
@@ -19,7 +20,7 @@ export default async function Loading() {
   const dict = playDictionary(await activeDictionary());
 
   return (
-    <div className="flex min-h-0 flex-col narrow:h-[calc(100dvh-3rem-1px)]">
+    <div className={cn("flex min-h-0 flex-col", PLAY_SHELL)}>
       <PlayHeaderSkeleton />
       <WorkspaceSkeleton dict={dict} />
     </div>

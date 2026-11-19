@@ -342,10 +342,43 @@ entirely, and the editor takes the freed width. Collapsing all three leaves
 only the tab strip and the editor on the screen. A finished run reopens a
 collapsed bottom panel on its own, the same reasoning that already switches
 its tab to Result: the participant is meant to see what the query did.
-Below 760 px the same panels are stacked sections rather than columns, and
-the same toggles hide the same sections. What is collapsed is remembered in
-`localStorage` per contest, beside the pane widths (section 12's directory
-note on `lib/`).
+What is collapsed is remembered in `localStorage` per contest, beside the
+pane widths (section 12's directory note on `lib/`).
+
+**Below 760 px the console shows one pane at a time.** Four panes do not fit
+on a phone, and stacked they made a page two screens tall on which the result
+sat under the whole editor and the questions under the schema: every run was
+followed by a scroll. So the screen stays one viewport tall there too, and a
+switch under the header chooses what fills it: Editor, Result, Schema or
+Questions (three parts in a contest that hides its schema). The switch is a
+radio group, not a tab list, because from 760 px up the same panes are plain
+regions with no switch over them; its parts are 44 px high, it sticks under
+the bar, and it carries the organisers' unread dot on Questions, since the
+header's three toggles are not drawn at this width.
+
+- **Nothing is unmounted by a switch.** Every pane stays in the tree and is
+  hidden, so the query being typed, the last result, an unsent answer and each
+  pane's scroll position are there on the way back. During an olympiad losing
+  any of them is worse than any layout.
+- **A run switches to Result**, for the reason a run reopens a collapsed
+  bottom panel on a wide screen. The Result and Query log buttons beside Run
+  lead to the same pane showing the one asked for, and the switch's Result
+  part always means the result.
+- **A table's name in the schema writes its query and returns to the editor**,
+  where the query landed.
+- **The shortcuts choose a pane instead of collapsing one**: Ctrl/⌘+J shows
+  the result, Ctrl/⌘+B the schema, Ctrl/⌘+Alt+B the questions, and the same
+  keys again return to the editor; ⌘K opens the schema with the caret in its
+  search. What is collapsed on a wide screen is neither read nor changed
+  here, so a panel hidden on a desktop is still reachable on a phone.
+- **The hiding is done in CSS first.** A class hides every pane but the
+  chosen one below the breakpoint, so the server's markup is already one pane
+  before any script runs; the script then tells the panes which of them is
+  shown, which is what stops a hidden query log from refreshing.
+- **A phone on its side** (under 480 px tall) cannot hold the header and a
+  pane together. There the switch and its pane take the whole viewport under
+  the bar and the header scrolls away above them, which is the one case in
+  which this screen scrolls as a page.
 
 **The editor carries its SQL as a strip of tabs, VS Code's own shape:** a
 name, a close cross, and a trailing "+", double-click or F2 to rename (Enter

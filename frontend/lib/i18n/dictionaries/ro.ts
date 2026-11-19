@@ -1794,6 +1794,13 @@ const ro = {
             bottom: "Ctrl/⌘+J",
           },
         },
+        phone: {
+          label: "Panoul afișat",
+          editor: "Editor",
+          result: "Rezultat",
+          schema: "Schemă",
+          side: "Întrebări",
+        },
         row: {
           heading: "Rândul {n}",
           region: "Rândul {n} al rezultatului",

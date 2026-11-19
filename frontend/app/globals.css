@@ -10,6 +10,14 @@
 }
 
 /**
+ * A phone on its side: below `narrow` and too short to hold the play
+ * screen's header and one pane together (`play/skeleton.tsx`). The width is
+ * `--breakpoint-narrow`, repeated because a media query cannot read a
+ * variable.
+ */
+@custom-variant phone-short (@media (width < 47.5rem) and (height < 30rem));
+
+/**
  * Fades whichever edge of a horizontal row has content hidden past it, so a
  * row of tabs cut between two labels still says there is more. A
  * scroll-driven animation moves the two fade widths where the browser has

@@ -2001,6 +2001,15 @@ const en = {
             bottom: "Ctrl/⌘+J",
           },
         },
+        // The switch a phone gets instead of the three toggles: one pane on
+        // screen at a time. `side` names the pane the questions open in.
+        phone: {
+          label: "Shown pane",
+          editor: "Editor",
+          result: "Result",
+          schema: "Schema",
+          side: "Questions",
+        },
         // One row of the result, open in full under the table (§7). The
         // table clips a cell at its column's width, and a witness statement
         // is not something a `title` attribute is a way to read.

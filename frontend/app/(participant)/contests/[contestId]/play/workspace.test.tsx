@@ -694,19 +694,6 @@ describe("the pane grid's own shape", () => {
     expect(new Set(orders).size).toBe(orders.length);
   });
 
-  test("every pane placed below the narrow breakpoint declares its own order, and no two share one", () => {
-    const { container } = show(A_SCHEMA);
-    const grid = paneGrid(container);
-
-    // Below 47.5rem both handles are hidden and the three panels stack.
-    const orders = placedPanes(grid, "max-narrow:hidden")
-      .filter((pane) => !pane.classList.contains("max-wide:hidden"))
-      .map((pane) => declaredOrder(pane, ["max-narrow:", "max-wide:"]));
-
-    expect(orders).not.toContain(null);
-    expect(new Set(orders).size).toBe(orders.length);
-  });
-
   // An implicit `auto` track grows to the result table's max-content width,
   // which sized the editor by the table and scrolled the page sideways.
   test("the console column declares a track that cannot exceed its container", () => {
@@ -717,17 +704,16 @@ describe("the pane grid's own shape", () => {
     expect(column!.className).toMatch(/(^|\s)grid-cols-1(\s|$)/);
   });
 
-  // Unbounded, a large result buries the questions far below the fold.
-  test("the bottom panel keeps a height bound of its own on the narrow fallback", () => {
+  // Below the narrow breakpoint one pane is laid out at a time. An implicit
+  // `auto` row would size it by its content, and a long result or story would
+  // scroll the page instead of its own box.
+  test("below the narrow breakpoint the grid and the console column each declare one row that fills the height", () => {
     const { container } = show(A_SCHEMA);
-    const panes = [...container.querySelectorAll("div")].filter(
-      (div) => div.classList.contains("overflow-hidden") && div.classList.contains("flex-1"),
-    );
+    const grid = paneGrid(container);
+    const column = container.querySelector("form")?.closest("div.grid");
 
-    // The result pane and the log pane, both mounted, side by side.
-    expect(panes).toHaveLength(2);
-    expect(panes[0].parentElement).toBe(panes[1].parentElement);
-    expect(panes[0].parentElement!.className).toMatch(/max-narrow:max-h-\[/);
+    expect(grid).toHaveClass("max-narrow:grid-rows-[minmax(0,1fr)]");
+    expect(column).toHaveClass("max-narrow:grid-rows-[minmax(0,1fr)]");
   });
 });
 
@@ -1113,5 +1099,340 @@ describe("collapsing a panel", () => {
 
     expect(orders).not.toContain(null);
     expect(new Set(orders).size).toBe(orders.length);
+  });
+});
+
+// jsdom has no `matchMedia`; a stub that matches stands in for a window below
+// the narrow breakpoint. The hiding CSS is not applied here, so visibility is
+// read from the `hidden` attribute the same state drives.
+describe("one pane at a time on a phone", () => {
+  const sw = en.participant.play.workspace.phone;
+
+  const A_QUESTION = {
+    id: "q1",
+    locked: false as const,
+    kind: "text" as const,
+    points: 10,
+    isBonus: false,
+    choiceIds: [],
+    title: "",
+    bodyMd: "Who was in the greenhouse?",
+    choices: {},
+    attemptsRemaining: 3,
+    closed: false,
+    canAnswer: true,
+    correct: false,
+    pointsAwarded: 0,
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+  });
+
+  let contests = 0;
+  function showOnAPhone(schema: typeof A_SCHEMA | null = A_SCHEMA) {
+    contests += 1;
+    const contestId = `phone-${contests}`;
+    const view = render(
+      <PanelVisibilityProvider contestId={contestId}>
+        <PanelToggles dict={en} />
+        <Workspace
+          accountId="u1"
+          contestId={contestId}
+          storyBody={<p>A body in the stacks.</p>}
+          storyCover={null}
+          printView={null}
+          storyUnavailable={null}
+          questionEntries={[{ question: A_QUESTION, index: 1, body: <span>{A_QUESTION.bodyMd}</span> }]}
+          schema={schema}
+          sqlMode="read_only"
+          resultDownload
+          schemaDiagram
+          initialLog={freshInitialLog()}
+          workspace={A_WORKSPACE}
+          locale="en"
+          dict={en}
+        />
+      </PanelVisibilityProvider>,
+    );
+    return { ...view, contestId };
+  }
+
+  function part(name: string) {
+    return screen.getByRole("radio", { name });
+  }
+  function schemaPanel() {
+    return screen.getByRole("region", { name: en.participant.play.schema.heading, hidden: true });
+  }
+  function sidePanel() {
+    return screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story, hidden: true });
+  }
+  function resultPanel() {
+    return screen.getByText(en.participant.play.workspace.resultEmpty);
+  }
+  function editor() {
+    return screen.getByRole("textbox", { name: en.participant.console.label, hidden: true });
+  }
+  function answerField() {
+    return screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel, hidden: true });
+  }
+
+  test("opens on the editor, with the other three panes mounted and hidden", () => {
+    showOnAPhone();
+
+    expect(part(sw.editor)).toBeChecked();
+    expect(editor()).toBeVisible();
+    expect(resultPanel()).not.toBeVisible();
+    expect(schemaPanel()).not.toBeVisible();
+    expect(sidePanel()).not.toBeVisible();
+  });
+
+  test("each part shows its pane and hides the one before", async () => {
+    showOnAPhone();
+
+    await userEvent.click(part(sw.schema));
+    expect(schemaPanel()).toBeVisible();
+    expect(editor()).not.toBeVisible();
+
+    await userEvent.click(part(sw.side));
+    expect(sidePanel()).toBeVisible();
+    expect(schemaPanel()).not.toBeVisible();
+
+    await userEvent.click(part(sw.result));
+    expect(resultPanel()).toBeVisible();
+    expect(sidePanel()).not.toBeVisible();
+
+    await userEvent.click(part(sw.editor));
+    expect(editor()).toBeVisible();
+    expect(resultPanel()).not.toBeVisible();
+  });
+
+  // Before hydration the server's markup is all a phone has, and afterwards a
+  // class is what keeps a pane away should the script's reading of the width
+  // ever disagree with the stylesheet's.
+  test("every pane but the shown one carries the class that hides it below the breakpoint", async () => {
+    const { container } = showOnAPhone();
+    const paneOf = (name: string) => container.querySelector(`[data-phone-pane="${name}"]`);
+
+    expect(paneOf("editor")).not.toHaveClass("max-narrow:hidden");
+    for (const name of ["result", "schema", "side"]) expect(paneOf(name)).toHaveClass("max-narrow:hidden");
+
+    await userEvent.click(part(sw.side));
+
+    expect(paneOf("side")).not.toHaveClass("max-narrow:hidden");
+    for (const name of ["editor", "result", "schema"]) expect(paneOf(name)).toHaveClass("max-narrow:hidden");
+  });
+
+  test("a completed run switches to the result", async () => {
+    runResult.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    showOnAPhone();
+
+    await runQuery();
+
+    await waitFor(() => expect(part(sw.result)).toBeChecked());
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(editor()).not.toBeVisible();
+    runResult.current = { kind: "idle" };
+  });
+
+  test("a query typed survives a visit to the schema and back, in the same editor", async () => {
+    const { container } = showOnAPhone();
+    await waitForRealEditor(container);
+    const before = editor();
+    await userEvent.click(before);
+    await userEvent.keyboard("SELECT * FROM suspects");
+
+    await userEvent.click(part(sw.schema));
+    await userEvent.click(part(sw.editor));
+
+    expect(editor()).toBe(before);
+    expect(editor()).toHaveTextContent("SELECT * FROM suspects");
+    expect(editor()).toBeVisible();
+  });
+
+  test("an unsent answer survives a switch", async () => {
+    showOnAPhone();
+    await userEvent.click(part(sw.side));
+    await userEvent.type(answerField(), "the gardener");
+
+    await userEvent.click(part(sw.editor));
+    expect(answerField()).not.toBeVisible();
+    await userEvent.click(part(sw.side));
+
+    expect(answerField()).toBeVisible();
+    expect(answerField()).toHaveValue("the gardener");
+  });
+
+  test("the schema keeps its scroll box, and so its position, across a switch", async () => {
+    showOnAPhone();
+    await userEvent.click(part(sw.schema));
+    const box = schemaPanel().querySelector<HTMLElement>(".overflow-y-auto")!;
+    box.scrollTop = 120;
+
+    await userEvent.click(part(sw.editor));
+    await userEvent.click(part(sw.schema));
+
+    expect(schemaPanel().querySelector(".overflow-y-auto")).toBe(box);
+    expect(box.scrollTop).toBe(120);
+  });
+
+  test("the result part shows the result even after the log was looked at", async () => {
+    showOnAPhone();
+    const pressed = (name: string) =>
+      screen.getByRole("button", { name, hidden: true }).getAttribute("aria-pressed");
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
+    expect(part(sw.result)).toBeChecked();
+    expect(pressed(en.participant.play.workspace.tabs.log)).toBe("true");
+
+    await userEvent.click(part(sw.editor));
+    // Nothing is pressed while neither is on screen.
+    expect(pressed(en.participant.play.workspace.tabs.log)).toBe("false");
+    await userEvent.click(part(sw.result));
+
+    expect(pressed(en.participant.play.workspace.tabs.result)).toBe("true");
+    expect(pressed(en.participant.play.workspace.tabs.log)).toBe("false");
+  });
+
+  test("a table's name writes its query and brings the editor back", async () => {
+    const { container } = showOnAPhone();
+    await waitForRealEditor(container);
+    await userEvent.click(part(sw.schema));
+
+    await userEvent.click(screen.getByRole("button", tableName("guests")));
+
+    expect(part(sw.editor)).toBeChecked();
+    expect(editor()).toBeVisible();
+    expect(editor()).toHaveTextContent("SELECT * FROM guests");
+  });
+
+  test("the shortcuts show a pane and, pressed again, return to the editor", async () => {
+    const { contestId } = showOnAPhone();
+
+    fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true });
+    expect(part(sw.result)).toBeChecked();
+    fireEvent.keyDown(window, { key: "b", code: "KeyB", ctrlKey: true });
+    expect(part(sw.schema)).toBeChecked();
+    fireEvent.keyDown(window, { key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+    expect(part(sw.side)).toBeChecked();
+    fireEvent.keyDown(window, { key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+    expect(part(sw.editor)).toBeChecked();
+
+    // Nothing was collapsed: the wide layout's memory is not a phone's to change.
+    expect(window.localStorage.getItem(`dbcontest.console.collapsed.${contestId}`)).toBeNull();
+  });
+
+  test("Ctrl+J with the caret in the editor shows the result and moves the focus to the switch", async () => {
+    const { container } = showOnAPhone();
+    await waitForRealEditor(container);
+    await userEvent.click(editor());
+    await userEvent.keyboard("SELECT 1");
+
+    await userEvent.keyboard("{Control>}j{/Control}");
+
+    expect(part(sw.result)).toBeChecked();
+    expect(part(sw.result)).toHaveFocus();
+    expect(editor()).toHaveTextContent("SELECT 1");
+  });
+
+  test("the schema search shortcut shows the schema and puts the caret in the search", async () => {
+    showOnAPhone();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+
+    await waitFor(() => expect(part(sw.schema)).toBeChecked());
+    expect(screen.getByRole("textbox", { name: en.participant.play.schema.searchLabel })).toHaveFocus();
+  });
+
+  test("a panel collapsed on a wide screen is still reachable", async () => {
+    window.localStorage.setItem(
+      `dbcontest.console.collapsed.phone-${contests + 1}`,
+      JSON.stringify({ schema: true, side: true, bottom: true }),
+    );
+    showOnAPhone();
+
+    await userEvent.click(part(sw.side));
+    expect(sidePanel()).toBeVisible();
+    await userEvent.click(part(sw.schema));
+    expect(schemaPanel()).toBeVisible();
+    await userEvent.click(part(sw.result));
+    expect(resultPanel()).toBeVisible();
+  });
+
+  test("the header's panel toggles are not drawn below the breakpoint", () => {
+    showOnAPhone();
+
+    const toggle = screen.getByRole("button", { name: en.participant.play.workspace.panels.side });
+    expect(toggle.parentElement).toHaveClass("max-narrow:hidden");
+  });
+});
+
+describe("from the narrow breakpoint up", () => {
+  test("the switch stays in the tree but is not drawn, and every pane shows", () => {
+    render(
+      <PanelVisibilityProvider contestId="wide-1">
+        <Workspace
+          accountId="u1"
+          contestId="wide-1"
+          storyBody={<p>A body in the stacks.</p>}
+          storyCover={null}
+          printView={null}
+          storyUnavailable={null}
+          questionEntries={[]}
+          schema={A_SCHEMA}
+          sqlMode="read_only"
+          resultDownload
+          schemaDiagram
+          initialLog={freshInitialLog()}
+          workspace={A_WORKSPACE}
+          locale="en"
+          dict={en}
+        />
+      </PanelVisibilityProvider>,
+    );
+
+    expect(screen.getByRole("radiogroup", { name: en.participant.play.workspace.phone.label })).toHaveClass(
+      "narrow:hidden",
+    );
+    expect(screen.getByRole("textbox", { name: en.participant.console.label })).toBeVisible();
+    expect(screen.getByText(en.participant.play.workspace.resultEmpty)).toBeVisible();
+    expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeVisible();
+    expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story })).toBeVisible();
+  });
+
+  test("a run leaves the phone's pane alone and shows the result beside the editor", async () => {
+    render(
+      <PanelVisibilityProvider contestId="wide-2">
+        <Workspace
+          accountId="u1"
+          contestId="wide-2"
+          storyBody={null}
+          storyCover={null}
+          printView={null}
+          storyUnavailable={null}
+          questionEntries={[]}
+          schema={null}
+          sqlMode="read_only"
+          resultDownload
+          schemaDiagram
+          initialLog={freshInitialLog()}
+          workspace={A_WORKSPACE}
+          locale="en"
+          dict={en}
+        />
+      </PanelVisibilityProvider>,
+    );
+
+    await runQuery();
+
+    expect(screen.getByRole("textbox", { name: en.participant.console.label })).toBeVisible();
+    expect(screen.getByRole("radio", { name: en.participant.play.workspace.phone.editor, hidden: true })).toBeChecked();
   });
 });

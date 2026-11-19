@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
@@ -14,13 +15,15 @@ import type { Locale } from "@/lib/i18n/config";
 
 import { refreshSchema, type ConsoleState } from "./requests";
 import { ConsoleEditor, type ConsoleHandle } from "./console";
-import { usePanelVisibility, useSchemaPanel } from "./panel-toggles";
+import { PaneSwitch } from "./pane-switch";
+import { usePanelVisibility, useSchemaPanel, type PhonePane } from "./panel-toggles";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResetDatabase } from "./reset-database";
 import { ResultPanel } from "./result-panel";
 import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
+import { PLAY_PANES } from "./skeleton";
 import { tableQuery } from "./table-query";
 import { purgeForeignDrafts } from "./use-autosave";
 import { useSignals } from "./use-signals";
@@ -41,6 +44,14 @@ const MemoSchemaPanel = memo(SchemaPanel);
  * Full-bleed, an exception to `docs/design/SPEC.md` §5 recorded there: during
  * an olympiad every pixel goes to the data. Every pane edge is draggable and
  * remembered (`pane-splitter.tsx`).
+ *
+ * Below `narrow` the panes do not fit side by side, so one is shown at a time
+ * and `PaneSwitch` chooses it. Every pane stays mounted: a query, a result,
+ * an unsent answer and a scroll position outlive a switch. The hiding is done
+ * twice on purpose. A class hides every pane but the chosen one below the
+ * breakpoint, which is all a phone has before hydration; the `hidden`
+ * attribute follows once the width is known to the script, and with it what
+ * the panes are told about being shown.
  *
  * The print copy of the story sits beside the workspace, hidden on screen
  * (`hidden print:block`), while the workspace is `print:hidden`; un-styling
@@ -132,16 +143,20 @@ export function Workspace({
 
   // Collapsed panes are not rendered, divider included, so the grid tracks
   // below are computed: a track for an absent pane would be empty screen.
-  const { collapsed, toggle, expand } = usePanelVisibility();
+  const { collapsed, toggle, expand, phone, phonePane, showPhonePane, registerPhoneSwitch, present, sideMarked } =
+    usePanelVisibility();
   // The header sits outside the Suspense boundary and cannot see the schema;
   // this tells it whether to offer a schema toggle.
   useSchemaPanel(schema !== null);
 
-  const showSchema = schema !== null && !collapsed.schema;
+  const showSchema = schema !== null && (phone ? phonePane === "schema" : !collapsed.schema);
   // An open schema column narrows how far the side column may grow.
   const { containerRef, sizes: widths, commit, sideBounds } = usePaneWidths(contestId, showSchema);
-  const showSide = !collapsed.side;
-  const showBottom = !collapsed.bottom;
+  const showSide = phone ? phonePane === "side" : !collapsed.side;
+  const showBottom = phone ? phonePane === "result" : !collapsed.bottom;
+  const showEditor = !phone || phonePane === "editor";
+  /** The class half of the phone's hiding; see the component's comment. */
+  const offPhone = (pane: PhonePane) => phonePane !== pane && "max-narrow:hidden";
 
   // From `narrow` (>=760px) the schema spans its own row underneath, so only
   // the side panel has a column here; from `wide` (>=1024px) all three do.
@@ -188,7 +203,16 @@ export function Workspace({
   // A click on a table's name writes a query on it into the open SQL tab,
   // for the participant to change or run.
   const consoleRef = useRef<ConsoleHandle>(null);
-  const queryTable = useCallback((table: string) => consoleRef.current?.insert(tableQuery(table)), []);
+  const queryTable = useCallback(
+    (table: string) => {
+      // On a phone the editor is behind the schema. It is shown before the
+      // insert, synchronously, because the insert puts the caret in the editor
+      // and a hidden editor cannot take it.
+      if (phone) flushSync(() => showPhonePane("editor"));
+      consoleRef.current?.insert(tableQuery(table));
+    },
+    [phone, showPhonePane],
+  );
 
   /** Brings the schema panel back for ⌘K, which focuses its search field. */
   const revealSchema = useCallback(() => expand("schema"), [expand]);
@@ -199,17 +223,31 @@ export function Workspace({
     expand("bottom");
   };
 
+  /** The switch's Result part means the result, whichever of the two the pane showed last. */
+  const choosePhonePane = (pane: PhonePane) => {
+    if (pane === "result") setBottomTab("result");
+    showPhonePane(pane);
+  };
+
   return (
     <>
       {/* Print-only: hidden on screen, shown by `print:block`. */}
       <div className="hidden print:block">{printView}</div>
-      {/* From `narrow` (>=760px) the screen is one viewport tall with no page
-          scroll; below it the sections stack and the page scrolls, but each panel
-          keeps its own scroll box (see the bottom pane). The height arithmetic
-          lives on `page.tsx`'s shell; `narrow:flex-1` takes the rest of it only
-          from the breakpoint up, since `flex-1` in a content-height column
-          collapses. */}
-      <div className="flex min-h-0 flex-col print:hidden narrow:flex-1">
+      {/* The screen is one viewport tall with no page scroll, and each panel
+          keeps its own scroll box. The height arithmetic is `PLAY_SHELL` and
+          `PLAY_PANES` (skeleton.tsx). */}
+      <div className={cn(PLAY_PANES, "flex flex-col print:hidden")}>
+        {/* Without a provider nothing could act on a choice. */}
+        {present ? (
+          <PaneSwitch
+            value={phonePane}
+            onChange={choosePhonePane}
+            schema={schema !== null}
+            marked={sideMarked ? t.panels.sideMarked : null}
+            switchRef={registerPhoneSwitch}
+            dict={dict}
+          />
+        ) : null}
         {/* Schema left, editor and result in the middle, story and questions
           right. The side columns have fixed widths and the middle takes the rest.
           Without a schema its column is dropped rather than left empty. */}
@@ -224,7 +262,8 @@ export function Workspace({
             } as React.CSSProperties
           }
           className={cn(
-            "grid min-h-0 grid-cols-1 narrow:flex-1",
+            // Below `narrow` one pane is laid out, and the one row gives it the height.
+            "grid min-h-0 flex-1 grid-cols-1 max-narrow:grid-rows-[minmax(0,1fr)]",
             // The hairlines between panes are grid columns of their own, so dragging
             // changes a width, not a margin. Three panes only from `wide`: at 768px a
             // third pane leaves the result table about 300px. The templates are
@@ -242,18 +281,19 @@ export function Workspace({
             //
             // Every pane in the row declares an `order`, hairlines included: grid
             // auto-placement puts a child with the default `order: 0` before all the
-            // numbered ones, which pushes the console into a 1px divider track. Below
-            // `narrow` the schema sits between the console and the questions (order 2);
-            // from `narrow` to `wide` it spans a second row and must be placed last
+            // numbered ones, which pushes the console into a 1px divider track. From
+            // `narrow` to `wide` the schema spans a second row and must be placed last
             // (order 4).
             <div
               data-panel="schema"
+              data-phone-pane="schema"
               hidden={!showSchema}
               className={cn(
-                "min-h-0 border-line max-wide:col-span-full max-wide:max-h-80 max-wide:border-t max-narrow:order-2 narrow:max-wide:order-4",
+                "min-h-0 border-line max-wide:col-span-full narrow:max-wide:order-4 narrow:max-wide:max-h-80 narrow:max-wide:border-t",
                 // Conditional rather than fighting the `hidden` attribute; see the bottom
                 // pane.
                 showSchema && "flex flex-col",
+                offPhone("schema"),
               )}
             >
               <MemoSchemaPanel
@@ -280,20 +320,27 @@ export function Workspace({
             />
           ) : null}
           {/* The console column: the editor on top, the result and log below. The
-            split starts at 55/45 and is the participant's to change (SPEC.md §5). On the
-            narrow fallback each pane gets a minimum instead and the edge is not
-            draggable: a share of a content-height column means nothing. */}
+            split starts at 55/45 and is the participant's to change (SPEC.md §5). Below
+            `narrow` the column holds whichever of the two is shown, in one row. */}
           {/* `grid-cols-1` is load-bearing: an implicit `auto` track grows to the
             result table's max-content width and overflows the page;
             `minmax(0, 1fr)` keeps the sideways scroll inside the table. */}
           <div
             ref={columnRef}
             style={{ "--pane-editor": `${rows.editor}%`, "--console-rows": consoleRows } as React.CSSProperties}
-            className="grid min-h-0 grid-cols-1 grid-rows-[var(--console-rows)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b"
+            className={cn(
+              "grid min-h-0 grid-cols-1 grid-rows-[var(--console-rows)] border-line max-wide:order-1 max-narrow:grid-rows-[minmax(0,1fr)]",
+              phonePane !== "editor" && phonePane !== "result" && "max-narrow:hidden",
+            )}
           >
             {/* A flex column: the form claims the cell with flex-1, which is inert in
-              a block parent. */}
-            <div className="flex min-h-0 flex-col max-narrow:min-h-80 max-narrow:border-b max-narrow:border-line">
+              a block parent. Hidden, never unmounted, when a phone shows another
+              pane: the editor holds the query being written. */}
+            <div
+              data-phone-pane="editor"
+              hidden={!showEditor}
+              className={cn("min-h-0", showEditor && "flex flex-col", offPhone("editor"))}
+            >
               <ConsoleEditor
                 ref={consoleRef}
                 accountId={accountId}
@@ -340,8 +387,8 @@ export function Workspace({
               />
             </div>
 
-            {/* The hairline is the handle. Hidden below `narrow`, where the panes
-              carry their own minimum and maximum heights. */}
+            {/* The hairline is the handle. Hidden below `narrow`, where one pane has
+              the column to itself. */}
             {showBottom ? (
               <PaneHandle
                 label={t.panes.editor}
@@ -361,19 +408,15 @@ export function Workspace({
               log's scroll position; they hide by class because `display:flex` would
               beat the `hidden` attribute.
 
-              `max-narrow:max-h-[60svh]` keeps the result a scroll box on the narrow
-              fallback; unbounded, a large result pushes the questions thousands of
-              pixels down. `svh`, not `dvh`, so a phone's URL bar does not resize the
-              box mid-scroll.
-
               Collapsed, the pane is hidden, not unmounted: `display: none` drops its
               grid track but keeps the log's loaded pages. The display class is
               conditional because any author `display` beats the browser's
               `[hidden] { display: none }`. */}
             <div
               data-panel="bottom"
+              data-phone-pane="result"
               hidden={!showBottom}
-              className={cn("min-h-0", showBottom && "flex flex-col max-narrow:max-h-[60svh]")}
+              className={cn("min-h-0", showBottom && "flex flex-col", offPhone("result"))}
             >
               <div
                 className={cn(
@@ -423,14 +466,15 @@ export function Workspace({
             />
           ) : null}
 
-          {/* The story and questions, stacked below the console on narrow screens.
-            Hidden rather than unmounted when collapsed: an answer field holds
+          {/* The story and questions. Hidden rather than unmounted when collapsed
+            or when a phone shows another pane: an answer field holds
             unsaved state, and on Windows AltGr arrives as Ctrl+Alt, so a stray
             keystroke could otherwise discard a typed answer. */}
           <div
             data-panel="side"
+            data-phone-pane="side"
             hidden={!showSide}
-            className="min-h-0 max-wide:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line"
+            className={cn("min-h-0 max-wide:order-3", offPhone("side"))}
           >
             <MemoSidePanel
               storyBody={storyBody}

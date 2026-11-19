@@ -36,6 +36,35 @@ export type CollapsedPanels = Record<PanelKey, boolean>;
 
 const PANEL_KEYS: readonly PanelKey[] = ["schema", "side", "bottom"];
 
+/**
+ * The panes a phone shows one at a time. Below `narrow` the three panels and
+ * the editor do not fit together, so the shortcuts and a completed run choose
+ * a pane there instead of collapsing or expanding a panel, and what is
+ * collapsed on a wide screen is neither read nor changed.
+ */
+export type PhonePane = "editor" | "result" | "schema" | "side";
+
+const PHONE_PANE: Record<PanelKey, PhonePane> = { schema: "schema", side: "side", bottom: "result" };
+
+/** Tailwind's `max-narrow:`; in step with `--breakpoint-narrow` in `globals.css`. */
+const PHONE_QUERY = "(width < 47.5rem)";
+
+function phoneQuery(): MediaQueryList | null {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia(PHONE_QUERY)
+    : null;
+}
+
+function subscribePhone(listener: () => void) {
+  const query = phoneQuery();
+  query?.addEventListener("change", listener);
+  return () => query?.removeEventListener("change", listener);
+}
+
+function phoneSnapshot(): boolean {
+  return phoneQuery()?.matches ?? false;
+}
+
 /** Every panel showing: the default, and what the server renders. */
 const NOTHING_COLLAPSED: CollapsedPanels = { schema: false, side: false, bottom: false };
 
@@ -150,6 +179,16 @@ type PanelVisibility = {
   registerToggle: (panel: PanelKey, node: HTMLButtonElement | null) => void;
   /** Something new waits unread in the side panel; its toggle shows it. */
   sideMarked: boolean;
+  /**
+   * Whether the window is below `narrow`. False on the server and until
+   * hydration, so the first paint is kept right by CSS (`workspace.tsx`).
+   */
+  phone: boolean;
+  /** The pane a phone shows; kept while the window is wide, where nothing reads it. */
+  phonePane: PhonePane;
+  showPhonePane: (pane: PhonePane) => void;
+  /** Registers the phone's switch, which takes the focus of a pane a key press hides. */
+  registerPhoneSwitch: (node: HTMLElement | null) => void;
 };
 
 const OUTSIDE: PanelVisibility = {
@@ -161,6 +200,10 @@ const OUTSIDE: PanelVisibility = {
   present: false,
   registerToggle: () => {},
   sideMarked: false,
+  phone: false,
+  phonePane: "editor",
+  showPhonePane: () => {},
+  registerPhoneSwitch: () => {},
 };
 
 const PanelVisibilityContext = createContext<PanelVisibility>(OUTSIDE);
@@ -199,8 +242,31 @@ export function PanelVisibilityProvider({
     toggleRefs.current[panel] = node;
   }, []);
 
+  const phone = useSyncExternalStore(subscribePhone, phoneSnapshot, () => false);
+  const [phonePane, setPhonePane] = useState<PhonePane>("editor");
+  const phonePaneRef = useRef(phonePane);
+  const phoneSwitchRef = useRef<HTMLElement | null>(null);
+  const registerPhoneSwitch = useCallback((node: HTMLElement | null) => {
+    phoneSwitchRef.current = node;
+  }, []);
+  const showPhonePane = useCallback((pane: PhonePane) => {
+    // The pane holding the focus is about to be hidden, which would drop the
+    // focus to `<body>`; the switch's part for the new pane takes it.
+    const focused = document.activeElement?.closest<HTMLElement>("[data-phone-pane]");
+    if (focused && focused.dataset.phonePane !== pane) {
+      phoneSwitchRef.current?.querySelector<HTMLElement>(`input[value="${pane}"]`)?.focus();
+    }
+    phonePaneRef.current = pane;
+    setPhonePane(pane);
+  }, []);
+
   const toggle = useCallback(
     (panel: PanelKey) => {
+      if (phoneSnapshot()) {
+        const pane = PHONE_PANE[panel];
+        showPhonePane(phonePaneRef.current === pane ? "editor" : pane);
+        return;
+      }
       const current = snapshot(contestId);
       const collapsing = !current[panel];
       // Hiding the panel that holds the focus moves the focus to its toggle;
@@ -213,16 +279,20 @@ export function PanelVisibilityProvider({
       }
       commit(contestId, { ...current, [panel]: collapsing });
     },
-    [contestId],
+    [contestId, showPhonePane],
   );
 
   const expand = useCallback(
     (panel: PanelKey) => {
+      if (phoneSnapshot()) {
+        showPhonePane(PHONE_PANE[panel]);
+        return;
+      }
       const current = snapshot(contestId);
       if (!current[panel]) return;
       commit(contestId, { ...current, [panel]: false });
     },
-    [contestId],
+    [contestId, showPhonePane],
   );
 
 
@@ -248,8 +318,33 @@ export function PanelVisibilityProvider({
   }, [hasSchema, toggle]);
 
   const value = useMemo(
-    () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true, registerToggle, sideMarked }),
-    [collapsed, toggle, expand, hasSchema, reportSchema, registerToggle, sideMarked],
+    () => ({
+      collapsed,
+      toggle,
+      expand,
+      hasSchema,
+      reportSchema,
+      present: true,
+      registerToggle,
+      sideMarked,
+      phone,
+      phonePane,
+      showPhonePane,
+      registerPhoneSwitch,
+    }),
+    [
+      collapsed,
+      toggle,
+      expand,
+      hasSchema,
+      reportSchema,
+      registerToggle,
+      sideMarked,
+      phone,
+      phonePane,
+      showPhonePane,
+      registerPhoneSwitch,
+    ],
   );
   return (
     <PanelVisibilityContext.Provider value={value}>
@@ -314,7 +409,8 @@ function shortcutFor(event: KeyboardEvent): PanelKey | null {
 /**
  * The three icon buttons at the right end of the play header. `aria-pressed`
  * with a fixed name, the ARIA toggle pattern; the shortcut sits in the
- * tooltip so a screen reader does not read it after every name.
+ * tooltip so a screen reader does not read it after every name. Not drawn
+ * below `narrow`, where the workspace's switch chooses the pane instead.
  */
 export function PanelToggles({ dict }: { dict: PlayDictionary }) {
   const { collapsed, toggle, hasSchema, present, registerToggle, sideMarked } = usePanelVisibility();
@@ -327,7 +423,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
   if (!present) return null;
 
   return (
-    <div className="flex shrink-0 items-center gap-0.5">
+    <div className="flex shrink-0 items-center gap-0.5 max-narrow:hidden">
       {hasSchema ? (
         <Toggle
           name={t.schema}

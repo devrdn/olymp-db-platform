@@ -19,6 +19,7 @@ import { fetchIdentity } from "@/lib/auth/session";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
+import { cn } from "@/lib/utils";
 
 import { ClarificationSignalProvider } from "./clarification-signal";
 import { ContentLoadedProvider, ContentLoadedSignal, RenderedRefusalSignal } from "./content-loaded";
@@ -31,7 +32,7 @@ import { isReadRateLimit, refusalKind } from "./refusals";
 import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
-import { WorkspaceSkeleton } from "./skeleton";
+import { PLAY_SHELL, WorkspaceSkeleton } from "./skeleton";
 import { Workspace } from "./workspace";
 
 export async function generateMetadata() {
@@ -122,11 +123,10 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   // hundred participants enter together, and Next would otherwise hold the
   // previous screen until they finish.
   //
-  // The height subtracts the app bar's `h-12` plus its 1px bottom border, and
-  // applies only from `narrow` up. `print:contents` drops it for print, where
-  // it would clip the print copy of the story at one screen.
+  // `print:contents` drops the shell's height for print, where it would clip
+  // the print copy of the story at one screen.
   return (
-    <div className="flex min-h-0 flex-col print:contents narrow:h-[calc(100dvh-3rem-1px)]">
+    <div className={cn("flex min-h-0 flex-col print:contents", PLAY_SHELL)}>
       {/* The providers carry state across the Suspense boundary.
           `ContentLoadedProvider` tells the header the content reads succeeded,
           which under individual timing means the clock started

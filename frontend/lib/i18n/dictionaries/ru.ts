@@ -1792,6 +1792,13 @@ const ru = {
             bottom: "Ctrl/⌘+J",
           },
         },
+        phone: {
+          label: "Панель на экране",
+          editor: "Редактор",
+          result: "Результат",
+          schema: "Схема",
+          side: "Вопросы",
+        },
         row: {
           heading: "Строка {n}",
           region: "Строка {n} результата",
