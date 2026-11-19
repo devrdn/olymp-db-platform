@@ -257,6 +257,13 @@ Google declares is identical for every font and guarantees nothing by itself.
 | `data` (mono) | `13px` / `1.85` | 400 | — | `tabular-nums` |
 | `narrative` (Literata) | `18px` / `1.7` | 400 | — | 58ch |
 
+**On a phone, a field that takes typing never uses a step under 16 px.** iOS
+Safari zooms the page into a focused field set smaller. So below `narrow`, and
+on a touch screen below `wide` (a phone on its side), a text field, a select
+or a text area draws `control`, `control-sm`, `small`, `label` and `data` at
+16 px; one on `body` or `narrative` keeps its own size. Buttons, checkboxes and
+all other text keep the sizes in the table. The rule closes `app/globals.css`.
+
 **The scale was revised upward after the first run on real screens.** The first
 set of values was taken from the Tailwind CSS documentation and inherited its
 sizes — but that is a page made of prose, and this is a register, a query log and

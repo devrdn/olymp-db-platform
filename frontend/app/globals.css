@@ -477,15 +477,24 @@
 }
 
 /**
- * iOS Safari zooms the page when a focused field is set under 16px, and the
- * scale's `control` step is 15px. The code editor and the prose editor are
- * already 17px and 18px, so they are left alone. Unlayered on purpose: a layered rule would
- * lose to the `text-control` utility on the element. Matches `narrow`.
+ * iOS Safari zooms the page when a focused field is set under 16px. On a
+ * phone held either way (on its side it is a touch screen below `wide`), a
+ * field's steps under 16px mean 16px, and a field that names no step inherits
+ * at least 16px. A step at or above it, such as `body` on the code editor or
+ * `narrative` on a prose field, keeps its size: the rule is in the base layer,
+ * so the utility on the field still picks the step.
  */
-@media (width < 47.5rem) {
-  input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="range"], [type="color"]),
-  select,
-  textarea {
-    font-size: 1rem;
+@layer base {
+  @media (width < 47.5rem), (pointer: coarse) and (width < 64rem) {
+    input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="range"], [type="color"]),
+    select,
+    textarea {
+      --text-small: 1rem;
+      --text-control: 1rem;
+      --text-control-sm: 1rem;
+      --text-label: 1rem;
+      --text-data: 1rem;
+      font-size: max(1rem, 1em);
+    }
   }
 }
