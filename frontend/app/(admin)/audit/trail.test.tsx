@@ -360,7 +360,6 @@ describe("AuditTrailRegister below a desktop's width", () => {
     for (const name of [dict.audit.columns.about, dict.audit.columns.where]) {
       expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
     }
-    // A cell that kept its column while the header went would shift the row.
     expect(cellOf(ABOUT)).toHaveClass("max-wide:hidden");
     expect(cellOf(FROM)).toHaveClass("max-wide:hidden");
 
@@ -390,6 +389,8 @@ describe("AuditTrailRegister below a desktop's width", () => {
     expect(cellOf(WHO)).toHaveClass("max-narrow:hidden");
     const folded = within(cellOf(WHEN)).getByText("root");
     expect(folded.closest(".max-narrow\\:block")).toHaveClass("hidden");
+    // A login has no break of its own and must not hold the column open.
+    expect(folded.closest(".max-narrow\\:block")).toHaveClass("wrap-anywhere");
   });
 
   test("names the system in that caption, too, when nobody acted", () => {
@@ -409,7 +410,15 @@ describe("AuditTrailRegister below a desktop's width", () => {
 
     const pieces = cellOf(WHEN).querySelectorAll(":scope > .whitespace-nowrap");
     // ICU puts a narrow no-break space before the day period.
-    expect([...pieces].map((piece) => piece.textContent)).toEqual(["Mar 1, 2026", "10:00\u202fAM"]);
+    expect([...pieces].map((piece) => piece.textContent)).toEqual(["Mar 1, 2026,", "10:00\u202fAM"]);
+  });
+
+  test("keeps the joiner's words with the day, so no line starts with them", () => {
+    render(<AuditTrailRegister entries={[aboutAccount]} {...props} locale="ru" dict={dict} />);
+
+    const pieces = cellOf(WHEN).querySelectorAll(":scope > .whitespace-nowrap");
+    // ICU binds "г." to the year with a narrow no-break space.
+    expect([...pieces].map((piece) => piece.textContent)).toEqual(["1 мар. 2026\u202fг.,", "10:00"]);
   });
 
   test("keeps the moment and the action at every width", () => {

@@ -216,7 +216,6 @@ describe("the archive list below a desktop's width", () => {
     for (const name of [en.archive.columns.window, en.archive.columns.participants]) {
       expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
     }
-    // A cell that kept its column while the header went would shift the row.
     const [title, windowCell, , participantsCell] = cellsOfFirstRow();
     expect(windowCell).toHaveClass("max-wide:hidden");
     expect(participantsCell).toHaveClass("max-wide:hidden");

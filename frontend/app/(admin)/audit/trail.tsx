@@ -104,7 +104,7 @@ export function AuditTrailRegister({
               <tr key={entry.id}>
                 <td className={cn(CELL, "font-mono text-data text-ink-2 narrow:whitespace-nowrap")}>
                   <Moment format={timestamp} iso={entry.created_at} />
-                  <span className="mt-1 hidden max-narrow:block">
+                  <span className="mt-1 hidden wrap-anywhere max-narrow:block">
                     <Actor entry={entry} dict={dict} />
                   </span>
                 </td>
@@ -167,7 +167,8 @@ export function AuditTrailRegister({
 
 /**
  * The moment in two unbreakable pieces, the day and the time, so a narrow
- * column breaks it between them. The joiner is the locale's own.
+ * column breaks it between them. The joiner is the locale's own; its words
+ * (Russian's "г.,") stay with the day and only its space comes between.
  */
 function Moment({ format, iso }: { format: Intl.DateTimeFormat; iso: string }) {
   const parts = format.formatToParts(new Date(iso));
@@ -180,10 +181,13 @@ function Moment({ format, iso }: { format: Intl.DateTimeFormat; iso: string }) {
       .map((part) => part.value)
       .join("");
 
+  const joiner = parts[hour - 1].value;
+  const glue = joiner.trimEnd();
+
   return (
     <>
-      <span className="whitespace-nowrap">{text(0, hour - 1)}</span>
-      {parts[hour - 1].value}
+      <span className="whitespace-nowrap">{text(0, hour - 1) + glue}</span>
+      {joiner.slice(glue.length)}
       <span className="whitespace-nowrap">{text(hour)}</span>
     </>
   );

@@ -455,24 +455,25 @@ reset: at a 768 px portrait tablet the register's column is about 620 px
 against the six columns' 800, and without the fold the window, one of the two
 columns a reader comes for, sat past the edge of the box.
 
-The same rule holds on every register, and each folds below `wide`, because
-none of their full sets fits the column between `narrow` and `wide`:
+The same rule holds on every register, and each makes room below `wide`,
+because none of their full sets fits the column between `narrow` and `wide`:
 
 - the accounts (`/users`) keep the name and login and the state, and fold the
   roles and the last sign-in;
 - the audit trail keeps when, who and what, and folds the subject and the
   address under the action;
-- a participant's contests (`/my`, `/open`) keep the title, the state and the
-  way in, and fold the window under the title;
+- a participant's contests (`/my`, `/open`) keep the title, the state, the
+  window and the way in: nothing folds, but the row number goes and the way
+  in takes only the room its buttons need;
 - the archive keeps the title, the status and the results link, and folds the
   window and the participants.
 
 A phone's 339 px holds the identifying column and one more. So below `narrow`
-a second column follows into the caption: the state on `/my`, `/open` and the
-archive, and the actor under the moment on the audit trail. The row number
-goes, and these registers halve the side padding (`--row-px`). That lets a
-login of two dozen characters keep one line beside the state, so a row of
-accounts is its name, its login and the caption.
+the columns that are left follow into the caption: the state and the window on
+`/my` and `/open`, the status on the archive, and the actor under the moment
+on the audit trail. The row number goes, and these registers halve the side
+padding (`--row-px`). That lets a login of two dozen characters keep one line
+beside the state, so a row of accounts is its name, its login and the caption.
 
 **A wide table scrolls in a `ScrollBox`, never on the page.** The box is
 `relative` as well as a scroller, because an `sr-only` label in a header cell

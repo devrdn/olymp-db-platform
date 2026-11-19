@@ -20,9 +20,10 @@ import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
  * compare; the columns are the window and the way in. No thumbnails: the spec
  * allows a photograph only above the crime story.
  *
- * Below `wide` the window folds into the caption under the title; on a phone
- * the state follows it and the row number goes, leaving the title beside the
- * way in (SPEC.md §5).
+ * Below `wide` the row number goes and the way in takes only the room it
+ * needs, so the window keeps its column; on a phone the state and the window
+ * fold into the caption under the title, leaving it beside the way in
+ * (SPEC.md §5).
  */
 
 const HEAD =
@@ -109,7 +110,7 @@ export function ParticipantRegister({
           <table className="w-full border-collapse text-left max-narrow:[--row-px:--spacing(2)] wide:min-w-3xl">
             <thead>
               <tr>
-                <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right max-narrow:hidden")}>
+                <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right max-wide:hidden")}>
                   {shared.columns.index}
                 </th>
                 <th scope="col" className={HEAD}>
@@ -118,10 +119,10 @@ export function ParticipantRegister({
                 <th scope="col" className={cn(HEAD, "w-36 max-narrow:hidden")}>
                   {shared.columns.state}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-52 max-wide:hidden")}>
+                <th scope="col" className={cn(HEAD, "w-52 max-narrow:hidden")}>
                   {shared.columns.starts}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-36 max-narrow:w-px")}>
+                <th scope="col" className={cn(HEAD, "w-36 max-wide:w-px")}>
                   {t.columns.action}
                 </th>
               </tr>
@@ -132,7 +133,7 @@ export function ParticipantRegister({
                   key={contest.id}
                   className="transition-colors duration-(--t-input) ease-standard hover:bg-panel"
                 >
-                  <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3 max-narrow:hidden")}>
+                  <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3 max-wide:hidden")}>
                     {String(index + 1).padStart(2, "0")}
                   </td>
                   <td className={CELL}>
@@ -145,7 +146,7 @@ export function ParticipantRegister({
                     <span className="mt-2 hidden max-narrow:block">
                       <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
                     </span>
-                    <span className="mt-2 hidden font-mono text-data text-ink-2 max-wide:block">
+                    <span className="mt-2 hidden font-mono text-data text-ink-2 max-narrow:block">
                       <ContestWindow
                         startsAt={contest.startsAt}
                         endsAt={contest.endsAt}
@@ -161,7 +162,7 @@ export function ParticipantRegister({
                   <td className={cn(CELL, "max-narrow:hidden")}>
                     <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
                   </td>
-                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2 max-wide:hidden")}>
+                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2 max-narrow:hidden")}>
                     <ContestWindow
                       startsAt={contest.startsAt}
                       endsAt={contest.endsAt}

@@ -122,8 +122,8 @@ describe("the register itself", () => {
 
     const row = screen.getAllByRole("row")[1];
     expect(within(row).getByText("The Greenhouse")).toBeInTheDocument();
-    // Once in its column and once in the phone's caption; one shows at a time.
-    expect(within(row).getAllByText(en.contests.status.running)).toHaveLength(2);
+    const stateCell = within(row).getAllByRole("cell")[2];
+    expect(within(stateCell).getByText(en.contests.status.running)).toBeInTheDocument();
   });
 });
 
@@ -237,38 +237,31 @@ describe("the register below a desktop's width", () => {
   const cellsOf = () => within(screen.getAllByRole("row")[1]).getAllByRole("cell");
   const [INDEX, CONTEST, STATE, WINDOW, ACTION] = [0, 1, 2, 3, 4];
 
-  test("folds the window into a caption under the title until wide", () => {
+  test("drops the row number and gives the way in only the room it needs until wide", () => {
     render_([contest()]);
 
-    expect(screen.getByRole("columnheader", { name: en.contests.columns.starts })).toHaveClass(
+    expect(screen.getByRole("columnheader", { name: en.contests.columns.index })).toHaveClass(
       "max-wide:hidden",
     );
-    // A cell that kept its column while the header went would shift the row.
-    expect(cellsOf()[WINDOW]).toHaveClass("max-wide:hidden");
-
-    const folded = within(cellsOf()[CONTEST]).getByText(/2026/);
-    expect(folded.closest(".max-wide\\:block")).toHaveClass("hidden");
+    expect(cellsOf()[INDEX]).toHaveClass("max-wide:hidden");
+    expect(screen.getByRole("columnheader", { name: en.participant.columns.action })).toHaveClass(
+      "max-wide:w-px",
+    );
   });
 
-  test("folds the state into the caption on a phone, and drops the row number", () => {
+  test("folds the state and the window into the caption on a phone only", () => {
     render_([contest({ status: "running" })]);
 
-    for (const name of [en.contests.columns.index, en.contests.columns.state]) {
+    for (const name of [en.contests.columns.state, en.contests.columns.starts]) {
       expect(screen.getByRole("columnheader", { name })).toHaveClass("max-narrow:hidden");
     }
-    expect(cellsOf()[INDEX]).toHaveClass("max-narrow:hidden");
     expect(cellsOf()[STATE]).toHaveClass("max-narrow:hidden");
+    expect(cellsOf()[WINDOW]).toHaveClass("max-narrow:hidden");
 
-    const folded = within(cellsOf()[CONTEST]).getByText(en.contests.status.running);
-    expect(folded.closest(".max-narrow\\:block")).toHaveClass("hidden");
-  });
-
-  test("gives the way in only the room it needs on a phone, and the title the rest", () => {
-    render_([contest()]);
-
-    expect(screen.getByRole("columnheader", { name: en.participant.columns.action })).toHaveClass(
-      "max-narrow:w-px",
-    );
+    const state = within(cellsOf()[CONTEST]).getByText(en.contests.status.running);
+    expect(state.closest(".max-narrow\\:block")).toHaveClass("hidden");
+    const window = within(cellsOf()[CONTEST]).getByText(/2026/);
+    expect(window.closest(".max-narrow\\:block")).toHaveClass("hidden");
   });
 
   test("keeps the contest and the way in at every width", () => {

@@ -95,7 +95,8 @@ describe("AccountRegister", () => {
   test("says an account has never signed in instead of showing an empty cell", () => {
     renderRegister(<AccountRegister accounts={[account({ lastLoginAt: undefined })]} {...props} dict={en} />);
 
-    expect(screen.getByText(en.accounts.never)).toBeInTheDocument();
+    const lastSeenCell = within(screen.getAllByRole("row")[1]).getAllByRole("cell")[5];
+    expect(within(lastSeenCell).getByText(en.accounts.never)).toBeInTheDocument();
   });
 
   test("offers the way out of a filter that matched nothing", () => {
@@ -148,15 +149,17 @@ describe("AccountRegister below a desktop's width", () => {
     for (const name of [en.accounts.columns.roles, en.accounts.columns.lastSeen]) {
       expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
     }
-    // A cell that kept its column while the header went would shift the row.
     const [, , , , rolesCell, lastSeenCell] = cellsOf();
     expect(rolesCell).toHaveClass("max-wide:hidden");
     expect(lastSeenCell).toHaveClass("max-wide:hidden");
 
-    const caption = screen.getByText(
-      `Student · ${formatMoment("2026-03-01T10:00:00Z", { locale: "en" })}`,
-    );
+    const [, , accountCell] = cellsOf();
+    const moment = within(accountCell).getByText(formatMoment("2026-03-01T10:00:00Z", { locale: "en" }));
+    // The caption breaks before the moment, never inside it.
+    expect(moment).toHaveClass("whitespace-nowrap");
+    const caption = moment.parentElement;
     expect(caption).toHaveClass("hidden", "max-wide:block");
+    expect(caption).toHaveTextContent(`Student · ${moment.textContent}`);
   });
 
   test("says in the caption, too, that there is no role and no sign-in", () => {
@@ -164,10 +167,15 @@ describe("AccountRegister below a desktop's width", () => {
       <AccountRegister accounts={[account({ roles: [], lastLoginAt: undefined })]} {...props} dict={en} />,
     );
 
-    expect(screen.getByText(`${en.accounts.noRoles} · ${en.accounts.never}`)).toHaveClass(
-      "hidden",
-      "max-wide:block",
-    );
+    const caption = within(cellsOf()[2]).getByText(en.accounts.never).parentElement;
+    expect(caption).toHaveClass("hidden", "max-wide:block");
+    expect(caption).toHaveTextContent(`${en.accounts.noRoles} · ${en.accounts.never}`);
+  });
+
+  test("lets a login break anywhere rather than hold the column open", () => {
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+
+    expect(within(cellsOf()[2]).getByText("s.popescu")).toHaveClass("wrap-anywhere");
   });
 
   test("drops the row number on a phone, where the name needs the room", () => {
