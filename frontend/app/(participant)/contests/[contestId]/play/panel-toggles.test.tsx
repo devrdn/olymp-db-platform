@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -5,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 
-import { PanelToggles, PanelVisibilityProvider, useSchemaPanel } from "./panel-toggles";
+import { PHONE_QUERY, PanelToggles, PanelVisibilityProvider, useSchemaPanel } from "./panel-toggles";
 
 const t = en.participant.play.workspace.panels;
 
@@ -352,5 +355,23 @@ describe("what is remembered", () => {
     show(contestId);
 
     expect(screen.getByRole("button", { name: t.schema })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+// A media query cannot read a custom property, so the width is written out
+// where a query needs it. The script and the stylesheet must agree to the
+// unit, or a pane is hidden by one and announced as shown by the other.
+describe("the width below which the screen is a phone's", () => {
+  const css = readFileSync(path.resolve(__dirname, "../../../../globals.css"), "utf8");
+  const narrow = /--breakpoint-narrow:\s*([\d.]+rem);/.exec(css)?.[1];
+
+  test("is the narrow breakpoint in the script's query", () => {
+    expect(narrow).toBeDefined();
+    expect(PHONE_QUERY).toBe(`(width < ${narrow})`);
+  });
+
+  test("is the narrow breakpoint in the stylesheet's variant for a phone on its side", () => {
+    const variant = /@custom-variant phone-short \(@media \(width < ([\d.]+rem)\)/.exec(css)?.[1];
+    expect(variant).toBe(narrow);
   });
 });

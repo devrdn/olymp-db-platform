@@ -1,6 +1,7 @@
 "use client";
 
 import { PanelBottom, PanelLeft, PanelRight } from "lucide-react";
+import { flushSync } from "react-dom";
 import {
   createContext,
   useCallback,
@@ -46,8 +47,19 @@ export type PhonePane = "editor" | "result" | "schema" | "side";
 
 const PHONE_PANE: Record<PanelKey, PhonePane> = { schema: "schema", side: "side", bottom: "result" };
 
-/** Tailwind's `max-narrow:`; in step with `--breakpoint-narrow` in `globals.css`. */
-const PHONE_QUERY = "(width < 47.5rem)";
+/**
+ * Tailwind's `max-narrow:`. A media query cannot read `--breakpoint-narrow`,
+ * so the width is repeated here; a test holds the two equal.
+ */
+export const PHONE_QUERY = "(width < 47.5rem)";
+
+const PHONE_PANES: readonly string[] = ["editor", "result", "schema", "side"];
+
+/** The pane that holds the focus, or null when the focus is in none. */
+function focusedPhonePane(): PhonePane | null {
+  const pane = document.activeElement?.closest<HTMLElement>("[data-phone-pane]")?.dataset.phonePane;
+  return pane !== undefined && PHONE_PANES.includes(pane) ? (pane as PhonePane) : null;
+}
 
 function phoneQuery(): MediaQueryList | null {
   return typeof window !== "undefined" && typeof window.matchMedia === "function"
@@ -186,7 +198,17 @@ type PanelVisibility = {
   phone: boolean;
   /** The pane a phone shows; kept while the window is wide, where nothing reads it. */
   phonePane: PhonePane;
+  /** Shows a pane the participant asked for, taking the focus of the pane it hides. */
   showPhonePane: (pane: PhonePane) => void;
+  /**
+   * A run has settled. On a wide screen the bottom panel comes back. On a
+   * phone the result is shown only to a participant still at the editor or
+   * the result; one who moved on keeps their pane and their focus, and the
+   * result's part of the switch is marked instead.
+   */
+  revealResult: () => void;
+  /** A result arrived that the phone's participant has not opened yet. */
+  resultMarked: boolean;
   /** Registers the phone's switch, which takes the focus of a pane a key press hides. */
   registerPhoneSwitch: (node: HTMLElement | null) => void;
 };
@@ -203,6 +225,8 @@ const OUTSIDE: PanelVisibility = {
   phone: false,
   phonePane: "editor",
   showPhonePane: () => {},
+  revealResult: () => {},
+  resultMarked: false,
   registerPhoneSwitch: () => {},
 };
 
@@ -249,16 +273,41 @@ export function PanelVisibilityProvider({
   const registerPhoneSwitch = useCallback((node: HTMLElement | null) => {
     phoneSwitchRef.current = node;
   }, []);
-  const showPhonePane = useCallback((pane: PhonePane) => {
-    // The pane holding the focus is about to be hidden, which would drop the
-    // focus to `<body>`; the switch's part for the new pane takes it.
-    const focused = document.activeElement?.closest<HTMLElement>("[data-phone-pane]");
-    if (focused && focused.dataset.phonePane !== pane) {
-      phoneSwitchRef.current?.querySelector<HTMLElement>(`input[value="${pane}"]`)?.focus();
-    }
+  const [resultMarked, setResultMarked] = useState(false);
+  const setPane = useCallback((pane: PhonePane) => {
     phonePaneRef.current = pane;
     setPhonePane(pane);
+    if (pane === "result") setResultMarked(false);
   }, []);
+  const focusPhonePart = useCallback((pane: PhonePane) => {
+    phoneSwitchRef.current?.querySelector<HTMLElement>(`input[value="${pane}"]`)?.focus();
+  }, []);
+  const showPhonePane = useCallback(
+    (pane: PhonePane) => {
+      // The pane holding the focus is about to be hidden, which would drop the
+      // focus to `<body>`; the switch's part for the new pane takes it.
+      const focused = focusedPhonePane();
+      if (focused !== null && focused !== pane) focusPhonePart(pane);
+      setPane(pane);
+    },
+    [focusPhonePart, setPane],
+  );
+
+  // A window that becomes a phone's (a rotation, a resize) shows the pane the
+  // participant is working in, not the one chosen the last time it was narrow.
+  // Synchronously, before the stylesheet's hiding of the other panes can take
+  // the focus away.
+  useEffect(() => {
+    const query = phoneQuery();
+    if (!query) return;
+    const onChange = () => {
+      if (!query.matches) return;
+      const pane = focusedPhonePane();
+      if (pane !== null && pane !== phonePaneRef.current) flushSync(() => setPane(pane));
+    };
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, [setPane]);
 
   const toggle = useCallback(
     (panel: PanelKey) => {
@@ -296,6 +345,26 @@ export function PanelVisibilityProvider({
   );
 
 
+  const revealResult = useCallback(() => {
+    if (!phoneSnapshot()) {
+      const current = snapshot(contestId);
+      if (current.bottom) commit(contestId, { ...current, bottom: false });
+      return;
+    }
+    const pane = phonePaneRef.current;
+    if (pane !== "editor" && pane !== "result") {
+      setResultMarked(true);
+      return;
+    }
+    // The run's own button is hidden with the editor. The focus goes with the
+    // pane only from there or from nowhere, never from a field elsewhere.
+    const active = document.activeElement;
+    if (pane === "editor" && (active === null || active === document.body || focusedPhonePane() === "editor")) {
+      focusPhonePart("result");
+    }
+    setPane("result");
+  }, [contestId, focusPhonePart, setPane]);
+
   // The shortcuts anywhere outside the editor. The editor binds the same
   // keys (see `workspace.tsx`) since CodeMirror sees them first; a binding
   // that runs calls `preventDefault`, which this listener checks.
@@ -330,6 +399,8 @@ export function PanelVisibilityProvider({
       phone,
       phonePane,
       showPhonePane,
+      revealResult,
+      resultMarked,
       registerPhoneSwitch,
     }),
     [
@@ -343,6 +414,8 @@ export function PanelVisibilityProvider({
       phone,
       phonePane,
       showPhonePane,
+      revealResult,
+      resultMarked,
       registerPhoneSwitch,
     ],
   );

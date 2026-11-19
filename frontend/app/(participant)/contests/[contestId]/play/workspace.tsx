@@ -143,8 +143,19 @@ export function Workspace({
 
   // Collapsed panes are not rendered, divider included, so the grid tracks
   // below are computed: a track for an absent pane would be empty screen.
-  const { collapsed, toggle, expand, phone, phonePane, showPhonePane, registerPhoneSwitch, present, sideMarked } =
-    usePanelVisibility();
+  const {
+    collapsed,
+    toggle,
+    expand,
+    phone,
+    phonePane,
+    showPhonePane,
+    revealResult,
+    resultMarked,
+    registerPhoneSwitch,
+    present,
+    sideMarked,
+  } = usePanelVisibility();
   // The header sits outside the Suspense boundary and cannot see the schema;
   // this tells it whether to offer a schema toggle.
   useSchemaPanel(schema !== null);
@@ -243,7 +254,10 @@ export function Workspace({
             value={phonePane}
             onChange={choosePhonePane}
             schema={schema !== null}
-            marked={sideMarked ? t.panels.sideMarked : null}
+            marks={{
+              ...(sideMarked ? { side: t.panels.sideMarked } : null),
+              ...(resultMarked ? { result: t.phone.resultMarked } : null),
+            }}
             switchRef={registerPhoneSwitch}
             dict={dict}
           />
@@ -273,8 +287,7 @@ export function Workspace({
           )}
         >
           {schema !== null ? (
-            // Source order follows the wide layout so tab order matches what is seen;
-            // below `narrow` the schema moves after the console.
+            // Source order follows the wide layout so tab order matches what is seen.
             //
             // A flex column because the panel claims the cell with `flex-1`, which is
             // inert in a block parent.
@@ -380,8 +393,11 @@ export function Workspace({
                     // names an earlier run's tab.
                     setResultFrom(source?.tabTitle ?? null);
                     // Open the panel if collapsed: seeing the result is the point of
-                    // running (SPEC.md §5).
-                    showBottomTab("result");
+                    // running (SPEC.md §5). Not `showBottomTab`: the participant did
+                    // not ask for this moment, so it must not move them or their focus
+                    // off a pane they went to meanwhile.
+                    setBottomTab("result");
+                    revealResult();
                   }
                 }}
               />
@@ -488,6 +504,7 @@ export function Workspace({
               initialNotes={workspace?.notes ?? null}
               scoring={scoring}
               icpcPenaltyMin={icpcPenaltyMin}
+              shown={showSide}
               dict={dict}
               locale={locale}
             />

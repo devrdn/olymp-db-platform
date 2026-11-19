@@ -1798,6 +1798,7 @@ const ru = {
           result: "Результат",
           schema: "Схема",
           side: "Вопросы",
+          resultMarked: "Готов новый результат",
         },
         row: {
           heading: "Строка {n}",

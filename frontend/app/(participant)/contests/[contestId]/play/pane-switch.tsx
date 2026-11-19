@@ -18,7 +18,7 @@ export function PaneSwitch({
   value,
   onChange,
   schema,
-  marked,
+  marks,
   switchRef,
   dict,
 }: {
@@ -26,14 +26,18 @@ export function PaneSwitch({
   onChange: (pane: PhonePane) => void;
   /** False in a contest that hides its schema: no such part. */
   schema: boolean;
-  /** What waits unread in the questions pane, or null; see `Toggle` in `panel-toggles.tsx`. */
-  marked: string | null;
+  /**
+   * What waits unseen behind a part, in words: a dot for the eye and a
+   * description for a screen reader, the name staying fixed (see `Toggle` in
+   * `panel-toggles.tsx`).
+   */
+  marks: Partial<Record<PhonePane, string>>;
   switchRef?: React.Ref<HTMLDivElement>;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace.phone;
   const name = useId();
-  const noteId = useId();
+  const notePrefix = useId();
   const parts: readonly PhonePane[] = schema ? ["editor", "result", "schema", "side"] : ["editor", "result", "side"];
 
   return (
@@ -55,7 +59,7 @@ export function PaneSwitch({
             value={pane}
             checked={value === pane}
             onChange={() => onChange(pane)}
-            aria-describedby={pane === "side" && marked ? noteId : undefined}
+            aria-describedby={marks[pane] ? `${notePrefix}-${pane}` : undefined}
             className="peer sr-only"
           />
           <span
@@ -67,18 +71,20 @@ export function PaneSwitch({
             )}
           >
             <span className="truncate">{t[pane]}</span>
-            {pane === "side" && marked ? (
+            {marks[pane] ? (
               <span aria-hidden data-testid="pane-switch-marker" className="size-1.5 shrink-0 rounded-full bg-accent" />
             ) : null}
           </span>
         </label>
       ))}
-      {/* Outside the label, or it would be read as part of the part's name. */}
-      {marked ? (
-        <span id={noteId} className="sr-only">
-          {marked}
-        </span>
-      ) : null}
+      {/* Outside the labels, or they would be read as part of a part's name. */}
+      {parts.map((pane) =>
+        marks[pane] ? (
+          <span key={pane} id={`${notePrefix}-${pane}`} className="sr-only">
+            {marks[pane]}
+          </span>
+        ) : null,
+      )}
     </div>
   );
 }

@@ -72,9 +72,16 @@ export function SidePanel({
   initialNotes,
   scoring = "points",
   icpcPenaltyMin = 20,
+  shown: onScreen = true,
   dict,
   locale,
 }: {
+  /**
+   * False while the panel is collapsed or a phone shows another pane. A tab
+   * left open in a hidden panel is not being read: its announcements stay
+   * unread and its standings are not fetched.
+   */
+  shown?: boolean;
   storyBody: React.ReactNode;
   /** The picture above the story, rendered on the server (`story-cover.tsx`). */
   storyCover: React.ReactNode;
@@ -213,14 +220,14 @@ export function SidePanel({
           contestId={contestId}
           accountId={accountId}
           questionEntries={questionEntries}
-          active={shown === "clarifications"}
+          active={onScreen && shown === "clarifications"}
           onUnreadChange={onClarificationsUnread}
           dict={dict}
           locale={locale}
         />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
-        <LeaderboardTab contestId={contestId} active={shown === "leaderboard"} dict={dict} locale={locale} />
+        <LeaderboardTab contestId={contestId} active={onScreen && shown === "leaderboard"} dict={dict} locale={locale} />
       </TabsContent>
     </Tabs>
   );

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -24,11 +24,18 @@ import type {
 } from "./requests";
 
 const runResult = vi.hoisted(() => ({ current: { kind: "idle" } as ConsoleState }));
+/** Holds a run in flight until the test lets it settle; null settles at once. */
+const runGate = vi.hoisted(() => ({ current: null as Promise<void> | null }));
+/** What the questions to the organisers read, which a test may hold back. */
+const clarificationsRead = vi.hoisted(() => ({ current: null as Promise<unknown> | null }));
 const logCalls = vi.hoisted(() => ({ count: 0 }));
 const schemaReads = vi.hoisted(() => ({ count: 0, next: { kind: "refused", code: "unreachable" } as SchemaRefreshResult }));
 
 vi.mock("./requests", () => ({
-  runQuery: async () => runResult.current,
+  runQuery: async () => {
+    if (runGate.current) await runGate.current;
+    return runResult.current;
+  },
   submitAnswer: async () => ({ kind: "idle" }) as AnswerState,
   refreshQuestions: async () => ({ kind: "ok", items: [] }) as QuestionsRefreshResult,
   fetchQueryLog: async (): Promise<QueryLogRefreshResult> => {
@@ -36,7 +43,8 @@ vi.mock("./requests", () => ({
     return { kind: "ok", items: [], total: 0 };
   },
   resetDatabase: async (): Promise<ResetState> => ({ kind: "done" }),
-  fetchClarifications: async () => ({ kind: "ok", feed: { items: [], next: null, open: 0 } }),
+  fetchClarifications: async () =>
+    clarificationsRead.current ?? { kind: "ok", feed: { items: [], next: null, open: 0 } },
   refreshSchema: async (): Promise<SchemaRefreshResult> => {
     schemaReads.count++;
     return schemaReads.next;
@@ -200,6 +208,18 @@ async function waitForRealEditor(container: HTMLElement = document.body) {
 /** The name of a table in the schema panel, the button that writes a query on it. */
 function tableName(table: string) {
   return { name: en.participant.play.schema.query.replace("{table}", table) };
+}
+
+/**
+ * Leaves the focus on `<body>`, as a browser does when the focused control
+ * is disabled or hidden. jsdom does neither by itself.
+ */
+function dropFocus() {
+  const holder = document.createElement("button");
+  document.body.append(holder);
+  holder.focus();
+  holder.remove();
+  expect(document.body).toHaveFocus();
 }
 
 async function runQuery() {
@@ -1125,14 +1145,58 @@ describe("one pane at a time on a phone", () => {
     pointsAwarded: 0,
   };
 
+  /** A window whose width the test can change, as a rotation does. */
+  const width = { phone: true, listeners: new Set<() => void>() };
+  function rotate(phone: boolean) {
+    width.phone = phone;
+    act(() => {
+      for (const listener of [...width.listeners]) listener();
+    });
+  }
+
   beforeEach(() => {
+    width.phone = true;
+    width.listeners.clear();
     vi.stubGlobal("matchMedia", (query: string) => ({
-      matches: true,
+      get matches() {
+        return width.phone;
+      },
       media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
+      // Only the width's own listeners: the editor asks about `print` too.
+      addEventListener: (_: string, listener: () => void) => {
+        if (query.includes("width")) width.listeners.add(listener);
+      },
+      removeEventListener: (_: string, listener: () => void) => width.listeners.delete(listener),
     }));
   });
+
+  afterEach(() => {
+    runGate.current = null;
+    clarificationsRead.current = null;
+    runResult.current = { kind: "idle" };
+  });
+
+  const AN_ANSWER = {
+    kind: "answer",
+    result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+  } as ConsoleState;
+
+  /** Starts a run that stays in flight until the returned function is called. */
+  async function startRun() {
+    let settle = () => {};
+    runGate.current = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    runResult.current = AN_ANSWER;
+    showOnAPhone();
+    await runQuery();
+    return async () => {
+      await act(async () => {
+        settle();
+        await runGate.current;
+      });
+    };
+  }
 
   let contests = 0;
   function showOnAPhone(schema: typeof A_SCHEMA | null = A_SCHEMA) {
@@ -1243,6 +1307,113 @@ describe("one pane at a time on a phone", () => {
     runResult.current = { kind: "idle" };
   });
 
+  // A run takes seconds under load. Its result arriving is not something the
+  // participant asked for, so it may not take the pane or the focus from
+  // whatever they moved on to.
+  test("a run that settles while another pane is open leaves the pane and the focus, and marks the result", async () => {
+    const settle = await startRun();
+    await userEvent.click(part(sw.side));
+    await userEvent.click(answerField());
+    await userEvent.keyboard("the gar");
+
+    await settle();
+
+    await waitFor(() => expect(part(sw.result)).toHaveAccessibleDescription(sw.resultMarked));
+    expect(part(sw.side)).toBeChecked();
+    expect(answerField()).toBeVisible();
+    expect(answerField()).toHaveFocus();
+    await userEvent.keyboard("dener");
+    expect(answerField()).toHaveValue("the gardener");
+
+    await userEvent.click(part(sw.result));
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(part(sw.result)).not.toHaveAccessibleDescription();
+  });
+
+  test("a run that settles while the result is already open marks nothing", async () => {
+    const settle = await startRun();
+    await userEvent.click(part(sw.result));
+
+    await settle();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeVisible());
+    expect(part(sw.result)).toBeChecked();
+    expect(part(sw.result)).not.toHaveAccessibleDescription();
+  });
+
+  // The Run button is disabled while its query runs and hidden with the
+  // editor afterwards; without a hand-off the focus is left on `<body>`.
+  test("a run from the editor moves the focus to the result part with the pane", async () => {
+    const settle = await startRun();
+    dropFocus();
+
+    await settle();
+
+    await waitFor(() => expect(part(sw.result)).toBeChecked());
+    expect(part(sw.result)).toHaveFocus();
+  });
+
+  // Hidden, the side panel must not count an announcement as read: the dot
+  // on the questions part is the only word of it a phone gets.
+  test("an announcement that arrives while the questions are hidden raises their marker, though its tab was left open", async () => {
+    let deliver: (value: unknown) => void = () => {};
+    clarificationsRead.current = new Promise((resolve) => {
+      deliver = resolve;
+    });
+    showOnAPhone();
+    await userEvent.click(part(sw.side));
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.clarifications.tab }));
+    await userEvent.click(part(sw.editor));
+
+    await act(async () => {
+      deliver({
+        kind: "ok",
+        feed: {
+          items: [{ kind: "announcement", id: "a1", postedAt: "2026-11-02T09:00:00.000000Z", body: "Ten minutes left." }],
+          next: null,
+          open: 0,
+        },
+      });
+      await clarificationsRead.current;
+    });
+
+    await waitFor(() =>
+      expect(part(sw.side)).toHaveAccessibleDescription(en.participant.play.workspace.panels.sideMarked),
+    );
+
+    await userEvent.click(part(sw.side));
+    await waitFor(() => expect(part(sw.side)).not.toHaveAccessibleDescription());
+  });
+
+  // A phone turned on its side is often wide enough for the pane grid. Turned
+  // back, it shows the pane the participant was working in, not the one
+  // chosen before the turn.
+  test("coming back to phone width shows the pane that holds the focus", async () => {
+    const { container } = showOnAPhone();
+    await waitForRealEditor(container);
+    await userEvent.click(part(sw.side));
+    rotate(false);
+    await userEvent.click(editor());
+    await userEvent.keyboard("SELECT 1");
+
+    rotate(true);
+
+    expect(part(sw.editor)).toBeChecked();
+    expect(editor()).toBeVisible();
+    expect(editor()).toHaveTextContent("SELECT 1");
+  });
+
+  test("coming back to phone width with the focus nowhere keeps the pane chosen before", async () => {
+    showOnAPhone();
+    await userEvent.click(part(sw.side));
+    rotate(false);
+    dropFocus();
+
+    rotate(true);
+
+    expect(part(sw.side)).toBeChecked();
+  });
+
   test("a query typed survives a visit to the schema and back, in the same editor", async () => {
     const { container } = showOnAPhone();
     await waitForRealEditor(container);
@@ -1271,7 +1442,7 @@ describe("one pane at a time on a phone", () => {
     expect(answerField()).toHaveValue("the gardener");
   });
 
-  test("the schema keeps its scroll box, and so its position, across a switch", async () => {
+  test("the schema keeps its scroll box across a switch", async () => {
     showOnAPhone();
     await userEvent.click(part(sw.schema));
     const box = schemaPanel().querySelector<HTMLElement>(".overflow-y-auto")!;
@@ -1405,6 +1576,32 @@ describe("from the narrow breakpoint up", () => {
     expect(screen.getByText(en.participant.play.workspace.resultEmpty)).toBeVisible();
     expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeVisible();
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story })).toBeVisible();
+  });
+
+  // The Run button is disabled while its query runs, and a browser drops the
+  // focus of a control that stops being focusable.
+  test("a run by the button hands the focus back to the button when it settles", async () => {
+    let settle = () => {};
+    runGate.current = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    runResult.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    show();
+    await runQuery();
+    dropFocus();
+
+    await act(async () => {
+      settle();
+      await runGate.current;
+    });
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: en.participant.console.run })).toHaveFocus();
+    runGate.current = null;
+    runResult.current = { kind: "idle" };
   });
 
   test("a run leaves the phone's pane alone and shows the result beside the editor", async () => {

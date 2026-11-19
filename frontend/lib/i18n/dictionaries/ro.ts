@@ -1800,6 +1800,7 @@ const ro = {
           result: "Rezultat",
           schema: "Schemă",
           side: "Întrebări",
+          resultMarked: "Un rezultat nou este gata",
         },
         row: {
           heading: "Rândul {n}",

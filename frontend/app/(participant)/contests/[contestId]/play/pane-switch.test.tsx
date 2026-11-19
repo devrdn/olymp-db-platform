@@ -10,7 +10,7 @@ const t = en.participant.play.workspace.phone;
 
 function show(props: Partial<Parameters<typeof PaneSwitch>[0]> = {}) {
   const onChange = vi.fn();
-  const view = render(<PaneSwitch value="editor" onChange={onChange} schema marked={null} dict={en} {...props} />);
+  const view = render(<PaneSwitch value="editor" onChange={onChange} schema marks={{}} dict={en} {...props} />);
   return { ...view, onChange };
 }
 
@@ -68,13 +68,15 @@ describe("the pane switch", () => {
     }
   });
 
-  test("says in words, on the questions part, that something new waits there", () => {
-    show({ marked: "Something new from the organisers" });
+  test("says in words, on the part it belongs to, what waits behind it", () => {
+    show({ marks: { side: "Something new from the organisers", result: t.resultMarked } });
 
     expect(screen.getByRole("radio", { name: t.side })).toHaveAccessibleDescription(
       "Something new from the organisers",
     );
-    expect(screen.getByTestId("pane-switch-marker")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: t.result })).toHaveAccessibleDescription(t.resultMarked);
+    expect(screen.getByRole("radio", { name: t.editor })).not.toHaveAccessibleDescription();
+    expect(screen.getAllByTestId("pane-switch-marker")).toHaveLength(2);
   });
 
   test("draws no marker when nothing waits", () => {

@@ -76,7 +76,18 @@ export function ConsoleEditor({
    */
   const [runFrom, setRunFrom] = useState<string | null>(null);
 
+  // The Run button is disabled while its query runs, and a browser drops the
+  // focus of a control that stops being focusable. A run started from the
+  // button gives it back, before `onResult`, which may move it on.
+  const runButtonRef = useRef<HTMLButtonElement>(null);
+  const runHadFocus = useRef(false);
+
   useEffect(() => {
+    if (runHadFocus.current && state.kind !== "idle") {
+      runHadFocus.current = false;
+      const active = document.activeElement;
+      if (active === null || active === document.body) runButtonRef.current?.focus();
+    }
     onResult(state, runFrom === null ? undefined : { tabTitle: runFrom });
     // onResult is a fresh closure on every workspace render; only `state`
     // should trigger this, once per completed run.
@@ -151,6 +162,7 @@ export function ConsoleEditor({
       // Read as the run starts, not when it settles (see `runFrom`). React
       // calls this before the action, and ⌘↵ arrives here too (`requestSubmit`).
       onSubmit={() => {
+        runHadFocus.current = document.activeElement === runButtonRef.current;
         // Null, not "", when there is no tab: an empty name would render as
         // "From " with nothing after it.
         setRunFrom(tabs.tabs.find((tab) => tab.id === tabs.activeId)?.title ?? null);
@@ -180,6 +192,7 @@ export function ConsoleEditor({
           move when the result changes height. */}
       <div className="@container flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <button
+          ref={runButtonRef}
           type="submit"
           disabled={running}
           className={cn(buttonVariants({ variant: "primary", size: "sm" }), "pointer-coarse:h-11")}

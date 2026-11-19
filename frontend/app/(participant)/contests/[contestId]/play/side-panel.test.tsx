@@ -531,6 +531,60 @@ describe("the side panel's table", () => {
   });
 });
 
+// Hidden by a collapse or by a phone showing another pane, the panel shows
+// nothing, so nothing in it may behave as if it were being read.
+describe("a side panel that is not on screen", () => {
+  function showHidden() {
+    return render(
+      <SidePanel
+        shown={false}
+        accountId="u1"
+        storyBody={<p>A body in the stacks.</p>}
+        storyCover={null}
+        storyUnavailable={null}
+        contestId="c1"
+        questionEntries={[]}
+        initialNotes={null}
+        dict={en}
+        locale="en"
+      />,
+    );
+  }
+
+  test("does not read the standings, though their tab is the open one", async () => {
+    vi.mocked(fetchStandings).mockClear();
+    showHidden();
+
+    fireEvent.click(screen.getByRole("tab", { name: en.leaderboard.tab, hidden: true }));
+    await Promise.resolve();
+
+    expect(fetchStandings).not.toHaveBeenCalled();
+  });
+
+  test("keeps an announcement unread, though the organisers' tab is the open one", async () => {
+    localStorage.clear();
+    vi.mocked(fetchClarifications).mockResolvedValue({
+      kind: "ok",
+      feed: {
+        items: [{ kind: "announcement", id: "a1", postedAt: "2026-11-02T09:00:00.000000Z", body: "Ten minutes left." }],
+        next: null,
+        open: 0,
+      },
+    });
+    showHidden();
+    const tab = en.participant.play.clarifications.tab;
+
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(tab), hidden: true }));
+
+    expect(
+      await screen.findByRole("tab", {
+        name: `${tab} (${en.participant.play.clarifications.unread})`,
+        hidden: true,
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("the questions to the organisers tab", () => {
   const tab = en.participant.play.clarifications.tab;
   const unread = `${tab} (${en.participant.play.clarifications.unread})`;

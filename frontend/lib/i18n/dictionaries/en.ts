@@ -2009,6 +2009,7 @@ const en = {
           result: "Result",
           schema: "Schema",
           side: "Questions",
+          resultMarked: "A new result is ready",
         },
         // One row of the result, open in full under the table (§7). The
         // table clips a cell at its column's width, and a witness statement
