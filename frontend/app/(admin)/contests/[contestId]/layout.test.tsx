@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Contest } from "@/lib/api/contests";
+import { getDictionary } from "@/lib/i18n/dictionary";
 
 // The layout's request-bound reads are faked; the test covers which sections it
 // offers.
@@ -115,5 +116,16 @@ describe("the participant questions tab", () => {
     await renderLayout();
 
     expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
+  });
+});
+
+describe("the section list", () => {
+  test("is named from the dictionary", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayMonitor: false });
+    await renderLayout();
+
+    const { sections } = (await getDictionary("en")).workspace;
+    expect(sections).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: sections })).toBeInTheDocument();
   });
 });

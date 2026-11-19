@@ -333,6 +333,7 @@ const ru = {
     backToRegister: "← Все олимпиады",
     untitled: "Олимпиада без названия",
     breadcrumb: "Хлебные крошки",
+    sections: "Разделы олимпиады",
     titleEditor: {
       edit: "Изменить название",
       heading: "Название и описание",

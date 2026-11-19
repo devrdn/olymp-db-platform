@@ -22,13 +22,20 @@ export type NavGroup = { label?: string; items: NavItem[] };
  * overflowed at 375px). A client component only to know the pathname.
  * `aria-current="page"` carries what the border shows.
  */
-export function ContestNav({ groups }: { groups: NavGroup[] }) {
+export function ContestNav({
+  groups,
+  label,
+}: {
+  groups: NavGroup[];
+  /** The list's accessible name, from the dictionary. */
+  label: string;
+}) {
   const pathname = usePathname();
 
   return (
     <nav
       ref={scrollCue}
-      aria-label="Contest sections"
+      aria-label={label}
       className={cn(
         "flex flex-col gap-6",
         // Below the breakpoint the column becomes one scrolling row, and only

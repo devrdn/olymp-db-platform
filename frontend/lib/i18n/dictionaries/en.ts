@@ -401,6 +401,8 @@ const en = {
     backToRegister: "← All contests",
     untitled: "Untitled contest",
     breadcrumb: "Breadcrumb",
+    /** The accessible name of the list of the workspace's sections. */
+    sections: "Contest sections",
     /**
      * The name, edited from the heading rather than hunted for in settings.
      * One field is open by default — the language the contest falls back

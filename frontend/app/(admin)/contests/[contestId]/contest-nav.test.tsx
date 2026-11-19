@@ -9,6 +9,7 @@ vi.mock("next/navigation", () => ({ usePathname }));
 import { ContestNav, type NavGroup } from "./contest-nav";
 
 const ID = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
+const LABEL = "Secțiunile olimpiadei";
 
 const groups: NavGroup[] = [
   { items: [{ href: `/contests/${ID}`, label: "Overview", exact: true }] },
@@ -22,9 +23,16 @@ const groups: NavGroup[] = [
 ];
 
 describe("ContestNav", () => {
+  test("is named in the reader's language by the label it is given", () => {
+    usePathname.mockReturnValue(`/contests/${ID}`);
+    render(<ContestNav groups={groups} label={LABEL} />);
+
+    expect(screen.getByRole("navigation", { name: LABEL })).toBeInTheDocument();
+  });
+
   test("marks the section being read", () => {
     usePathname.mockReturnValue(`/contests/${ID}/story`);
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     expect(screen.getByRole("link", { name: "Story" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
@@ -33,7 +41,7 @@ describe("ContestNav", () => {
   /** The overview's address is a prefix of every section's. */
   test("does not mark the overview while a section under it is open", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions`);
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: "Questions" })).toHaveAttribute("aria-current", "page");
@@ -41,7 +49,7 @@ describe("ContestNav", () => {
 
   test("marks the overview on its own address", () => {
     usePathname.mockReturnValue(`/contests/${ID}`);
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
   });
@@ -49,7 +57,7 @@ describe("ContestNav", () => {
   /** A section stays marked on screens under it. */
   test("keeps a section marked while a screen under it is open", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions/9f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6`);
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     expect(screen.getByRole("link", { name: "Questions" })).toHaveAttribute("aria-current", "page");
   });
@@ -57,7 +65,7 @@ describe("ContestNav", () => {
   /** `/questions-archive` is not inside `/questions`. */
   test("does not mark a section on an address that merely shares its prefix", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions-archive`);
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     expect(screen.getByRole("link", { name: "Questions" })).not.toHaveAttribute("aria-current");
   });
@@ -69,6 +77,7 @@ describe("ContestNav, what a section still owes", () => {
     usePathname.mockReturnValue(`/contests/${ID}`);
     render(
       <ContestNav
+        label={LABEL}
         groups={[
           {
             items: [{ href: `/contests/${ID}/questions`, label: "Questions", note: "3" }],
@@ -82,7 +91,7 @@ describe("ContestNav, what a section still owes", () => {
 
   test("says nothing about a section that owes nothing", () => {
     usePathname.mockReturnValue(`/contests/${ID}`);
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     expect(screen.getByRole("link", { name: "Story" })).toHaveTextContent(/^Story$/);
   });
@@ -95,7 +104,7 @@ describe("ContestNav, as a row on a phone", () => {
   test("fades the edge the remaining sections are hidden past", () => {
     usePathname.mockReturnValue(`/contests/${ID}`);
     measureScroller({ scrollWidth: 924, clientWidth: 339 });
-    render(<ContestNav groups={groups} />);
+    render(<ContestNav groups={groups} label={LABEL} />);
 
     const row = screen.getByRole("navigation");
     // Only as a row: the column never scrolls, and a mask would clip its focus ring.

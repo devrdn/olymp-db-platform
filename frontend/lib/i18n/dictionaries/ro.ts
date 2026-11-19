@@ -333,6 +333,7 @@ const ro = {
     backToRegister: "← Toate olimpiadele",
     untitled: "Olimpiadă fără titlu",
     breadcrumb: "Firimituri",
+    sections: "Secțiunile olimpiadei",
     titleEditor: {
       edit: "Editează titlul",
       heading: "Titlu și descriere",
