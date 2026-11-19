@@ -297,7 +297,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		gamePool, err := storage.NewMaintenancePool(ctx, cfg.GameProvisionerDSN, provisionStatementTimeout)
 		if err != nil {
 			a.close()
-			return nil, fmt.Errorf("connect to the game cluster: %w", err)
+			return nil, err
 		}
 		a.closers = append(a.closers, gamePool.Close)
 

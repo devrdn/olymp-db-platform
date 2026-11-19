@@ -106,6 +106,13 @@ func poolConfig(dsn string, statementTimeout time.Duration, maxConns int32) (*pg
 	return cfg, nil
 }
 
+// The names an operator sees in a connection error, so a failure points at the
+// database that was being opened.
+const (
+	coreName        = "core database"
+	gameClusterName = "game cluster"
+)
+
 // NewPool opens the core database pool and verifies it is reachable, so a
 // misconfigured deployment fails at startup rather than on the first request.
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -140,13 +147,6 @@ func NewMaintenancePool(ctx context.Context, dsn string, statementTimeout time.D
 	}
 	return openPool(ctx, cfg, gameClusterName)
 }
-
-// The names an operator sees in a connection error, so a failure points at the
-// database that was being opened.
-const (
-	coreName        = "core database"
-	gameClusterName = "game cluster"
-)
 
 func openPool(ctx context.Context, cfg *pgxpool.Config, name string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
