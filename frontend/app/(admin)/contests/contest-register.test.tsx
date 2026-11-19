@@ -140,6 +140,10 @@ describe("ContestRegister below a desktop's width", () => {
     for (const name of [en.contests.columns.enrollment, en.contests.columns.mode]) {
       expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
     }
+    // A cell that kept its column while the header went would shift the row.
+    for (const name of [en.contests.enrollment.open, en.contests.mode.multi]) {
+      expect(screen.getByRole("cell", { name })).toHaveClass("max-wide:hidden");
+    }
     const caption = screen.getByText(
       `${en.contests.enrollment.open} · ${en.contests.mode.multi}`,
     );
