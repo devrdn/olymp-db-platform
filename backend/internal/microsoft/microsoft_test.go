@@ -170,6 +170,17 @@ func TestTheCallbackRefusesAnIssuerThatDoesNotMatchItsTenant(t *testing.T) {
 	}
 }
 
+func TestTheCallbackRefusesAForeignTenantClaimingTheHomeIssuer(t *testing.T) {
+	p := microsofttest.NewProvider(t)
+	c := newClient(t, p, nil)
+
+	claims := p.Claims(clientID, otherTenant, objectID, "the-nonce")
+	claims["iss"] = p.Issuer(homeTenant)
+	if _, err := exchange(t, c, p, claims); !errors.Is(err, connector.ErrInvalidToken) {
+		t.Errorf("Exchange() = %v, want ErrInvalidToken", err)
+	}
+}
+
 func TestATenantThatIsNotAnIdentifierIsRefused(t *testing.T) {
 	p := microsofttest.NewProvider(t)
 	c := newClient(t, p, nil)

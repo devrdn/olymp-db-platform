@@ -2030,7 +2030,16 @@ it, with the number of questions waiting beside it while the contest runs.
     and again for an unknown key ID at most once a minute, so the API starts
     without reaching Microsoft; then the audience, the expiry, the nonce, an
     issuer that is the token's own tenant's (under `common` any tenant's key
-    signs), and a tenant `MICROSOFT_TENANT` admits. The identity is the
+    signs), and a tenant `MICROSOFT_TENANT` admits. The ID token arrives
+    only in the answer to the server-to-server code exchange, which needs
+    the client secret and the PKCE verifier; the callback reads nothing but
+    `code`, `state` and `error` from the browser. Under `common` one key set
+    verifies every tenant's token, because Microsoft, not the tenant, holds
+    those keys, so a tenant cannot mint a token, only obtain one Microsoft
+    signed for its own `tid`. What ties a token to a tenant is therefore its
+    issuer, which must be `<base>/<tid>/v2.0` for the token's own `tid`, in
+    either direction. Per-issuer key sets would add nothing while Microsoft
+    signs for every tenant. The identity is the
     issuer and the object ID (`oid`), never `sub`, which differs for every
     application registration, so an installation can change its
     registration without losing its links. Microsoft vouches for the email
