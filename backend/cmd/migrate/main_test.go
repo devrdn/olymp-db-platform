@@ -904,3 +904,71 @@ func TestLatestMigrationIsTheHighestUpFile(t *testing.T) {
 		t.Errorf("latestMigration() = %d, %v; want %d", latest, err, highest)
 	}
 }
+
+type reportsViewState struct {
+	exists     bool
+	grants     int
+	adminHolds bool
+}
+
+func readReportsViewState(t *testing.T, dsn string) reportsViewState {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	var s reportsViewState
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM permissions WHERE code = 'reports.view'),
+		       (SELECT count(*) FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+		         WHERE p.code = 'reports.view'),
+		       EXISTS (SELECT 1 FROM role_permissions rp
+		                 JOIN permissions p ON p.id = rp.permission_id
+		                 JOIN roles r ON r.id = rp.role_id
+		                WHERE p.code = 'reports.view' AND r.code = 'admin')`).
+		Scan(&s.exists, &s.grants, &s.adminHolds)
+	if err != nil {
+		t.Fatalf("read the reports.view state: %v", err)
+	}
+	return s
+}
+
+// Rolling back restores the permission for admin only, the state seeded by
+// 000006; grants to other roles are not recorded anywhere to restore.
+func TestTheReportsViewMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if got := readReportsViewState(t, dsn); got != (reportsViewState{}) {
+		t.Fatalf("after up the permission is still there: %+v", got)
+	}
+
+	if err := m.Migrate(60); err != nil {
+		t.Fatalf("migrate to 60: %v", err)
+	}
+	if got := readReportsViewState(t, dsn); !got.exists || !got.adminHolds {
+		t.Fatalf("after rolling back 000061 = %+v, want the permission held by admin", got)
+	}
+
+	if err := m.Migrate(61); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrate to 61: %v", err)
+	}
+	if got := readReportsViewState(t, dsn); got != (reportsViewState{}) {
+		t.Fatalf("after applying 000061 again = %+v, want it gone", got)
+	}
+}

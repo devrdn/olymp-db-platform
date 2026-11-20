@@ -50,7 +50,7 @@ func TestUnscopedPermissionIsGrantedByAGlobalRole(t *testing.T) {
 func TestUnscopedPermissionIsDeniedWithoutIt(t *testing.T) {
 	auth := New(&fakeRoles{})
 
-	err := auth.Authorize(context.Background(), identity(PermissionReportsView), PermissionUsersManage, uuid.Nil)
+	err := auth.Authorize(context.Background(), identity(PermissionAuditView), PermissionUsersManage, uuid.Nil)
 
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("Authorize() = %v, want ErrForbidden", err)
@@ -155,7 +155,6 @@ func TestManagerHoldsTheEverydayContestPermissions(t *testing.T) {
 		PermissionContestEdit,
 		PermissionContestPublish,
 		PermissionParticipantManage,
-		PermissionReportsView,
 	} {
 		if err := auth.Authorize(ctx, identity(), permission, contestA); err != nil {
 			t.Errorf("manager was denied %s: %v", permission, err)
@@ -197,8 +196,8 @@ func TestLookupFailureDeniesRatherThanAllows(t *testing.T) {
 	}
 }
 
-func TestHasReportsGlobalPermissions(t *testing.T) {
-	id := identity(PermissionContestCreate, PermissionReportsView)
+func TestHasReportsOnlyTheGrantedPermissions(t *testing.T) {
+	id := identity(PermissionContestCreate, PermissionAuditView)
 
 	if !id.Has(PermissionContestCreate) {
 		t.Error("Has() missed a granted permission")

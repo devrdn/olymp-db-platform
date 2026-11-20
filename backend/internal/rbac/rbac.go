@@ -26,7 +26,6 @@ const (
 	PermissionContestPublish    = "contest.publish"
 	PermissionContestManage     = "contest.manage"
 	PermissionParticipantManage = "participant.manage"
-	PermissionReportsView       = "reports.view"
 	PermissionUsersManage       = "users.manage"
 	PermissionAuditView         = "audit.view"
 	PermissionSettingsManage    = "settings.manage"
@@ -72,7 +71,6 @@ var managerPermissions = map[string]struct{}{
 	PermissionContestEdit:       {},
 	PermissionContestPublish:    {},
 	PermissionParticipantManage: {},
-	PermissionReportsView:       {},
 }
 
 // ownerOnlyPermissions are reserved for the contest owner, so a manager cannot

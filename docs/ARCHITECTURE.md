@@ -960,7 +960,7 @@ CREATE TABLE roles (          -- student, admin, organizer; extensible
     name text NOT NULL
 );
 
-CREATE TABLE permissions (    -- contest.create, users.manage, reports.view …
+CREATE TABLE permissions (    -- contest.create, users.manage, audit.view …
     id   smallserial PRIMARY KEY,
     code text NOT NULL UNIQUE
 );

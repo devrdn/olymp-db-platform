@@ -239,7 +239,7 @@ func TestRequirePermissionAllowsAHolder(t *testing.T) {
 }
 
 func TestRequirePermissionDeniesWithoutIt(t *testing.T) {
-	f := newMiddlewareFixture(t, staticRoles{}, rbac.PermissionReportsView)
+	f := newMiddlewareFixture(t, staticRoles{}, rbac.PermissionAuditView)
 	rec := httptest.NewRecorder()
 	handler := f.mw.Authenticate(f.mw.RequirePermission(rbac.PermissionUsersManage)(http.HandlerFunc(okHandler)))
 

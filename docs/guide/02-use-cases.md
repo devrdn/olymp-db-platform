@@ -494,7 +494,6 @@ a contest, so it unlocks nothing on its own.
 | `participant.manage` | | | held | yes | yes | The participant roster, disqualification, the account directory search |
 | `contest.monitor` | | held | held | yes | yes | Every `/contests/{contestID}/monitor/...` read; the staff screen shows the tab only to holders |
 | `contest.clarify` | | held | held | yes | yes | The question queue, answering, announcements (`/contests/{contestID}/clarifications`, `/announcements`); the staff screen shows the tab only to holders |
-| `reports.view` | | | held | yes | yes | No route checks it today. The frontend counts it as a staff permission when choosing where an account lands after sign-in |
 | `users.manage` | | | yes | | | `/users/...` and `/roles` |
 | `audit.view` | | | yes | | | `/audit` and `/audit/actions` |
 | `settings.manage` | | | yes | | | `GET /settings/all` and every settings write |
@@ -502,8 +501,8 @@ a contest, so it unlocks nothing on its own.
 
 The frontend never reads roles, only the permission list from `GET /auth/me`:
 [`lib/auth/destination.ts`](../../frontend/lib/auth/destination.ts) sends an
-account holding `contest.create`, `contest.admin_all`, `users.manage`,
-`reports.view` or `audit.view` to `/contests` after sign-in and everyone else
+account holding `contest.create`, `contest.admin_all`, `users.manage`
+or `audit.view` to `/contests` after sign-in and everyone else
 to `/my`. A new role added as data therefore needs no frontend change.
 
 ## What a participant is refused

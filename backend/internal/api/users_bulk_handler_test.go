@@ -162,7 +162,7 @@ func TestBulkPasswordResetIssuesADistinctPasswordPerAccount(t *testing.T) {
 }
 
 func TestBulkEndpointsRequireThePermission(t *testing.T) {
-	f := newAPIFixture(t, rbac.PermissionReportsView)
+	f := newAPIFixture(t, rbac.PermissionAuditView)
 
 	cases := []struct{ path, body string }{
 		{"/users/bulk/status", `{"ids":["` + uuid.NewString() + `"],"status":"blocked","reason":"x"}`},

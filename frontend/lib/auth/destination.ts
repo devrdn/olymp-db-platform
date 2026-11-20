@@ -15,7 +15,6 @@ const STAFF_PERMISSIONS = [
   "contest.create",
   "contest.admin_all",
   "users.manage",
-  "reports.view",
   "audit.view",
 ];
 

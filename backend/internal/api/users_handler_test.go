@@ -140,7 +140,7 @@ func TestAccountResponsesNeverCarryThePasswordDigest(t *testing.T) {
 
 func TestAccountEndpointsRequireThePermission(t *testing.T) {
 	// A signed-in student must not reach account management.
-	f := newAPIFixture(t, rbac.PermissionReportsView)
+	f := newAPIFixture(t, rbac.PermissionAuditView)
 
 	cases := []struct{ method, path, body string }{
 		{http.MethodGet, "/users", ""},
@@ -681,7 +681,7 @@ func TestSignInUnlockEndpointRefusesAMalformedID(t *testing.T) {
 }
 
 func TestSignInUnlockEndpointNeedsThePermission(t *testing.T) {
-	f := newAPIFixture(t, rbac.PermissionReportsView)
+	f := newAPIFixture(t, rbac.PermissionAuditView)
 
 	rec := f.do(http.MethodPost, "/users/"+uuid.NewString()+"/sign-in/unlock", "")
 

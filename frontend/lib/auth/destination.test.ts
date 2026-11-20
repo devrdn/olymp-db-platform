@@ -21,6 +21,12 @@ describe("destinationAfterLogin", () => {
   test("sends an account with no staff permission to the participant area", () => {
     expect(destinationAfterLogin({ mustChangePassword: false, permissions: [] })).toBe("/my");
   });
+
+  test("no longer counts reports.view as a staff permission", () => {
+    expect(
+      destinationAfterLogin({ mustChangePassword: false, permissions: ["reports.view"] }),
+    ).toBe("/my");
+  });
 });
 
 // An unchecked `next` would make sign-in an open redirect.

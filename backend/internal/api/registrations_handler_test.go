@@ -331,7 +331,7 @@ func TestTheAddressIsCheckedBeforeTheEmail(t *testing.T) {
 }
 
 func TestTheRegistrationListNeedsTheUsersPermission(t *testing.T) {
-	f := newRegistrationsFixture(t, rbac.PermissionReportsView)
+	f := newRegistrationsFixture(t, rbac.PermissionAuditView)
 
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodGet, "/registrations", ""},
