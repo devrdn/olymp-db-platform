@@ -189,6 +189,22 @@ groups:
             "reclaimed game instances" line; make game-orphans lists what the
             game cluster still holds, and ARGS=-apply removes it.
 
+      - alert: DBContestRetentionFailing
+        # The sweep runs every fifteen minutes; a failure keeps rows past the period docs/ARCHITECTURE.md section 9 promises.
+        expr: |
+          sum(increase(retention_failures_total[1h])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
+          > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: The retention sweep failed in the last hour.
+          description: >-
+            Not urgent during a contest. The API log has a "a background job
+            failed" line with job=retention that names the table and the
+            cause; expired rows stay until a later pass succeeds.
+
       - alert: DBContestMailAbandoned
         # A message is abandoned only for its own sake (a refused recipient, eight failed attempts) or after a day unsent, so each one is a person who will not get it.
         expr: |

@@ -9,6 +9,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
 )
 
 // task is a periodic job. The machinery is kept minimal: no retries, backoff
@@ -395,5 +396,55 @@ func sweepExpired(log *slog.Logger, name, swept string, sweep func(context.Conte
 			}
 			return err
 		},
+	}
+}
+
+// retentionEvery is how often the sweep looks for expired rows; a pass is
+// bounded by retention.MaxBatches however large the backlog.
+const retentionEvery = 15 * time.Minute
+
+// pruneRetention deletes what retention.Service.Prune finds past its period
+// and counts each table's pass. A tick that failed still counts what it
+// deleted. A table left unreached because the process is stopping is not a
+// failure.
+func pruneRetention(log *slog.Logger, prune func(context.Context) ([]retention.Outcome, error), counters *metrics.RetentionCounters) task {
+	return task{
+		name: "retention",
+		// Not at startup: it deletes history nobody waits on, and a
+		// boot-time delete would compete with the restart for the core pool.
+		every: retentionEvery,
+		run: func(ctx context.Context) error {
+			outcomes, err := prune(ctx)
+			var attrs []any
+			for _, o := range outcomes {
+				stopped := ctx.Err() != nil && errors.Is(o.Err, ctx.Err())
+				counters.Add(string(o.Table), o.Deleted, o.Err != nil && !stopped)
+				if o.Deleted > 0 {
+					attrs = append(attrs, string(o.Table), o.Deleted)
+				}
+			}
+			if len(attrs) > 0 {
+				log.InfoContext(ctx, "deleted rows past their retention", attrs...)
+			}
+			return err
+		},
+	}
+}
+
+// underRetentionLock runs prune only while holding the sweep's advisory lock,
+// so replicas sharing a database never delete the same batches against each
+// other. A replica that does not get the lock skips the tick; release runs
+// after the pass, whatever its result.
+func underRetentionLock(
+	lock func(context.Context) (release func(), held bool, err error),
+	prune func(context.Context) ([]retention.Outcome, error),
+) func(context.Context) ([]retention.Outcome, error) {
+	return func(ctx context.Context) ([]retention.Outcome, error) {
+		release, held, err := lock(ctx)
+		if err != nil || !held {
+			return nil, err
+		}
+		defer release()
+		return prune(ctx)
 	}
 }

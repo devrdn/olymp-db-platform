@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
 	"github.com/google/uuid"
 )
 
@@ -236,4 +237,96 @@ func TestRetentionKeepsAMessageThatMayStillBeSent(t *testing.T) {
 			t.Errorf("the pending message was deleted")
 		}
 	})
+}
+
+func TestOnlyOneReplicaHoldsTheRetentionLockAtATime(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+	first, second := NewRetention(testPool), NewRetention(testPool)
+
+	release, held, err := first.TryLock(ctx)
+	if err != nil || !held {
+		t.Fatalf("first TryLock() = %v, %v, want it held", held, err)
+	}
+	if _, again, err := second.TryLock(ctx); err != nil || again {
+		t.Fatalf("TryLock() while held = %v, %v, want it refused", again, err)
+	}
+
+	release()
+	release2, held, err := second.TryLock(ctx)
+	if err != nil || !held {
+		t.Fatalf("TryLock() after release = %v, %v, want it held", held, err)
+	}
+	release2()
+}
+
+// Prune on the pool, outside any test transaction, is how the deployment runs
+// it: the audit exemption lives and dies with the transaction the store opens.
+func TestPruneDeletesExpiredRowsOnThePoolAndKeepsYoungOnes(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+	q := storage.QuerierFrom(ctx, testPool)
+
+	author := makeUser(t, ctx, "prune-"+uuid.NewString()[:8])
+	contest := contestWithJournal(t, ctx, 2)
+	young := contestWithJournal(t, ctx, 2)
+	t.Cleanup(func() {
+		for _, id := range []uuid.UUID{contest, young} {
+			_, _ = q.Exec(ctx, `DELETE FROM contests WHERE id = $1`, id)
+		}
+		_, _ = q.Exec(ctx, `DELETE FROM users WHERE id = $1`, author.ID)
+	})
+	setContest(t, ctx, contest, "archived", "13 months")
+	setContest(t, ctx, young, "archived", "11 months")
+	auditOld := appendAged(t, ctx, "19 months")
+	sentOld := insertMail(t, ctx, `now() - interval '31 days', NULL::timestamptz`)
+	sentYoung := insertMail(t, ctx, `now() - interval '29 days', NULL::timestamptz`)
+	t.Cleanup(func() { _, _ = q.Exec(ctx, `DELETE FROM mail_outbox WHERE id = ANY($1)`, []int64{sentOld, sentYoung}) })
+
+	var youngAuditBefore int
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE created_at >= now() - interval '18 months'`).
+		Scan(&youngAuditBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	outcomes, err := retention.New(NewRetention(testPool)).Prune(ctx)
+	if err != nil {
+		t.Fatalf("Prune() = %v", err)
+	}
+	for _, o := range outcomes {
+		if o.Err != nil {
+			t.Errorf("%s failed: %v", o.Table, o.Err)
+		}
+	}
+
+	var auditLeft, oldMail, youngMail, youngAuditAfter int
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE id = $1`, auditOld).Scan(&auditLeft); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM mail_outbox WHERE id = $1`, sentOld).Scan(&oldMail); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM mail_outbox WHERE id = $1`, sentYoung).Scan(&youngMail); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE created_at >= now() - interval '18 months'`).
+		Scan(&youngAuditAfter); err != nil {
+		t.Fatal(err)
+	}
+	if auditLeft != 0 || oldMail != 0 || youngMail != 1 {
+		t.Errorf("expired audit row left %d, expired mail left %d, young mail left %d; want 0, 0, 1", auditLeft, oldMail, youngMail)
+	}
+	if youngAuditAfter < youngAuditBefore {
+		t.Errorf("young audit entries went from %d to %d", youngAuditBefore, youngAuditAfter)
+	}
+	if got := journalRows(t, ctx, contest); got != 0 {
+		t.Errorf("expired journal keeps %d rows, want 0", got)
+	}
+	if got := journalRows(t, ctx, young); got != 2 {
+		t.Errorf("young journal keeps %d rows, want 2", got)
+	}
 }

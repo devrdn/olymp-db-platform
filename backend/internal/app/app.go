@@ -50,6 +50,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
 	"github.com/devrdn/olymp-db-platform/backend/internal/registrations"
+	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rpc"
 	"github.com/devrdn/olymp-db-platform/backend/internal/settings"
 	"github.com/devrdn/olymp-db-platform/backend/internal/showcase"
@@ -265,6 +266,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
+
+	retentionStore := postgres.NewRetention(pool)
+	a.tasks = append(a.tasks, pruneRetention(log,
+		underRetentionLock(retentionStore.TryLock, retention.New(retentionStore).Prune),
+		metrics.NewRetentionCounters(recorder, retention.TableNames())))
 
 	// Built before provisioning so the reclaim sweep can record what it drops.
 	auditRecorder := audit.New(postgres.NewAuditSink(pool))

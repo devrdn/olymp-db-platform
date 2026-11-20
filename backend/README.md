@@ -934,7 +934,7 @@ somebody tried from an outside device.
 
 ### The audit trail
 
-Who did what, from where and when — kept for a year, and the record the
+Who did what, from where and when — kept for eighteen months, and the record the
 specification asks for. Entries are written in the same transaction as the
 action they describe, so an action and its entry land together or neither
 does.
@@ -1015,7 +1015,7 @@ or not at all — a user cannot exist without their roles or without the entry
 naming who created them. Request origin (IP, user agent) travels in the context
 and is stamped onto every entry automatically. Payloads
 are redacted at any depth: `password`, `token`, `secret` and friends never reach
-a table kept for a year.
+a table kept for eighteen months.
 
 ## Email
 
@@ -1520,6 +1520,7 @@ changed setting means changing the number in the rules too.
 | `DBContestAPIErrors` | critical | over 5% of API answers are 5xx, at least 10 in 5 minutes, for 3 minutes |
 | `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s with at least 15 of those requests in 5 minutes, for 10 minutes |
 | `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
+| `DBContestRetentionFailing` | warning | the retention sweep failed in the last hour; expired rows stay until a later pass succeeds |
 | `DBContestMailAbandoned` | warning | an email message was abandoned in the last hour |
 | `DBContestMailRelayFailing` | warning | sending email has been paused for 10 minutes: the relay itself failed (connection, TLS, the account, the sender), or refused three messages in a row ([Diagnosing](#diagnosing)) |
 | `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |

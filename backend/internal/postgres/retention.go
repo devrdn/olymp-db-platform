@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
@@ -20,6 +21,45 @@ func NewRetention(pool *pgxpool.Pool) *Retention { return &Retention{pool: pool}
 
 func (r *Retention) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
+}
+
+// retentionLockKey is the advisory lock every replica's sweep competes for.
+// Advisory locks are scoped to a database, so it cannot collide with
+// scheduleLockKey or gamedb's prepareLock.
+const retentionLockKey = 8_531_204_477_119_004_1
+
+// retentionUnlockTimeout bounds the release, which runs after the sweep's own
+// context may already have ended.
+const retentionUnlockTimeout = 5 * time.Second
+
+// TryLock takes the sweep's advisory lock on a connection of its own, so the
+// sweep's batches run on other connections and outside any transaction, which
+// the audit delete requires. It never blocks: a replica that loses gets
+// held == false. release must be called once when held; a connection that
+// cannot confirm the unlock is closed, which frees the lock.
+func (r *Retention) TryLock(ctx context.Context) (release func(), held bool, err error) {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire a connection for the retention lock: %w", err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, int64(retentionLockKey)).Scan(&held); err != nil {
+		conn.Release()
+		return nil, false, fmt.Errorf("acquire the retention lock: %w", err)
+	}
+	if !held {
+		conn.Release()
+		return nil, false, nil
+	}
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), retentionUnlockTimeout)
+		defer cancel()
+		var unlocked bool
+		if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, int64(retentionLockKey)).Scan(&unlocked); err != nil || !unlocked {
+			_ = conn.Hijack().Close(ctx)
+			return
+		}
+		conn.Release()
+	}, true, nil
 }
 
 // DeleteQueryLog deletes up to limit journal rows of contests still archived

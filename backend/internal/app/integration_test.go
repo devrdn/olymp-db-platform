@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
 )
 
 // The alert rules and the dashboard are loaded by a Prometheus and a Grafana
@@ -40,7 +41,7 @@ var scrapeLabels = map[string]bool{"job": true, "instance": true}
 // closedLabels take only values the code declares and exports at zero from the
 // start, so an equality matcher on one can be held to the code.
 // route, status and method take whatever the traffic brings.
-var closedLabels = map[string]bool{"outcome": true, "reason": true, "limit": true}
+var closedLabels = map[string]bool{"outcome": true, "reason": true, "limit": true, "table": true}
 
 // The two services, named as the selector's dbcontest label names them.
 const (
@@ -68,6 +69,7 @@ func registeredSeries(t *testing.T) map[string]exportedSeries {
 	api.ObserveRequest("GET", "/api/v1/contests/{contestID}/events", 200, time.Minute, true)
 	metrics.NewGameReclaimCounters(api)
 	metrics.NewMailCounters(api, mailing.KindNames(), mailing.Outcomes())
+	metrics.NewRetentionCounters(api, retention.TableNames())
 
 	runner := metrics.NewPrometheus()
 	observed := metrics.NewQueryRunner(runner, queryrunner.Endings(), queryrunner.CutOffs(), queryrunner.Lends())

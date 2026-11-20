@@ -848,7 +848,11 @@ The contest's id is the identifier in its workspace address,
 
 5. **Archive.** **Overview**, **Archive**, the contest's final state. An
    archived contest refuses disqualification; its grace can still be
-   extended. Nothing deletes its query log or audit trail.
+   extended. Archiving cannot be undone, and it starts a clock: twelve months
+   later the retention sweep deletes the contest's query log for good, so
+   download what you need from **Monitoring** before then. The audit trail
+   does not wait for the archive: each entry is deleted eighteen months after
+   it was written ([ARCHITECTURE section 9](../ARCHITECTURE.md#9-logging-and-audit)).
 6. **Leftovers.** `consoleload sweep` lists any load-test run still on the
    server.
 

@@ -18,6 +18,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/filestore"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
 	"github.com/google/uuid"
 )
 
@@ -432,6 +433,11 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 			atStart: false,
 			why:     "it drops databases, nothing waits on it, and a grace period bounds what it can find",
 		},
+		{
+			job:     pruneRetention(quiet(), nil, metrics.NewRetentionCounters(metrics.Noop{}, nil)),
+			atStart: false,
+			why:     "it deletes history nobody waits on, and a boot-time delete would compete with the restart for the core pool",
+		},
 	} {
 		t.Run(tc.job.name, func(t *testing.T) {
 			if tc.job.atStart != tc.atStart {
@@ -647,5 +653,149 @@ func TestStoppingWorkersGivesEachTheShutdownDeadlineAndLogsOneThatOverstays(t *t
 	}
 	if out := buf.String(); !strings.Contains(out, "worker=slow") || strings.Contains(out, "worker=quick") {
 		t.Errorf("log = %q, want only the worker that overstayed", out)
+	}
+}
+
+var errAway = errors.New("the database is away")
+
+func retentionTotals(t *testing.T, recorder *metrics.Prometheus, name string) map[string]float64 {
+	t.Helper()
+
+	families, err := recorder.Registry().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	totals := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			totals[m.GetLabel()[0].GetValue()] = m.GetCounter().GetValue()
+		}
+	}
+	return totals
+}
+
+func TestPruneRetentionCountsEachTableAndReportsFailure(t *testing.T) {
+	recorder := metrics.NewPrometheus()
+	counters := metrics.NewRetentionCounters(recorder, retention.TableNames())
+	job := pruneRetention(quiet(), func(context.Context) ([]retention.Outcome, error) {
+		return []retention.Outcome{
+			{Table: retention.TableQueryLog, Deleted: 10012},
+			{Table: retention.TableAuditLog, Err: errAway},
+			{Table: retention.TableMailOutbox, Deleted: 3},
+		}, errAway
+	}, counters)
+
+	if err := job.run(t.Context()); !errors.Is(err, errAway) {
+		t.Fatalf("run() = %v, want %v", err, errAway)
+	}
+
+	deleted := retentionTotals(t, recorder, "retention_rows_deleted_total")
+	if deleted["query_log"] != 10012 || deleted["mail_outbox"] != 3 || deleted["audit_log"] != 0 {
+		t.Errorf("rows deleted = %v, want query_log 10012, mail_outbox 3, audit_log 0", deleted)
+	}
+	failures := retentionTotals(t, recorder, "retention_failures_total")
+	if failures["audit_log"] != 1 || failures["query_log"] != 0 || failures["mail_outbox"] != 0 {
+		t.Errorf("failures = %v, want audit_log 1 and the rest 0", failures)
+	}
+}
+
+// A shutdown mid-tick is not the table's fault, so no failure is counted; the
+// rows the finished tables deleted still are.
+func TestPruneRetentionCountsNoFailureForATickTheShutdownEnded(t *testing.T) {
+	recorder := metrics.NewPrometheus()
+	counters := metrics.NewRetentionCounters(recorder, retention.TableNames())
+	ctx, cancel := context.WithCancel(t.Context())
+	job := pruneRetention(quiet(), func(context.Context) ([]retention.Outcome, error) {
+		cancel()
+		return []retention.Outcome{
+			{Table: retention.TableQueryLog, Deleted: 7},
+			{Table: retention.TableAuditLog, Err: ctx.Err()},
+			{Table: retention.TableMailOutbox, Err: ctx.Err()},
+		}, ctx.Err()
+	}, counters)
+
+	if err := job.run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("run() = %v, want the cancellation", err)
+	}
+
+	if got := retentionTotals(t, recorder, "retention_rows_deleted_total")["query_log"]; got != 7 {
+		t.Errorf("query_log rows deleted = %v, want 7", got)
+	}
+	for table, n := range retentionTotals(t, recorder, "retention_failures_total") {
+		if n != 0 {
+			t.Errorf("%s failures = %v after a shutdown, want 0", table, n)
+		}
+	}
+}
+
+func TestPruneRetentionLogsOnlyATickThatDeletedSomething(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	counters := metrics.NewRetentionCounters(metrics.Noop{}, retention.TableNames())
+	deleted := 0
+	job := pruneRetention(log, func(context.Context) ([]retention.Outcome, error) {
+		return []retention.Outcome{{Table: retention.TableQueryLog, Deleted: deleted}}, nil
+	}, counters)
+
+	if err := job.run(t.Context()); err != nil || buf.Len() != 0 {
+		t.Fatalf("an idle tick = %v, logged %q; want nil and nothing", err, buf.String())
+	}
+	deleted = 4
+	if err := job.run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); !strings.Contains(got, "deleted rows past their retention") || !strings.Contains(got, "query_log=4") {
+		t.Errorf("log = %q, want the deleted rows per table", got)
+	}
+}
+
+func TestPruneRetentionRunsEveryFifteenMinutes(t *testing.T) {
+	job := pruneRetention(quiet(), nil, metrics.NewRetentionCounters(metrics.Noop{}, nil))
+	if job.every != 15*time.Minute || job.name != "retention" {
+		t.Errorf("name = %q, every = %s; want retention every 15m", job.name, job.every)
+	}
+}
+
+func TestTheRetentionSweepSkipsATickWhileAnotherReplicaHoldsTheLock(t *testing.T) {
+	ran, released := 0, 0
+	prune := func(context.Context) ([]retention.Outcome, error) { ran++; return nil, nil }
+	held := true
+	lock := func(context.Context) (func(), bool, error) {
+		if !held {
+			return nil, false, nil
+		}
+		return func() { released++ }, true, nil
+	}
+	sweep := underRetentionLock(lock, prune)
+
+	if _, err := sweep(t.Context()); err != nil || ran != 1 || released != 1 {
+		t.Fatalf("with the lock free: err = %v, ran = %d, released = %d; want nil, 1, 1", err, ran, released)
+	}
+	held = false
+	if _, err := sweep(t.Context()); err != nil || ran != 1 {
+		t.Fatalf("with the lock taken: err = %v, ran = %d; want nil and no second run", err, ran)
+	}
+}
+
+func TestTheRetentionSweepDoesNotRunWhenTheLockCannotBeAsked(t *testing.T) {
+	ran := false
+	sweep := underRetentionLock(func(context.Context) (func(), bool, error) { return nil, false, errAway },
+		func(context.Context) ([]retention.Outcome, error) { ran = true; return nil, nil })
+
+	if _, err := sweep(t.Context()); !errors.Is(err, errAway) || ran {
+		t.Errorf("err = %v, ran = %v; want the lock's failure and no run", err, ran)
+	}
+}
+
+func TestTheRetentionSweepReleasesTheLockWhenItsPassFails(t *testing.T) {
+	released := false
+	sweep := underRetentionLock(func(context.Context) (func(), bool, error) { return func() { released = true }, true, nil },
+		func(context.Context) ([]retention.Outcome, error) { return nil, errAway })
+
+	if _, err := sweep(t.Context()); !errors.Is(err, errAway) || !released {
+		t.Errorf("err = %v, released = %v; want the failure and a release", err, released)
 	}
 }

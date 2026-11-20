@@ -2325,7 +2325,7 @@ address and user agent, travels in the context (`audit.RequestMeta`) and is
 stamped onto every entry automatically, so services need not remember it. The
 payload goes through **redaction at any depth**: `password`, `token`,
 `secret`, `password_hash` and keys like them never reach a table that is kept
-for a year and read by administrators. A failed sign-in is logged with the
+for eighteen months and read by administrators. A failed sign-in is logged with the
 login, which is what somebody searches by, and never with the password. A
 failure to write the audit entry **returns an error for a privileged
 operation** — an action nobody can be held to account for is worse than one
@@ -2901,11 +2901,27 @@ Three independent streams with different purposes:
 | Stream | What | Where | Retention |
 |---|---|---|---|
 | **Technical logs** | Structured JSON from the applications (slog): HTTP requests, errors, provisioning, each event carrying `request_id` and `user_id`; with `METRICS_BACKEND=log`, the metrics digest joins them | stdout → Promtail → **Loki**, dashboards in Grafana | 30–90 days |
-| **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | Kept; no code deletes rows |
-| **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | Kept; no code deletes rows |
+| **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | 18 months, then the retention sweep deletes it |
+| **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | 12 months after its contest is archived, then the retention sweep deletes it |
 
-Nothing archives or deletes `query_log` or `audit_log` rows, so both are kept
-until an operator removes them.
+A background task, the retention sweep, runs every fifteen minutes (not at
+startup) and deletes what has outlived its period, in batches of 5000 rows
+and at most 20 batches per table per run, so a large backlog is cleared over
+several runs. One replica sweeps at a time, under an advisory lock. The audit
+trail goes 18 months after each entry; the database itself refuses to delete
+an entry younger than that, through the setting `olympdb.audit_retention`
+that only the sweep's transaction sets, so no retention period shorter than 18
+months can be configured by mistake. A contest's query log goes 12 months
+after the contest is archived (`contests.archived_at`, stamped when the status
+becomes `archived`); a contest that finished and was never archived keeps its
+journal, as does one taken out of the archive. Rows of `mail_outbox` go 30
+days after they were sent or abandoned; a message still pending is never
+deleted. The sweep writes no audit entry: it logs a line for each run that
+deleted anything, counts `retention_rows_deleted_total` and
+`retention_failures_total` by table, and the `DBContestRetentionFailing`
+alert fires when a run fails. It leaves the counters of `registration_activity`,
+`registration_addresses`, `participant_events` and `submissions` alone; those
+are outside the decided periods.
 
 The rules: the audit entry is written in the same transaction as the action;
 passwords and hashes are never logged; `request_id` is threaded from the
@@ -3100,7 +3116,7 @@ somebody named in code can be written.
 **The journal is not a version-control system.** For authored text — the
 story, a question's wording, a title — the **fact of a change and the
 languages** are recorded, not the text: a story is saved often, weighs
-kilobytes and is kept for a year, so previous versions would make `audit_log`
+kilobytes and is kept for eighteen months, so previous versions would make `audit_log`
 the largest table in the database, mostly duplicated prose. And it could not
 be used to roll back anyway: "restore yesterday's story" is content
 versioning — a different store, a different lifetime, a separate feature if it
@@ -4572,8 +4588,8 @@ genuinely bad message being retried up to its cap instead of dropped at once.
 - An address stored before addresses were validated, which the outbox's
   check refuses, fails a whole bulk reset with a 500 rather than skipping
   that account.
-- Rows of `mail_outbox` are never deleted. A sent or abandoned row has no
-  body, but keeps the recipient's address, and nothing deletes it.
+- A sent or abandoned row of `mail_outbox` has no body but keeps the
+  recipient's address for thirty days, then the retention sweep deletes it.
 - The check that refuses a control character in a login or a full name also
   runs when an administrator edits a profile, against the stored login. An
   account created before the check whose login carries one cannot have its
