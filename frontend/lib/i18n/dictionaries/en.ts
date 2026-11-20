@@ -2908,6 +2908,7 @@ const en = {
     external_signin_closed: "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one.",
     external_signin_unavailable: "Signing in this way is switched off here. Sign in another way, or ask an administrator.",
     external_signin_conflict: "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator.",
+    external_signin_unverified: "An account here already uses this email address but has never confirmed it. If the account is yours, sign in with its password if it has one, or reset the password by email: that confirms the address, and signing in this way will then work. If it is not yours, or the password cannot be reset by email, ask an administrator.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
     internal_error: "The server could not process the request.",

@@ -299,6 +299,14 @@ password. Each other way in is the installation's choice:
   account without one. A one-time password an administrator issues after the
   link is kept: the next sign-in through the provider lands on the change
   form, as a password sign-in does.
+- **An unverified address links only an account nobody chose a password
+  for.** An account that does not act as staff, has never verified its
+  address and is not on a one-time password is not linked through it
+  (`external_signin_unverified`), and no account is created in its place:
+  the event's registration form with mail off hands the account to whoever
+  filled it in, who may have typed somebody else's address. A followed reset
+  link verifies the address; an administrator's reset puts the account back
+  on a one-time password. Either lets the next provider sign-in link it.
 - **Only an ASCII address finds or links an account.** An address with any
   character outside ASCII, vouched for or not, is never used to find or link
   an account, nor put on one: Unicode case folding would take one spelling
@@ -349,7 +357,7 @@ The same migration counts the address of every account not deleted at that
 moment as verified, since staff entered them. An account made later by
 staff, an import or the event form starts with its address unverified, until
 its owner follows a reset link or signs in through a provider that
-vouches for it. An administrator who changes an account's address to another
+vouches for it and links the account. An administrator who changes an account's address to another
 one clears its verified mark.
 
 ### Connecting Microsoft sign-in
@@ -574,6 +582,7 @@ signing keys that could not be fetched.
 | `external_signin_failed` | "Signing in through that service did not work. Try again." | they declined, or Microsoft refused (consent above); the sign-in took more than ten minutes or came back to another browser; the code exchange failed (the secret, the redirect URI); the token could not be verified; more than 120 requests to the provider's `start` or `callback` (counted apart per provider and per route, refusals included) came from their address in ten minutes; the account the address found changed twice while the sign-in decided, or no free login could be derived for a new one; or the administrator's switches could not be read (logged at error, [Switching a provider off](#switching-a-provider-off)) |
 | `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose token carries `acct` = 0 (a guest, a token without `acct`, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
 | `external_signin_conflict` | "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same issuer (for Microsoft, the same tenant), as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
+| `external_signin_unverified` | "An account here already uses this email address but has never confirmed it. If the account is yours, sign in with its password if it has one, or reset the password by email: that confirms the address, and signing in this way will then work. If it is not yours, or the password cannot be reset by email, ask an administrator." | the address belongs to an account that does not act as staff, has never verified the address and is not on a one-time password (somebody chose its password, or it has none). Such an account could have been made with somebody else's address, as event registration with mail off does. No account is created in its place. A password reset link verifies the address, and an administrator's reset puts the account on a one-time password; after either, the sign-in links |
 | `external_signin_closed` | "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
 | `external_signin_unavailable` | "Signing in this way is switched off here. Sign in another way, or ask an administrator." | an administrator switched the provider off ([Switching a provider off](#switching-a-provider-off)) |
 | `account_blocked` | "This account is blocked. Contact an administrator." | the account is blocked or deleted |

@@ -79,6 +79,23 @@ func TestHasPasswordIsFalseForAnAccountWithoutADigest(t *testing.T) {
 	}
 }
 
+func TestAnAccountIsLinkableByEmailOnlyWhenItProvedItOrNeverChoseAPassword(t *testing.T) {
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	for name, c := range map[string]struct {
+		u    users.User
+		want bool
+	}{
+		"verified, chosen password":     {users.User{EmailVerifiedAt: &at, PasswordHash: "h"}, true},
+		"unverified, one-time password": {users.User{PasswordHash: "h", MustChangePassword: true}, true},
+		"unverified, chosen password":   {users.User{PasswordHash: "h"}, false},
+		"unverified, no password":       {users.User{}, false},
+	} {
+		if got := c.u.LinkableByEmail(); got != c.want {
+			t.Errorf("%s: LinkableByEmail() = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
 func TestExternalIdentityValidateBoundsEveryField(t *testing.T) {
 	ok := users.ExternalIdentity{UserID: uuid.New(), Provider: users.ProviderMicrosoft, Issuer: "https://issuer.example", Subject: "abc", Email: "a@example.edu"}
 	if err := ok.Validate(); err != nil {

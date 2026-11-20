@@ -27,9 +27,10 @@ type Store interface {
 // Accounts creates and links accounts (users.Service). Both refuse an
 // identity another request linked first with users.ErrExternalIdentityTaken,
 // leaving nothing behind. LinkExternal re-reads the account under a lock and
-// refuses users.ErrStaffNotLinkable, the blocked and deleted sentinels,
-// users.ErrNotFound when the account no longer holds the identity's email, and
-// users.ErrIssuerAlreadyLinked when it holds another identity at the issuer.
+// refuses users.ErrStaffNotLinkable, users.ErrUnverifiedNotLinkable, the
+// blocked and deleted sentinels, users.ErrNotFound when the account no longer
+// holds the identity's email, and users.ErrIssuerAlreadyLinked when it holds
+// another identity at the issuer.
 // LinkExternal drops a one-time password and returns the account as it then
 // stands, whose session generation a sign-in must use.
 type Accounts interface {
@@ -77,9 +78,11 @@ func NewService(cfg Config) *Service {
 // linked to; else, when the email is trusted, the live account holding it,
 // linked now and its email marked verified; else a new student account,
 // carrying the email only when it is trusted. It refuses ErrInvalidClaims
-// before any lookup, ErrStaffAccount, ErrIdentityConflict, ErrSignupClosed
-// where an account would have to be created, and the users sentinels in
-// PassedThrough.
+// before any lookup, ErrStaffAccount, ErrIdentityConflict,
+// ErrUnverifiedAccount when the account holding the trusted email is not
+// staff, never proved the address and is not on a one-time password,
+// ErrSignupClosed where an account would have to be created, and the users
+// sentinels in PassedThrough.
 func (s *Service) Resolve(ctx context.Context, c Claims) (users.User, error) {
 	c = c.cleaned()
 	identity, err := c.identity()
@@ -190,6 +193,8 @@ func (s *Service) link(ctx context.Context, u users.User, identity users.Externa
 		return s.known(ctx, identity, homeDirectory)
 	case errors.Is(err, users.ErrStaffNotLinkable):
 		return users.User{}, ErrStaffAccount
+	case errors.Is(err, users.ErrUnverifiedNotLinkable):
+		return users.User{}, ErrUnverifiedAccount
 	case errors.Is(err, users.ErrIssuerAlreadyLinked):
 		return users.User{}, ErrIdentityConflict
 	case err != nil:

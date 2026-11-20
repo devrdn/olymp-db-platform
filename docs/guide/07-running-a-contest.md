@@ -242,7 +242,7 @@ installation's settings decide which exist
 |---|---|---|
 | **Accounts made by staff**, one at a time or by importing a roster (below) | an administrator, with a one-time password | always |
 | **Create an account** on the sign-in page | the person, with a password of their own and a code mailed to their address | `SELF_SIGNUP_ENABLED` and mail are on |
-| **Continue with Microsoft, Google or GitHub** | nobody, when the address the provider vouches for is already an account's; otherwise the first sign-in makes one, with a generated login and no password | the installation is connected to the provider ([Microsoft](../../backend/README.md#connecting-microsoft-sign-in), [Google](../../backend/README.md#connecting-google-sign-in), [GitHub](../../backend/README.md#connecting-github-sign-in)) and an administrator has not switched it off; new accounts only with `SELF_SIGNUP_ENABLED` |
+| **Continue with Microsoft, Google or GitHub** | nobody, when the address the provider vouches for is already an account's (one that never confirmed it only while still on its one-time password, below); otherwise the first sign-in makes one, with a generated login and no password | the installation is connected to the provider ([Microsoft](../../backend/README.md#connecting-microsoft-sign-in), [Google](../../backend/README.md#connecting-google-sign-in), [GitHub](../../backend/README.md#connecting-github-sign-in)) and an administrator has not switched it off; new accounts only with `SELF_SIGNUP_ENABLED` |
 | **The event's registration form** (`/register`) | the form, with a one-time password and an entrance code | `EVENT_REGISTRATION_ENABLED` is on |
 
 - An account still has to join the contest: by enrolling itself where
@@ -258,6 +258,15 @@ installation's settings decide which exist
   one-time password stops working at that sign-in. A one-time password an
   administrator issues after the link stays: the next sign-in through the
   provider asks the person to change it, as a password sign-in would.
+- A provider does not link an account that never confirmed its address and
+  is no longer on its one-time password, such as one made by the event's
+  registration form whose owner has since chosen a password: somebody else
+  could have typed that address. The sign-in is refused with "An account
+  here already uses this email address but has never confirmed it…", and no
+  second account is made. A followed reset link confirms the address, and an
+  administrator's password reset puts the account back on a one-time
+  password; after either, the next sign-in through the provider links it. A
+  staff account linked through the installation's own directory is exempt.
 - Staff accounts never get a reset link, and enter through a provider only
   when the provider says, at that sign-in, that the person belongs to the
   installation's own directory: a member of the Microsoft tenant named by
@@ -353,7 +362,7 @@ site's own email domain. Sign up or sign in with such an address." With mail
 on, the refusal also says that a password reset link confirms an address
 the account already has, and links **Forgot password?**. An address is
 confirmed by a sign-up code, a followed reset link or a sign-in through a provider
-that vouches for it. The address of every account not deleted when the
+that vouches for it and links the account (above). The address of every account not deleted when the
 release that brings this was installed counts as confirmed; an account made
 after it by staff, an import or the event form starts unconfirmed, until its
 owner does one of those. An administrator who changes an account's address

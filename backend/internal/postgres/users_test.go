@@ -1366,6 +1366,175 @@ func TestLinkExternalWaitsForARoleChangeInFlight(t *testing.T) {
 	}
 }
 
+// An administrator's address edit that drops the verification, committed
+// while the link waits, is seen by the locked re-read.
+func TestLinkExternalWaitsForAnUnverifyingEditInFlight(t *testing.T) {
+	tag := "ext-unverify-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	ctx := context.Background()
+	repo := NewUsers(testPool)
+	if err := repo.SetPassword(ctx, ana.ID, "a-hash-of-a-password-ana-chose", false); err != nil {
+		t.Fatalf("set the password: %v", err)
+	}
+	if err := repo.MarkEmailVerified(ctx, ana.ID, time.Now()); err != nil {
+		t.Fatalf("verify the address: %v", err)
+	}
+
+	admin, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Rollback(ctx) }()
+	if _, err := admin.Exec(ctx, `UPDATE users SET email_verified_at = NULL WHERE id = $1`, ana.ID); err != nil {
+		t.Fatalf("drop the verification: %v", err)
+	}
+
+	linked := make(chan error, 1)
+	go func() {
+		_, err := service.LinkExternal(ctx, users.LinkExternalCommand{UserID: ana.ID, Identity: externalLink(tag), VerifiedAt: time.Now()})
+		linked <- err
+	}()
+
+	select {
+	case err := <-linked:
+		t.Fatalf("LinkExternal returned %v with the edit still open", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := admin.Commit(ctx); err != nil {
+		t.Fatalf("commit the edit: %v", err)
+	}
+	select {
+	case err := <-linked:
+		if !errors.Is(err, users.ErrUnverifiedNotLinkable) {
+			t.Errorf("LinkExternal() = %v, want ErrUnverifiedNotLinkable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LinkExternal did not return after the edit committed")
+	}
+	if n := countIdentities(t, ana.ID); n != 0 {
+		t.Errorf("identities = %d, want none", n)
+	}
+	if stored, err := repo.ByID(ctx, ana.ID); err != nil || stored.EmailVerifiedAt != nil {
+		t.Errorf("stored verified at %v (%v), want the address left unverified", stored.EmailVerifiedAt, err)
+	}
+}
+
+// oneTimePasswordStudent is a student still on the one-time password
+// "issued one-time password", which LinkableByEmail admits unverified.
+func oneTimePasswordStudent(t *testing.T, tag string) users.User {
+	t.Helper()
+	ana := externalStudent(t, tag)
+	if err := NewUsers(testPool).SetPassword(context.Background(), ana.ID, passwordtest.Hash(t, "issued one-time password"), true); err != nil {
+		t.Fatalf("issue the one-time password: %v", err)
+	}
+	return ana
+}
+
+// A link committed while a password change waits retires the password the
+// change verified, so the change is refused and the account keeps no password
+// its creator chose.
+func TestChangePasswordWaitsForALinkInFlight(t *testing.T) {
+	tag := "ext-change-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := oneTimePasswordStudent(t, tag)
+	ctx := context.Background()
+	identity := externalLink(tag)
+
+	link, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = link.Rollback(ctx) }()
+	// What users.Service.LinkExternal writes for this account, held open.
+	if _, err := link.Exec(ctx, `
+		INSERT INTO external_identities (user_id, provider, issuer, subject, email)
+		VALUES ($1, $2, $3, $4, $5)`, ana.ID, identity.Provider, identity.Issuer, identity.Subject, identity.Email); err != nil {
+		t.Fatalf("link the identity: %v", err)
+	}
+	if _, err := link.Exec(ctx, `
+		UPDATE users SET email_verified_at = now(), password_hash = '', must_change_password = false,
+			session_generation = session_generation + 1
+		WHERE id = $1`, ana.ID); err != nil {
+		t.Fatalf("retire the one-time password: %v", err)
+	}
+
+	changed := make(chan error, 1)
+	go func() {
+		changed <- service.ChangePassword(ctx, users.ChangePasswordCommand{
+			UserID: ana.ID, OldPassword: "issued one-time password", NewPassword: "a password the creator chose",
+		})
+	}()
+
+	select {
+	case err := <-changed:
+		t.Fatalf("ChangePassword returned %v with the link still open", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := link.Commit(ctx); err != nil {
+		t.Fatalf("commit the link: %v", err)
+	}
+	select {
+	case err := <-changed:
+		if !errors.Is(err, users.ErrWrongPassword) {
+			t.Errorf("ChangePassword() = %v, want ErrWrongPassword", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ChangePassword did not return after the link committed")
+	}
+	if stored, err := NewUsers(testPool).ByID(ctx, ana.ID); err != nil || stored.HasPassword() {
+		t.Errorf("stored has password = %v (%v), want the linked account left without one", stored.HasPassword(), err)
+	}
+}
+
+// A password change committed while a link waits ends the one-time password
+// that made the unverified account linkable, so the link is refused.
+func TestLinkExternalWaitsForAPasswordChangeInFlight(t *testing.T) {
+	tag := "ext-chosen-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := oneTimePasswordStudent(t, tag)
+	ctx := context.Background()
+
+	change, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = change.Rollback(ctx) }()
+	// What users.Service.ChangePassword writes, held open.
+	if _, err := change.Exec(ctx, `
+		UPDATE users SET password_hash = $2, must_change_password = false,
+			session_generation = session_generation + 1
+		WHERE id = $1`, ana.ID, passwordtest.Hash(t, "a password the creator chose")); err != nil {
+		t.Fatalf("change the password: %v", err)
+	}
+
+	linked := make(chan error, 1)
+	go func() {
+		_, err := service.LinkExternal(ctx, users.LinkExternalCommand{UserID: ana.ID, Identity: externalLink(tag), VerifiedAt: time.Now()})
+		linked <- err
+	}()
+
+	select {
+	case err := <-linked:
+		t.Fatalf("LinkExternal returned %v with the change still open", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := change.Commit(ctx); err != nil {
+		t.Fatalf("commit the change: %v", err)
+	}
+	select {
+	case err := <-linked:
+		if !errors.Is(err, users.ErrUnverifiedNotLinkable) {
+			t.Errorf("LinkExternal() = %v, want ErrUnverifiedNotLinkable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LinkExternal did not return after the change committed")
+	}
+	if n := countIdentities(t, ana.ID); n != 0 {
+		t.Errorf("identities = %d, want none", n)
+	}
+}
+
 // FOR NO KEY UPDATE: a row that only references the account, such as a role
 // assignment or a submission, is not held up by the lock.
 func TestLockDoesNotHoldUpRowsReferencingTheAccount(t *testing.T) {
@@ -1433,6 +1602,9 @@ func TestTwoConcurrentLinksOfOneIssuerLinkOne(t *testing.T) {
 	tag := "ext-issuer-" + uuid.NewString()[:8]
 	service := externalAccounts(t, tag)
 	ana := externalStudent(t, tag)
+	if err := NewUsers(testPool).MarkEmailVerified(context.Background(), ana.ID, time.Now()); err != nil {
+		t.Fatalf("verify the address: %v", err)
+	}
 
 	start := make(chan struct{})
 	errs := make(chan error, 2)

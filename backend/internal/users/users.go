@@ -77,6 +77,10 @@ var (
 	// ErrStaffNotLinkable refuses linking an external identity to a staff
 	// account (see federation.Service.refuse).
 	ErrStaffNotLinkable = errors.New("a staff account is linked to an external identity only from the installation's own directory")
+	// ErrUnverifiedNotLinkable refuses linking by email an account that does
+	// not act as staff and is neither verified nor on a one-time password
+	// (User.LinkableByEmail).
+	ErrUnverifiedNotLinkable = errors.New("an account that never proved its email and is not on a one-time password is not linked by email")
 	// ErrIssuerAlreadyLinked refuses linking an account to a second identity
 	// at an issuer it already holds one at.
 	ErrIssuerAlreadyLinked = errors.New("the account is already linked to another identity at this issuer")
@@ -91,7 +95,7 @@ func Errors() []error {
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
-		ErrExternalIdentityTaken, ErrStaffNotLinkable, ErrIssuerAlreadyLinked,
+		ErrExternalIdentityTaken, ErrStaffNotLinkable, ErrUnverifiedNotLinkable, ErrIssuerAlreadyLinked,
 	}
 }
 
@@ -135,6 +139,13 @@ func (u User) IsActive() bool { return u.Status == StatusActive }
 
 // HasPassword reports whether the account can sign in with a password.
 func (u User) HasPassword() bool { return u.PasswordHash != "" }
+
+// LinkableByEmail reports whether an address a provider vouches for may carry
+// its holder into the account: the account proved the address, or is still on
+// the one-time password it was issued, which nobody has chosen yet. Any other
+// account may have been made with somebody else's address, as event
+// registration with mail off does, and its creator would keep access.
+func (u User) LinkableByEmail() bool { return u.EmailVerifiedAt != nil || u.MustChangePassword }
 
 // IsStaff reports whether the account holds any global permission. The
 // student role holds none. A contest's manager or owner may hold none either;

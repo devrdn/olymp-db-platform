@@ -1937,9 +1937,20 @@ it, with the number of questions waiting beside it while the contest runs.
     a login derived from the hint or the name. It refuses a staff account
     unless `HomeDirectory` is set for this sign-in, a blocked or deleted one
     whatever the provider says, a creation while `SELF_SIGNUP_ENABLED` is
-    off, and a link by email to an account already linked to another
-    identity of the same issuer, since a provider may give a mailbox to
-    somebody new. An address that is not vouched for is kept only on the
+    off, a link by email to an account already linked to another identity
+    of the same issuer, since a provider may give a mailbox to somebody new,
+    and a link by email to an account that does not act as staff, has never
+    verified its address and is not on a one-time password. Such an account
+    can be made with somebody else's address: event registration with mail
+    off hands the account's one-time password to whoever filled in the form,
+    who then chooses a password, and that creator would keep access to the
+    account the address's real holder signs into. The refusal
+    (`external_signin_unverified`) creates no account in its place, since
+    the address stays with the account holding it; a password reset link
+    verifies the address and lifts it. A staff account is exempt: it reaches
+    a link only through the home directory, where the provider vouches for
+    membership and an administrator typed the address, and it has no
+    self-service reset that could verify it. An address that is not vouched for is kept only on the
     identity, never on the account, and never links; one that is not a
     bounded address is dropped instead, so it never stops the sign-in, while
     a vouched-for one refuses it. An address with a character outside ASCII
@@ -1949,8 +1960,10 @@ it, with the number of questions waiting beside it while the contest runs.
     identity's in ASCII for a link. The display name and the login hint,
     which only seeds a new login, lose invalid UTF-8 and control characters
     and are cut to their bounds, never refused. Linking any account that
-    still holds the one-time password staff issued (a student's, or a staff
-    account linked through the home directory) drops that password (the hash
+    still holds the one-time password staff issued (a student's, which
+    `User.LinkableByEmail` admits although its address is unverified because
+    nobody has chosen its password yet, or a staff account linked through the
+    home directory) drops that password (the hash
     becomes NULL and the flag clears) and ends the account's older sessions,
     in the same transaction, recorded as `user.one_time_password_retire`:
     the person never had it, and kept, it would send them to a change form

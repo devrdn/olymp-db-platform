@@ -414,13 +414,15 @@ type LinkExternalCommand struct {
 // is locked and read again first, so a change committed since the caller's
 // read is seen: it refuses ErrAccountDeleted, ErrAccountBlocked,
 // ErrStaffNotLinkable, ErrNotFound when the account no longer holds the
-// identity's email, which is what vouched for linking it, and
-// ErrIssuerAlreadyLinked when the account already holds another identity at
-// the same issuer: a provider may reassign a mailbox, and the address must
-// not carry its new holder into the previous one's account. An account still
-// on its one-time password loses it, as retireOneTimePassword says. It
-// returns the account as it then stands. As for CreateExternal, the owner
-// made the change, so the audit entries have no actor.
+// identity's email, which is what vouched for linking it,
+// ErrUnverifiedNotLinkable when an account that does not act as staff is not
+// User.LinkableByEmail, and ErrIssuerAlreadyLinked when the account already
+// holds another identity at the same issuer: a provider may reassign a
+// mailbox, and the address must not carry its new holder into the previous
+// one's account. An account still on its one-time password loses it, as
+// retireOneTimePassword says. It returns the account as it then stands. As
+// for CreateExternal, the owner made the change, so the audit entries have no
+// actor.
 func (s *Service) LinkExternal(ctx context.Context, cmd LinkExternalCommand) (User, error) {
 	if s.identities == nil {
 		return User{}, errNoIdentityStore
@@ -442,11 +444,15 @@ func (s *Service) LinkExternal(ctx context.Context, cmd LinkExternalCommand) (Us
 		if err != nil {
 			return err
 		}
-		if err := s.refuseExternalEntry(ctx, u, cmd.HomeDirectory); err != nil {
+		staff, err := s.refuseExternalEntry(ctx, u, cmd.HomeDirectory)
+		if err != nil {
 			return err
 		}
 		if !sameASCIIAddress(u.Email, identity.Email) {
 			return fmt.Errorf("%w: the account no longer holds the address", ErrNotFound)
+		}
+		if !staff && !u.LinkableByEmail() {
+			return ErrUnverifiedNotLinkable
 		}
 		other, err := s.identities.HoldsOtherIdentityAt(ctx, userID, identity.Provider, identity.Issuer, identity.Subject)
 		if err != nil {
@@ -502,25 +508,23 @@ func (s *Service) retireOneTimePassword(ctx context.Context, u *User, provider s
 }
 
 // refuseExternalEntry says why an account read under its lock cannot be
-// entered or linked through an external provider, if it cannot.
-func (s *Service) refuseExternalEntry(ctx context.Context, u User, homeDirectory bool) error {
+// entered or linked through an external provider, if it cannot, and whether
+// it acts as staff.
+func (s *Service) refuseExternalEntry(ctx context.Context, u User, homeDirectory bool) (bool, error) {
 	switch {
 	case u.Status == StatusDeleted:
-		return ErrAccountDeleted
+		return false, ErrAccountDeleted
 	case !u.IsActive():
-		return ErrAccountBlocked
-	}
-	if homeDirectory {
-		return nil
+		return false, ErrAccountBlocked
 	}
 	staff, err := ActsAsStaff(ctx, s.repo, u)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if staff {
-		return ErrStaffNotLinkable
+	if staff && !homeDirectory {
+		return true, ErrStaffNotLinkable
 	}
-	return nil
+	return staff, nil
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {
@@ -595,7 +599,11 @@ type ChangePasswordCommand struct {
 }
 
 // ChangePassword replaces a password after checking the current one. The
-// caller throttles it (CLAUDE.md rule 4).
+// caller throttles it (CLAUDE.md rule 4). The digest is verified outside the
+// transaction, so the write locks the account and refuses ErrWrongPassword
+// when the digest is no longer the one verified: a link that retired a
+// one-time password meanwhile must not end with its creator's choice on the
+// linked account.
 func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand) error {
 	user, err := s.repo.ByID(ctx, cmd.UserID)
 	if err != nil {
@@ -623,6 +631,16 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 		return fmt.Errorf("hash password: %w", err)
 	}
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, user.ID); err != nil {
+			return err
+		}
+		current, err := s.repo.ByID(ctx, user.ID)
+		if err != nil {
+			return err
+		}
+		if current.PasswordHash != user.PasswordHash {
+			return ErrWrongPassword
+		}
 		if err := s.repo.SetPassword(ctx, user.ID, hash, false); err != nil {
 			return err
 		}

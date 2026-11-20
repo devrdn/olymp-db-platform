@@ -182,6 +182,10 @@
       "meaning": "Signing in through this external provider is switched off on this installation. Sign in another way: an account entered only through it can set a password by password recovery, and staff ask an administrator."
     },
     {
+      "code": "external_signin_unverified",
+      "meaning": "The address the provider vouches for belongs to an account here that never proved it owns that address and is not on a one-time password, so the sign-in is not linked to it. The account's holder confirms the address with a password reset link and then signs in through the provider, or an administrator resolves it."
+    },
+    {
       "code": "forbidden",
       "meaning": "The signed-in account may not perform this action here."
     },

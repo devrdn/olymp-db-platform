@@ -2678,6 +2678,7 @@ const ro = {
     external_signin_closed: "Acel cont nu este legat de niciun cont de aici, iar conturi noi nu se pot crea. Cereți unul organizatorilor.",
     external_signin_unavailable: "Autentificarea în acest mod este oprită aici. Intrați în alt mod sau adresați-vă unui administrator.",
     external_signin_conflict: "Nu vă puteți autentifica aici cu acel cont: contul dumneavoastră de pe acest site este legat de alt cont de la același serviciu sau organizația dumneavoastră nu este admisă. Adresați-vă unui administrator.",
+    external_signin_unverified: "Această adresă de e-mail este deja folosită de un cont de aici, dar nu a fost confirmată niciodată. Dacă acel cont este al dumneavoastră, autentificați-vă cu parola lui, dacă are una, sau resetați parola prin e-mail: astfel adresa se confirmă, iar apoi autentificarea în acest mod va funcționa. Dacă nu este al dumneavoastră sau parola nu se poate reseta prin e-mail, adresați-vă unui administrator.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",
     internal_error: "Serverul nu a putut procesa cererea.",

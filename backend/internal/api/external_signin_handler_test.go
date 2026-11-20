@@ -491,7 +491,8 @@ func TestAKeyOutageIsLoggedAsAnError(t *testing.T) {
 // on every try, so the page must not say to try again.
 func TestASecondIdentityForALinkedAccountLandsOnTheConflictCode(t *testing.T) {
 	f := newExternalFixture(t, externalOptions{createAccounts: true})
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	verified := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &verified, Roles: []string{users.RoleStudent}})
 	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
 		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: f.provider.Issuer(msHomeTenant), Subject: "an-earlier-object-id",
 	}); err != nil {
@@ -502,6 +503,33 @@ func TestASecondIdentityForALinkedAccountLandsOnTheConflictCode(t *testing.T) {
 	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
 
 	assertLandsOnSignIn(t, rec, "external_signin_conflict")
+}
+
+func TestAnUnverifiedAccountWithAChosenPasswordLandsOnTheUnverifiedCode(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: passwordtest.Hash(t, "a password its creator chose"),
+	})
+	s := f.start(t, "192.0.2.1", "/")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_unverified")
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.NewCookieWriter(false).SessionName() && c.Value != "" {
+			t.Errorf("a session cookie was set: %+v", c)
+		}
+	}
+	if ids := f.repo.Identities(ana.ID); len(ids) != 0 {
+		t.Errorf("ana's account was linked: %+v", ids)
+	}
+	if f.repo.Len() != 1 {
+		t.Errorf("%d accounts exist, want only ana's", f.repo.Len())
+	}
+	if f.logs.loggedError("") {
+		t.Error("the refusal was logged as an error, as an outage would be")
+	}
 }
 
 func TestARefusedTokenLandsOnTheSignInPage(t *testing.T) {

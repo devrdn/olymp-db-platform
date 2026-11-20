@@ -22,6 +22,9 @@ const issuer = "https://login.example.edu/tenant/v2.0"
 
 var now = time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
 
+// proved is when a verified account proved its address, before the sign-in.
+var proved = now.Add(-24 * time.Hour)
+
 type discardSink struct{}
 
 func (discardSink) Append(context.Context, audit.Entry) error       { return nil }
@@ -157,7 +160,7 @@ func TestAKnownIdentitySignsIntoItsAccount(t *testing.T) {
 
 func TestATrustedEmailLinksToTheExistingStudent(t *testing.T) {
 	f := newFixture(t)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 	c := trusted("sub-ana")
 	c.Email = "  Ana@Example.EDU "
 
@@ -235,6 +238,57 @@ func TestATrustedEmailLinksAnAccountWithoutItsOneTimePassword(t *testing.T) {
 	assertEnteredWithoutTheOneTimePassword(t, f, ana, got)
 	if got.EmailVerifiedAt == nil || !got.EmailVerifiedAt.Equal(now) {
 		t.Errorf("returned account verified at %v, want %v", got.EmailVerifiedAt, now)
+	}
+}
+
+func TestATrustedEmailDoesNotLinkAnUnverifiedAccountWithAChosenPassword(t *testing.T) {
+	for _, provider := range users.Providers {
+		t.Run(provider, func(t *testing.T) {
+			f := newFixture(t)
+			ana := f.repo.Add(users.User{
+				Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+				PasswordHash: "a-hash-of-a-password-its-creator-chose",
+			})
+			accounts := f.accountCount()
+			c := trusted("sub-ana")
+			c.Provider = provider
+
+			_, err := f.service().Resolve(t.Context(), c)
+
+			if !errors.Is(err, federation.ErrUnverifiedAccount) {
+				t.Errorf("Resolve() = %v, want ErrUnverifiedAccount", err)
+			}
+			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+				t.Errorf("identities = %+v, want none", linked)
+			}
+			if n := f.accountCount(); n != accounts {
+				t.Errorf("accounts = %d, want %d: no fresh account", n, accounts)
+			}
+		})
+	}
+}
+
+// The rule is decided on the locked row, so an address an administrator
+// re-typed after the lookup is not linked.
+func TestAnAccountUnverifiedBeforeTheLinkIsNotLinked(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent},
+		PasswordHash: "a-hash-of-a-password-ana-chose",
+	})
+	f.accounts.before = func() {
+		if err := f.repo.UpdateProfile(t.Context(), ana.ID, ana.FullName, ana.Email, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+
+	if !errors.Is(err, federation.ErrUnverifiedAccount) {
+		t.Errorf("Resolve() = %v, want ErrUnverifiedAccount", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
 	}
 }
 
@@ -400,7 +454,7 @@ func TestNoAccountIsCreatedWhileSignupIsClosed(t *testing.T) {
 		f.policy.CreateAccounts = false
 		known := f.repo.Add(users.User{Login: "known", FullName: "Known", Roles: []string{users.RoleStudent}})
 		f.link(t, known, "sub-known")
-		ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+		ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 
 		if got, err := f.service().Resolve(t.Context(), claims("sub-known")); err != nil || got.ID != known.ID {
 			t.Errorf("known identity: Resolve() = %v, %v; want its account", got.ID, err)
@@ -682,7 +736,7 @@ func TestTwoFirstSignInsOfOneIdentityEnterOneAccount(t *testing.T) {
 
 func TestALinkThatLosesARaceEntersTheWinner(t *testing.T) {
 	f := newFixture(t)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 	f.accounts.before = func() { f.link(t, ana, "sub-ana") }
 
 	got, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
@@ -845,7 +899,7 @@ func TestTheHomeDirectoryNeverOpensABlockedOrDeletedAccount(t *testing.T) {
 func TestTheHomeDirectoryFlagReachesTheLink(t *testing.T) {
 	for _, home := range []bool{true, false} {
 		f := newFixture(t)
-		f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+		f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 		c := trusted("sub-ana")
 		c.HomeDirectory = home
 
@@ -903,7 +957,7 @@ func (a *claimingAccounts) CreateExternal(ctx context.Context, cmd users.CreateE
 
 func TestAnAccountThatTakesTheEmailDuringCreationIsLinkedInstead(t *testing.T) {
 	f := newFixture(t)
-	ana := users.User{ID: uuid.New(), Login: "confirmed", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}}
+	ana := users.User{ID: uuid.New(), Login: "confirmed", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}}
 	accounts := &claimingAccounts{Accounts: f.accounts, repo: f.repo, appear: &ana}
 	f.accounts = &hookedAccounts{Accounts: accounts}
 
@@ -983,7 +1037,7 @@ func TestAnAccountReaddressedBeforeTheLinkIsNotLinked(t *testing.T) {
 
 func TestASecondIdentityOfTheSameIssuerIsNotLinkedByEmail(t *testing.T) {
 	f := newFixture(t)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 	f.link(t, ana, "sub-previous-holder")
 
 	_, err := f.service().Resolve(t.Context(), trusted("sub-new-holder"))
@@ -1001,7 +1055,7 @@ func TestASecondIdentityOfTheSameIssuerIsNotLinkedByEmail(t *testing.T) {
 
 func TestAnIdentityOfAnotherIssuerIsLinkedByEmail(t *testing.T) {
 	f := newFixture(t)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}})
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 	f.link(t, ana, "sub-ana")
 	c := trusted("sub-ana-elsewhere")
 	c.Issuer = "https://login.example.edu/other-tenant/v2.0"

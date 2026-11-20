@@ -230,13 +230,16 @@ var usersErrors = errorTable{
 	{err: users.ErrMailOff, status: http.StatusConflict, code: codeMailOff,
 		message: "Email is off on this installation, so sign-in details cannot be emailed"},
 	// Ours if any of these arrives: federation answers a lost race by entering
-	// the account that won it, and the other two with refusals of its own.
+	// the account that won it, and the others with refusals of its own.
 	{err: users.ErrExternalIdentityTaken, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "an external identity was linked twice"},
 	{err: users.ErrStaffNotLinkable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a staff account's refusal to link reached a handler"},
+	{err: users.ErrUnverifiedNotLinkable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
+		message: "Internal server error",
+		logAs:   "an unverified account's refusal to link reached a handler"},
 	{err: users.ErrIssuerAlreadyLinked, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a second identity's refusal to link reached a handler"},
@@ -369,6 +372,8 @@ var externalSignInRedirects = []struct {
 	// Refused on every try, so the person is sent to an administrator, not
 	// back to the button.
 	{err: federation.ErrIdentityConflict, code: codeExternalSignInConflict},
+	// The holder can lift this one: a password reset link proves the address.
+	{err: federation.ErrUnverifiedAccount, code: codeExternalSignInUnverified},
 	{err: connector.ErrSignInRefused, code: codeExternalSignInFailed},
 	{err: connector.ErrExchangeFailed, code: codeExternalSignInFailed},
 	{err: connector.ErrKeysUnavailable, code: codeExternalSignInFailed, outage: true},

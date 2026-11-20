@@ -49,11 +49,15 @@ var (
 	// to another identity at the same issuer: a provider may reassign a
 	// mailbox, and its new holder must not enter the previous one's account.
 	ErrIdentityConflict = errors.New("the account is already linked to another identity at this provider")
+	// ErrUnverifiedAccount refuses linking by email an account that does not
+	// act as staff and is not users.User.LinkableByEmail. No fresh account is
+	// made instead: the address stays with the account that holds it.
+	ErrUnverifiedAccount = errors.New("the account holding the address never proved it and is not on a one-time password")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
 func Errors() []error {
-	return []error{ErrStaffAccount, ErrSignupClosed, ErrInvalidClaims, ErrIdentityConflict}
+	return []error{ErrStaffAccount, ErrSignupClosed, ErrInvalidClaims, ErrIdentityConflict, ErrUnverifiedAccount}
 }
 
 // PassedThrough lists the users sentinels Resolve hands over unchanged, so the

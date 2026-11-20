@@ -423,7 +423,7 @@ func TestCreateExternalOfALinkedIdentityIsRefusedAsTaken(t *testing.T) {
 func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	f := newFixture(t)
 	f.service.WithExternalIdentities(f.repo)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	ana := f.oneTimeStudent(t)
 	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
 
 	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: at}); err != nil {
@@ -440,11 +440,11 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	if f.uow.Calls != 1 {
 		t.Errorf("units of work = %d, want the link, the verification and the entry in one", f.uow.Calls)
 	}
-	if len(f.sink.entries) != 1 {
-		t.Fatalf("audit = %v, want one entry", f.sink.actions())
+	if got := f.sink.actions(); !slices.Equal(got, []string{audit.ActionUserExternalIdentityLink, audit.ActionUserOneTimePasswordRetire}) {
+		t.Fatalf("audit = %v, want the link, then the one-time password's retirement", got)
 	}
 	entry := f.sink.entries[0]
-	if entry.Action != audit.ActionUserExternalIdentityLink || entry.ActorID != nil || entry.EntityID != ana.ID.String() {
+	if entry.ActorID != nil || entry.EntityID != ana.ID.String() {
 		t.Errorf("entry = %+v, want the link with a nil actor", entry)
 	}
 	if entry.Payload["provider"] != users.ProviderMicrosoft || entry.Payload["email_trusted"] != true ||
@@ -509,8 +509,9 @@ func TestLinkingRetiresAnUnusedOneTimePassword(t *testing.T) {
 func TestLinkingKeepsAPasswordTheOwnerChose(t *testing.T) {
 	f := newFixture(t)
 	f.service.WithExternalIdentities(f.repo)
+	verified := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	ana := f.repo.Add(users.User{
-		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &verified, Roles: []string{users.RoleStudent},
 		PasswordHash: passwordtest.Hash(t, "a password ana chose"),
 	})
 
@@ -523,6 +524,85 @@ func TestLinkingKeepsAPasswordTheOwnerChose(t *testing.T) {
 	}
 	if got := f.sink.actions(); !slices.Equal(got, []string{audit.ActionUserExternalIdentityLink}) {
 		t.Errorf("audit = %v, want the link only", got)
+	}
+}
+
+func TestLinkExternalRefusesAnUnverifiedAccountNotOnAOneTimePassword(t *testing.T) {
+	for name, hash := range map[string]string{
+		"chosen password": passwordtest.Hash(t, "a password ana's creator chose"),
+		"no password":     "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			ana := f.repo.Add(users.User{
+				Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent}, PasswordHash: hash,
+			})
+
+			_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()})
+
+			if !errors.Is(err, users.ErrUnverifiedNotLinkable) {
+				t.Errorf("LinkExternal() = %v, want ErrUnverifiedNotLinkable", err)
+			}
+			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+				t.Errorf("identities = %+v, want none", linked)
+			}
+			stored, _ := f.repo.Get(ana.ID)
+			if stored.EmailVerifiedAt != nil {
+				t.Error("the email was marked verified")
+			}
+			if stored.PasswordHash != ana.PasswordHash {
+				t.Error("the password changed")
+			}
+			if got := f.sink.actions(); len(got) != 0 {
+				t.Errorf("audit = %v, want nothing recorded", got)
+			}
+		})
+	}
+}
+
+func TestLinkExternalLinksAnUnverifiedAccountStillOnItsOneTimePassword(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.oneTimeStudent(t)
+	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
+
+	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: at}); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want one", linked)
+	}
+	stored, _ := f.repo.Get(ana.ID)
+	if stored.PasswordHash != "" || stored.MustChangePassword {
+		t.Errorf("stored hash %q, must change %v: want the one-time password retired", stored.PasswordHash, stored.MustChangePassword)
+	}
+	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(at) {
+		t.Errorf("email verified at %v, want %v", stored.EmailVerifiedAt, at)
+	}
+}
+
+// Staff reach the link only from the home directory, where the provider
+// vouches for membership and an administrator typed the address.
+func TestLinkExternalLinksAnUnverifiedStaffAccountThroughTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.repo.GrantRole("organizer", "contests.manage")
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{"organizer"},
+		PasswordHash: passwordtest.Hash(t, "a password ana chose"),
+	})
+
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{
+		UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now(), HomeDirectory: true,
+	})
+
+	if err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
+		t.Errorf("identities = %+v, want one", linked)
 	}
 }
 
@@ -723,7 +803,7 @@ func TestLinkExternalRefusesAContestManager(t *testing.T) {
 func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {
 	f := newFixture(t)
 	f.service.WithExternalIdentities(f.repo)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	ana := f.oneTimeStudent(t)
 	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
 		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: microsoftIdentity("").Issuer, Subject: "sub-before",
 	}); err != nil {
@@ -749,7 +829,8 @@ func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {
 func TestLinkExternalLinksAnIdentityOfAnotherIssuer(t *testing.T) {
 	f := newFixture(t)
 	f.service.WithExternalIdentities(f.repo)
-	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu"})
+	verified := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &verified})
 	if err := f.repo.LinkExternalIdentity(t.Context(), users.ExternalIdentity{
 		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/other-tenant/v2.0", Subject: "sub-elsewhere",
 	}); err != nil {
