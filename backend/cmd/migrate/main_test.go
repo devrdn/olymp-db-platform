@@ -974,14 +974,15 @@ func TestTheReportsViewMigrationRollsBackAndForward(t *testing.T) {
 }
 
 // auditGuard is the append-only function as the catalogue holds it.
-type auditGuard struct{ body, comment string }
+type auditGuard struct{ body, comment, config string }
 
 func readAuditGuard(t *testing.T, ctx context.Context, conn *pgx.Conn) auditGuard {
 	t.Helper()
 	var g auditGuard
 	if err := conn.QueryRow(ctx, `
-		SELECT p.prosrc, coalesce(obj_description(p.oid, 'pg_proc'), '')
-		FROM pg_proc p WHERE p.proname = 'audit_log_refuse_change'`).Scan(&g.body, &g.comment); err != nil {
+		SELECT p.prosrc, coalesce(obj_description(p.oid, 'pg_proc'), ''),
+		       coalesce(array_to_string(p.proconfig, ','), '')
+		FROM pg_proc p WHERE p.proname = 'audit_log_refuse_change'`).Scan(&g.body, &g.comment, &g.config); err != nil {
 		t.Fatalf("read the audit guard: %v", err)
 	}
 	return g
@@ -989,18 +990,18 @@ func readAuditGuard(t *testing.T, ctx context.Context, conn *pgx.Conn) auditGuar
 
 // execWithRetentionOn runs statement with the retention setting on, as the
 // sweep runs, in a transaction it rolls back, and returns the answer.
-func execWithRetentionOn(t *testing.T, ctx context.Context, conn *pgx.Conn, statement string) error {
+func execWithRetentionOn(t *testing.T, ctx context.Context, conn *pgx.Conn, statement string) (pgconn.CommandTag, error) {
 	t.Helper()
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('olympdb.audit_retention', 'on', true)`); err != nil {
+	if _, err := tx.Exec(ctx,
+		`SELECT set_config('olympdb.audit_retention', pg_current_xact_id()::text, true)`); err != nil {
 		t.Fatalf("turn retention on: %v", err)
 	}
-	_, err = tx.Exec(ctx, statement)
-	return err
+	return tx.Exec(ctx, statement)
 }
 
 // TestTheAuditRetentionMigrationRestoresTheAppendOnlyGuard proves the down
@@ -1039,8 +1040,11 @@ func TestTheAuditRetentionMigrationRestoresTheAppendOnlyGuard(t *testing.T) {
 		t.Fatalf("append an old entry: %v", err)
 	}
 	const deleteOld = `DELETE FROM audit_log WHERE created_at < now() - interval '18 months'`
-	if err := execWithRetentionOn(t, ctx, conn, deleteOld); err != nil {
-		t.Fatalf("a retention delete at 63 = %v, want it let through", err)
+	if tag, err := execWithRetentionOn(t, ctx, conn, deleteOld); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("a retention delete at 63 = %v, %d rows; want the one old entry deleted", err, tag.RowsAffected())
+	}
+	if pinned := readAuditGuard(t, ctx, conn).config; pinned != "search_path=pg_catalog" {
+		t.Errorf("the guard's settings at 63 = %q, want its search_path pinned to pg_catalog", pinned)
 	}
 
 	if err := m.Migrate(62); err != nil {
@@ -1050,7 +1054,7 @@ func TestTheAuditRetentionMigrationRestoresTheAppendOnlyGuard(t *testing.T) {
 		t.Errorf("the guard after rolling back = %+v, want 000043's %+v", restored, original)
 	}
 	for _, statement := range []string{deleteOld, `UPDATE audit_log SET action = 'x'`, `TRUNCATE audit_log`} {
-		err := execWithRetentionOn(t, ctx, conn, statement)
+		_, err := execWithRetentionOn(t, ctx, conn, statement)
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) || !strings.Contains(pgErr.Message, "append-only") {
 			t.Errorf("%s with retention on, after rolling back = %v, want the trail's refusal", statement, err)

@@ -449,7 +449,6 @@ func TestTheTrailRefusesRewritingHistory(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-rewrite")
 		contestID := writeTrail(t, ctx, actor.ID)
-		q := storage.QuerierFrom(ctx, testPool)
 
 		for _, attempt := range []struct {
 			name, sql string
@@ -459,18 +458,8 @@ func TestTheTrailRefusesRewritingHistory(t *testing.T) {
 			{"delete", `DELETE FROM audit_log WHERE entity_id = $1`, []any{contestID}},
 			{"truncate", `TRUNCATE audit_log`, nil},
 		} {
-			// A refused statement aborts the transaction, so each attempt is
-			// its own savepoint.
-			if _, err := q.Exec(ctx, `SAVEPOINT rewrite`); err != nil {
-				t.Fatal(err)
-			}
-			_, err := q.Exec(ctx, attempt.sql, attempt.args...)
-			var pgErr *pgconn.PgError
-			if !errors.As(err, &pgErr) || !strings.Contains(pgErr.Message, "append-only") {
+			if _, err := inSavepoint(t, ctx, attempt.sql, attempt.args...); !refusedAsAppendOnly(err) {
 				t.Errorf("%s = %v, want the trail's refusal", attempt.name, err)
-			}
-			if _, err := q.Exec(ctx, `ROLLBACK TO SAVEPOINT rewrite`); err != nil {
-				t.Fatal(err)
 			}
 		}
 
@@ -518,11 +507,13 @@ func inSavepoint(t *testing.T, ctx context.Context, sql string, args ...any) (pg
 	return tag, err
 }
 
+// enableAuditRetention opens the trail's retention exemption as the sweep
+// does: for this transaction, by its own id.
 func enableAuditRetention(t *testing.T, ctx context.Context) {
 	t.Helper()
 
 	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
-		`SELECT set_config('olympdb.audit_retention', 'on', true)`); err != nil {
+		`SELECT set_config('olympdb.audit_retention', pg_current_xact_id()::text, true)`); err != nil {
 		t.Fatalf("turn retention on: %v", err)
 	}
 }
@@ -555,24 +546,70 @@ func TestRetentionMayNotDeleteAnEntryYoungerThanEighteenMonths(t *testing.T) {
 	})
 }
 
-// The exemption opens on the exact value 'on', set for the transaction; any
-// other value, or none, leaves the guard closed.
+// The exemption opens only for the transaction whose id the setting holds;
+// no setting, the bare word 'on' or another transaction's id leave it closed.
 func TestTheTrailRefusesARetentionDeleteWithoutTheSetting(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		id := appendAged(t, ctx, "19 months")
 
-		if _, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
-			t.Errorf("DELETE without the setting = %v, want the trail's refusal", err)
-		}
-
-		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
-			`SELECT set_config('olympdb.audit_retention', 'true', true)`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
-			t.Errorf("DELETE with the setting at 'true' = %v, want the trail's refusal", err)
+		for _, value := range []string{
+			"",
+			`'on'`,
+			`(pg_current_xact_id()::text::bigint + 1)::text`,
+		} {
+			if value != "" {
+				if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+					`SELECT set_config('olympdb.audit_retention', `+value+`, true)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
+				t.Errorf("DELETE with the setting at %q = %v, want the trail's refusal", value, err)
+			}
 		}
 	})
+}
+
+// A session-wide SET survives on a pooled connection; naming the transaction
+// that set it keeps it from opening any transaction after that one.
+func TestASessionWideRetentionSettingDoesNotOpenALaterTransaction(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := t.Context()
+	conn, err := testPool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire a connection: %v", err)
+	}
+	defer conn.Release()
+	defer func() {
+		if _, err := conn.Exec(context.WithoutCancel(ctx), `RESET olympdb.audit_retention`); err != nil {
+			t.Errorf("reset the setting: %v", err)
+		}
+	}()
+
+	var earlier string
+	if err := conn.QueryRow(ctx, `SELECT pg_current_xact_id()::text`).Scan(&earlier); err != nil {
+		t.Fatalf("read a transaction id: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT set_config('olympdb.audit_retention', $1, false)`, earlier); err != nil {
+		t.Fatalf("set the session-wide value: %v", err)
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var id int64
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO audit_log (action, created_at) VALUES ('contest.update', now() - interval '19 months') RETURNING id`).
+		Scan(&id); err != nil {
+		t.Fatalf("append an old entry: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
+		t.Errorf("DELETE under an earlier transaction's id = %v, want the trail's refusal", err)
+	}
 }
 
 func TestRetentionCannotRewriteOrTruncateTheTrail(t *testing.T) {

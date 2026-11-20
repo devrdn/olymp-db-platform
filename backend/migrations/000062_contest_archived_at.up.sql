@@ -10,11 +10,6 @@
 -- The backfill takes updated_at for contests archived before this
 -- migration. That is at or after the real archive time, so it errs late:
 -- a journal may be kept longer than its period, never deleted early.
-
--- The file runs as one implicit transaction (cmd/migrate hands it over as one
--- string); five seconds is longer than any query the API may run, so a wait
--- past it is a wait on something else, and the migration gives up rather than
--- queue requests on contests behind it.
 SET lock_timeout = '5s';
 
 ALTER TABLE contests ADD COLUMN archived_at timestamptz;
@@ -27,7 +22,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION contests_stamp_archived() IS
-    'Stamps contests.archived_at when a contest becomes archived: the column is derived, never supplied.';
+    'Stamps contests.archived_at when a contest becomes archived.';
 
 CREATE TRIGGER contests_stamp_archived
     BEFORE UPDATE OF status ON contests

@@ -7,5 +7,7 @@ BEGIN
 END;
 $$;
 
+ALTER FUNCTION audit_log_refuse_change() RESET search_path;
+
 COMMENT ON FUNCTION audit_log_refuse_change() IS
     'Refuses an UPDATE, DELETE or TRUNCATE on audit_log: the trail is append-only.';
