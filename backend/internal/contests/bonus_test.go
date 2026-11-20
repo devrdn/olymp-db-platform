@@ -70,11 +70,6 @@ func TestABonusQuestionIsRefusedOutsidePointsScoring(t *testing.T) {
 			if err != nil {
 				t.Fatalf("AddQuestion(regular) = %v", err)
 			}
-			update := bonusCmd(c.ID)
-			update.QuestionID = regular.ID
-			if _, err := f.Service.UpdateQuestion(context.Background(), update); !errors.Is(err, contests.ErrBonusNeedsPoints) {
-				t.Errorf("UpdateQuestion() = %v, want ErrBonusNeedsPoints", err)
-			}
 			bonus := true
 			if _, err := f.Service.SaveQuestion(context.Background(), contests.SaveQuestionCommand{
 				ActorID: uuid.New(), ContestID: c.ID, QuestionID: regular.ID,
@@ -98,15 +93,6 @@ func TestEditingAQuestionKeepsAnUnmentionedBonusFlag(t *testing.T) {
 		t.Fatalf("AddQuestion() = %v", err)
 	}
 
-	updated, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
-		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID, Kind: contests.KindText, Points: 7,
-	})
-	if err != nil {
-		t.Fatalf("UpdateQuestion() = %v", err)
-	}
-	if !updated.IsBonus {
-		t.Error("UpdateQuestion() cleared a bonus flag it was not sent")
-	}
 	saved, err := f.Service.SaveQuestion(context.Background(), contests.SaveQuestionCommand{
 		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID, Kind: contests.KindText, Points: 7,
 	})
@@ -138,10 +124,12 @@ func TestMarkingABonusIsRecordedAmongTheFieldsThatMoved(t *testing.T) {
 		t.Fatalf("AddQuestion() = %v", err)
 	}
 
-	update := bonusCmd(c.ID)
-	update.QuestionID = created.ID
-	if _, err := f.Service.UpdateQuestion(context.Background(), update); err != nil {
-		t.Fatalf("UpdateQuestion() = %v", err)
+	bonus := true
+	if _, err := f.Service.SaveQuestion(context.Background(), contests.SaveQuestionCommand{
+		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
+		Kind: contests.KindText, Points: 5, IsBonus: &bonus,
+	}); err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
 	}
 
 	entry := f.Audit.Entries[len(f.Audit.Entries)-1]

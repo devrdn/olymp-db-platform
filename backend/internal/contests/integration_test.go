@@ -76,23 +76,17 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 			})
 			return err
 		}},
-		{"UpdateQuestion", func() error {
-			_, err := f.Service.UpdateQuestion(ctx, contests.QuestionCommand{
+		{"SaveQuestion", func() error {
+			_, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
 				ActorID:    actor,
 				ContestID:  c.ID,
 				QuestionID: added.ID,
 				Kind:       contests.KindText,
 				Points:     7,
+				Texts:      map[string]contests.QuestionText{"en": {BodyMD: "Where was the second key?"}},
+				Answers:    []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "under the mat"}},
 			})
 			return err
-		}},
-		{"SetQuestionTexts", func() error {
-			return f.Service.SetQuestionTexts(ctx, actor, c.ID, added.ID,
-				map[string]contests.QuestionText{"en": {BodyMD: "Where was the second key?"}})
-		}},
-		{"SetAnswers", func() error {
-			return f.Service.SetAnswers(ctx, actor, c.ID, added.ID,
-				[]contests.Answer{{MatchKind: contests.MatchExactCI, Value: "under the mat"}})
 		}},
 		{"ReorderQuestions", func() error {
 			existing, err := f.Service.Questions(ctx, c.ID)

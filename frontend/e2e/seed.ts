@@ -98,15 +98,17 @@ export default async function seed(): Promise<void> {
       allow_catalog: false,
       disk_quota_ratio: 5,
     });
-    const question = await operator.call<{ id: string }>("POST", `${at}/questions`, {
+    const wording = {
       kind: "text",
       points: 10,
       is_visible: true,
       texts: { en: { title: "The alibi", body_md: "Which suspect has no alibi?" } },
-    });
+    };
+    const question = await operator.call<{ id: string }>("POST", `${at}/questions`, wording);
     record.question = { id: question.id, answer: ANSWER, wrongAnswer: WRONG_ANSWER };
     writeRecord(record);
-    await operator.call("PUT", `${at}/questions/${question.id}/answers`, {
+    await operator.call("PUT", `${at}/questions/${question.id}`, {
+      ...wording,
       answers: [{ match_kind: "exact_ci", value: ANSWER }],
     });
 

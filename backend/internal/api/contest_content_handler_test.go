@@ -199,40 +199,14 @@ func TestAQuestionsPenaltySurvivesARoundTripThroughTheAPI(t *testing.T) {
 	}
 }
 
-// TestUpdatingAQuestionPreservesAnUnmentionedPenalty: a PATCH that never
-// mentions penalty_pct must not reset it to zero.
-func TestUpdatingAQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
+func TestSavingAQuestionWholeCanChangeThePenalty(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
 	q := f.stores.Questions.Put(contests.Question{
 		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 10, PenaltyPct: 40, IsVisible: true,
 	})
 
-	rec := f.do(http.MethodPatch, questionPath(c.ID, q.ID.String()), `{
-		"kind": "text",
-		"points": 12
-	}`)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
-	}
-	body := decode(t, rec)
-	if body["penalty_pct"] != float64(40) {
-		t.Errorf("penalty_pct = %v, want 40 (unchanged by an edit that never mentioned it)", body["penalty_pct"])
-	}
-	if body["points"] != float64(12) {
-		t.Errorf("points = %v, want 12 (the field the request did mention)", body["points"])
-	}
-}
-
-func TestUpdatingAQuestionCanChangeThePenalty(t *testing.T) {
-	f := newContestFixture(t, rbac.PermissionContestCreate)
-	c := f.ownedContest(t, contests.StatusDraft)
-	q := f.stores.Questions.Put(contests.Question{
-		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 10, PenaltyPct: 40, IsVisible: true,
-	})
-
-	rec := f.do(http.MethodPatch, questionPath(c.ID, q.ID.String()), `{
+	rec := f.do(http.MethodPut, questionPath(c.ID, q.ID.String()), `{
 		"kind": "text",
 		"points": 10,
 		"penalty_pct": 0
@@ -331,10 +305,10 @@ func TestStaffSeeTheReferenceAnswers(t *testing.T) {
 	c := f.ownedContest(t, contests.StatusDraft)
 	question := f.addQuestion(t, c.ID)
 
-	saved := f.do(http.MethodPut, questionPath(c.ID, question)+"/answers",
-		`{"answers": [{"match_kind": "exact_ci", "value": "the butler"}]}`)
-	if saved.Code != http.StatusNoContent {
-		t.Fatalf("PUT answers status = %d, want 204 (%s)", saved.Code, saved.Body.String())
+	saved := f.do(http.MethodPut, questionPath(c.ID, question),
+		`{"kind": "text", "points": 5, "answers": [{"match_kind": "exact_ci", "value": "the butler"}]}`)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PUT question status = %d, want 200 (%s)", saved.Code, saved.Body.String())
 	}
 
 	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/questions", "")
@@ -354,8 +328,8 @@ func TestAReferenceAnswerWithABrokenPatternIsRejected(t *testing.T) {
 	c := f.ownedContest(t, contests.StatusDraft)
 	question := f.addQuestion(t, c.ID)
 
-	rec := f.do(http.MethodPut, questionPath(c.ID, question)+"/answers",
-		`{"answers": [{"match_kind": "regex", "value": "the (butler"}]}`)
+	rec := f.do(http.MethodPut, questionPath(c.ID, question),
+		`{"kind": "text", "points": 5, "answers": [{"match_kind": "regex", "value": "the (butler"}]}`)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
@@ -415,8 +389,8 @@ func TestQuestionTextRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 	c := f.ownedContest(t, contests.StatusDraft)
 	question := f.addQuestion(t, c.ID)
 
-	rec := f.do(http.MethodPut, questionPath(c.ID, question)+"/texts",
-		`{"texts": {"rus": {"body_md": "Кто это сделал?"}}}`)
+	rec := f.do(http.MethodPut, questionPath(c.ID, question),
+		`{"kind": "text", "points": 5, "texts": {"rus": {"body_md": "Кто это сделал?"}}}`)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
@@ -520,8 +494,8 @@ func TestAnOverlongQuestionTitleIsRefused(t *testing.T) {
 	}
 }
 
-// TestSavingAQuestionWholePreservesAnUnmentionedPenalty is the PUT counterpart
-// of the PATCH test above.
+// TestSavingAQuestionWholePreservesAnUnmentionedPenalty: a save that never
+// mentions penalty_pct must not reset it to zero.
 func TestSavingAQuestionWholePreservesAnUnmentionedPenalty(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -578,5 +552,23 @@ func TestSavingAQuestionNeedsThePermissionToEdit(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestTheSupersededQuestionRoutesAreGone(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.addQuestion(t, c.ID)
+	for _, call := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPatch, questionPath(c.ID, q), http.StatusMethodNotAllowed},
+		{http.MethodPut, questionPath(c.ID, q) + "/texts", http.StatusNotFound},
+		{http.MethodPut, questionPath(c.ID, q) + "/answers", http.StatusNotFound},
+	} {
+		if rec := f.do(call.method, call.path, `{}`); rec.Code != call.want {
+			t.Errorf("%s %s = %d, want %d", call.method, call.path, rec.Code, call.want)
+		}
 	}
 }

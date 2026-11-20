@@ -212,11 +212,9 @@ async function question(
   body: Record<string, unknown>,
   answers: { match_kind: string; value: string }[],
 ): Promise<string> {
-  const created = await operator.call<{ id: string }>("POST", `/contests/${contest.id}/questions`, {
-    is_visible: true,
-    ...body,
-  });
-  await operator.call("PUT", `/contests/${contest.id}/questions/${created.id}/answers`, { answers });
+  const whole = { is_visible: true, ...body };
+  const created = await operator.call<{ id: string }>("POST", `/contests/${contest.id}/questions`, whole);
+  await operator.call("PUT", `/contests/${contest.id}/questions/${created.id}`, { ...whole, answers });
   return created.id;
 }
 

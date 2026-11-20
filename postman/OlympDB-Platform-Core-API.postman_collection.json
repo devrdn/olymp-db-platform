@@ -1023,9 +1023,9 @@
           "response": []
         },
         {
-          "name": "Update question",
+          "name": "Save question",
           "request": {
-            "method": "PATCH",
+            "method": "PUT",
             "header": [
               {
                 "key": "Content-Type",
@@ -1044,10 +1044,10 @@
                 "{{questionId}}"
               ]
             },
-            "description": "Replaces the question's own fields. Text and answers have their own endpoints.\n\nChanging the options out from under existing reference answers is refused: it would leave answers nobody can submit.\n\nResponses: 200 · 400 · 404 · 409",
+            "description": "Replaces the whole question in one transaction: its fields, its wording in every language and its reference answers. A save lands entirely or not at all, so a change that spans several parts, such as a text question turned into a choice one, is checked as a whole.\n\n`penalty_pct`, `is_bonus` and `is_visible` left out keep what is stored. `title` is the one-line heading participants see first; a language sent without it has no title afterwards. `choices` maps each choice identifier to its label in that language. `texts` left out keeps the stored wording; `answers` left out clears the reference answers.\n\n`match_kind`: `exact` | `exact_ci` | `regex`. A regular expression is compiled here, at authoring time. Several accepted answers per question is normal. Answers are never returned to a participant and never written to the audit trail.\n\nResponses: 200 · 400 · 404 · 409",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 15,\n  \"is_visible\": false\n}",
+              "raw": "{\n  \"kind\": \"text\",\n  \"points\": 15,\n  \"is_visible\": true,\n  \"texts\": {\n    \"en\": {\n      \"title\": \"The culprit\",\n      \"body_md\": \"Who did it?\"\n    },\n    \"ro\": {\n      \"title\": \"Vinovatul\",\n      \"body_md\": \"Cine a făcut-o?\"\n    }\n  },\n  \"answers\": [\n    {\n      \"match_kind\": \"exact_ci\",\n      \"value\": \"the butler\"\n    },\n    {\n      \"match_kind\": \"exact_ci\",\n      \"value\": \"majordomul\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1104,78 +1104,6 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"order\": [\n    \"{{questionId}}\"\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Set question text",
-          "request": {
-            "method": "PUT",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}/texts",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "contests",
-                "{{contestId}}",
-                "questions",
-                "{{questionId}}",
-                "texts"
-              ]
-            },
-            "description": "Replaces the authored text. `title` is the one-line heading participants see first; a language sent without it has no title afterwards. `choices` maps each choice identifier to its label in that language.\n\nResponses: 204 · 400 · 404 · 409",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"texts\": {\n    \"en\": {\n      \"title\": \"The culprit\",\n      \"body_md\": \"Who did it?\",\n      \"choices\": {\n        \"a\": \"The butler\",\n        \"b\": \"The gardener\"\n      }\n    },\n    \"ro\": {\n      \"title\": \"Vinovatul\",\n      \"body_md\": \"Cine a făcut-o?\",\n      \"choices\": {\n        \"a\": \"Majordomul\",\n        \"b\": \"Grădinarul\"\n      }\n    }\n  }\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Set reference answers",
-          "request": {
-            "method": "PUT",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}/answers",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "contests",
-                "{{contestId}}",
-                "questions",
-                "{{questionId}}",
-                "answers"
-              ]
-            },
-            "description": "Replaces the accepted answers. Several per question is normal: the game database is English, so a translated story that transliterates a name simply adds another accepted spelling — refusing it would score language rather than detection.\n\n`match_kind`: `exact` | `exact_ci` | `regex`. A regular expression is compiled here, at authoring time: a pattern that fails to compile during a running contest would break grading for everybody who reached that question.\n\nNever returned to a participant, and never written to the audit trail.\n\nResponses: 204 · 400 `invalid_request` (bad pattern, or a choice value that is not one of the options) · 404 · 409",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"answers\": [\n    {\n      \"match_kind\": \"exact_ci\",\n      \"value\": \"the butler\"\n    },\n    {\n      \"match_kind\": \"exact_ci\",\n      \"value\": \"majordomul\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"

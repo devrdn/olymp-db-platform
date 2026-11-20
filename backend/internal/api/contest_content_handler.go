@@ -246,11 +246,10 @@ type questionRequest struct {
 	Texts     map[string]QuestionTextResponse `json:"texts"`
 }
 
-func (req questionRequest) command(contestID, questionID, actorID uuid.UUID) contests.QuestionCommand {
+func (req questionRequest) command(contestID, actorID uuid.UUID) contests.QuestionCommand {
 	return contests.QuestionCommand{
 		ActorID:     actorID,
 		ContestID:   contestID,
-		QuestionID:  questionID,
 		Kind:        req.Kind,
 		Points:      req.Points,
 		MaxAttempts: req.MaxAttempts,
@@ -274,32 +273,12 @@ func (h *ContestsHandler) addQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	created, err := h.service.AddQuestion(r.Context(), req.command(id, uuid.Nil, identity.UserID))
+	created, err := h.service.AddQuestion(r.Context(), req.command(id, identity.UserID))
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, toQuestionResponse(created))
-}
-
-func (h *ContestsHandler) updateQuestion(w http.ResponseWriter, r *http.Request) {
-	contestID, questionID, ok := h.questionRoute(w, r)
-	if !ok {
-		return
-	}
-
-	var req questionRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	identity, _ := auth.IdentityFrom(r.Context())
-	updated, err := h.service.UpdateQuestion(r.Context(), req.command(contestID, questionID, identity.UserID))
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	httpx.JSON(w, r, http.StatusOK, toQuestionResponse(updated))
 }
 
 func (h *ContestsHandler) deleteQuestion(w http.ResponseWriter, r *http.Request) {
@@ -352,39 +331,14 @@ func (h *ContestsHandler) reorderQuestions(w http.ResponseWriter, r *http.Reques
 	httpx.NoContent(w, r)
 }
 
-type questionTextsRequest struct {
-	Texts map[string]QuestionTextResponse `json:"texts"`
-}
-
-func (h *ContestsHandler) setQuestionTexts(w http.ResponseWriter, r *http.Request) {
-	contestID, questionID, ok := h.questionRoute(w, r)
-	if !ok {
-		return
-	}
-
-	var req questionTextsRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	identity, _ := auth.IdentityFrom(r.Context())
-	err := h.service.SetQuestionTexts(r.Context(), identity.UserID, contestID, questionID, toDomainTexts(req.Texts))
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	httpx.NoContent(w, r)
-}
-
 type saveQuestionRequest struct {
 	questionRequest
 	Answers []AnswerResponse `json:"answers"`
 }
 
 // saveQuestion replaces a question whole, in one transaction: a save lands
-// entirely or not at all, and a change spanning several parts (text to choice
-// question, say) is expressible, where the narrower endpoints would each refuse
-// half of it.
+// entirely or not at all, so a change spanning several parts (a text question
+// turned into a choice question, say) is checked and stored as one.
 func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 	contestID, questionID, ok := h.questionRoute(w, r)
 	if !ok {
@@ -422,34 +376,6 @@ func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, r, http.StatusOK, toQuestionResponse(saved))
-}
-
-type answersRequest struct {
-	Answers []AnswerResponse `json:"answers"`
-}
-
-func (h *ContestsHandler) setAnswers(w http.ResponseWriter, r *http.Request) {
-	contestID, questionID, ok := h.questionRoute(w, r)
-	if !ok {
-		return
-	}
-
-	var req answersRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	answers := make([]contests.Answer, 0, len(req.Answers))
-	for _, a := range req.Answers {
-		answers = append(answers, contests.Answer{MatchKind: a.MatchKind, Value: a.Value})
-	}
-
-	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.SetAnswers(r.Context(), identity.UserID, contestID, questionID, answers); err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	httpx.NoContent(w, r)
 }
 
 func (h *ContestsHandler) questionRoute(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {

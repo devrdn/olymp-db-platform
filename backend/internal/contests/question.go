@@ -283,25 +283,21 @@ type QuestionRepository interface {
 	ReplaceAnswers(ctx context.Context, questionID uuid.UUID, answers []Answer) error
 }
 
-// QuestionCommand describes a question to create or replace.
+// QuestionCommand describes a question to create.
 type QuestionCommand struct {
-	ActorID   uuid.UUID
-	ContestID uuid.UUID
-	// QuestionID is empty when creating.
-	QuestionID  uuid.UUID
+	ActorID     uuid.UUID
+	ContestID   uuid.UUID
 	Kind        string
 	Points      int
 	MaxAttempts *int
-	// PenaltyPct is nil to leave the stored penalty alone on update (zero
-	// means no penalty), and no penalty on create.
+	// PenaltyPct is nil for no penalty; zero means the same.
 	PenaltyPct *int
 	// IsVisible is nil for visible: hiding a question must be stated.
 	IsVisible *bool
-	// IsBonus is nil to leave the stored flag alone on update, and not a
-	// bonus on create.
+	// IsBonus is nil for not a bonus.
 	IsBonus   *bool
 	ChoiceIDs []string
-	// Texts, when given, replace the question's authored text.
+	// Texts, when given, are the question's authored text.
 	Texts map[string]QuestionText
 }
 
@@ -388,58 +384,6 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 		return Question{}, err
 	}
 	return created, nil
-}
-
-// UpdateQuestion replaces a question's own fields.
-func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Question, error) {
-	c, err := s.editableContest(ctx, cmd.ContestID)
-	if err != nil {
-		return Question{}, err
-	}
-	current, err := s.questionOf(ctx, cmd.ContestID, cmd.QuestionID)
-	if err != nil {
-		return Question{}, err
-	}
-
-	updated := current
-	updated.Kind = orDefault(cmd.Kind, current.Kind)
-	updated.Points = cmd.Points
-	updated.MaxAttempts = cmd.MaxAttempts
-	// A caller that does not send a penalty must not reset it.
-	if cmd.PenaltyPct != nil {
-		updated.PenaltyPct = *cmd.PenaltyPct
-	}
-	updated.ChoiceIDs = cmd.ChoiceIDs
-	if cmd.IsVisible != nil {
-		updated.IsVisible = *cmd.IsVisible
-	}
-	if cmd.IsBonus != nil {
-		updated.IsBonus = *cmd.IsBonus
-	}
-	if err := updated.Validate(); err != nil {
-		return Question{}, err
-	}
-	if err := checkBonus(c, updated); err != nil {
-		return Question{}, err
-	}
-	// New options must still cover the stored answers.
-	if err := validateAnswersFor(updated, current.Answers); err != nil {
-		return Question{}, err
-	}
-
-	payload := audit.Between(current.auditFields(), updated.auditFields()).Payload()
-	payload["question_id"] = updated.ID.String()
-
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.questions.Update(ctx, updated); err != nil {
-			return err
-		}
-		return s.record(ctx, cmd.ActorID, audit.ActionQuestionUpdate, cmd.ContestID, payload)
-	})
-	if err != nil {
-		return Question{}, err
-	}
-	return updated, nil
 }
 
 // SaveQuestionCommand is a question as its author edits it: its own fields,
@@ -626,54 +570,6 @@ func checkCompleteOrder(existing []Question, ordered []uuid.UUID) error {
 		seen[id] = struct{}{}
 	}
 	return nil
-}
-
-// SetQuestionTexts replaces a question's authored text.
-func (s *Service) SetQuestionTexts(ctx context.Context, actorID, contestID, questionID uuid.UUID, texts map[string]QuestionText) error {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return err
-	}
-	if _, err := s.questionOf(ctx, contestID, questionID); err != nil {
-		return err
-	}
-	if err := s.checkTexts(ctx, texts); err != nil {
-		return err
-	}
-
-	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.questions.ReplaceTexts(ctx, questionID, texts); err != nil {
-			return err
-		}
-		return s.record(ctx, actorID, audit.ActionQuestionUpdate, contestID, map[string]any{
-			"question_id": questionID.String(),
-			"languages":   textLanguages(texts),
-		})
-	})
-}
-
-// SetAnswers replaces a question's reference answers.
-func (s *Service) SetAnswers(ctx context.Context, actorID, contestID, questionID uuid.UUID, answers []Answer) error {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return err
-	}
-	q, err := s.questionOf(ctx, contestID, questionID)
-	if err != nil {
-		return err
-	}
-	if err := validateAnswersFor(q, answers); err != nil {
-		return err
-	}
-
-	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.questions.ReplaceAnswers(ctx, questionID, answers); err != nil {
-			return err
-		}
-		// Only the count: the trail must not be a place to read answers (§9.2).
-		return s.record(ctx, actorID, audit.ActionAnswersChange, contestID, map[string]any{
-			"question_id": questionID.String(),
-			"count":       len(answers),
-		})
-	})
 }
 
 // checkTexts checks every language's wording, then that each language is

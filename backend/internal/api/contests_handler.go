@@ -100,13 +100,10 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				r.Put("/schema-notes", h.setSchemaNotes)
 				r.Post("/questions", h.addQuestion)
 				r.Put("/questions/order", h.reorderQuestions)
-				r.Patch("/questions/{"+questionIDParam+"}", h.updateQuestion)
 				// The whole question in one transaction: fields, wording and
-				// reference answers. PATCH edits a part; PUT replaces it.
+				// reference answers.
 				r.Put("/questions/{"+questionIDParam+"}", h.saveQuestion)
 				r.Delete("/questions/{"+questionIDParam+"}", h.deleteQuestion)
-				r.Put("/questions/{"+questionIDParam+"}/texts", h.setQuestionTexts)
-				r.Put("/questions/{"+questionIDParam+"}/answers", h.setAnswers)
 
 				// The contest as a file (contest_package.go). Under
 				// contest.edit, not contest.view, because the package carries

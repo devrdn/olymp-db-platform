@@ -161,9 +161,6 @@ func TestEveryPathThatWritesQuestionTextChecksItsBound(t *testing.T) {
 			})
 			return err
 		},
-		"SetQuestionTexts": func(f *conteststest.Fixture, contestID, questionID uuid.UUID) error {
-			return f.Service.SetQuestionTexts(context.Background(), uuid.New(), contestID, questionID, overlong)
-		},
 	}
 	for name, write := range paths {
 		t.Run(name, func(t *testing.T) {
@@ -431,11 +428,13 @@ func TestChoiceAnswerMustNameOneOfTheQuestionsOptions(t *testing.T) {
 		t.Fatalf("AddQuestion() = %v", err)
 	}
 
-	err = f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID,
-		[]contests.Answer{{MatchKind: contests.MatchExact, Value: "c"}})
+	save := saveCmd(c.ID, q.ID)
+	save.Kind, save.ChoiceIDs = contests.KindChoice, []string{"a", "b"}
+	save.Answers = []contests.Answer{{MatchKind: contests.MatchExact, Value: "c"}}
+	_, err = f.Service.SaveQuestion(context.Background(), save)
 
 	if !errors.Is(err, contests.ErrInvalidAnswer) {
-		t.Errorf("SetAnswers() = %v, want ErrInvalidAnswer", err)
+		t.Errorf("SaveQuestion() = %v, want ErrInvalidAnswer", err)
 	}
 }
 
@@ -447,11 +446,13 @@ func TestChoiceAnswerNamingAnOptionIsAccepted(t *testing.T) {
 	cmd.ChoiceIDs = []string{"a", "b"}
 	q, _ := f.Service.AddQuestion(context.Background(), cmd)
 
-	err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID,
-		[]contests.Answer{{MatchKind: contests.MatchExact, Value: "b"}})
+	save := saveCmd(c.ID, q.ID)
+	save.Kind, save.ChoiceIDs = contests.KindChoice, []string{"a", "b"}
+	save.Answers = []contests.Answer{{MatchKind: contests.MatchExact, Value: "b"}}
+	_, err := f.Service.SaveQuestion(context.Background(), save)
 
 	if err != nil {
-		t.Errorf("SetAnswers() = %v, want nil", err)
+		t.Errorf("SaveQuestion() = %v, want nil", err)
 	}
 }
 
@@ -467,12 +468,14 @@ func TestAQuestionHoldsAtMostFiftyAnswers(t *testing.T) {
 		answers[i] = contests.Answer{MatchKind: contests.MatchExact, Value: fmt.Sprint("the butler ", i)}
 	}
 
-	if err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID, answers); err != nil {
-		t.Errorf("SetAnswers() at the bound = %v, want nil", err)
+	save := saveCmd(c.ID, q.ID)
+	save.Answers = answers
+	if _, err := f.Service.SaveQuestion(context.Background(), save); err != nil {
+		t.Errorf("SaveQuestion() at the bound = %v, want nil", err)
 	}
-	answers = append(answers, contests.Answer{MatchKind: contests.MatchExact, Value: "the gardener"})
-	if err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID, answers); !errors.Is(err, contests.ErrInvalidAnswer) {
-		t.Errorf("SetAnswers() past the bound = %v, want ErrInvalidAnswer", err)
+	save.Answers = append(answers, contests.Answer{MatchKind: contests.MatchExact, Value: "the gardener"})
+	if _, err := f.Service.SaveQuestion(context.Background(), save); !errors.Is(err, contests.ErrInvalidAnswer) {
+		t.Errorf("SaveQuestion() past the bound = %v, want ErrInvalidAnswer", err)
 	}
 }
 
@@ -481,11 +484,12 @@ func TestAnswersRefuseAPatternThatDoesNotCompile(t *testing.T) {
 	c := f.SeedContest(contests.StatusDraft)
 	q, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 
-	err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, q.ID,
-		[]contests.Answer{{MatchKind: contests.MatchRegex, Value: "the (butler"}})
+	save := saveCmd(c.ID, q.ID)
+	save.Answers = []contests.Answer{{MatchKind: contests.MatchRegex, Value: "the (butler"}}
+	_, err := f.Service.SaveQuestion(context.Background(), save)
 
 	if !errors.Is(err, contests.ErrInvalidAnswer) {
-		t.Errorf("SetAnswers() = %v, want ErrInvalidAnswer", err)
+		t.Errorf("SaveQuestion() = %v, want ErrInvalidAnswer", err)
 	}
 }
 
@@ -494,11 +498,22 @@ func TestQuestionTextRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 	c := f.SeedContest(contests.StatusDraft)
 	q, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 
-	err := f.Service.SetQuestionTexts(context.Background(), uuid.New(), c.ID, q.ID,
-		map[string]contests.QuestionText{"rus": {BodyMD: "Кто это сделал?"}})
+	save := saveCmd(c.ID, q.ID)
+	save.Texts = map[string]contests.QuestionText{"rus": {BodyMD: "Кто это сделал?"}}
+	_, err := f.Service.SaveQuestion(context.Background(), save)
 
 	if !errors.Is(err, contests.ErrUnknownLanguage) {
-		t.Errorf("SetQuestionTexts() = %v, want ErrUnknownLanguage", err)
+		t.Errorf("SaveQuestion() = %v, want ErrUnknownLanguage", err)
+	}
+}
+
+func saveCmd(contestID, questionID uuid.UUID) contests.SaveQuestionCommand {
+	return contests.SaveQuestionCommand{
+		ActorID:    uuid.New(),
+		ContestID:  contestID,
+		QuestionID: questionID,
+		Kind:       contests.KindText,
+		Points:     5,
 	}
 }
 
@@ -520,15 +535,10 @@ func TestChangingAQuestionRecordsWhichFieldMoved(t *testing.T) {
 	}
 
 	hidden := false
-	if _, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
-		ActorID:    uuid.New(),
-		ContestID:  c.ID,
-		QuestionID: created.ID,
-		Kind:       contests.KindText,
-		Points:     20,
-		IsVisible:  &hidden,
-	}); err != nil {
-		t.Fatalf("UpdateQuestion() = %v", err)
+	save := saveCmd(c.ID, created.ID)
+	save.Points, save.IsVisible = 20, &hidden
+	if _, err := f.Service.SaveQuestion(context.Background(), save); err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
 	}
 
 	var payload map[string]any
@@ -554,35 +564,7 @@ func TestChangingAQuestionRecordsWhichFieldMoved(t *testing.T) {
 	}
 }
 
-// A nil PenaltyPct leaves the stored value alone, as nil IsVisible does.
-func TestUpdateQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	penalty := 40
-	cmd := questionCmd(c.ID)
-	cmd.PenaltyPct = &penalty
-	created, err := f.Service.AddQuestion(context.Background(), cmd)
-	if err != nil {
-		t.Fatalf("AddQuestion() = %v", err)
-	}
-
-	// PenaltyPct nil, as a client unaware of penalties sends.
-	updated, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
-		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
-		Kind: contests.KindText, Points: 12,
-	})
-	if err != nil {
-		t.Fatalf("UpdateQuestion() = %v", err)
-	}
-	if updated.PenaltyPct != 40 {
-		t.Errorf("PenaltyPct = %d, want 40 (unchanged by an edit that never mentioned it)", updated.PenaltyPct)
-	}
-	if updated.Points != 12 {
-		t.Errorf("Points = %d, want 12 (the field the command did mention)", updated.Points)
-	}
-}
-
-func TestUpdateQuestionCanChangeThePenalty(t *testing.T) {
+func TestSaveQuestionCanChangeThePenalty(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 	penalty := 40
@@ -594,18 +576,18 @@ func TestUpdateQuestionCanChangeThePenalty(t *testing.T) {
 	}
 
 	zero := 0
-	updated, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
-		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
-		Kind: contests.KindText, Points: 5, PenaltyPct: &zero,
-	})
+	save := saveCmd(c.ID, created.ID)
+	save.PenaltyPct = &zero
+	updated, err := f.Service.SaveQuestion(context.Background(), save)
 	if err != nil {
-		t.Fatalf("UpdateQuestion() = %v", err)
+		t.Fatalf("SaveQuestion() = %v", err)
 	}
 	if updated.PenaltyPct != 0 {
 		t.Errorf("PenaltyPct = %d, want 0 (explicitly set)", updated.PenaltyPct)
 	}
 }
 
+// A nil PenaltyPct leaves the stored value alone, as nil IsVisible does.
 func TestSaveQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
@@ -635,9 +617,10 @@ func TestSettingTheAnswersStillRecordsOnlyHowMany(t *testing.T) {
 	c := f.SeedContest(contests.StatusDraft)
 	created, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 
-	if err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, created.ID,
-		[]contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}}); err != nil {
-		t.Fatalf("SetAnswers() = %v", err)
+	save := saveCmd(c.ID, created.ID)
+	save.Answers = []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}}
+	if _, err := f.Service.SaveQuestion(context.Background(), save); err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
 	}
 
 	for _, entry := range f.Audit.Entries {
