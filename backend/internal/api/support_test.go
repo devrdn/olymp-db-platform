@@ -20,6 +20,15 @@ const testPassword = "correct horse battery staple"
 // is given.
 var sessionName = auth.NewCookieWriter(false).SessionName()
 
+func assertNoSessionCookie(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionName && c.Value != "" {
+			t.Errorf("a session cookie was set: %+v", c)
+		}
+	}
+}
+
 // maxLoginAttempts mirrors the service's per-account throttle.
 const maxLoginAttempts = 10
 

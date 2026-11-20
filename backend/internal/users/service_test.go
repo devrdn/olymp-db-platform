@@ -583,8 +583,6 @@ func TestLinkExternalLinksAnUnverifiedAccountStillOnItsOneTimePassword(t *testin
 	}
 }
 
-// Staff reach the link only from the home directory, where the provider
-// vouches for membership and an administrator typed the address.
 func TestLinkExternalLinksAnUnverifiedStaffAccountThroughTheHomeDirectory(t *testing.T) {
 	f := newFixture(t)
 	f.repo.GrantRole("organizer", "contests.manage")
@@ -603,6 +601,27 @@ func TestLinkExternalLinksAnUnverifiedStaffAccountThroughTheHomeDirectory(t *tes
 	}
 	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
 		t.Errorf("identities = %+v, want one", linked)
+	}
+}
+
+// The home directory exempts staff, not every account it vouches for.
+func TestLinkExternalRefusesAnUnverifiedStudentEvenFromTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: passwordtest.Hash(t, "a password ana's creator chose"),
+	})
+
+	_, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{
+		UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now(), HomeDirectory: true,
+	})
+
+	if !errors.Is(err, users.ErrUnverifiedNotLinkable) {
+		t.Errorf("LinkExternal() = %v, want ErrUnverifiedNotLinkable", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
 	}
 }
 

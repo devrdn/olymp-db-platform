@@ -244,27 +244,36 @@ func TestATrustedEmailLinksAnAccountWithoutItsOneTimePassword(t *testing.T) {
 func TestATrustedEmailDoesNotLinkAnUnverifiedAccountWithAChosenPassword(t *testing.T) {
 	for _, provider := range users.Providers {
 		t.Run(provider, func(t *testing.T) {
-			f := newFixture(t)
-			ana := f.repo.Add(users.User{
-				Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
-				PasswordHash: "a-hash-of-a-password-its-creator-chose",
-			})
-			accounts := f.accountCount()
 			c := trusted("sub-ana")
 			c.Provider = provider
-
-			_, err := f.service().Resolve(t.Context(), c)
-
-			if !errors.Is(err, federation.ErrUnverifiedAccount) {
-				t.Errorf("Resolve() = %v, want ErrUnverifiedAccount", err)
-			}
-			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-				t.Errorf("identities = %+v, want none", linked)
-			}
-			if n := f.accountCount(); n != accounts {
-				t.Errorf("accounts = %d, want %d: no fresh account", n, accounts)
-			}
+			assertUnverifiedAccountNotLinked(t, c)
 		})
+	}
+	// The home directory exempts staff, not every account it vouches for.
+	t.Run("home directory", func(t *testing.T) {
+		assertUnverifiedAccountNotLinked(t, homeDirectory("sub-ana"))
+	})
+}
+
+func assertUnverifiedAccountNotLinked(t *testing.T, c federation.Claims) {
+	t.Helper()
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana", Email: "ana@example.edu", Roles: []string{users.RoleStudent},
+		PasswordHash: "a-hash-of-a-password-its-creator-chose",
+	})
+	accounts := f.accountCount()
+
+	_, err := f.service().Resolve(t.Context(), c)
+
+	if !errors.Is(err, federation.ErrUnverifiedAccount) {
+		t.Errorf("Resolve() = %v, want ErrUnverifiedAccount", err)
+	}
+	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
+		t.Errorf("identities = %+v, want none", linked)
+	}
+	if n := f.accountCount(); n != accounts {
+		t.Errorf("accounts = %d, want %d: no fresh account", n, accounts)
 	}
 }
 

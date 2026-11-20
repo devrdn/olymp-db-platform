@@ -79,7 +79,7 @@ func TestHasPasswordIsFalseForAnAccountWithoutADigest(t *testing.T) {
 	}
 }
 
-func TestAnAccountIsLinkableByEmailOnlyWhenItProvedItOrNeverChoseAPassword(t *testing.T) {
+func TestAnAccountIsLinkableByEmailWhenItProvedItOrIsOnAOneTimePassword(t *testing.T) {
 	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
 	for name, c := range map[string]struct {
 		u    users.User

@@ -354,19 +354,19 @@ download and the diagram stay editable while the contest runs.
 
 **A contest only for the installation's own domain.** Where
 `TRUSTED_EMAIL_DOMAIN` is set, say to `example.edu`, **Who may enter, and
-from where** offers **Only verified @example.edu addresses**. With it on,
-an account enrolling itself needs a confirmed address in that domain or one
-of its subdomains (`ana@cs.example.edu` counts); anybody else is refused
-with "This contest is open only to people with a verified address in this
-site's own email domain. Sign up or sign in with such an address." With mail
-on, the refusal also says that a password reset link confirms an address
-the account already has, and links **Forgot password?**. An address is
-confirmed by a sign-up code, a followed reset link or a sign-in through a provider
-that vouches for it and links the account (above). The address of every account not deleted when the
-release that brings this was installed counts as confirmed; an account made
-after it by staff, an import or the event form starts unconfirmed, until its
-owner does one of those. An administrator who changes an account's address
-to another one leaves it unconfirmed again.
+from where** offers **Only verified @example.edu addresses**. With it on, an
+account enrolling itself needs a confirmed address in that domain or one of
+its subdomains (`ana@cs.example.edu` counts); anybody else is refused with
+"This contest is open only to people with a verified address in this site's
+own email domain. Sign up or sign in with such an address." With mail on,
+the refusal also says that a password reset link confirms an address the
+account already has, and links **Forgot password?**. An address is confirmed
+by a sign-up code, a followed reset link or a sign-in through a provider
+that vouches for it and links the account (above). The address of every
+account not deleted when the release that brings this was installed counts
+as confirmed; an account made after it by staff, an import or the event form
+starts unconfirmed, until its owner does one of those. An administrator who
+changes an account's address to another one leaves it unconfirmed again.
 
 - It binds self-enrolment only. Staff adding people on **People**, one at
   a time or from a list, may add anybody. The participant list marks each

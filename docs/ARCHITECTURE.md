@@ -1837,14 +1837,15 @@ it, with the number of questions waiting beside it while the contest runs.
   - **A verified address.** `users.email_verified_at` is when the platform
     last had proof that the person owns the account's `email`: a confirmed
     sign-up code, a followed reset link, or an external sign-in whose
-    provider vouches for the address. Migration 000054 counted the address
-    of every account not deleted at the time as verified, since staff had
-    entered them; an account made later by staff, an import or the event
-    form starts unverified, until its owner proves the address. An
-    administrator who edits an account's address to another one clears the
-    mark, and the audit entry records that it was cleared; a change of
-    letter case alone keeps it. Addresses compare without regard to case,
-    under a unique index on `lower(email)` over live accounts.
+    provider vouches for the address and links the account (section 7).
+    Migration 000054 counted the address of every account not deleted at the
+    time as verified, since staff had entered them; an account made later by
+    staff, an import or the event form starts unverified, until its owner
+    proves the address. An administrator who edits an account's address to
+    another one clears the mark, and the audit entry records that it was
+    cleared; a change of letter case alone keeps it. Addresses compare
+    without regard to case, under a unique index on `lower(email)` over live
+    accounts.
   - **No answer tells a known address from an unknown one.** Sign-up and
     recovery answer every address alike and in the same time; a login, which
     the leaderboards show anyway, may be refused as taken.
@@ -1937,8 +1938,8 @@ it, with the number of questions waiting beside it while the contest runs.
     a login derived from the hint or the name. It refuses a staff account
     unless `HomeDirectory` is set for this sign-in, a blocked or deleted one
     whatever the provider says, a creation while `SELF_SIGNUP_ENABLED` is
-    off, a link by email to an account already linked to another identity
-    of the same issuer, since a provider may give a mailbox to somebody new,
+    off, a link by email to an account already linked to another identity of
+    the same issuer, since a provider may give a mailbox to somebody new,
     and a link by email to an account that does not act as staff, has never
     verified its address and is not on a one-time password. Such an account
     can be made with somebody else's address: event registration with mail
@@ -1947,14 +1948,18 @@ it, with the number of questions waiting beside it while the contest runs.
     account the address's real holder signs into. The refusal
     (`external_signin_unverified`) creates no account in its place, since
     the address stays with the account holding it; a password reset link
-    verifies the address and lifts it. A staff account is exempt: it reaches
-    a link only through the home directory, where the provider vouches for
-    membership and an administrator typed the address, and it has no
-    self-service reset that could verify it. An address that is not vouched for is kept only on the
-    identity, never on the account, and never links; one that is not a
-    bounded address is dropped instead, so it never stops the sign-in, while
-    a vouched-for one refuses it. An address with a character outside ASCII
-    is dropped, vouched for or not: Unicode case folding, PostgreSQL's
+    verifies the address and lifts it, and so does an administrator's
+    password reset, which puts the account back on a one-time password. A
+    staff account is exempt: it reaches a link only through the home
+    directory, where the provider vouches for membership, and its staff
+    status was granted by an administrator or by an organiser's appointment,
+    not taken by whoever typed the address. Staff have no self-service
+    reset, but an administrator's reset puts a staff account on a one-time
+    password, which links. An address that is not vouched for is kept only
+    on the identity, never on the account, and never links; one that is not
+    a bounded address is dropped instead, so it never stops the sign-in,
+    while a vouched-for one refuses it. An address with a character outside
+    ASCII is dropped, vouched for or not: Unicode case folding, PostgreSQL's
     `lower()` included, takes the Kelvin sign for `k`, so it could find
     another person's account, and an account's address must equal the
     identity's in ASCII for a link. The display name and the login hint,
@@ -1962,27 +1967,26 @@ it, with the number of questions waiting beside it while the contest runs.
     and are cut to their bounds, never refused. Linking any account that
     still holds the one-time password staff issued (a student's, which
     `User.LinkableByEmail` admits although its address is unverified because
-    nobody has chosen its password yet, or a staff account linked through the
-    home directory) drops that password (the hash
-    becomes NULL and the flag clears) and ends the account's older sessions,
-    in the same transaction, recorded as `user.one_time_password_retire`:
-    the person never had it, and kept, it would send them to a change form
-    that asks for it. A one-time password issued after the link was handed
-    to the person on purpose, so entering through the linked identity keeps
-    it and sends them to `/password`. From then on the account signs in
-    through the provider, or with a password its owner sets by a reset link,
-    or, for a staff account, which never gets one, a password an
-    administrator issues. Deleting an account deletes its identities, and
-    nothing else unlinks one. A known risk, accepted by the owner: a
-    provider's verified mark is what it checked once, so if the installation
-    gives an address to another person, a previous holder whose address is
-    still verified at GitHub or in a personal Microsoft or Google account is
-    linked into the new holder's account at a first sign-in through that
-    provider. The issuer guard above protects only the other direction. A
-    sign-in through the installation's own directory is not affected; the
-    mitigation is not reusing addresses, and an administrator can block an
-    account so linked. Another provider is another adapter, with no change
-    to federation.
+    nobody has chosen its password yet, or a staff account linked through
+    the home directory) drops that password (the hash becomes NULL and the
+    flag clears) and ends the account's older sessions, in the same
+    transaction, recorded as `user.one_time_password_retire`: the person
+    never had it, and kept, it would send them to a change form that asks
+    for it. A one-time password issued after the link was handed to the
+    person on purpose, so entering through the linked identity keeps it and
+    sends them to `/password`. From then on the account signs in through the
+    provider, or with a password its owner sets by a reset link, or, for a
+    staff account, which never gets one, a password an administrator issues.
+    Deleting an account deletes its identities, and nothing else unlinks
+    one. A known risk, accepted by the owner: a provider's verified mark is
+    what it checked once, so if the installation gives an address to another
+    person, a previous holder whose address is still verified at GitHub or
+    in a personal Microsoft or Google account is linked into the new
+    holder's account at a first sign-in through that provider. The issuer
+    guard above protects only the other direction. A sign-in through the
+    installation's own directory is not affected; the mitigation is not
+    reusing addresses, and an administrator can block an account so linked.
+    Another provider is another adapter, with no change to federation.
 
     **Staff and the home directory.** A staff account is entered or linked
     through a provider only when the adapter says the provider, at this

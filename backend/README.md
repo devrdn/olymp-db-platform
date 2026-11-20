@@ -356,9 +356,9 @@ docker compose -f deploy/docker-compose.yml exec -T pg-core \
 The same migration counts the address of every account not deleted at that
 moment as verified, since staff entered them. An account made later by
 staff, an import or the event form starts with its address unverified, until
-its owner follows a reset link or signs in through a provider that
-vouches for it and links the account. An administrator who changes an account's address to another
-one clears its verified mark.
+its owner follows a reset link or signs in through a provider that vouches
+for it and links the account. An administrator who changes an account's
+address to another one clears its verified mark.
 
 ### Connecting Microsoft sign-in
 

@@ -421,11 +421,7 @@ func TestAForeignTenantNeverEntersAStaffAccount(t *testing.T) {
 	rec := f.signIn(t, "192.0.2.1", s, claims)
 
 	assertLandsOnSignIn(t, rec, "external_signin_staff_account")
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.NewCookieWriter(false).SessionName() && c.Value != "" {
-			t.Errorf("a session cookie was set: %+v", c)
-		}
-	}
+	assertNoSessionCookie(t, rec)
 }
 
 func TestTheCallbackRefusesAStateItDidNotIssue(t *testing.T) {
@@ -516,11 +512,7 @@ func TestAnUnverifiedAccountWithAChosenPasswordLandsOnTheUnverifiedCode(t *testi
 	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
 
 	assertLandsOnSignIn(t, rec, "external_signin_unverified")
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.NewCookieWriter(false).SessionName() && c.Value != "" {
-			t.Errorf("a session cookie was set: %+v", c)
-		}
-	}
+	assertNoSessionCookie(t, rec)
 	if ids := f.repo.Identities(ana.ID); len(ids) != 0 {
 		t.Errorf("ana's account was linked: %+v", ids)
 	}
@@ -569,11 +561,7 @@ func TestARefusedAccountLandsOnItsCode(t *testing.T) {
 			rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
 
 			assertLandsOnSignIn(t, rec, tc.code)
-			for _, c := range rec.Result().Cookies() {
-				if c.Name == auth.NewCookieWriter(false).SessionName() && c.Value != "" {
-					t.Errorf("a session cookie was set: %+v", c)
-				}
-			}
+			assertNoSessionCookie(t, rec)
 		})
 	}
 }
