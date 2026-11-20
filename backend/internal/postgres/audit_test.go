@@ -484,3 +484,107 @@ func TestTheTrailRefusesRewritingHistory(t *testing.T) {
 		}
 	})
 }
+
+// appendAged writes an entry dated age before the test transaction's now().
+func appendAged(t *testing.T, ctx context.Context, age string) int64 {
+	t.Helper()
+
+	var id int64
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+		`INSERT INTO audit_log (action, created_at) VALUES ('contest.update', now() - $1::interval) RETURNING id`,
+		age).Scan(&id); err != nil {
+		t.Fatalf("append an entry %s old: %v", age, err)
+	}
+	return id
+}
+
+// inSavepoint runs one statement in its own savepoint, so a refusal, which
+// aborts the transaction, leaves the test transaction usable.
+func inSavepoint(t *testing.T, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	t.Helper()
+
+	q := storage.QuerierFrom(ctx, testPool)
+	if _, err := q.Exec(ctx, `SAVEPOINT attempt`); err != nil {
+		t.Fatal(err)
+	}
+	tag, err := q.Exec(ctx, sql, args...)
+	end := `RELEASE SAVEPOINT attempt`
+	if err != nil {
+		end = `ROLLBACK TO SAVEPOINT attempt`
+	}
+	if _, err := q.Exec(ctx, end); err != nil {
+		t.Fatal(err)
+	}
+	return tag, err
+}
+
+func enableAuditRetention(t *testing.T, ctx context.Context) {
+	t.Helper()
+
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`SELECT set_config('olympdb.audit_retention', 'on', true)`); err != nil {
+		t.Fatalf("turn retention on: %v", err)
+	}
+}
+
+func refusedAsAppendOnly(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && strings.Contains(pgErr.Message, "append-only")
+}
+
+func TestRetentionMayDeleteAnEntryOlderThanEighteenMonths(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		id := appendAged(t, ctx, "18 months 1 day")
+		enableAuditRetention(t, ctx)
+
+		tag, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Errorf("DELETE = %v, %d rows; want the entry deleted", err, tag.RowsAffected())
+		}
+	})
+}
+
+func TestRetentionMayNotDeleteAnEntryYoungerThanEighteenMonths(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		id := appendAged(t, ctx, "18 months -1 day")
+		enableAuditRetention(t, ctx)
+
+		if _, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
+			t.Errorf("DELETE = %v, want the trail's refusal", err)
+		}
+	})
+}
+
+// The exemption opens on the exact value 'on', set for the transaction; any
+// other value, or none, leaves the guard closed.
+func TestTheTrailRefusesARetentionDeleteWithoutTheSetting(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		id := appendAged(t, ctx, "19 months")
+
+		if _, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
+			t.Errorf("DELETE without the setting = %v, want the trail's refusal", err)
+		}
+
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`SELECT set_config('olympdb.audit_retention', 'true', true)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := inSavepoint(t, ctx, `DELETE FROM audit_log WHERE id = $1`, id); !refusedAsAppendOnly(err) {
+			t.Errorf("DELETE with the setting at 'true' = %v, want the trail's refusal", err)
+		}
+	})
+}
+
+func TestRetentionCannotRewriteOrTruncateTheTrail(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		id := appendAged(t, ctx, "19 months")
+		enableAuditRetention(t, ctx)
+
+		if _, err := inSavepoint(t, ctx, `UPDATE audit_log SET action = 'x' WHERE id = $1`, id); !refusedAsAppendOnly(err) {
+			t.Errorf("UPDATE = %v, want the trail's refusal", err)
+		}
+		if _, err := inSavepoint(t, ctx, `TRUNCATE audit_log`); !refusedAsAppendOnly(err) {
+			t.Errorf("TRUNCATE = %v, want the trail's refusal", err)
+		}
+	})
+}

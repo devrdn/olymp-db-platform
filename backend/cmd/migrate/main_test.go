@@ -972,3 +972,153 @@ func TestTheReportsViewMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("after applying 000061 again = %+v, want it gone", got)
 	}
 }
+
+// auditGuard is the append-only function as the catalogue holds it.
+type auditGuard struct{ body, comment string }
+
+func readAuditGuard(t *testing.T, ctx context.Context, conn *pgx.Conn) auditGuard {
+	t.Helper()
+	var g auditGuard
+	if err := conn.QueryRow(ctx, `
+		SELECT p.prosrc, coalesce(obj_description(p.oid, 'pg_proc'), '')
+		FROM pg_proc p WHERE p.proname = 'audit_log_refuse_change'`).Scan(&g.body, &g.comment); err != nil {
+		t.Fatalf("read the audit guard: %v", err)
+	}
+	return g
+}
+
+// execWithRetentionOn runs statement with the retention setting on, as the
+// sweep runs, in a transaction it rolls back, and returns the answer.
+func execWithRetentionOn(t *testing.T, ctx context.Context, conn *pgx.Conn, statement string) error {
+	t.Helper()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('olympdb.audit_retention', 'on', true)`); err != nil {
+		t.Fatalf("turn retention on: %v", err)
+	}
+	_, err = tx.Exec(ctx, statement)
+	return err
+}
+
+// TestTheAuditRetentionMigrationRestoresTheAppendOnlyGuard proves the down
+// file of the audit retention migration leaves the guard exactly as the
+// migration that introduced it wrote it, refusing even an old entry with
+// retention on.
+func TestTheAuditRetentionMigrationRestoresTheAppendOnlyGuard(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Migrate(43); err != nil {
+		t.Fatalf("migrate to 43: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	original := readAuditGuard(t, ctx, conn)
+
+	if err := m.Migrate(63); err != nil {
+		t.Fatalf("migrate to 63: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO audit_log (action, created_at) VALUES ('contest.update', now() - interval '19 months')`); err != nil {
+		t.Fatalf("append an old entry: %v", err)
+	}
+	const deleteOld = `DELETE FROM audit_log WHERE created_at < now() - interval '18 months'`
+	if err := execWithRetentionOn(t, ctx, conn, deleteOld); err != nil {
+		t.Fatalf("a retention delete at 63 = %v, want it let through", err)
+	}
+
+	if err := m.Migrate(62); err != nil {
+		t.Fatalf("migrate to 62: %v", err)
+	}
+	if restored := readAuditGuard(t, ctx, conn); restored != original {
+		t.Errorf("the guard after rolling back = %+v, want 000043's %+v", restored, original)
+	}
+	for _, statement := range []string{deleteOld, `UPDATE audit_log SET action = 'x'`, `TRUNCATE audit_log`} {
+		err := execWithRetentionOn(t, ctx, conn, statement)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || !strings.Contains(pgErr.Message, "append-only") {
+			t.Errorf("%s with retention on, after rolling back = %v, want the trail's refusal", statement, err)
+		}
+	}
+}
+
+func TestTheArchivedAtMigrationRollsBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+	if err := m.Migrate(61); err != nil {
+		t.Fatalf("migrate to 61: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO users (login, password_hash, full_name, status) VALUES ('ana', 'x', 'Ana', 'active');
+		INSERT INTO contests (created_by, status, updated_at)
+		SELECT id, 'archived', now() - interval '2 years' FROM users WHERE login = 'ana';
+		INSERT INTO contests (created_by, status) SELECT id, 'finished' FROM users WHERE login = 'ana'`); err != nil {
+		t.Fatalf("create the contests: %v", err)
+	}
+	present := func() (column, function bool) {
+		t.Helper()
+		if err := conn.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			               WHERE table_name = 'contests' AND column_name = 'archived_at'),
+			       to_regprocedure('contests_stamp_archived()') IS NOT NULL`).Scan(&column, &function); err != nil {
+			t.Fatalf("read the schema: %v", err)
+		}
+		return column, function
+	}
+
+	if err := m.Migrate(62); err != nil {
+		t.Fatalf("migrate to 62: %v", err)
+	}
+	if column, function := present(); !column || !function {
+		t.Fatalf("after applying 000062 column %t, function %t; want both", column, function)
+	}
+	var backfilled, untouched bool
+	if err := conn.QueryRow(ctx, `
+		SELECT bool_and(archived_at = updated_at) FILTER (WHERE status = 'archived'),
+		       bool_and(archived_at IS NULL) FILTER (WHERE status <> 'archived')
+		FROM contests`).Scan(&backfilled, &untouched); err != nil {
+		t.Fatalf("read the backfill: %v", err)
+	}
+	if !backfilled || !untouched {
+		t.Errorf("backfill: archived contests from updated_at %t, others left empty %t; want both", backfilled, untouched)
+	}
+
+	if err := m.Migrate(61); err != nil {
+		t.Fatalf("migrate back to 61: %v", err)
+	}
+	if column, function := present(); column || function {
+		t.Errorf("after rolling back 000062 column %t, function %t; want neither", column, function)
+	}
+}

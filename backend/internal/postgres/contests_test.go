@@ -758,3 +758,121 @@ func TestAContestCreatedBeforeTheReleaseIsOpenWithTasksHidden(t *testing.T) {
 		}
 	})
 }
+
+func readArchivedAt(t *testing.T, ctx context.Context, id uuid.UUID) *time.Time {
+	t.Helper()
+
+	var at *time.Time
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+		`SELECT archived_at FROM contests WHERE id = $1`, id).Scan(&at); err != nil {
+		t.Fatalf("read archived_at: %v", err)
+	}
+	return at
+}
+
+func TestArchivingAContestStampsArchivedAt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "archive-"+uuid.NewString()[:8])
+		id := makeContest(t, ctx, author.ID)
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE contests SET status = 'finished' WHERE id = $1`, id); err != nil {
+			t.Fatalf("finish the contest: %v", err)
+		}
+
+		if _, err := NewContests(testPool).SetStatus(ctx, id, "finished", "archived"); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		at := readArchivedAt(t, ctx, id)
+		if now := txNow(t, ctx); at == nil || !at.Equal(now) {
+			t.Errorf("archived_at = %v, want the moment of archiving %v", at, now)
+		}
+	})
+}
+
+func TestAContestCreatedArchivedIsStamped(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "archive-"+uuid.NewString()[:8])
+
+		var id uuid.UUID
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`INSERT INTO contests (created_by, status) VALUES ($1, 'archived') RETURNING id`,
+			author.ID).Scan(&id); err != nil {
+			t.Fatalf("create an archived contest: %v", err)
+		}
+
+		at := readArchivedAt(t, ctx, id)
+		if now := txNow(t, ctx); at == nil || !at.Equal(now) {
+			t.Errorf("archived_at = %v, want the moment of creation %v", at, now)
+		}
+	})
+}
+
+func TestAContestNotArchivedHasNoArchivedAt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "archive-"+uuid.NewString()[:8])
+
+		for _, status := range []string{"draft", "published", "finished"} {
+			id := makeContest(t, ctx, author.ID)
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE contests SET status = $2 WHERE id = $1`, id, status); err != nil {
+				t.Fatalf("move the contest to %s: %v", status, err)
+			}
+
+			if at := readArchivedAt(t, ctx, id); at != nil {
+				t.Errorf("a %s contest has archived_at %v, want none", status, at)
+			}
+		}
+	})
+}
+
+// Retention counts from archived_at, so writing the contest after its archive
+// must not move it.
+func TestArchivedAtSurvivesLaterEdits(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "archive-"+uuid.NewString()[:8])
+		id := makeContest(t, ctx, author.ID)
+
+		if !archivedAtKeptThrough(t, ctx, id,
+			`UPDATE contests SET visibility = 'closed', updated_at = now() WHERE id = $1`) {
+			t.Errorf("archived_at moved after an edit, want it kept at 13 months ago")
+		}
+	})
+}
+
+func TestArchivingAnArchivedContestAgainKeepsItsStamp(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "archive-"+uuid.NewString()[:8])
+		id := makeContest(t, ctx, author.ID)
+
+		if !archivedAtKeptThrough(t, ctx, id,
+			`UPDATE contests SET status = 'archived', updated_at = now() WHERE id = $1`) {
+			t.Errorf("archived_at moved when the archive status was written again, want it kept at 13 months ago")
+		}
+	})
+}
+
+// archivedAtKeptThrough archives the contest, back-dates its stamp by 13
+// months, runs edit, and reports whether the stamp stayed where it was put.
+func archivedAtKeptThrough(t *testing.T, ctx context.Context, id uuid.UUID, edit string) bool {
+	t.Helper()
+
+	q := storage.QuerierFrom(ctx, testPool)
+	for _, step := range []string{
+		`UPDATE contests SET status = 'archived' WHERE id = $1`,
+		`UPDATE contests SET archived_at = now() - interval '13 months' WHERE id = $1`,
+		edit,
+	} {
+		if _, err := q.Exec(ctx, step, id); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+
+	var kept bool
+	if err := q.QueryRow(ctx,
+		`SELECT archived_at = now() - interval '13 months' FROM contests WHERE id = $1`,
+		id).Scan(&kept); err != nil {
+		t.Fatalf("read archived_at: %v", err)
+	}
+	return kept
+}
