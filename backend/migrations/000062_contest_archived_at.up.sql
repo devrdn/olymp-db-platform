@@ -10,6 +10,7 @@
 -- The backfill takes updated_at for contests archived before this
 -- migration. That is at or after the real archive time, so it errs late:
 -- a journal may be kept longer than its period, never deleted early.
+
 SET lock_timeout = '5s';
 
 ALTER TABLE contests ADD COLUMN archived_at timestamptz;
