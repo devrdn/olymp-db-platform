@@ -3,6 +3,7 @@ package retention_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -151,10 +152,21 @@ func TestPruneStopsWhenTheContextEnds(t *testing.T) {
 	f := newFake(map[retention.Table][]answer{retention.TableQueryLog: {{5000, nil}}})
 	f.onCall = func(retention.Table) { cancel() }
 
-	_, err := retention.New(f).Prune(ctx)
+	outcomes, err := retention.New(f).Prune(ctx)
 
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("Prune() error = %v, want context.Canceled", err)
+	if len(outcomes) != 3 {
+		t.Fatalf("outcomes = %d, want 3", len(outcomes))
+	}
+	if outcomes[0].Deleted != 5000 || outcomes[0].Err != context.Canceled {
+		t.Errorf("query_log outcome = %+v, want 5000 deleted and context.Canceled", outcomes[0])
+	}
+	for _, o := range outcomes[1:] {
+		if o.Err != context.Canceled || o.Deleted != 0 {
+			t.Errorf("%s outcome = %+v, want not reached with context.Canceled", o.Table, o)
+		}
+	}
+	if n := countIs(err, context.Canceled); n != 1 {
+		t.Errorf("error %v holds context.Canceled %d times, want once", err, n)
 	}
 	if n := len(f.calls[retention.TableQueryLog]); n != 1 {
 		t.Errorf("query_log calls = %d, want 1", n)
@@ -162,6 +174,42 @@ func TestPruneStopsWhenTheContextEnds(t *testing.T) {
 	if len(f.calls[retention.TableAuditLog])+len(f.calls[retention.TableMailOutbox]) != 0 {
 		t.Errorf("other tables were called after the context ended")
 	}
+}
+
+func TestPruneReportsContextCancelledInsideAStoreCallOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped := fmt.Errorf("delete: %w", context.Canceled)
+	f := newFake(map[retention.Table][]answer{retention.TableQueryLog: {{0, wrapped}}})
+	f.onCall = func(retention.Table) { cancel() }
+
+	outcomes, err := retention.New(f).Prune(ctx)
+
+	if !errors.Is(outcomes[0].Err, context.Canceled) || outcomes[0].Err == context.Canceled {
+		t.Errorf("query_log outcome error = %v, want the store's wrapped error", outcomes[0].Err)
+	}
+	if n := countIs(err, context.Canceled); n != 1 {
+		t.Errorf("error %v holds context.Canceled %d times, want once", err, n)
+	}
+}
+
+// countIs counts the joined errors that are target.
+func countIs(err, target error) int {
+	if err == nil {
+		return 0
+	}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		n := 0
+		for _, e := range j.Unwrap() {
+			if errors.Is(e, target) {
+				n++
+			}
+		}
+		return n
+	}
+	if errors.Is(err, target) {
+		return 1
+	}
+	return 0
 }
 
 func TestTableNamesListsTheThreeInOrder(t *testing.T) {

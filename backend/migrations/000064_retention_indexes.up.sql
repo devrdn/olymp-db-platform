@@ -1,5 +1,6 @@
--- Indexes for the retention sweep (internal/retention), which filters two
--- tables by columns nothing else filters on:
+-- Indexes for the retention sweep, whose queries are in
+-- internal/postgres/retention.go and filter two tables by columns nothing
+-- else filters on:
 --   contests: archived_at, to find the contests whose query journal has aged out;
 --   mail_outbox: the moment a message finished, sent or abandoned.
 -- query_log (query_log_contest_executed_idx) and audit_log

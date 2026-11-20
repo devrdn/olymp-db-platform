@@ -41,8 +41,8 @@ func (r *Retention) DeleteQueryLog(ctx context.Context, archivedMonths, limit in
 }
 
 // DeleteAuditLog deletes up to limit audit entries older than olderThanMonths,
-// oldest first. The append-only guard opens only for the transaction that
-// names itself, and the setting is transaction-local, so it closes with the batch.
+// oldest first. Call it outside any transaction: the append-only exemption
+// lasts until the enclosing transaction ends, and UnitOfWork.Do joins an outer one.
 func (r *Retention) DeleteAuditLog(ctx context.Context, olderThanMonths, limit int) (int, error) {
 	var deleted int
 	err := storage.NewUnitOfWork(r.pool).Do(ctx, func(ctx context.Context) error {

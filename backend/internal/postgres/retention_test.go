@@ -117,8 +117,11 @@ func TestRetentionDeletesAuditEntriesOlderThanEighteenMonths(t *testing.T) {
 		young := appendAged(t, ctx, "17 months")
 
 		n, err := NewRetention(testPool).DeleteAuditLog(ctx, 18, 5000)
-		if err != nil || n < 1 {
-			t.Fatalf("DeleteAuditLog() = %d, %v, want the old entry gone", n, err)
+		if err != nil || n != 1 {
+			t.Fatalf("DeleteAuditLog() = %d, %v, want 1", n, err)
+		}
+		if again, err := NewRetention(testPool).DeleteAuditLog(ctx, 18, 5000); err != nil || again != 0 {
+			t.Errorf("second DeleteAuditLog() = %d, %v, want 0", again, err)
 		}
 		var oldLeft, youngLeft int
 		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
@@ -146,6 +149,7 @@ func TestPruningTheTrailTakesNoTableLock(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer rows.Close()
+		sawRowExclusive := false
 		for rows.Next() {
 			var mode string
 			if err := rows.Scan(&mode); err != nil {
@@ -154,6 +158,13 @@ func TestPruningTheTrailTakesNoTableLock(t *testing.T) {
 			if mode != "RowExclusiveLock" && mode != "AccessShareLock" {
 				t.Errorf("lock %s held on audit_log, want only row-level modes", mode)
 			}
+			sawRowExclusive = sawRowExclusive || mode == "RowExclusiveLock"
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !sawRowExclusive {
+			t.Error("no RowExclusiveLock seen on audit_log: the delete did not run here")
 		}
 	})
 }
@@ -180,8 +191,11 @@ func TestRetentionDeletesMailFinishedOverThirtyDaysAgo(t *testing.T) {
 		recent := insertMail(t, ctx, `now() - interval '29 days', NULL::timestamptz`)
 
 		n, err := NewRetention(testPool).DeleteMailOutbox(ctx, 30, 5000)
-		if err != nil || n < 2 {
-			t.Fatalf("DeleteMailOutbox() = %d, %v, want at least 2", n, err)
+		if err != nil || n != 2 {
+			t.Fatalf("DeleteMailOutbox() = %d, %v, want 2", n, err)
+		}
+		if again, err := NewRetention(testPool).DeleteMailOutbox(ctx, 30, 5000); err != nil || again != 0 {
+			t.Errorf("second DeleteMailOutbox() = %d, %v, want 0", again, err)
 		}
 		var left []int64
 		rows, err := storage.QuerierFrom(ctx, testPool).Query(ctx,
@@ -196,6 +210,9 @@ func TestRetentionDeletesMailFinishedOverThirtyDaysAgo(t *testing.T) {
 				t.Fatal(err)
 			}
 			left = append(left, id)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
 		}
 		if len(left) != 1 || left[0] != recent {
 			t.Errorf("rows left = %v, want only %d", left, recent)

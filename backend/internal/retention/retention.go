@@ -51,8 +51,8 @@ func TableNames() []string {
 }
 
 // Store deletes expired rows, each method one batch of at most limit rows,
-// and returns how many it deleted. A batch run twice deletes nothing the
-// second time.
+// and returns how many it deleted. Running a batch again, or at the same
+// time, is safe: it deletes only expired rows still present.
 type Store interface {
 	DeleteQueryLog(ctx context.Context, archivedMonths, limit int) (int, error)
 	DeleteAuditLog(ctx context.Context, olderThanMonths, limit int) (int, error)
@@ -60,7 +60,8 @@ type Store interface {
 }
 
 // Outcome is what Prune did to one table. Deleted counts the rows removed
-// even when Err is set.
+// even when Err is set. A table not reached because ctx ended has Err equal
+// to ctx.Err(), which tells it from a failure of the table itself.
 type Outcome struct {
 	Table   Table
 	Deleted int
@@ -84,11 +85,15 @@ func (s *Service) Prune(ctx context.Context) ([]Outcome, error) {
 	for _, table := range tables {
 		out := s.prune(ctx, table)
 		outcomes = append(outcomes, out)
-		if out.Err != nil {
+		if out.Err != nil && out.Err != ctx.Err() {
 			errs = append(errs, out.Err)
 		}
 	}
-	return outcomes, errors.Join(dedupeContext(ctx, errs)...)
+	err := errors.Join(errs...)
+	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+		err = errors.Join(err, ctxErr)
+	}
+	return outcomes, err
 }
 
 func (s *Service) prune(ctx context.Context, table Table) Outcome {
@@ -117,27 +122,9 @@ func (s *Service) batch(ctx context.Context, table Table) (int, error) {
 		return s.store.DeleteQueryLog(ctx, QueryLogMonths, BatchSize)
 	case TableAuditLog:
 		return s.store.DeleteAuditLog(ctx, AuditLogMonths, BatchSize)
-	default:
+	case TableMailOutbox:
 		return s.store.DeleteMailOutbox(ctx, MailOutboxDays, BatchSize)
+	default:
+		panic("retention: unknown table " + string(table))
 	}
-}
-
-// dedupeContext keeps ctx's own error once, however many tables stopped on it.
-func dedupeContext(ctx context.Context, errs []error) []error {
-	ctxErr := ctx.Err()
-	if ctxErr == nil {
-		return errs
-	}
-	kept := errs[:0:0]
-	seen := false
-	for _, err := range errs {
-		if err == ctxErr {
-			if seen {
-				continue
-			}
-			seen = true
-		}
-		kept = append(kept, err)
-	}
-	return kept
 }
