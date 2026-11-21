@@ -7,34 +7,57 @@
 #
 # The secrets are the *PASSWORD, *SECRET and *TOKEN values of <stack dir>/stack.env
 # and E2E_ADMIN_PASSWORD of <stack dir>/smoke.env; either file may be missing.
-# Prints no value. stack.sh writes every one with `openssl rand -hex 32`, so each
-# is safe inside a sed pattern; do not feed it a value that is not hex.
+# Prints no value.
+#
+# It fails closed: the upload step runs after a failed one, so if redaction
+# stops for any reason the whole artifact directory is deleted here, where the
+# failure is seen, rather than trusting every caller to remember to.
 set -euo pipefail
 
 dir="${1:?usage: redact.sh <artifact dir> <stack dir>}"
 stack="${2:?usage: redact.sh <artifact dir> <stack dir>}"
 
-secrets=()
+done_ok=0
+list=""
+cleanup() {
+	[ -z "$list" ] || rm -f "$list"
+	[ "$done_ok" -eq 1 ] || rm -rf "$dir"
+}
+trap cleanup EXIT
+
+values=()
 if [ -f "$stack/stack.env" ]; then
 	while IFS='=' read -r key value; do
 		case "$key" in
-		*PASSWORD | *SECRET | *TOKEN) [ -z "$value" ] || secrets+=("$value") ;;
+		*PASSWORD | *SECRET | *TOKEN) [ -z "$value" ] || values+=("$value") ;;
 		esac
 	done <"$stack/stack.env"
 fi
 if [ -f "$stack/smoke.env" ]; then
 	value="$(sed -n 's/^E2E_ADMIN_PASSWORD=//p' "$stack/smoke.env")"
-	[ -z "$value" ] || secrets+=("$value")
+	[ -z "$value" ] || values+=("$value")
 fi
-[ "${#secrets[@]}" -gt 0 ] || exit 0
 
-script=""
-for value in "${secrets[@]}"; do
-	script+="s/$value/***/g;"
-done
+if [ "${#values[@]}" -gt 0 ]; then
+	# Longest first, so a value that contains another is not left with a tail;
+	# each is escaped for sed, as the admin password is base64url, not hex.
+	script=""
+	while read -r _ value; do
+		script+="s/$(printf '%s' "$value" | sed 's/[][\.*^$/&]/\\&/g')/***/g;"
+	done < <(for value in "${values[@]}"; do echo "${#value} $value"; done | sort -rn)
 
-# grep -I skips binary files (the screenshots), which hold no log text.
-while IFS= read -r -d '' file; do
-	sed "$script" "$file" >"$file.redacted"
-	mv "$file.redacted" "$file"
-done < <(grep -rIl --null . "$dir" || true)
+	list="$(mktemp)"
+	# Exit 1 is "no text file", fine; 2 is an error, which must not pass.
+	status=0
+	grep -rIl --null . "$dir" >"$list" || status=$?
+	[ "$status" -le 1 ] || exit 1
+
+	tmp="$(mktemp)"
+	while IFS= read -r -d '' file; do
+		sed "$script" "$file" >"$tmp"
+		# Written through the file, not renamed over it, to keep its mode.
+		cat "$tmp" >"$file"
+	done <"$list"
+	rm -f "$tmp"
+fi
+done_ok=1
