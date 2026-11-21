@@ -396,7 +396,9 @@ The game check is `GameInstances.GameReady`, a read of `game_templates` in the
 core database, never the game cluster
 ([ARCHITECTURE.md §4.2](../ARCHITECTURE.md#42-provisioning-without-a-spike)).
 A game saved again while the contest is published holds the start until the
-rebuild finishes. The hidden-question checks apply at the start too: a published contest whose deciding question was hidden afterwards stays published and is audited as start-blocked.
+rebuild finishes. The hidden-question checks apply at the start too: a
+published contest whose deciding question was hidden afterwards stays published
+and is audited as start-blocked.
 
 Rules that matter:
 

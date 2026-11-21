@@ -72,6 +72,16 @@ func contains(codes []string, want string) bool {
 	return false
 }
 
+func count(codes []string, want string) int {
+	n := 0
+	for _, code := range codes {
+		if code == want {
+			n++
+		}
+	}
+	return n
+}
+
 func TestACompleteContestPassesTheGate(t *testing.T) {
 	c, story, questions := publishable()
 
@@ -574,16 +584,6 @@ func TestGateAcceptsABonusQuestionBesideARegularOneUnderPointsScoring(t *testing
 	}
 }
 
-func count(codes []string, want string) int {
-	n := 0
-	for _, code := range codes {
-		if code == want {
-			n++
-		}
-	}
-	return n
-}
-
 // A hidden question never reaches a participant, so a winner contest whose
 // finals are all hidden could never be won.
 func TestGateRefusesAWinnerContestWhoseEveryFinalQuestionIsHidden(t *testing.T) {
@@ -623,9 +623,8 @@ func TestGateAcceptsAWinnerContestWithOneVisibleFinalBesideAHiddenOne(t *testing
 	shown.IsVisible = true
 	questions = append(questions, shown)
 
-	err := contests.CheckPublishable(c, story, questions)
-	if err != nil && contains(problemCodes(t, err), contests.ProblemWinnerFinalHidden) {
-		t.Errorf("CheckPublishable() = %v, want no %s", err, contests.ProblemWinnerFinalHidden)
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
 	}
 }
 

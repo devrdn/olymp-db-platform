@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { summarisePublishCheck } from "./publish-gate";
+import { PUBLISH_PROBLEMS, summarisePublishCheck } from "./publish-gate";
 
 describe("summarisePublishCheck", () => {
   test("marks a language complete when no problem names it", () => {
@@ -90,13 +90,18 @@ describe("summarisePublishCheck, contest-wide problems", () => {
 
   test("keeps the hidden deciding-question problems in the global list", () => {
     const gate = summarisePublishCheck(
-      { ready: false, problems: [{ code: "winner_final_hidden" }, { code: "every_question_hidden" }] },
+      {
+        ready: false,
+        problems: [{ code: PUBLISH_PROBLEMS.winnerFinalHidden }, { code: PUBLISH_PROBLEMS.everyQuestionHidden }],
+      },
       ["en"],
     );
 
+    expect(PUBLISH_PROBLEMS.winnerFinalHidden).toBe("winner_final_hidden");
+    expect(PUBLISH_PROBLEMS.everyQuestionHidden).toBe("every_question_hidden");
     expect(gate.global).toEqual([
-      { code: "winner_final_hidden", count: 1 },
-      { code: "every_question_hidden", count: 1 },
+      { code: PUBLISH_PROBLEMS.winnerFinalHidden, count: 1 },
+      { code: PUBLISH_PROBLEMS.everyQuestionHidden, count: 1 },
     ]);
   });
 

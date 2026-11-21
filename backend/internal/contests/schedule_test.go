@@ -349,9 +349,10 @@ func TestAdvanceDoesNotStartAWinnerContestWhoseEveryFinalIsHidden(t *testing.T) 
 		q.MaxAttempts = &limit
 		q.IsVisible = false
 		f.questions.Put(q)
-		shown := q
-		shown.ID, shown.Ord, shown.Kind, shown.IsVisible = uuid.New(), 2, contests.KindText, true
-		f.questions.Put(shown)
+		f.questions.Put(contests.Question{
+			ID: uuid.New(), ContestID: c.ID, Ord: 2, Kind: contests.KindText, IsVisible: true,
+			Texts: q.Texts, Answers: q.Answers,
+		})
 	}
 	f.games.Built(c.ID)
 	c = putDue(f, c)

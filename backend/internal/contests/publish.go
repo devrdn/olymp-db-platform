@@ -204,12 +204,12 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 		add(PublishProblem{Code: ProblemWinnerNeedsFinal})
 	}
 	anyShown := slices.ContainsFunc(questions, func(q Question) bool { return q.IsVisible })
+	anyFinal := slices.ContainsFunc(questions, func(q Question) bool { return q.Kind == KindFinal })
+	anyShownFinal := slices.ContainsFunc(questions, func(q Question) bool { return q.Kind == KindFinal && q.IsVisible })
 	switch {
 	case len(questions) > 0 && !anyShown:
 		add(PublishProblem{Code: ProblemEveryQuestionHidden})
-	case c.Scoring == ScoringWinner && !slices.ContainsFunc(questions, func(q Question) bool {
-		return q.Kind == KindFinal && q.IsVisible
-	}) && slices.ContainsFunc(questions, func(q Question) bool { return q.Kind == KindFinal }):
+	case c.Scoring == ScoringWinner && anyFinal && !anyShownFinal:
 		add(PublishProblem{Code: ProblemWinnerFinalHidden})
 	}
 	if c.ScoresPoints() && len(questions) > 0 && !slices.ContainsFunc(questions, func(q Question) bool {
