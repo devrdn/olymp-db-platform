@@ -335,6 +335,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			WithClusterBudget(cfg.ClusterMaxBytes).
 			// A reset is one copy, and gets the bound a copy statement gets.
 			WithCopyTimeout(provisionStatementTimeout)
+		metrics.WatchProvisioningQueue(recorder, databases.QueueDepth)
 		// Coalesces a burst of triggers into one extra tend.
 		tender := provisioning.NewTender()
 		poolTrigger = tender

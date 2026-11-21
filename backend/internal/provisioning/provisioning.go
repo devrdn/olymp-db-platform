@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
@@ -139,6 +140,9 @@ type Service struct {
 	// this service runs, the tender's and participants' alike: each copies the
 	// whole template on the cluster's one disk.
 	copies *semaphore.Weighted
+	// waiting counts copies asked for and not yet started; a counter rather
+	// than a lock, so a scrape never waits on a worker.
+	waiting atomic.Int64
 	// providing holds one channel per registration whose database is being
 	// provided, closed when that is done.
 	providingMu sync.Mutex
@@ -283,6 +287,12 @@ func (s *Service) EnsureFrom(ctx context.Context, contest Contest, registration 
 	return database, nil
 }
 
+// QueueDepth is how many copies this process has been asked for and not yet
+// started: TopUp's backlog plus every caller waiting for a copy slot.
+func (s *Service) QueueDepth() int {
+	return int(s.waiting.Load())
+}
+
 // TopUp brings the pool up to depth, and reports how many copies it made.
 // Copies are made by s.workers at a time, never in a burst: CREATE DATABASE
 // is heavy enough to slow the whole cluster.
@@ -301,6 +311,7 @@ func (s *Service) TopUp(ctx context.Context, contest Contest, depth int) (int, e
 		work <- struct{}{}
 	}
 	close(work)
+	s.waiting.Add(int64(want))
 
 	var (
 		mu     sync.Mutex
@@ -314,6 +325,7 @@ func (s *Service) TopUp(ctx context.Context, contest Contest, depth int) (int, e
 		go func() {
 			defer party.Done()
 			for range work {
+				s.waiting.Add(-1)
 				if ctx.Err() != nil {
 					return
 				}
@@ -330,6 +342,8 @@ func (s *Service) TopUp(ctx context.Context, contest Contest, depth int) (int, e
 		}()
 	}
 	party.Wait()
+	// Items no worker took: they stopped on an error or a cancelled context.
+	s.waiting.Add(-int64(len(work)))
 
 	return made, failed
 }
@@ -543,7 +557,10 @@ func (s *Service) replace(ctx context.Context, contest Contest, database string)
 // copyTemplate makes database a fresh copy of the contest's template once one
 // of the s.copies slots is free.
 func (s *Service) copyTemplate(ctx context.Context, contest Contest, database string) error {
-	if err := s.copies.Acquire(ctx, 1); err != nil {
+	s.waiting.Add(1)
+	err := s.copies.Acquire(ctx, 1)
+	s.waiting.Add(-1)
+	if err != nil {
 		return err
 	}
 	defer s.copies.Release(1)

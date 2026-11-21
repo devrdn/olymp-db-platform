@@ -291,3 +291,104 @@ func waitUntil(t *testing.T, ready func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestTheQueueCountsCopiesAskedForAndNotYetStarted(t *testing.T) {
+	contest, _ := contestFor(t, t.Context(), 1)
+	fake := &cluster{slow: 300 * time.Millisecond}
+	service := newService(fake).WithWorkers(1)
+
+	type result struct {
+		made int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		made, err := service.TopUp(t.Context(), contest, 3)
+		done <- result{made, err}
+	}()
+	waitUntil(t, func() bool { return fake.highWater() == 1 })
+
+	if got := service.QueueDepth(); got != 2 {
+		t.Fatalf("queue depth while one of three copies runs = %d, want 2", got)
+	}
+
+	got := <-done
+	if got.err != nil {
+		t.Fatalf("top up: %v", got.err)
+	}
+	if got.made != 3 {
+		t.Fatalf("made %d copies, want 3", got.made)
+	}
+	if depth := service.QueueDepth(); depth != 0 {
+		t.Fatalf("queue depth after the top-up = %d, want 0", depth)
+	}
+}
+
+func TestAParticipantWaitingForACopySlotIsInTheQueue(t *testing.T) {
+	contest, people := contestFor(t, t.Context(), 2)
+	fake := &cluster{slow: 300 * time.Millisecond}
+	service := newService(fake).WithWorkers(1)
+
+	errs := make(chan error, 2)
+	go func() {
+		_, err := service.Ensure(t.Context(), contest, people[0])
+		errs <- err
+	}()
+	waitUntil(t, func() bool { return fake.highWater() == 1 })
+	go func() {
+		_, err := service.Ensure(t.Context(), contest, people[1])
+		errs <- err
+	}()
+	waitUntil(t, func() bool { return service.QueueDepth() == 1 })
+
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("ensure: %v", err)
+		}
+	}
+	if depth := service.QueueDepth(); depth != 0 {
+		t.Fatalf("queue depth after both copies = %d, want 0", depth)
+	}
+}
+
+func TestTheQueueEmptiesWhenAWaitingCallerLeaves(t *testing.T) {
+	contest, people := contestFor(t, t.Context(), 2)
+	fake := &cluster{slow: 300 * time.Millisecond}
+	service := newService(fake).WithWorkers(1)
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := service.Ensure(t.Context(), contest, people[0])
+		first <- err
+	}()
+	waitUntil(t, func() bool { return fake.highWater() == 1 })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := service.Ensure(ctx, contest, people[1]); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want the context's", err)
+	}
+	if depth := service.QueueDepth(); depth != 0 {
+		t.Fatalf("queue depth after the waiting caller left = %d, want 0", depth)
+	}
+
+	if err := <-first; err != nil {
+		t.Fatalf("first ensure: %v", err)
+	}
+	if depth := service.QueueDepth(); depth != 0 {
+		t.Fatalf("queue depth after the copy finished = %d, want 0", depth)
+	}
+}
+
+func TestTheQueueEmptiesWhenATopUpGivesUp(t *testing.T) {
+	contest, _ := contestFor(t, t.Context(), 1)
+	away := errors.New("the cluster is away")
+	service := newService(&cluster{fail: away}).WithWorkers(1)
+
+	if _, err := service.TopUp(t.Context(), contest, 3); !errors.Is(err, away) {
+		t.Fatalf("error = %v, want the cluster's", err)
+	}
+	if depth := service.QueueDepth(); depth != 0 {
+		t.Fatalf("queue depth after the top-up gave up = %d, want 0", depth)
+	}
+}
