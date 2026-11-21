@@ -1179,6 +1179,14 @@ const ro = {
         hint: "Între 0 și 1000 fiecare. La egalitate locul este comun, deci o egalitate la limită primește premiul mai bun. Un participant care n-a punctat deloc nu primește premiu. Cu toate trei la 0 nimeni nu primește premiu.",
         winnerHint: "În modul câștigător aceste numere nu se aplică: singurul câștigător primește premiul I.",
       },
+      grace: {
+        heading: "Păstrați bazele de date mai mult",
+        help: "Bazele de date ale participanților se șterg când se încheie perioada de grație de după final. O perioadă mai lungă se numără din nou din momentul în care o salvați.",
+        inForce: "În vigoare: {n} minute",
+        inForceDefault: "În vigoare: valoarea implicită a instalării",
+        label: "Păstrare, în minute de acum",
+        hint: "Mai lungă decât perioada în vigoare, cel mult 129.600 de minute (90 de zile). Bazele de date deja șterse nu revin.",
+      },
       archive: {
         heading: "Arhivă",
         help: "Dacă această olimpiadă apare în arhivă după încheiere. Rezultatele se deschid prin link direct în ambele cazuri.",

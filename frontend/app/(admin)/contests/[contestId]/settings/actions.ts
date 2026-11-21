@@ -10,6 +10,7 @@ import {
   type Enrollment,
   ENROLLMENTS,
   enumFromForm,
+  graceFromForm,
   icpcPenaltyFromForm,
   prizePlacesFromForm,
   shapeFromForm,
@@ -149,6 +150,29 @@ export async function savePrizePlacesAction(
   if (!places.ok) return { code: "invalid_request" };
 
   return attempt(`/contests/${contestId}/prize-places`, { method: "PUT", body: places.value }, contestId);
+}
+
+/**
+ * Extends a finished contest's grace period. `currentGraceMin` comes from the
+ * form only to spare a request that cannot succeed; the server compares against
+ * the period actually in force.
+ */
+export async function extendGraceAction(
+  _previous: SettingsState,
+  form: FormData,
+): Promise<SettingsState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const current = Number(form.get("currentGraceMin"));
+  const grace = graceFromForm(form, Number.isFinite(current) && current > 0 ? current : 0);
+  if (!grace.ok) return { code: grace.code };
+
+  return attempt(
+    `/contests/${contestId}/grace`,
+    { method: "PATCH", body: { grace_period_min: grace.value } },
+    contestId,
+  );
 }
 
 /**

@@ -2,6 +2,7 @@ import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import {
   contentEditable,
   contestCoverSchema,
+  graceExtendable,
   prizePlacesEditable,
   settingsEditable,
   shapeEditable,
@@ -12,6 +13,7 @@ import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
 import { CoverPanel } from "./cover-panel";
+import { GracePanel } from "./grace-panel";
 import { ArchivePanel, ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings-panels";
 
 /**
@@ -22,7 +24,8 @@ import { ArchivePanel, ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } fr
  * contest runs (extending after a power cut); the shape freezes at the start;
  * the SQL policy freezes with the content, so rights do not depend on when
  * someone connected; the prize places, which change only what the standings
- * show, stay open until the contest is archived.
+ * show, stay open until the contest is archived. The grace panel is the
+ * reverse: it exists only once the contest has finished.
  */
 export default async function SettingsPage(props: PageProps<"/contests/[contestId]/settings">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
@@ -58,6 +61,8 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
       />
 
       <PrizePanel contest={contest} editable={prizePlacesEditable(contest.status)} dict={dict} />
+
+      {graceExtendable(contest.status) ? <GracePanel contest={contest} dict={dict} /> : null}
 
       <ArchivePanel contest={contest} archiveOn={brand.archive} dict={dict} />
 

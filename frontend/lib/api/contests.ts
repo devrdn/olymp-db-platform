@@ -347,6 +347,33 @@ export function prizePlacesFromForm(form: FormData): { ok: true; value: PrizePla
   return { ok: true, value: { first, second, third } };
 }
 
+/** Whether the grace period may be extended: only once the contest has ended. */
+export function graceExtendable(status: ContestStatus): boolean {
+  return status === "finished" || status === "archived";
+}
+
+/** Mirrors `maxGracePeriodMin` in `backend/internal/contests/contests.go`: 90 days. */
+export const MAX_GRACE_PERIOD_MIN = 129_600;
+
+/**
+ * The new grace period as the form submitted it. `current` is the contest's own
+ * grace; when it is 0 the installation default is in force, which only the
+ * server knows, so any value within the bound passes and the server judges it.
+ */
+export function graceFromForm(
+  form: FormData,
+  current: number,
+): { ok: true; value: number } | { ok: false; code: "invalid_request" | "grace_not_longer" } {
+  const raw = String(form.get("gracePeriodMin") ?? "").trim();
+  if (!/^\d+$/.test(raw)) return { ok: false, code: "invalid_request" };
+
+  const value = Number(raw);
+  if (value < 1 || value > MAX_GRACE_PERIOD_MIN) return { ok: false, code: "invalid_request" };
+  if (current > 0 && value <= current) return { ok: false, code: "grace_not_longer" };
+
+  return { ok: true, value };
+}
+
 export type ArchiveSettings = { visibility: Visibility; archiveTasks: boolean };
 
 /**

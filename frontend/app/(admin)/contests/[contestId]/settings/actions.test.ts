@@ -8,7 +8,7 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
 vi.mock("next/cache", () => ({ revalidatePath }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
-import { saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
+import { extendGraceAction, saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 
@@ -287,5 +287,52 @@ describe("saveArchiveSettingsAction", () => {
     expect(await saveArchiveSettingsAction({}, form({ visibility: "closed" }))).toEqual({
       code: "visibility_needs_invite_only",
     });
+  });
+});
+
+describe("extendGraceAction", () => {
+  test("extends the grace on its own endpoint", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    const state = await extendGraceAction({}, form({ gracePeriodMin: "4320", currentGraceMin: "1440" }));
+
+    expect(state).toEqual({ saved: true });
+    expect(serverRequest).toHaveBeenCalledTimes(1);
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/grace`, {
+      method: "PATCH",
+      body: { grace_period_min: 4320 },
+    });
+    expect(revalidatePath).toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal to shorten", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    serverRequest.mockRejectedValueOnce(new ApiError("grace_not_longer", 400, "not longer"));
+
+    expect(await extendGraceAction({}, form({ gracePeriodMin: "60", currentGraceMin: "0" }))).toEqual({
+      code: "grace_not_longer",
+    });
+  });
+
+  test("refuses a value no longer than the contest's own grace without asking the server", async () => {
+    const state = await extendGraceAction({}, form({ gracePeriodMin: "100", currentGraceMin: "1440" }));
+
+    expect(state).toEqual({ code: "grace_not_longer" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("refuses a value past the bound without asking the server", async () => {
+    const state = await extendGraceAction({}, form({ gracePeriodMin: "129601", currentGraceMin: "0" }));
+
+    expect(state).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("refuses a contest id that is not an identifier", async () => {
+    const data = form({ gracePeriodMin: "4320", currentGraceMin: "0" });
+    data.set("contestId", "../users");
+
+    expect(await extendGraceAction({}, data)).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
   });
 });

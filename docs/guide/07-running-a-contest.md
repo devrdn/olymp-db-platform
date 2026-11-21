@@ -737,9 +737,8 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
 
 #### Calling a staff route from the command line
 
-A few actions have no screen: rebuilding a running contest's lost game, and
-extending the grace period after the end. Call them with an organiser's
-session (an administrator, or the contest's owner or a manager), from a
+A few actions have no screen: rebuilding a running contest's lost game. Call
+it with an organiser's session (an administrator, or the contest's owner or a manager), from a
 machine with `curl` 7.76 or later and `jq`:
 
 ```bash
@@ -834,9 +833,12 @@ The contest's id is the identifier in its workspace address,
    status or settings: the finish, and again from archiving or an extension,
    each of which restarts the count. The **Reclaim sweep per hour** panel
    shows them go. To keep them longer, for a dispute or a look at someone's
-   work, extend it before it runs out
-   ([as staff](#calling-a-staff-route-from-the-command-line)); a new value
-   must be longer than the one in force:
+   work, extend it before it runs out:
+   on the contest's **Settings** tab, **Keep the databases longer** takes the
+   new period in minutes, counted from the moment you save, up to 129,600 (90
+   days). It must be longer than the one in force, and databases already
+   deleted do not come back. The same call from the command line
+   ([as staff](#calling-a-staff-route-from-the-command-line)):
 
    ```bash
    curl -sS --fail-with-body -b "$JAR" -X PATCH -H 'Content-Type: application/json' \

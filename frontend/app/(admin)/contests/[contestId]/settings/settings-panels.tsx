@@ -31,7 +31,7 @@ import { messageForCode } from "@/lib/i18n/errors";
  * A titled block with its own save. One form per endpoint, so one refusal
  * does not discard the others.
  */
-function Panel({
+export function Panel({
   title,
   help,
   dict,
@@ -86,7 +86,7 @@ function HelpLegend({
   );
 }
 
-function SaveRow({
+export function SaveRow({
   state,
   pending,
   editable,

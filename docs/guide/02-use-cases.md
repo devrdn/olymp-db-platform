@@ -355,7 +355,7 @@ flowchart LR
 | List and drop participant databases | `/contests/{contestID}/databases` | `GET /contests/{contestID}/game/instances`, `DELETE .../game/instances/{database}` | `provisioning` | `contest.view` to list, `contest.edit` to drop |
 | Choose whether a finished contest is in the archive, and whether its tasks are shown | `/contests/{contestID}/settings` | `PUT /contests/{contestID}/archive-settings` | `contests` | `contest.edit`; in every status; a contest with open enrolment cannot be closed (`visibility_needs_invite_only`); audited as `contest.update` |
 | Set how many prize places there are | `/contests/{contestID}/settings` | `PUT /contests/{contestID}/prize-places` | `contests` | `contest.edit`; also on a finished contest, refused once archived (`not_editable`) |
-| Extend the grace before databases are reclaimed | API only | `PATCH /contests/{contestID}/grace` | `contests` | `contest.edit`; only on a finished or archived contest, and only longer (`grace_not_longer` otherwise) |
+| Extend the grace before databases are reclaimed | `/contests/{contestID}/settings` | `PATCH /contests/{contestID}/grace` | `contests` | `contest.edit`; only on a finished or archived contest, and only longer (`grace_not_longer` otherwise) |
 
 `...` in this table stands for `/contests/{contestID}`.
 

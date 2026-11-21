@@ -8,6 +8,9 @@ import {
   contestSchema,
   coverHref,
   defaultLanguage,
+  graceExtendable,
+  graceFromForm,
+  MAX_GRACE_PERIOD_MIN,
   icpcPenaltyFromForm,
   NEXT_STATUSES,
   prizePlacesEditable,
@@ -557,5 +560,48 @@ describe("archiveSettingsFromForm", () => {
   test("refuses a visibility outside the list, or none", () => {
     expect(archiveSettingsFromForm(shapeForm({ visibility: "public" }))).toEqual({ ok: false });
     expect(archiveSettingsFromForm(shapeForm({}))).toEqual({ ok: false });
+  });
+});
+
+describe("graceExtendable", () => {
+  test.each([
+    ["finished", true],
+    ["archived", true],
+    ["draft", false],
+    ["published", false],
+    ["running", false],
+  ] as const)("%s is %s", (status, expected) => {
+    expect(graceExtendable(status)).toBe(expected);
+  });
+});
+
+describe("graceFromForm", () => {
+  const form = (value: string) => {
+    const data = new FormData();
+    data.set("gracePeriodMin", value);
+    return data;
+  };
+
+  test("takes a value longer than the one in force", () => {
+    expect(graceFromForm(form("4320"), 1440)).toEqual({ ok: true, value: 4320 });
+  });
+
+  test("refuses a value that does not exceed the contest's own grace", () => {
+    expect(graceFromForm(form("1440"), 1440)).toEqual({ ok: false, code: "grace_not_longer" });
+    expect(graceFromForm(form("60"), 1440)).toEqual({ ok: false, code: "grace_not_longer" });
+  });
+
+  test("leaves the comparison to the server while the installation default is in force", () => {
+    expect(graceFromForm(form("1"), 0)).toEqual({ ok: true, value: 1 });
+    expect(graceFromForm(form("60"), 0)).toEqual({ ok: true, value: 60 });
+  });
+
+  test("accepts the bound and refuses what is past it", () => {
+    expect(graceFromForm(form(String(MAX_GRACE_PERIOD_MIN)), 0)).toEqual({ ok: true, value: 129_600 });
+    expect(graceFromForm(form("129601"), 0)).toEqual({ ok: false, code: "invalid_request" });
+  });
+
+  test.each(["0", "", "2.5", "-5", "abc"])("refuses %j as invalid", (value) => {
+    expect(graceFromForm(form(value), 0)).toEqual({ ok: false, code: "invalid_request" });
   });
 });

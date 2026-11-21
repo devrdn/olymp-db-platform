@@ -1288,6 +1288,14 @@ const en = {
         hint: "From 0 to 1000 each. Ties share a place, so a tie on a boundary takes the better prize. A participant who scored nothing gets no prize. With all three at 0 nobody gets a prize.",
         winnerHint: "In winner mode these counts do not apply: the one winner holds the first prize.",
       },
+      grace: {
+        heading: "Keep the databases longer",
+        help: "Participants' databases are deleted when the grace period after the end runs out. A longer period counts again from the moment you save it.",
+        inForce: "In force: {n} minutes",
+        inForceDefault: "In force: the installation's default",
+        label: "Keep for, minutes from now",
+        hint: "Longer than the period in force, and at most 129,600 minutes (90 days). Databases already deleted do not come back.",
+      },
       archive: {
         heading: "Archive",
         help: "Whether this contest appears in the archive once it ends. Results open by direct link either way.",
