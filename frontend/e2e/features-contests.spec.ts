@@ -1,8 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { readSeed } from "./api";
+import { readSeed, type Account } from "./api";
 import { SECRET } from "./seed-features";
-import { capture, chooseTheme, openPlay, openSideTab, runQuery, scrollWithin, signIn } from "./support";
+import { capture, cellUnder, chooseTheme, openPlay, openSideTab, runQuery, scrollWithin, signIn } from "./support";
 
 /**
  * The contest-wide post-beta behaviour: what a sequential contest withholds,
@@ -144,14 +144,38 @@ test("a closed catalogue hides the schema and the diagram; no descriptions, no T
   await capture(page, "play-hidden-catalogue");
 });
 
+/** The name a participant's row carries in the play tab, which labels rows by full name. */
+function nameOf(account: Account): string {
+  if (!account.fullName) throw new Error(`the seed recorded no full name for ${account.login}`);
+  return account.fullName;
+}
+
 /** One standings row, found by the participant's name. */
 function standingsRow(table: Locator, name: string): Locator {
   return table.getByRole("row").filter({ hasText: name });
 }
 
-async function expectPrize(row: Locator, prize: string, mark: string, medal: string | null) {
-  const cell = row.getByRole("cell").first();
-  await expect(cell).toHaveAccessibleName(prize);
+/**
+ * The organiser's table has a Prize column of its own, on every row. The play
+ * tab's panel variant folds the medal into the Place column and draws it only
+ * for a row that holds a prize.
+ */
+async function expectPrize(
+  table: Locator,
+  row: Locator,
+  prize: string,
+  mark: string,
+  medal: string | null,
+  column: "Prize" | "Place" = "Prize",
+) {
+  const cell = await cellUnder(table, row, column);
+  if (column === "Place" && !medal) {
+    // The place must be drawn, or a missing row would pass the count below.
+    await expect(cell.getByTestId("place")).toBeVisible();
+    await expect(cell.getByTestId("prize")).toHaveCount(0);
+    return;
+  }
+  await expect(cell).toContainText(prize);
   await expect(cell).toContainText(mark);
   const badge = cell.getByTestId("prize");
   if (medal) await expect(badge).toHaveAttribute("data-medal", medal);
@@ -164,10 +188,10 @@ test("the standings give medals I, II and III to the configured places and a das
 
   await page.goto(`/contests/${contests.features.id}/standings`);
   const table = page.getByRole("table", { name: "Standings" });
-  await expectPrize(standingsRow(table, accounts.bob.login), "First prize", "I", "gold");
-  await expectPrize(standingsRow(table, accounts.alice.login), "Second prize", "II", "silver");
-  await expectPrize(standingsRow(table, accounts.carol.login), "Third prize", "III", "bronze");
-  await expectPrize(standingsRow(table, accounts.dave.login), "No prize", "—", null);
+  await expectPrize(table, standingsRow(table, accounts.bob.login), "First prize", "I", "gold");
+  await expectPrize(table, standingsRow(table, accounts.alice.login), "Second prize", "II", "silver");
+  await expectPrize(table, standingsRow(table, accounts.carol.login), "Third prize", "III", "bronze");
+  await expectPrize(table, standingsRow(table, accounts.dave.login), "No prize", "—", null);
   await capture(page, "staff-standings-prizes");
   await page.setViewportSize({ width: 768, height: 900 });
   await capture(page, "staff-standings-prizes-at-768");
@@ -176,8 +200,8 @@ test("the standings give medals I, II and III to the configured places and a das
   await page.goto(`/contests/${contests.hidden.id}/standings`);
   const winner = standingsRow(table, accounts.frank.login);
   await expect(winner).toContainText("Winner");
-  await expectPrize(winner, "First prize", "I", "gold");
-  await expectPrize(standingsRow(table, accounts.erin.login), "No prize", "—", null);
+  await expectPrize(table, winner, "First prize", "I", "gold");
+  await expectPrize(table, standingsRow(table, accounts.erin.login), "No prize", "—", null);
   await capture(page, "staff-standings-winner");
 });
 
@@ -188,12 +212,12 @@ test("a participant's own table shows the same prize places", async ({ page }) =
   await openSideTab(page, "Table");
 
   const table = page.getByRole("tabpanel", { name: "Table" }).getByRole("table");
-  await expectPrize(standingsRow(table, accounts.bob.login), "First prize", "I", "gold");
-  await expectPrize(standingsRow(table, accounts.alice.login), "Second prize", "II", "silver");
-  await expectPrize(standingsRow(table, accounts.carol.login), "Third prize", "III", "bronze");
-  const own = standingsRow(table, accounts.dave.login);
+  await expectPrize(table, standingsRow(table, nameOf(accounts.bob)), "First prize", "I", "gold", "Place");
+  await expectPrize(table, standingsRow(table, nameOf(accounts.alice)), "Second prize", "II", "silver", "Place");
+  await expectPrize(table, standingsRow(table, nameOf(accounts.carol)), "Third prize", "III", "bronze", "Place");
+  const own = standingsRow(table, nameOf(accounts.dave));
   await expect(own).toContainText("You");
-  await expectPrize(own, "No prize", "—", null);
+  await expectPrize(table, own, "No prize", "—", null, "Place");
   await capture(page, "play-standings-prizes");
 });
 

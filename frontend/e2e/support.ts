@@ -125,3 +125,16 @@ export async function closeSqlTab(page: Page, name: string): Promise<void> {
   await page.getByRole("button", { name: `Close ${name}` }).click();
   await expect(page.getByRole("tablist", { name: "SQL tabs" }).getByRole("tab", { name })).toHaveCount(0);
 }
+
+/**
+ * The cell of `row` that sits under the column heading `column`, so a spec does
+ * not count columns and survives a new one. Counts only the headings and cells
+ * on screen: a column folded away at this width is not counted by either.
+ */
+export async function cellUnder(table: Locator, row: Locator, column: string): Promise<Locator> {
+  await expect(table.getByRole("columnheader").first()).toBeVisible();
+  const headings = (await table.getByRole("columnheader").allTextContents()).map((text) => text.trim());
+  const index = headings.indexOf(column);
+  expect(index, `the table has no "${column}" column; it has ${headings.join(", ")}`).toBeGreaterThanOrEqual(0);
+  return row.getByRole("cell").nth(index);
+}

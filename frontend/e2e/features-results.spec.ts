@@ -1,7 +1,7 @@
 import { expect, test, type Locator } from "@playwright/test";
 
 import { Api, readSeed } from "./api";
-import { capture, openPlay, openSideTab, signIn } from "./support";
+import { capture, cellUnder, openPlay, openSideTab, signIn } from "./support";
 
 /**
  * The bonus question, last of the post-beta checks because it ends the
@@ -16,8 +16,9 @@ import { capture, openPlay, openSideTab, signIn } from "./support";
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
-function pointsOf(table: Locator, login: string): Locator {
-  return table.getByRole("row").filter({ hasText: login }).getByRole("cell").last();
+/** A participant's own table labels rows by full name, not login. */
+async function pointsOf(table: Locator, name: string): Promise<Locator> {
+  return cellUnder(table, table.getByRole("row").filter({ hasText: name }), "Points");
 }
 
 test("a correct bonus answer gives back the penalty, in the standings and on the participant's report", async ({
@@ -32,7 +33,8 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
 
   await openSideTab(page, "Table");
   const own = page.getByRole("tabpanel", { name: "Table" }).getByRole("table");
-  await expect(pointsOf(own, accounts.alice.login)).toHaveText("7");
+  const points = await pointsOf(own, accounts.alice.fullName!);
+  await expect(points).toHaveText("7");
 
   await openSideTab(page, "Questions");
   const panel = page.getByRole("tabpanel", { name: "Questions" });
@@ -56,7 +58,7 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
   // Seven points and three lost to the penalty; the bonus of five gives the
   // three back and no more. The wrong bonus attempt cost nothing.
   await openSideTab(page, "Table");
-  await expect(pointsOf(own, accounts.alice.login)).toHaveText("10", { timeout: 20_000 });
+  await expect(points).toHaveText("10", { timeout: 20_000 });
   await capture(page, "play-bonus-standings");
 
   // The project's connection settings, so a second browser cannot drift from the first.
@@ -67,8 +69,8 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
   await desk.goto(`/contests/${id}/standings`);
   const table = desk.getByRole("table", { name: "Standings" });
   const alice = table.getByRole("row").filter({ hasText: accounts.alice.login });
-  await expect(alice.getByRole("cell").nth(3)).toHaveText("10");
-  await expect(alice.getByRole("cell").first()).toHaveAccessibleName("Second prize");
+  await expect(await cellUnder(table, alice, "Points")).toHaveText("10");
+  await expect(await cellUnder(table, alice, "Prize")).toContainText("Second prize");
   await staff.close();
 
   // The report opens once the contest is over for the participant.

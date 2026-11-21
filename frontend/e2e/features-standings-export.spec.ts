@@ -14,19 +14,22 @@ import { capture, signIn } from "./support";
  */
 
 // features-results ends the contest, and this name sorts after it; run on its
-// own, this file ends it the same way. The preview reads the staff table,
-// which is cached for a few seconds, so the page opens only once it says final.
+// own, this file ends it the same way. The contest's own status decides
+// whether to end it: the results say "final" only after the staff table's
+// cache turns over, and finishing a finished contest is refused. The preview
+// reads that table, so the page opens only once it says final.
 test.beforeAll(async () => {
   const seed = readSeed();
   const id = seed.features.contests.features.id;
   const operator = await Api.open();
   const status = async () => (await operator.call<{ status: string }>("GET", `/contests/${id}/results`)).status;
+  const contestStatus = async () => (await operator.call<{ status: string }>("GET", `/contests/${id}`)).status;
   try {
     await operator.signIn(seed.admin.login, seed.admin.password);
-    if ((await status()) !== "final") {
+    if ((await contestStatus()) === "running") {
       await operator.call("POST", `/contests/${id}/status`, { status: "finished" });
-      await expect.poll(status, { timeout: 15_000 }).toBe("final");
     }
+    await expect.poll(status, { timeout: 15_000 }).toBe("final");
   } finally {
     await operator.close();
   }

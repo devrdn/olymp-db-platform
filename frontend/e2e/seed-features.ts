@@ -396,7 +396,7 @@ async function createAccount(
     full_name: fullName,
     roles: ["student"],
   });
-  accounts[key] = { id: created.user.id, login, password: "" };
+  accounts[key] = { id: created.user.id, login, password: "", fullName };
   save();
   const password = generatedPassword();
   const owner = await Api.open();
@@ -408,7 +408,7 @@ async function createAccount(
   } finally {
     await owner.close();
   }
-  accounts[key] = { id: created.user.id, login, password };
+  accounts[key] = { id: created.user.id, login, password, fullName };
   save();
 }
 

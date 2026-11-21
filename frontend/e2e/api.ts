@@ -19,7 +19,8 @@ export const STATE_DIR = process.env.E2E_STATE_DIR ?? path.resolve(__dirname, ".
 const SEED_FILE = path.join(STATE_DIR, "seed.json");
 const ADMIN_FILE = path.join(STATE_DIR, "admin.json");
 
-export type Account = { id: string; login: string; password: string };
+/** `fullName` is set for the feature seed's participants: a contest names its rows by full name unless told otherwise. */
+export type Account = { id: string; login: string; password: string; fullName?: string };
 
 /**
  * What the seed has made so far. Each object is recorded the moment the API
