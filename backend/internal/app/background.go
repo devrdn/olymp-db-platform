@@ -479,3 +479,27 @@ func underRetentionLock(
 		return prune(ctx)
 	}
 }
+
+// activeParticipantsEvery is how often the participant count is refreshed.
+const activeParticipantsEvery = 30 * time.Second
+
+// countActiveParticipants refreshes contest_active_participants. It is one
+// indexed count per tick and the gauge's only source, so a scrape never
+// reaches the database (CLAUDE.md rule 6). A failed count keeps the last value.
+func countActiveParticipants(count func(context.Context, time.Time) (int, error), gauge *metrics.ParticipantGauge) task {
+	return task{
+		name: "active-participants",
+		// At startup too: a dashboard opened after a restart would read zero
+		// until the first tick.
+		atStart: true,
+		every:   activeParticipantsEvery,
+		run: func(ctx context.Context) error {
+			n, err := count(ctx, time.Now())
+			if err != nil {
+				return err
+			}
+			gauge.SetActive(n)
+			return nil
+		},
+	}
+}

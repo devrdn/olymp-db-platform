@@ -435,6 +435,12 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 			why:     "it drops databases, nothing waits on it, and a grace period bounds what it can find",
 		},
 		{
+			job: countActiveParticipants(func(context.Context, time.Time) (int, error) { return 0, nil },
+				metrics.NewParticipantGauge(metrics.Noop{})),
+			atStart: true,
+			why:     "a dashboard opened after a restart would read zero participants until the first tick",
+		},
+		{
 			job:     pruneRetention(quiet(), nil, metrics.NewRetentionCounters(metrics.Noop{}, nil)),
 			atStart: false,
 			why:     "it deletes history nobody waits on, and a boot-time delete would compete with the restart for the core pool",
@@ -827,5 +833,65 @@ func TestTheRetentionSweepReleasesTheLockWhenItsPassFails(t *testing.T) {
 
 	if _, err := sweep(t.Context()); !errors.Is(err, errAway) || !released {
 		t.Errorf("err = %v, released = %v; want the failure and a release", err, released)
+	}
+}
+
+func participantGaugeValue(t *testing.T, rec *metrics.Prometheus) float64 {
+	t.Helper()
+	families, err := rec.Registry().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if f.GetName() == "contest_active_participants" {
+			return f.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+	t.Fatal("contest_active_participants is not exported")
+	return 0
+}
+
+func TestCountActiveParticipantsSetsTheGauge(t *testing.T) {
+	rec := metrics.NewPrometheus()
+	job := countActiveParticipants(
+		func(context.Context, time.Time) (int, error) { return 7, nil },
+		metrics.NewParticipantGauge(rec))
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := participantGaugeValue(t, rec); got != 7 {
+		t.Errorf("gauge = %v, want 7", got)
+	}
+}
+
+func TestCountActiveParticipantsKeepsTheLastValueWhenTheCountFails(t *testing.T) {
+	rec := metrics.NewPrometheus()
+	var fail bool
+	job := countActiveParticipants(func(context.Context, time.Time) (int, error) {
+		if fail {
+			return 0, errAway
+		}
+		return 7, nil
+	}, metrics.NewParticipantGauge(rec))
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fail = true
+	if err := job.run(t.Context()); !errors.Is(err, errAway) {
+		t.Fatalf("run() = %v, want the count's failure", err)
+	}
+	if got := participantGaugeValue(t, rec); got != 7 {
+		t.Errorf("gauge = %v after a failed count, want the last value 7", got)
+	}
+}
+
+func TestCountActiveParticipantsRunsEveryThirtySeconds(t *testing.T) {
+	job := countActiveParticipants(func(context.Context, time.Time) (int, error) { return 0, nil },
+		metrics.NewParticipantGauge(metrics.Noop{}))
+
+	if job.every != activeParticipantsEvery || activeParticipantsEvery != 30*time.Second {
+		t.Errorf("every = %s, constant = %s, want 30s", job.every, activeParticipantsEvery)
 	}
 }

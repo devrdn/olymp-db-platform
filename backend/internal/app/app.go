@@ -269,6 +269,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
+	a.tasks = append(a.tasks, countActiveParticipants(postgres.NewRegistrations(pool).CountActive, metrics.NewParticipantGauge(recorder)))
 
 	retentionStore := postgres.NewRetention(pool)
 	a.tasks = append(a.tasks, pruneRetention(log,

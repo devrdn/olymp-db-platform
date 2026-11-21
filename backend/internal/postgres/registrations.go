@@ -431,3 +431,22 @@ func (r *Registrations) SetStatus(ctx context.Context, registrationID uuid.UUID,
 	}
 	return nil
 }
+
+// countActiveSQL is the whole contract of CountActive and is what the plan
+// test explains. An individual session counts only while its own time runs;
+// a fixed one while its contest does.
+const countActiveSQL = `
+	SELECT count(*)
+	FROM registrations r JOIN contests c ON c.id = r.contest_id
+	WHERE r.status = 'active' AND c.status = 'running'
+	  AND (c.timing = 'fixed' OR r.started_at + make_interval(mins => c.duration_min) > $1)`
+
+// CountActive counts registrations in status 'active' of a running contest
+// whose own time has not run out at now.
+func (r *Registrations) CountActive(ctx context.Context, now time.Time) (int, error) {
+	var n int
+	if err := r.querier(ctx).QueryRow(ctx, countActiveSQL, now).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count active participants: %w", err)
+	}
+	return n, nil
+}

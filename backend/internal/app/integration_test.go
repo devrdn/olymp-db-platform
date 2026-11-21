@@ -71,6 +71,7 @@ func registeredSeries(t *testing.T) map[string]exportedSeries {
 	metrics.NewMailCounters(api, mailing.KindNames(), mailing.Outcomes())
 	metrics.NewRetentionCounters(api, retention.TableNames())
 	metrics.WatchProvisioningQueue(api, func() int { return 0 })
+	metrics.NewParticipantGauge(api)
 
 	runner := metrics.NewPrometheus()
 	observed := metrics.NewQueryRunner(runner, queryrunner.Endings(), queryrunner.CutOffs(), queryrunner.Lends())

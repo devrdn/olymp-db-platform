@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -578,6 +579,110 @@ func TestForRunReportsNotAParticipantForAnUnknownContest(t *testing.T) {
 
 		if _, err := repo.ForRun(ctx, uuid.New(), stranger.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
 			t.Errorf("ForRun() = %v, want ErrParticipantNotFound — the same answer a never-registered user gets", err)
+		}
+	})
+}
+
+func TestCountActiveCountsParticipantsWhoseTimeIsRunning(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		now := txNow(t, ctx)
+		before, err := repo.CountActive(ctx, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		author := makeUser(t, ctx, "author-count-active")
+		contest := func(status, timing string, durationMin any) uuid.UUID {
+			id := makeContest(t, ctx, author.ID)
+			exec(t, ctx, `UPDATE contests SET status = $2, timing = $3, duration_min = $4 WHERE id = $1`,
+				id, status, timing, durationMin)
+			return id
+		}
+		register := func(contestID uuid.UUID, login, status string, startedAgo time.Duration) {
+			user := makeUser(t, ctx, login)
+			exec(t, ctx, `INSERT INTO registrations (contest_id, user_id, status, started_at) VALUES ($1, $2, $3, $4)`,
+				contestID, user.ID, status, now.Add(-startedAgo))
+		}
+
+		fixed := contest("running", "fixed", nil)
+		register(fixed, "count-active-fixed-1", "active", time.Minute)
+		register(fixed, "count-active-fixed-2", "active", time.Minute)
+		register(fixed, "count-active-registered", "registered", 0)
+		register(fixed, "count-active-finished", "finished", time.Minute)
+
+		individual := contest("running", "individual", 60)
+		register(individual, "count-active-inside", "active", 30*time.Minute)
+		register(individual, "count-active-outside", "active", 90*time.Minute)
+
+		over := contest("finished", "fixed", nil)
+		register(over, "count-active-over", "active", time.Minute)
+
+		after, err := repo.CountActive(ctx, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after-before != 3 {
+			t.Errorf("CountActive rose by %d, want 3: two in a fixed contest and one inside an individual session", after-before)
+		}
+	})
+}
+
+// The count runs every thirty seconds against the largest table, so it must
+// be a range of the partial index migration 000065 made for it (CLAUDE.md
+// rule 7).
+func TestCountActiveReadsItsPartialIndex(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		q := storage.QuerierFrom(ctx, testPool)
+		author := makeUser(t, ctx, "author-count-plan")
+		contest := makeContest(t, ctx, author.ID)
+		exec(t, ctx, `UPDATE contests SET status = 'running' WHERE id = $1`, contest)
+		exec(t, ctx, `
+			WITH people AS (
+				INSERT INTO users (login, full_name, password_hash)
+				SELECT 'count-plan-' || n, 'P', 'x' FROM generate_series(1, 3000) n RETURNING id
+			)
+			INSERT INTO registrations (contest_id, user_id, status)
+			SELECT $1, id, 'registered' FROM people`, contest)
+		exec(t, ctx, `UPDATE registrations SET status = 'active' WHERE id IN (
+			SELECT id FROM registrations WHERE contest_id = $1 LIMIT 30)`, contest)
+		// ANALYZE writes its row estimates in place, where a rollback does not
+		// reach them; they are refreshed once the rows are gone, so a later
+		// plan test does not price its tables by this one's.
+		t.Cleanup(func() {
+			for _, table := range []string{"users", "contests", "registrations"} {
+				_, _ = testPool.Exec(context.Background(), "ANALYZE "+table)
+			}
+		})
+		for _, table := range []string{"users", "contests", "registrations"} {
+			exec(t, ctx, "ANALYZE "+table)
+		}
+		// Whether the planner prefers the index on a table this small is its
+		// own arithmetic; what the test owns is that the index can serve the
+		// query.
+		exec(t, ctx, `SET LOCAL enable_seqscan = off`)
+
+		var raw []byte
+		if err := q.QueryRow(ctx, "EXPLAIN (FORMAT JSON) "+countActiveSQL, txNow(t, ctx)).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var plans []struct {
+			Plan planNode `json:"Plan"`
+		}
+		if err := json.Unmarshal(raw, &plans); err != nil {
+			t.Fatal(err)
+		}
+		var used bool
+		var walk func(n planNode)
+		walk = func(n planNode) {
+			used = used || n.Index == "registrations_active_idx"
+			for _, child := range n.Plans {
+				walk(child)
+			}
+		}
+		walk(plans[0].Plan)
+		if !used {
+			t.Errorf("the count does not read registrations_active_idx; plan: %s", raw)
 		}
 	})
 }
