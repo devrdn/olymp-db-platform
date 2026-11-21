@@ -1078,6 +1078,69 @@ func TestStaffListingsCarryNoEnrolmentFlagWorthReading(t *testing.T) {
 	}
 }
 
+func TestAManagerWithoutAGlobalPermissionListsTheContestsTheyStaff(t *testing.T) {
+	f := newContestFixture(t)
+	managed := f.stores.SeedContest(contests.StatusDraft)
+	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+		ContestID: managed.ID, UserID: f.actor.ID, Role: rbac.RoleManager, GrantedBy: uuid.New(),
+	}); err != nil {
+		t.Fatalf("Grant() returned error: %v", err)
+	}
+	other := f.stores.SeedContest(contests.StatusPublished)
+
+	rec := f.asked(t, "/contests", f.cookie)
+	rows := listed(t, rec)
+
+	if _, ok := rows[managed.ID.String()]; !ok {
+		t.Error("the contest the account manages is missing from its list")
+	}
+	if _, ok := rows[other.ID.String()]; ok {
+		t.Error("a contest the account does not staff is listed")
+	}
+	if total := decode(t, rec)["total"]; total != float64(1) {
+		t.Errorf("total = %v, want 1", total)
+	}
+}
+
+func TestTwoManagersEachListOnlyTheirOwnContest(t *testing.T) {
+	f := newContestFixture(t)
+	mine := f.stores.SeedContest(contests.StatusDraft)
+	theirs := f.stores.SeedContest(contests.StatusDraft)
+	rival, rivalCookie := f.asParticipant(t, "rival")
+	for contestID, userID := range map[uuid.UUID]uuid.UUID{mine.ID: f.actor.ID, theirs.ID: rival.ID} {
+		if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+			ContestID: contestID, UserID: userID, Role: rbac.RoleManager, GrantedBy: uuid.New(),
+		}); err != nil {
+			t.Fatalf("Grant() returned error: %v", err)
+		}
+	}
+
+	first := listed(t, f.asked(t, "/contests", f.cookie))
+	second := listed(t, f.asked(t, "/contests", rivalCookie))
+
+	if len(first) != 1 || first[mine.ID.String()] == nil {
+		t.Errorf("first manager lists %d contests, want only their own", len(first))
+	}
+	if len(second) != 1 || second[theirs.ID.String()] == nil {
+		t.Errorf("second manager lists %d contests, want only their own", len(second))
+	}
+}
+
+func TestAnAccountStaffingNothingListsNothingUnscoped(t *testing.T) {
+	f := newContestFixture(t)
+	f.stores.SeedContest(contests.StatusPublished)
+	_, cookie := f.asParticipant(t, "s.popescu")
+
+	rec := f.asked(t, "/contests", cookie)
+
+	if rows := listed(t, rec); len(rows) != 0 {
+		t.Errorf("listed %d contests, want none", len(rows))
+	}
+	if total := decode(t, rec)["total"]; total != float64(0) {
+		t.Errorf("total = %v, want 0", total)
+	}
+}
+
 func TestTheEnrolmentNarrowingIsRefusedWhereItMeansNothing(t *testing.T) {
 	// Outside the participant scope there is no "me": the SQL would compare
 	// against a null identity and return an empty list, answering a different

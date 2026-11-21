@@ -160,7 +160,7 @@ flowchart LR
 |---|---|---|---|---|
 | Change own password | `/password` | `POST /auth/password` | `auth` | Session; the current password is verified and throttled. While the account holds a one-time password, every route but this one, sign-out and `GET /auth/me` answers `password_change_required` |
 | Sign out | account menu in every shell | `POST /auth/logout` | `auth` | Session |
-| Know who I am | every shell | `GET /auth/me` | `auth` | Session; returns the global permissions the frontend routes by |
+| Know who I am | every shell | `GET /auth/me` | `auth` | Session; returns the global permissions the frontend routes by, and `manages_contests`: whether the account manages or owns a contest that is not archived |
 | See my contests | `/my` | `GET /contests?scope=participant&enrolled=true` | `contests` | Session; registered contests that are published, running or finished; a contest closed to the archive stays here after it ends |
 | Browse contests open to me | `/open` | `GET /contests?scope=participant` | `contests` | Session; adds contests with open enrolment that are published or running; a contest whose visibility is `closed` drops out once it has ended |
 | Read the archive of finished contests | `/archive`, `/archive/{contestID}` (its results are `GET /contests/{contestID}/leaderboard`) | `GET /archive/contests`, `GET /archive/contests/{contestID}` | `archive` | Session, any account; only when an administrator has switched the archive on, otherwise 404; open contests that have ended; tasks only when the organiser allowed them; 60 reads a minute (`archive_too_often`) |
@@ -282,7 +282,7 @@ flowchart LR
 
 | Use case | Screen | API | Package | Permission or condition |
 |---|---|---|---|---|
-| See my contests | `/contests` | `GET /contests` | `contests` | Session. `contest.admin_all` lists every contest; `contest.create` lists the contests the caller staffs; anyone else gets the participant list. Known gap: a manager appointed from an account without `contest.create` (a `student`, say) gets the participant list here and lands on `/my` after sign-in, so neither shows the contest they run; they reach its staff screens only by URL |
+| See my contests | `/contests` | `GET /contests` | `contests` | Session. `contest.admin_all` lists every contest; anyone else gets the contests they own or manage, and an account that staffs none gets an empty list. The participant view is `scope=participant` |
 | Create a contest | `/contests/new` | `POST /contests` | `contests` | `contest.create` (global) |
 | See the overview and the publish check | `/contests/{contestID}` | `GET /contests/{contestID}`, `GET /contests/{contestID}/publish-check` | `contests` | `contest.view` |
 | Edit title and descriptions | `/contests/{contestID}` | `PUT /contests/{contestID}/translations` | `contests` | `contest.edit`; frozen once the contest runs |
@@ -486,7 +486,7 @@ a contest, so it unlocks nothing on its own.
 
 | Permission | `student` | `organizer` | `admin` | Owner | Manager | Unlocks |
 |---|---|---|---|---|---|---|
-| `contest.create` | | yes | yes | | | `POST /contests` (global check); also makes `GET /contests` list the contests the caller staffs instead of the participant view |
+| `contest.create` | | yes | yes | | | `POST /contests` (global check) |
 | `contest.view` | | held | held | yes | yes | Staff reads of a contest: overview, publish check, story, questions, SQL policy, staff list, cover, game and its databases, live standings |
 | `contest.edit` | | | held | yes | yes | Every content and settings write, the package export, deleting a draft, extending the grace, revealing the leaderboard, dropping a participant database |
 | `contest.publish` | | | held | yes | yes | `POST /contests/{contestID}/status`: publish, unpublish, start, finish, archive |

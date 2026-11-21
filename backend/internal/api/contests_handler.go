@@ -59,8 +59,9 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 	r.Route("/contests", func(r chi.Router) {
 		r.Use(h.mw.Authenticate)
 
-		// The listing is scoped inside the handler: students and staff see
-		// different result sets, not different rights.
+		// The listing is scoped inside the handler: what the caller takes
+		// part in and what they staff are different result sets, not different
+		// rights.
 		r.Get("/", h.list)
 		r.With(h.mw.RequirePermission(rbac.PermissionContestCreate)).Post("/", h.create)
 
@@ -374,9 +375,10 @@ type contestListResponse struct {
 	Total int              `json:"total"`
 }
 
-// list returns the contests the caller may see: staff see those they run,
-// everyone sees those they take part in and the open ones, and an installation
-// administrator sees all.
+// list returns the contests the caller may see. With scope=participant that is
+// the ones they take part in and the open ones; without it, an installation
+// administrator sees all and anyone else sees the ones they staff, which is
+// nothing for an account that staffs none.
 func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
@@ -399,10 +401,8 @@ func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		filter.VisibleTo = identity.UserID
 	case identity.Has(rbac.PermissionContestAdminAll):
 		// Everything, unscoped.
-	case identity.Has(rbac.PermissionContestCreate):
-		filter.ManagedBy = identity.UserID
 	default:
-		filter.VisibleTo = identity.UserID
+		filter.ManagedBy = identity.UserID
 	}
 
 	// The participant's "mine" and "the rest open to me". It only narrows the

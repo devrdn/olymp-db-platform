@@ -25,6 +25,7 @@ type PasswordChanger interface {
 // value every middleware passes around.
 type AccountReader interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
+	users.ContestManagers
 }
 
 // AuthHandler serves the authentication endpoints.
@@ -141,6 +142,9 @@ type meResponse struct {
 	Email       string   `json:"email,omitempty"`
 	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
+	// ManagesContests is true for an account that manages or owns a contest
+	// that is not archived, the test ActsAsStaff applies.
+	ManagesContests bool `json:"manages_contests"`
 }
 
 // me describes the signed-in account: its permissions, so the interface hides
@@ -174,6 +178,15 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 		body.FullName = account.FullName
 		body.Email = account.Email
 		body.Roles = account.Roles
+	}
+
+	// One indexed read and no write. A failure reads as "no", for the same
+	// reason as above.
+	if manages, err := h.accounts.ManagesContest(r.Context(), identity.UserID); err != nil {
+		h.log.WarnContext(r.Context(), "could not tell whether the account runs a contest",
+			"user_id", identity.UserID, "error", err)
+	} else {
+		body.ManagesContests = manages
 	}
 
 	httpx.JSON(w, r, http.StatusOK, body)

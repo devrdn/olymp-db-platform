@@ -201,7 +201,7 @@
                 "me"
               ]
             },
-            "description": "Describes the signed-in account and the exact permission codes its roles grant — useful for building UI that hides what the account may not do.\n\nResponses:\n- 200 — `{ id, login, permissions: string[] }`\n- 401 `unauthenticated`"
+            "description": "Describes the signed-in account and the exact permission codes its roles grant — useful for building UI that hides what the account may not do.\n\nResponses:\n- 200 — `{ id, login, full_name, email?, roles: string[], permissions: string[], manages_contests: boolean }`. `manages_contests` is true when the account manages or owns a contest that is not archived (one indexed read, no write); a failed lookup reports false\n- 401 `unauthenticated`"
           },
           "response": []
         },
@@ -544,7 +544,7 @@
                 }
               ]
             },
-            "description": "Which contests the caller sees depends on who they are, not on a flag they pass:\n- system administrator (`contest.admin_all`) — all of them\n- organizer (`contest.create`) — the ones they own or manage\n- anybody else — the ones they take part in, plus open ones taking signups\n\n`scope=participant` asks for the student view explicitly, which is how staff preview what a participant sees.\n\nEach item carries one **negotiated** title and the `lang` it was served in (`?lang=`, then `Accept-Language`, then the contest default, then `DEFAULT_LOCALE`). It also carries `sql_mode`, the mode of the contest's SQL policy (`read_only` when none was set): a participant may not read the policy itself, and the play screen offers the database reset only under `read_write`. And it carries `result_download`, whether the play screen offers a query result as a CSV file, and `schema_diagram`, whether it draws the schema as a diagram.\n\nResponses: 200 `{ items: ContestSummary[], total }` · 401 `unauthenticated`"
+            "description": "Which contests the caller sees depends on who they are, not on a flag they pass:\n- system administrator (`contest.admin_all`) — all of them\n- anybody else — the ones they own or manage, so an account that staffs nothing gets an empty list\n\n`scope=participant` asks for the participant view: the ones they take part in, plus open ones taking signups. Participant screens send it, and so do staff previewing what a participant sees.\n\nEach item carries one **negotiated** title and the `lang` it was served in (`?lang=`, then `Accept-Language`, then the contest default, then `DEFAULT_LOCALE`). It also carries `sql_mode`, the mode of the contest's SQL policy (`read_only` when none was set): a participant may not read the policy itself, and the play screen offers the database reset only under `read_write`. And it carries `result_download`, whether the play screen offers a query result as a CSV file, and `schema_diagram`, whether it draws the schema as a diagram.\n\nResponses: 200 `{ items: ContestSummary[], total }` · 401 `unauthenticated`"
           },
           "response": []
         },

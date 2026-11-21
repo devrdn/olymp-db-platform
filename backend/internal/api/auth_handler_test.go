@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +33,7 @@ type handlerFixture struct {
 	// hasher has a single slot and a short wait, so a test can fill it and
 	// see the refusal an overloaded process answers with.
 	hasher *password.Hasher
+	mw     *auth.Middleware
 }
 
 func newHandlerFixture(t *testing.T) *handlerFixture {
@@ -66,7 +69,7 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 	router := chi.NewRouter()
 	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher), repo, mw, auth.NewCookieWriter(false), log).Mount(router)
 
-	return &handlerFixture{router: router, repo: repo, user: user, hasher: hasher}
+	return &handlerFixture{router: router, repo: repo, user: user, hasher: hasher, mw: mw}
 }
 
 func (f *handlerFixture) post(path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -292,6 +295,70 @@ func TestCurrentUserEndpointNamesTheAccountAsAPersonWouldReadIt(t *testing.T) {
 	// out but do not name.
 	if len(body.Roles) != 1 || body.Roles[0] != "student" {
 		t.Errorf("roles = %v, want [student]", body.Roles)
+	}
+}
+
+func (f *handlerFixture) manages(t *testing.T, cookie *http.Cookie) bool {
+	t.Helper()
+	return f.meWith(t, f.router, cookie)["manages_contests"] == true
+}
+
+func (f *handlerFixture) meWith(t *testing.T, router http.Handler, cookie *http.Cookie) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	return body
+}
+
+func TestCurrentUserEndpointSaysWhetherTheAccountRunsAContest(t *testing.T) {
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+
+	if f.manages(t, cookie) {
+		t.Error("manages_contests = true before any appointment")
+	}
+	f.repo.AppointToContest(f.user.ID)
+	if !f.manages(t, cookie) {
+		t.Error("manages_contests = false after the account was appointed")
+	}
+}
+
+// failingContestLookup reads accounts but cannot say which contests they run.
+type failingContestLookup struct{ *userstest.Repository }
+
+func (failingContestLookup) ManagesContest(context.Context, uuid.UUID) (bool, error) {
+	return false, errors.New("contest role lookup failed")
+}
+
+func TestCurrentUserEndpointSurvivesAFailedContestLookup(t *testing.T) {
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+	f.repo.AppointToContest(f.user.ID)
+
+	var logged bytes.Buffer
+	log := logging.New("warn", &logged)
+	router := chi.NewRouter()
+	api.NewAuthHandler(nil, nil, failingContestLookup{f.repo}, f.mw, auth.NewCookieWriter(false), log).Mount(router)
+
+	body := f.meWith(t, router, cookie)
+
+	if body["manages_contests"] != false {
+		t.Errorf("manages_contests = %v, want false", body["manages_contests"])
+	}
+	if body["login"] != "ivanov" {
+		t.Errorf("login = %v, want ivanov", body["login"])
+	}
+	if !strings.Contains(logged.String(), "contest") {
+		t.Errorf("no warning logged for the failed lookup: %q", logged.String())
 	}
 }
 
