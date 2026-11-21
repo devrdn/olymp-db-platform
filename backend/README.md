@@ -1239,8 +1239,6 @@ one's, "abandoned unsent: queued more than 24h0m0s ago".
 `max(mail_outbox_due)` falling by about `SMTP_MAX_PER_MINUTE` a minute is a
 bulk send going out. The dashboard has no email panel; ask Grafana's Explore.
 
-Mail aside, the API exports `contest_active_participants` (gauge) when Prometheus is the metrics backend: the active registrations whose own time, grace included, has not run out, counted every 30 s. It is a count of the shared database, so read it with `max()`.
-
 **The alerts** ([the table](#alerts-and-the-dashboard)) are both warnings:
 `DBContestMailAbandoned` fires on any message abandoned in the last hour,
 each one a person who will not get it, and `DBContestMailRelayFailing` on ten
@@ -1386,6 +1384,17 @@ Whether a labelled endpoint exists depends on one variable per service:
 an install must do with the label when it changes the variable is written beside
 the labels in `deploy/docker-compose.yml`, where a test also holds it.
 
+### API gauges
+
+| Series | Type | Meaning |
+|---|---|---|
+| `provisioning_queue_depth` | gauge | database copies this process has been asked for and has not started: the backlog of a pool top-up plus every caller waiting for one of the `GAME_PROVISION_WORKERS` slots, read at scrape time. Per process, so read it with `sum()` |
+| `contest_active_participants` | gauge | active registrations of running contests whose own time, grace included, has not run out, counted every 30 s. Exported only when Prometheus is the metrics backend. A count of the shared database, so read it with `max()` |
+
+`DBContestProvisioningQueueBacklog` warns when the queue has not been empty
+once in 30 minutes. Active participants carry no alert; the dashboard shows
+them beside the queue.
+
 ### Query Runner metrics
 
 The Query Runner serves `/metrics` over plain HTTP on a listener of its own,
@@ -1523,6 +1532,7 @@ changed setting means changing the number in the rules too.
 | `DBContestAPISlow` | warning | the API's p95, slow-by-design routes left out, is over 1 s with at least 15 of those requests in 5 minutes, for 10 minutes |
 | `DBContestReclaimFailing` | warning | the reclaim sweep failed in the last hour |
 | `DBContestRetentionFailing` | warning | the retention sweep failed in the last hour; expired rows stay until a later pass succeeds |
+| `DBContestProvisioningQueueBacklog` | warning | the API's provisioning queue has not been empty once for 30 minutes: copies are asked for faster than they are made, or the game cluster stopped making them |
 | `DBContestMailAbandoned` | warning | an email message was abandoned in the last hour |
 | `DBContestMailRelayFailing` | warning | sending email has been paused for 10 minutes: the relay itself failed (connection, TLS, the account, the sender), or refused three messages in a row ([Diagnosing](#diagnosing)) |
 | `DBContestQueriesFailingInternally` | critical | 5 or more `error`/`internal` queries in 5 minutes, for 2 minutes |

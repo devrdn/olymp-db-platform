@@ -1475,7 +1475,7 @@
     {
       "type": "timeseries",
       "title": "Database resets and game builds per hour",
-      "description": "The HTTP calls that start provisioning, by status; the provisioning queue itself is not measured.",
+      "description": "The HTTP calls that start provisioning, by status; the queue they feed is the next panel.",
       "id": 27,
       "datasource": {
         "type": "prometheus",
@@ -1617,6 +1617,110 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Provisioning queue",
+      "description": "Database copies asked for and not yet started, summed over API processes; DBContestProvisioningQueueBacklog warns when it is not once empty for 30 minutes.",
+      "id": 33,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(provisioning_queue_depth{job=~\"$api_job\"})",
+          "legendFormat": "waiting",
+          "refId": "A",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Active participants",
+      "description": "Registrations still working in a running contest, counted every 30 seconds; the same on every replica, so max. Exported only on the Prometheus backend.",
+      "id": 34,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max(contest_active_participants{job=~\"$api_job\"})",
+          "legendFormat": "active",
+          "refId": "A",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "type": "row",
       "title": "Processes",
       "id": 29,
@@ -1625,7 +1729,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 80
       },
       "panels": []
     },
@@ -1642,7 +1746,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1694,7 +1798,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1746,7 +1850,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {

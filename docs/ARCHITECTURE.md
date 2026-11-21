@@ -609,8 +609,11 @@ it never runs in bulk at the moment that matters:
 - **A queue with bounded concurrency.** Every creation goes through the
   provisioning queue, two to four workers wide: a database is made when a
   participant registers or is added, spread over the time before the start
-  rather than fired off at it. Queue depth is a metric with an alert
-  (section 9).
+  rather than fired off at it. There is no queue table: the queue is the
+  workers' slots and the callers waiting for one, and each API process
+  reports its own as the gauge `provisioning_queue_depth`, so the total is its
+  `sum()`. `DBContestProvisioningQueueBacklog` warns when the queue has not
+  been empty once in 30 minutes (section 9).
 - **A pool of spares.** For each published contest, provisioning keeps K spare
   copies ready (`game_pool_c{id}_NNN`). K is not a number from configuration
   but the roster's own answer: everybody who has no copy yet, plus
@@ -2928,8 +2931,10 @@ passwords and hashes are never logged; `request_id` is threaded from the
 interface through the Core API to the Query Runner for end-to-end tracing, and
 every `query_log` row carries it, which is what ties a student's query to the
 technical logs in Loki. The metrics are requests per second, latency per
-endpoint, the number of active participants, the duration and refusal rate of
-student queries, and the depth of the provisioning queue.
+endpoint, the number of active participants (`contest_active_participants`,
+the same on every replica, so read with `max()`), the duration and refusal
+rate of student queries, and the depth of the provisioning queue
+(`provisioning_queue_depth`, per process, so read with `sum()`).
 
 ### 9.1 The query-log panel
 

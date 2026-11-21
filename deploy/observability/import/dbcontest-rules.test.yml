@@ -59,6 +59,8 @@ tests:
         values: '0x30'
       - series: 'mail_relay_failing{job="core-api", instance="api:9090"}'
         values: '0x30'
+      - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
+        values: '0x30'
       - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="ok", reason=""}'
         values: '0x30'
       - series: 'queryrunner_queries_total{job="queryrunner", instance="queryrunner:9101", outcome="error", reason="internal"}'
@@ -357,6 +359,70 @@ tests:
     promql_expr_test:
       - expr: ALERTS{alertname="DBContestRetentionFailing", alertstate="firing"}
         eval_time: 8m
+        exp_samples: []
+
+  # A queue that is never empty for thirty minutes is copies asked for faster
+  # than they are made.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x40'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x40'
+      - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
+        values: '5x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
+        eval_time: 29m
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 31m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # One empty sample resets the clock: the queue emptied at 21m, so only
+  # 25 minutes of backlog have passed since.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x50'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x50'
+      - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
+        values: '5x20 0 5x25'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 47m
+        exp_samples: []
+
+  # A process that started 20 minutes ago has not had thirty minutes to fail.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x40'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x40'
+      - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
+        values: '_x20 5x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 39m
+        exp_samples: []
+
+  # A scrape gap in the middle of a backlog is not a backlog: the series
+  # disappears, and the clock starts again.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x50'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x50'
+      - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
+        values: '5x20 _x10 5x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 49m
         exp_samples: []
 
   # One abandoned message is one person without it.
