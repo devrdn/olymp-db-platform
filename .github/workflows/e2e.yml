@@ -70,10 +70,8 @@ jobs:
       - name: Start the throwaway stack
         run: make e2e-stack-up
 
-      # The values belong to a stack that dies with the runner, and masking is
-      # the guard: a failing CREATE ROLE ... PASSWORD can be logged by the game
-      # cluster. They are read from the files the stack wrote, before any later
-      # step can print them.
+      # Guards this run's log only. The values belong to a stack that dies with
+      # the runner; the uploaded artifact is redacted separately (redact.sh).
       - name: Mask the generated secrets
         run: |
           set -euo pipefail
@@ -92,7 +90,10 @@ jobs:
       # (smoke.env, stack.env) and Playwright traces hold the run's passwords,
       # so neither is ever copied. Staging one directory keeps the artifact's
       # layout at test-results/ and e2e-logs/. A cancelled run (the timeout)
-      # still leaves its logs.
+      # still leaves its logs. A failing CREATE ROLE ... PASSWORD can be logged
+      # by the game cluster, and ::add-mask:: does not reach uploaded files, so
+      # every generated secret is redacted from the staged text first; this runs
+      # even when the stack never came up, as stack.sh writes its env file first.
       - name: Collect screenshots and container logs
         if: failure() || cancelled()
         run: |
@@ -104,6 +105,7 @@ jobs:
             name="$(docker inspect --format '{{.Name}}' "$id")"
             docker logs "$id" >"$stage/e2e-logs/${name#/}.log" 2>&1 || true
           done
+          frontend/e2e/redact.sh "$stage" "$E2E_STACK_DIR"
 
       - name: Upload screenshots and logs
         if: failure() || cancelled()
