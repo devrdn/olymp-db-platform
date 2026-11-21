@@ -1087,6 +1087,8 @@ func TestAManagerWithoutAGlobalPermissionListsTheContestsTheyStaff(t *testing.T)
 		t.Fatalf("Grant() returned error: %v", err)
 	}
 	other := f.stores.SeedContest(contests.StatusPublished)
+	other.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(other)
 
 	rec := f.asked(t, "/contests", f.cookie)
 	rows := listed(t, rec)
@@ -1128,9 +1130,14 @@ func TestTwoManagersEachListOnlyTheirOwnContest(t *testing.T) {
 
 func TestAnAccountStaffingNothingListsNothingUnscoped(t *testing.T) {
 	f := newContestFixture(t)
-	f.stores.SeedContest(contests.StatusPublished)
+	open := f.stores.SeedContest(contests.StatusPublished)
+	open.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(open)
 	_, cookie := f.asParticipant(t, "s.popescu")
 
+	if _, ok := listed(t, f.asked(t, "/contests?scope=participant", cookie))[open.ID.String()]; !ok {
+		t.Fatal("the open contest is not visible in the participant scope, so the fixture proves nothing")
+	}
 	rec := f.asked(t, "/contests", cookie)
 
 	if rows := listed(t, rec); len(rows) != 0 {

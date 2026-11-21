@@ -201,7 +201,7 @@
                 "me"
               ]
             },
-            "description": "Describes the signed-in account and the exact permission codes its roles grant — useful for building UI that hides what the account may not do.\n\nResponses:\n- 200 — `{ id, login, full_name, email?, roles: string[], permissions: string[], manages_contests: boolean }`. `manages_contests` is true when the account manages or owns a contest that is not archived (one indexed read, no write); a failed lookup reports false\n- 401 `unauthenticated`"
+            "description": "Describes the signed-in account and the exact permission codes its roles grant — useful for building UI that hides what the account may not do.\n\nResponses:\n- 200 — `{ id, login, full_name, email?, roles: string[], permissions: string[], manages_contests: boolean }`. `manages_contests` is true when the account manages or owns a contest that is not archived; a failed lookup reports false\n- 401 `unauthenticated`"
           },
           "response": []
         },
@@ -526,7 +526,7 @@
                 {
                   "key": "scope",
                   "value": "",
-                  "description": "participant — what a student would see."
+                  "description": "participant — the participant view. Participant screens must send scope=participant; without it the list is what the caller staffs."
                 },
                 {
                   "key": "lang",

@@ -180,8 +180,8 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 		body.Roles = account.Roles
 	}
 
-	// One indexed read and no write. A failure reads as "no", for the same
-	// reason as above.
+	// A failure reads as no: it only changes where the account lands, since
+	// every contest route authorises on its own.
 	if manages, err := h.accounts.ManagesContest(r.Context(), identity.UserID); err != nil {
 		h.log.WarnContext(r.Context(), "could not tell whether the account runs a contest",
 			"user_id", identity.UserID, "error", err)

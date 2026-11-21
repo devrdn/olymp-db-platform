@@ -357,7 +357,7 @@ func TestCurrentUserEndpointSurvivesAFailedContestLookup(t *testing.T) {
 	if body["login"] != "ivanov" {
 		t.Errorf("login = %v, want ivanov", body["login"])
 	}
-	if !strings.Contains(logged.String(), "contest") {
+	if !strings.Contains(logged.String(), "could not tell whether the account runs a contest") {
 		t.Errorf("no warning logged for the failed lookup: %q", logged.String())
 	}
 }
