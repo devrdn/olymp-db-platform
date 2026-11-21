@@ -1013,6 +1013,8 @@ const ro = {
         choicesHelp: "Răspunsul este unul dintre aceștia, niciodată o etichetă, și asta face verificarea independentă de limba citită.",
         visible: "Arătați această întrebare participanților",
         visibleHelp: "O întrebare ascunsă există complet — puncte, răspunsuri de referință, tot. A înțelege ce se cere devine parte din sarcină, nu un rând de instrucțiuni.",
+        hiddenLastVisible: "Nicio altă întrebare nu este afișată. Ascunsă, aceasta blochează publicarea: participanții nu ar avea la ce să răspundă.",
+        hiddenWinnerFinal: "Punctajul este pe primul care rezolvă, iar nicio altă întrebare finală nu este afișată. Ascunsă, aceasta blochează publicarea: o întrebare ascunsă nu poate primi răspuns, deci nimeni nu ar putea câștiga.",
         bonus: "Întrebare bonus",
         bonusHint: "Un răspuns corect îi redă participantului până la punctajul ei din penalizarea adunată pentru încercările greșite, niciodată mai mult decât această penalizare. Altfel nu aduce puncte, un răspuns greșit la ea nu costă nimic, iar limita de încercări rămâne în vigoare.",
         bonusPointsOnly: "Întrebările bonus există doar la punctajul „Puncte”: la „Primul care rezolvă” sau ICPC nu există nicio penalizare pe care să o restituie.",

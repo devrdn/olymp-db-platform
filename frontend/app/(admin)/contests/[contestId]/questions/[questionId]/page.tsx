@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { Tag } from "@/components/ui/tag";
-import { questionSchema } from "@/lib/api/content";
+import { questionListSchema, questionSchema } from "@/lib/api/content";
 import { contentEditable, sequentialActive } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { activeDictionary } from "@/lib/i18n/server";
@@ -21,14 +21,18 @@ export default async function QuestionPage(
   const [{ contestId, questionId }, dict] = await Promise.all([props.params, activeDictionary()]);
   if (!isId(questionId)) notFound();
 
-  const [contest, question] = await Promise.all([
+  const [contest, question, list] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, `/questions/${questionId}`, (payload) =>
       questionSchema.parse(payload),
     ),
+    loadContestResource(contestId, "/questions", (payload) => questionListSchema.parse(payload)),
   ]);
 
   if (!question) notFound();
+
+  const otherVisible = (list?.items ?? []).filter((q) => q.id !== question.id && q.isVisible);
+  const otherVisibleFinals = otherVisible.filter((q) => q.kind === "final").length;
 
   const t = dict.workspace.question;
   const editable = contentEditable(contest.status);
@@ -61,6 +65,8 @@ export default async function QuestionPage(
         editable={editable}
         sequentialActive={sequentialActive(contest)}
         scoring={contest.scoring}
+        otherVisibleQuestions={otherVisible.length}
+        otherVisibleFinals={otherVisibleFinals}
         dict={dict}
       />
     </div>

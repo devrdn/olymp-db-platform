@@ -57,6 +57,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="points"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -85,6 +87,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="points"
         sequentialActive
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -111,6 +115,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="icpc"
         sequentialActive
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -132,6 +138,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="icpc"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -150,6 +158,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="winner"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -170,6 +180,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="points"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -186,6 +198,8 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         editable
         scoring="points"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -207,6 +221,8 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
         editable
         scoring="points"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -265,6 +281,8 @@ describe("QuestionEditor, fields the scoring mode does not use", () => {
         editable
         scoring={scoring}
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -336,6 +354,8 @@ describe("QuestionEditor, the bonus question", () => {
         editable={editable}
         scoring={scoring}
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -413,6 +433,8 @@ describe("QuestionEditor, the reference answers", () => {
         editable
         scoring="points"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -440,6 +462,8 @@ describe("QuestionEditor, the title", () => {
         editable={editable}
         scoring="points"
         sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
         dict={dict}
       />,
     );
@@ -496,5 +520,83 @@ describe("QuestionEditor, the title", () => {
 
     const english = within(screen.getByRole("group", { name: "en" }));
     expect(english.getByLabelText(t().title)).toBeDisabled();
+  });
+});
+
+describe("QuestionEditor, hiding the deciding question", () => {
+  function renderHiding(
+    overrides: Partial<Question>,
+    counts: { otherVisibleQuestions: number; otherVisibleFinals?: number },
+    scoring: "points" | "winner" | "icpc" = "points",
+  ) {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question(overrides)}
+        languages={["en"]}
+        editable
+        scoring={scoring}
+        sequentialActive={false}
+        otherVisibleQuestions={counts.otherVisibleQuestions}
+        otherVisibleFinals={counts.otherVisibleFinals ?? 0}
+        dict={dict}
+      />,
+    );
+    return screen.getByRole("checkbox", { name: dict.workspace.question.shape.visible });
+  }
+
+  const t = () => dict.workspace.question.shape;
+
+  test("warns that hiding the only shown question blocks publishing", async () => {
+    const checkbox = renderHiding({}, { otherVisibleQuestions: 0 });
+    expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
+
+    await userEvent.setup().click(checkbox);
+    const warning = screen.getByText(t().hiddenLastVisible);
+    expect(checkbox).toHaveAttribute("aria-describedby", warning.id);
+
+    await userEvent.setup().click(checkbox);
+    expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
+  });
+
+  test("warns that hiding the last shown final question blocks publishing under first to solve", async () => {
+    const checkbox = renderHiding(
+      { kind: "final", maxAttempts: 3 },
+      { otherVisibleQuestions: 2, otherVisibleFinals: 0 },
+      "winner",
+    );
+    await userEvent.setup().click(checkbox);
+
+    expect(screen.getByText(t().hiddenWinnerFinal)).toBeInTheDocument();
+    expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
+  });
+
+  test("says nothing while another final question is shown", async () => {
+    const checkbox = renderHiding(
+      { kind: "final", maxAttempts: 3 },
+      { otherVisibleQuestions: 2, otherVisibleFinals: 1 },
+      "winner",
+    );
+    await userEvent.setup().click(checkbox);
+
+    expect(screen.queryByText(t().hiddenWinnerFinal)).not.toBeInTheDocument();
+    expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
+  });
+
+  test("says nothing about a hidden final outside first to solve", async () => {
+    const checkbox = renderHiding(
+      { kind: "final" },
+      { otherVisibleQuestions: 1, otherVisibleFinals: 0 },
+      "points",
+    );
+    await userEvent.setup().click(checkbox);
+
+    expect(screen.queryByText(t().hiddenWinnerFinal)).not.toBeInTheDocument();
+    expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
+  });
+
+  test("warns at once about a question already stored hidden", () => {
+    renderHiding({ isVisible: false }, { otherVisibleQuestions: 0 });
+    expect(screen.getByText(t().hiddenLastVisible)).toBeInTheDocument();
   });
 });

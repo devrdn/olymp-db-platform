@@ -29,6 +29,8 @@ export function QuestionEditor({
   editable,
   sequentialActive,
   scoring,
+  otherVisibleQuestions,
+  otherVisibleFinals,
   dict,
 }: {
   contestId: string;
@@ -39,6 +41,10 @@ export function QuestionEditor({
   // effect, computed by the page so the rule is not restated here.
   sequentialActive: boolean;
   scoring: Scoring;
+  // How many of the contest's other questions are shown (and, of those, final
+  // ones), counted by the page, for the hint beside the visibility switch.
+  otherVisibleQuestions: number;
+  otherVisibleFinals: number;
   dict: Dictionary;
 }) {
   // Option ids are edited in one section and labelled in another, so the label
@@ -61,6 +67,8 @@ export function QuestionEditor({
         editable={editable}
         sequentialActive={sequentialActive}
         scoring={scoring}
+        otherVisibleQuestions={otherVisibleQuestions}
+        otherVisibleFinals={otherVisibleFinals}
         dict={dict}
         kind={kind}
         onKind={setKind}
@@ -157,6 +165,8 @@ function ShapeSection({
   editable,
   sequentialActive,
   scoring,
+  otherVisibleQuestions,
+  otherVisibleFinals,
   dict,
   kind,
   onKind,
@@ -167,6 +177,8 @@ function ShapeSection({
   editable: boolean;
   sequentialActive: boolean;
   scoring: Scoring;
+  otherVisibleQuestions: number;
+  otherVisibleFinals: number;
   dict: Dictionary;
   kind: string;
   onKind: (value: Question["kind"]) => void;
@@ -196,6 +208,19 @@ function ShapeSection({
 
   const penaltyPerAttempt = Math.floor((points * (penaltyPct ?? 0)) / 100);
   const bonusHintId = useId();
+
+  // Mirrors the publication gate: with nothing else shown it reports only
+  // that every question is hidden; otherwise a winner contest needs a shown
+  // final.
+  const [visible, setVisible] = useState(question.isVisible);
+  const hiddenHintId = useId();
+  const hiddenHint = visible
+    ? undefined
+    : otherVisibleQuestions === 0
+      ? t.shape.hiddenLastVisible
+      : scoring === "winner" && kind === "final" && otherVisibleFinals === 0
+        ? t.shape.hiddenWinnerFinal
+        : undefined;
 
   return (
     <>
@@ -353,18 +378,27 @@ function ShapeSection({
         ) : null}
 
         {/* Beside the label, so its name does not join the checkbox's. */}
-        <div className="flex items-center gap-2">
-          <label className="flex w-fit cursor-pointer items-center gap-3 text-control text-ink">
-            <input
-              type="checkbox"
-              name="isVisible"
-              defaultChecked={question.isVisible}
-              disabled={!editable}
-              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
-            />
-            {t.shape.visible}
-          </label>
-          <Tooltip label={dict.chrome.helpLabel}>{t.shape.visibleHelp}</Tooltip>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <label className="flex w-fit cursor-pointer items-center gap-3 text-control text-ink">
+              <input
+                type="checkbox"
+                name="isVisible"
+                checked={visible}
+                onChange={(event) => setVisible(event.target.checked)}
+                disabled={!editable}
+                aria-describedby={hiddenHint ? hiddenHintId : undefined}
+                className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+              />
+              {t.shape.visible}
+            </label>
+            <Tooltip label={dict.chrome.helpLabel}>{t.shape.visibleHelp}</Tooltip>
+          </div>
+        {hiddenHint ? (
+          <p id={hiddenHintId} className="max-w-body pl-7 text-small text-warn">
+            {hiddenHint}
+          </p>
+        ) : null}
         </div>
 
         {/* The rule is spelled out rather than behind a "?": it changes what

@@ -880,7 +880,10 @@ list, and the whole contest carries one question.
 
 **A hidden question** (`questions.is_visible = false`) — staff only: it never
 reaches the participant, and nothing reveals it during a contest. The
-publication gate refuses a contest whose deciding question is hidden.
+publication gate refuses a contest whose deciding question is hidden, and the
+editor warns beside the visibility switch when hiding this question would
+block publishing: it is the only one shown, or the last shown final question
+under first-to-solve scoring.
 
 **A bonus question** (`questions.is_bonus`, points scoring only) — marked with a
 `good` tag, its points read as "up to N back" rather than "N pts", and one line

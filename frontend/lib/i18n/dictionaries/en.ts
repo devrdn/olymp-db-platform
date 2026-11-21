@@ -1119,6 +1119,8 @@ const en = {
         choicesHelp: "The answer is one of these, never a label, which is what keeps checking independent of the language read.",
         visible: "Show this question to participants",
         visibleHelp: "A hidden question exists in full — points, reference answers and all. Working out what is being asked becomes part of the task rather than a line of instructions.",
+        hiddenLastVisible: "No other question is shown. Hidden, this one blocks publishing: participants would have nothing they could answer.",
+        hiddenWinnerFinal: "Scoring is first to solve and no other final question is shown. Hidden, this one blocks publishing: a hidden question can never be answered, so nobody could win.",
         bonus: "Bonus question",
         bonusHint: "Answered correctly, it gives back up to its points from the penalty the participant's wrong attempts have cost, never more than that penalty. It earns nothing else, a wrong answer to it costs nothing, and the attempt limit still applies.",
         bonusPointsOnly: "Only Points scoring has bonus questions: under First to solve or ICPC there is no penalty for one to give back.",
