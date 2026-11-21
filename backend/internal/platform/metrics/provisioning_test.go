@@ -32,16 +32,43 @@ provisioning_queue_depth ` + value + `
 
 func TestWatchProvisioningQueueDoesNothingOnNonPrometheusBackends(t *testing.T) {
 	t.Run("log", func(t *testing.T) {
+		var called atomic.Bool
 		var buf bytes.Buffer
 		rec := NewLog(logging.New("info", &buf), time.Minute)
-		WatchProvisioningQueue(rec, func() int { return 7 })
+		WatchProvisioningQueue(rec, func() int { called.Store(true); return 7 })
 		rec.Flush()
 
+		if called.Load() {
+			t.Error("depth was read on the log backend")
+		}
 		if strings.Contains(buf.String(), "provisioning_") {
 			t.Errorf("the log digest mentions the provisioning queue: %q", buf.String())
 		}
 	})
 	t.Run("none", func(t *testing.T) {
-		WatchProvisioningQueue(Noop{}, func() int { return 7 })
+		var called atomic.Bool
+		WatchProvisioningQueue(Noop{}, func() int { called.Store(true); return 7 })
+
+		if called.Load() {
+			t.Error("depth was read on the none backend")
+		}
+	})
+	t.Run("prometheus reads it at scrape", func(t *testing.T) {
+		var called atomic.Bool
+		p := NewPrometheus()
+		WatchProvisioningQueue(p, func() int { called.Store(true); return 7 })
+		if called.Load() {
+			t.Error("depth was read before any scrape")
+		}
+
+		if _, err := p.Registry().Gather(); err != nil {
+			t.Fatal(err)
+		}
+		if !called.Load() {
+			t.Error("a scrape did not read depth")
+		}
+		if got := testutil.CollectAndCount(p.Registry(), "provisioning_queue_depth"); got != 1 {
+			t.Errorf("series = %d, want 1", got)
+		}
 	})
 }

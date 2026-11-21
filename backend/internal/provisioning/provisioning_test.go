@@ -392,3 +392,26 @@ func TestTheQueueEmptiesWhenATopUpGivesUp(t *testing.T) {
 		t.Fatalf("queue depth after the top-up gave up = %d, want 0", depth)
 	}
 }
+
+func TestTheQueueEmptiesWhenATopUpIsCancelledMidRun(t *testing.T) {
+	contest, _ := contestFor(t, t.Context(), 1)
+	fake := &cluster{slow: 300 * time.Millisecond}
+	service := newService(fake).WithWorkers(1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.TopUp(ctx, contest, 4)
+		done <- err
+	}()
+	waitUntil(t, func() bool { return fake.highWater() == 1 })
+	cancel()
+
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want the context's", err)
+	}
+	if depth := service.QueueDepth(); depth != 0 {
+		t.Fatalf("queue depth after the cancelled top-up = %d, want 0", depth)
+	}
+}
