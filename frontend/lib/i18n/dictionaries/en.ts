@@ -1296,6 +1296,12 @@ const en = {
         label: "Keep for, minutes from now",
         hint: "Longer than the period in force, and at most 129,600 minutes (90 days). Databases already deleted do not come back.",
       },
+      deleteDraft: {
+        heading: "Delete this draft",
+        body: "Deletes the draft with its story, questions, roster and databases. This cannot be undone. A contest that was ever published can only be archived.",
+        action: "Delete draft",
+        confirm: "Delete the draft \"{title}\" and everything in it? This cannot be undone.",
+      },
       archive: {
         heading: "Archive",
         help: "Whether this contest appears in the archive once it ends. Results open by direct link either way.",

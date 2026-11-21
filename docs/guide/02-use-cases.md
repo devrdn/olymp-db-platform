@@ -287,7 +287,7 @@ flowchart LR
 | See the overview and the publish check | `/contests/{contestID}` | `GET /contests/{contestID}`, `GET /contests/{contestID}/publish-check` | `contests` | `contest.view` |
 | Edit title and descriptions | `/contests/{contestID}` | `PUT /contests/{contestID}/translations` | `contests` | `contest.edit`; frozen once the contest runs |
 | Export the contest as a package | `/contests/{contestID}` (export menu) | `GET /contests/{contestID}/export` | `contests` | `contest.edit`, because the package carries the reference answers |
-| Delete a draft | API only | `DELETE /contests/{contestID}` | `contests` | `contest.edit`; only a draft (`not_editable` otherwise) |
+| Delete a draft | `/contests/{contestID}/settings` (last panel, after a confirmation) | `DELETE /contests/{contestID}` | `contests` | `contest.edit`; only a draft (`not_editable`), not while it is being built (`build_in_progress`) or a database is connected (`game_in_use`) |
 | Write the story | `/contests/{contestID}/story` | `GET`, `PUT /contests/{contestID}/story` | `contests` | `contest.view` to read, `contest.edit` to write |
 | Write the table descriptions | `/contests/{contestID}/story` | `GET`, `PUT /contests/{contestID}/schema-notes` | `contests` | `contest.view` to read, `contest.edit` to write |
 | List, add, reorder and delete questions | `/contests/{contestID}/questions` | `GET`, `POST /contests/{contestID}/questions`; `PUT .../questions/order`; `DELETE .../questions/{questionID}` | `contests` | `contest.view` to read, `contest.edit` to write |

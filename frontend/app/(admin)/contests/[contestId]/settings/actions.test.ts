@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 // `vi.mock` factories are hoisted, so their mocks are built with `vi.hoisted`.
-const { revalidatePath, serverRequest } = vi.hoisted(() => ({
+const { redirect, revalidatePath, serverRequest } = vi.hoisted(() => ({
+  redirect: vi.fn(),
   revalidatePath: vi.fn(),
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
+vi.mock("next/navigation", () => ({ redirect }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
-import { extendGraceAction, saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
+import { ApiError } from "@/lib/api/client";
+import { deleteDraftAction, extendGraceAction, saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 
@@ -22,6 +25,7 @@ function form(fields: Record<string, string>): FormData {
 beforeEach(() => {
   serverRequest.mockReset();
   revalidatePath.mockReset();
+  redirect.mockReset();
 });
 
 /**
@@ -333,6 +337,37 @@ describe("extendGraceAction", () => {
     data.set("contestId", "../users");
 
     expect(await extendGraceAction({}, data)).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("deleteDraftAction", () => {
+  test("deletes the draft, refreshes the register and goes there", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    await deleteDraftAction({}, form({}));
+
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}`, { method: "DELETE" });
+    expect(revalidatePath).toHaveBeenCalledWith("/contests");
+    expect(redirect).toHaveBeenCalledWith("/contests");
+  });
+
+  test.each(["build_in_progress", "game_in_use", "not_editable"])(
+    "answers %s and stays on the settings",
+    async (code) => {
+      serverRequest.mockRejectedValueOnce(new ApiError(code, 409, "refused"));
+
+      expect(await deleteDraftAction({}, form({}))).toEqual({ code });
+      expect(redirect).not.toHaveBeenCalled();
+      expect(revalidatePath).not.toHaveBeenCalled();
+    },
+  );
+
+  test("refuses an id that is not one without a request", async () => {
+    const data = new FormData();
+    data.set("contestId", "../x");
+
+    expect(await deleteDraftAction({}, data)).toEqual({ code: "invalid_contest_id" });
     expect(serverRequest).not.toHaveBeenCalled();
   });
 });

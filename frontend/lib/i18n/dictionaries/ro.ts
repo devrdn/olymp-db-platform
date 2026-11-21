@@ -1187,6 +1187,12 @@ const ro = {
         label: "Păstrare, în minute de acum",
         hint: "Mai lungă decât perioada în vigoare, cel mult 129.600 de minute (90 de zile). Bazele de date deja șterse nu revin.",
       },
+      deleteDraft: {
+        heading: "Ștergeți această ciornă",
+        body: "Șterge ciorna împreună cu povestea, întrebările, lista participanților și bazele de date. Acțiunea nu poate fi anulată. O olimpiadă care a fost vreodată publicată poate fi doar arhivată.",
+        action: "Ștergeți ciorna",
+        confirm: "Ștergeți ciorna \"{title}\" și tot ce conține? Acțiunea nu poate fi anulată.",
+      },
       archive: {
         heading: "Arhivă",
         help: "Dacă această olimpiadă apare în arhivă după încheiere. Rezultatele se deschid prin link direct în ambele cazuri.",

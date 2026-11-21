@@ -737,9 +737,9 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
 
 #### Calling a staff route from the command line
 
-A few actions have no screen: rebuilding a running contest's lost game. Call
-it with an organiser's session (an administrator, or the contest's owner or a manager), from a
-machine with `curl` 7.76 or later and `jq`:
+One action has no screen: rebuilding a running contest's lost game. Call it
+with an organiser's session (an administrator, or the contest's owner or a
+manager), from a machine with `curl` 7.76 or later and `jq`:
 
 ```bash
 umask 077                         # curl rewrites the cookie jar; keep it owner-only

@@ -6,13 +6,15 @@ import {
   prizePlacesEditable,
   settingsEditable,
   shapeEditable,
+  titleIn,
 } from "@/lib/api/contests";
 import { branding } from "@/lib/api/branding";
 import { sqlPolicySchema } from "@/lib/api/policy";
-import { activeDictionary } from "@/lib/i18n/server";
+import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
 import { CoverPanel } from "./cover-panel";
+import { DeleteDraftPanel } from "./delete-draft-panel";
 import { GracePanel } from "./grace-panel";
 import { ArchivePanel, ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings-panels";
 
@@ -28,7 +30,11 @@ import { ArchivePanel, ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } fr
  * reverse: it exists only once the contest has finished.
  */
 export default async function SettingsPage(props: PageProps<"/contests/[contestId]/settings">) {
-  const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
+  const [{ contestId }, dict, locale] = await Promise.all([
+    props.params,
+    activeDictionary(),
+    activeLocale(),
+  ]);
 
   const [contest, policy, cover, methods, brand] = await Promise.all([
     loadContest(contestId),
@@ -88,6 +94,10 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
           editable={contentEditable(contest.status)}
           dict={dict}
         />
+      ) : null}
+
+      {contest.status === "draft" ? (
+        <DeleteDraftPanel contestId={contest.id} title={titleIn(contest, locale)} dict={dict} />
       ) : null}
     </div>
   );

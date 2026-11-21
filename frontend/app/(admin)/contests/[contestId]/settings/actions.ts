@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { ApiError, failureCode } from "@/lib/api/client";
 import {
@@ -322,4 +323,29 @@ export async function removeCoverAction(
 
   refresh(contestId);
   return { saved: true, cover: null };
+}
+
+export type DeleteDraftState = { code?: string };
+
+/**
+ * Deletes a draft. The id is checked here; the server refuses anything that is
+ * not a draft, a build under way and a database still connected, and each
+ * refusal keeps the organiser on the settings.
+ */
+export async function deleteDraftAction(
+  _previous: DeleteDraftState,
+  form: FormData,
+): Promise<DeleteDraftState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const failure = await serverRequest(`/contests/${contestId}`, { method: "DELETE" }).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  if (failure) return { code: failureCode(failure) };
+
+  revalidatePath("/contests");
+  // Outside any catch: `redirect` works by throwing.
+  redirect("/contests");
 }

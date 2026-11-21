@@ -357,8 +357,9 @@ stateDiagram-v2
   and a disqualified one stays `disqualified`. The caller writes one
   `participant.finish` audit entry, with no actor and no origin, for each
   user the statement returns as finished, in the same transaction.
-- Deleting a draft: `DELETE /contests/ID`, behind `contest.edit`, calling
-  `Service.Delete`. Any other status is refused; a contest that was ever
+- Deleting a draft: the last panel of the Settings tab, behind a
+  confirmation that names the draft, then `DELETE /contests/ID`, behind
+  `contest.edit`, calling `Service.Delete`. Any other status is refused; a contest that was ever
   published can only be archived. The draft's game databases are dropped
   from the game cluster first (`provisioning.Service.DropGame`), since its
   rows are how every other tool finds them. A game being built refuses the
