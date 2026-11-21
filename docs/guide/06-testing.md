@@ -478,10 +478,16 @@ no stack.
 
 ### `image.yml`
 
-A reusable workflow both call. It builds one Dockerfile target with Buildx,
-tags it (`sha-<commit>`, the branch, the version from a tag), checks that the
-image contains the expected binary and that its data directories belong to
-the right user, and pushes only when asked to publish.
+A reusable workflow both call. Job `image` builds one Dockerfile target with
+Buildx for linux/amd64 on `ubuntu-24.04` and linux/arm64 on `ubuntu-24.04-arm`,
+one native runner each, and checks that the image is of that architecture,
+contains the expected binary and that its data directories belong to the
+right user. On a merge the image is only loaded locally. On a publish each
+platform pushes its image by digest, pulls it back for the check, and hands
+the digest on; job `manifest` then tags (`sha-<commit>`, the version from a
+tag, and `latest` for a release) one manifest list naming both digests with
+`docker buildx imagetools create`, and fails unless it lists exactly the two
+platforms. Nothing is tagged until both platforms have passed.
 
 ### Matching CI on your machine
 

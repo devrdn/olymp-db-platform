@@ -1,4 +1,5 @@
-# Building one image, and publishing it only when asked.
+# Building one image for linux/amd64 and linux/arm64, and publishing it only
+# when asked.
 #
 # A reusable workflow rather than a step somebody copies. Two things made that
 # the right shape:
@@ -15,6 +16,13 @@
 #
 # The caller decides which of the two it is, and grants the permission that
 # goes with it.
+#
+# Each platform builds on a runner of its own architecture: under QEMU the
+# pg_query C build and `next build` run several times slower, and a public
+# repository's arm64 runners cost nothing. On a publish each platform pushes
+# its image by digest alone, and `manifest` names both digests under the tags
+# only after both platform jobs passed their checks, so no tag ever points at
+# one platform, or at a platform whose check failed.
 
 name: image
 
@@ -54,15 +62,27 @@ on:
         default: false
         type: boolean
 
-# No `permissions` here. A called workflow may only narrow what its caller
-# granted, so a block at this level would cap every caller at it: a
-# `contents: read` here left the publishing caller's `packages: write` with
-# nothing, and the first tag's push was refused by the registry. The caller's
-# job decides, as the header says.
+# No `permissions` here, nor on the jobs below. A called workflow may only
+# narrow what its caller granted, so a block at this level would cap every
+# caller at it: a `contents: read` here left the publishing caller's
+# `packages: write` with nothing, and the first tag's push was refused by the
+# registry. The caller's job decides, as the header says: on a publish both
+# jobs below push, and on a merge neither holds more than `contents: read`.
 
 jobs:
   image:
-    runs-on: ubuntu-latest
+    name: image (${{ matrix.arch }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     # Every action is pinned to a commit, not a tag: on a publish this job
     # holds a token that can push the images a server deploys, and a tag is
@@ -85,7 +105,9 @@ jobs:
       # Two tags on every image: the commit it was built from, which is
       # unambiguous and never reused, and a moving one for convenience. A
       # deploy names a version explicitly; nothing deploys "latest".
-      - id: meta
+      # Anchored, because `manifest` must compute exactly these tags.
+      - &metadata
+        id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ inputs.image }}
@@ -94,25 +116,47 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{raw}}
 
-      # Loaded into the local daemon rather than pushed, always. What is built
-      # on a merge is a check that it *can* be built; the push below happens
-      # only when the caller asked for one.
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      # On a merge the image is loaded into the local daemon under its tags and
+      # goes no further. On a publish it is pushed by digest with no tag at
+      # all: the tags are `manifest`'s to give, once both platforms exist.
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ inputs.context }}
           target: ${{ inputs.target }}
-          load: true
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          load: ${{ !inputs.publish }}
+          outputs: ${{ inputs.publish && format('type=image,name=ghcr.io/{0}/{1},push-by-digest=true,name-canonical=true,push=true', github.repository_owner, inputs.image) || '' }}
+          tags: ${{ !inputs.publish && steps.meta.outputs.tags || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('sha-{0}', github.sha) }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ inputs.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image }}-${{ matrix.arch }}
+
+      # The check below then reads the image back from the registry rather than
+      # from the builder, so what it passes is the digest the tags will name.
+      - name: pull back what was pushed
+        id: pushed
+        if: inputs.publish
+        run: |
+          set -euo pipefail
+          if ! [[ $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "the build reported no digest: '$DIGEST'"
+            exit 1
+          fi
+          ref="ghcr.io/$OWNER/$IMAGE@$DIGEST"
+          docker pull "$ref"
+          echo "ref=$ref" >>"$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
 
       # What the image actually contains, asserted rather than assumed. This is
       # the check that catches the wrong stage being built — which happened,
-      # and produced an image named for the API with no api binary in it.
+      # and produced an image named for the API with no api binary in it —
+      # and a build that quietly produced the other platform.
       #
       # And who owns what a volume will be mounted on. A new named volume is
       # initialised from the image's directory at its mount point, ownership
@@ -120,10 +164,17 @@ jobs:
       # root's, and a process running as nonroot cannot write to it — the API
       # restarted forever on a fresh install for exactly that.
       - name: the image carries what it is meant to
-        if: inputs.expect != '' || inputs.owned != ''
         run: |
-          set -eu
-          image=$(echo "$TAGS" | head -1)
+          set -euo pipefail
+          image=${PUSHED:-$(echo "$TAGS" | head -1)}
+          failed=0
+
+          arch=$(docker image inspect --format '{{.Architecture}}' "$image")
+          if [ "$arch" != "$ARCH" ]; then
+            echo "$image is built for $arch, not $ARCH"
+            failed=1
+          fi
+
           listing="$RUNNER_TEMP/image-listing"
           docker create --name check "$image" >/dev/null
           # Listed to a file first: a reader that stops at the first match
@@ -131,7 +182,6 @@ jobs:
           docker export check | tar -tv --numeric-owner >"$listing"
           docker rm check >/dev/null
 
-          failed=0
           if [ -n "$EXPECT" ] && ! awk -v want="$EXPECT" \
               '$6 == want { found = 1 } END { exit !found }' "$listing"; then
             echo "$image has no $EXPECT"
@@ -149,17 +199,89 @@ jobs:
           done
           exit "$failed"
         env:
+          PUSHED: ${{ steps.pushed.outputs.ref }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          ARCH: ${{ matrix.arch }}
           EXPECT: ${{ inputs.expect }}
           OWNED: ${{ inputs.owned }}
 
-      - name: publish
+      # Handed to `manifest` only from here, after the check passed: a digest
+      # that failed it is never uploaded, and `manifest` does not run.
+      - name: record the digest
         if: inputs.publish
         run: |
-          set -eu
-          echo "$TAGS" | while read -r tag; do
-            [ -n "$tag" ] || continue
-            docker push "$tag"
-          done
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      # `overwrite`, because a re-run of the whole workflow uploads the same
+      # name again within the same run.
+      - if: inputs.publish
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ inputs.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  manifest:
+    runs-on: ubuntu-24.04
+    needs: image
+    if: inputs.publish
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ inputs.image }}-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - *metadata
+
+      - name: tag both platforms under one name
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          digests=(*)
+          if [ "${#digests[@]}" -ne 2 ]; then
+            echo "expected a digest from each of the two platforms, got ${#digests[@]}"
+            exit 1
+          fi
+
+          args=()
+          while read -r tag; do
+            args+=(-t "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "the metadata step produced no tags"
+            exit 1
+          fi
+          for digest in "${digests[@]}"; do
+            args+=("ghcr.io/$OWNER/$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create "${args[@]}"
+
+          # Attestations are listed as platform unknown/unknown and left out.
+          first=$(jq -r '.tags[0]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          platforms=$(docker buildx imagetools inspect --raw "$first" \
+            | jq -r '.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"' \
+            | sort | paste -sd ' ' -)
+          if [ "$platforms" != "linux/amd64 linux/arm64" ]; then
+            echo "$first lists '$platforms', not linux/amd64 and linux/arm64"
+            exit 1
+          fi
+        env:
+          OWNER: ${{ github.repository_owner }}
+          IMAGE: ${{ inputs.image }}

@@ -36,7 +36,8 @@ Platform notes:
 - **macOS.** Install the compiler with `xcode-select --install`. Start Docker
   Desktop before any `make` target that uses containers. On Apple Silicon
   `make dev-up` and `make stack-up` work because they build the project images
-  for your machine; released images are built for amd64 only (see
+  for your machine. Released images carry linux/amd64 and linux/arm64 from the
+  first release after v0.13.0; v0.13.0 and earlier are amd64 only (see
   [Ports and containers](#ports-and-containers)).
 - **Linux.** Install the compiler with `sudo apt install build-essential` (or
   your distribution's equivalent). Add yourself to the `docker` group so you
@@ -626,13 +627,18 @@ sized for an olympiad.
 
 ### Released images do not run on an ARM machine
 
-**Symptom.** `make deploy VERSION=...` on Apple Silicon fails because no image
-matches the platform.
+**Symptom.** `make deploy VERSION=...` on Apple Silicon or another arm64 host
+fails because no image matches the platform.
 
-**Cause.** The published images are built for amd64 only.
+**Cause.** The release is v0.13.0 or earlier, whose images were built for
+amd64 only. Later releases carry linux/amd64 and linux/arm64 under one tag,
+and Docker pulls the one that matches the host.
 
-**Fix.** Use `make stack-up`, which builds for your machine. To run a release
-anyway, accept emulation: `DOCKER_DEFAULT_PLATFORM=linux/amd64 make deploy VERSION=vX.Y.Z`.
+**Fix.** Deploy a later release. To run an older one, use `make stack-up`,
+which builds for your machine, or accept emulation:
+`DOCKER_DEFAULT_PLATFORM=linux/amd64 make deploy VERSION=vX.Y.Z`. To see which
+platforms a release carries:
+`docker buildx imagetools inspect ghcr.io/devrdn/db-contest-backend:vX.Y.Z`.
 
 ## Database
 

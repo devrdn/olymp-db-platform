@@ -104,9 +104,9 @@ jobs:
 
       - run: npm audit --omit=dev --audit-level=high
 
-  # Same shape as the backend's: a merge proves the image builds, a tag
-  # publishes it, and only the second holds a token that can write to the
-  # registry.
+  # Same shape as the backend's: a merge proves the image builds for both
+  # platforms, a tag publishes it, and only the second holds a token that can
+  # write to the registry.
 
   build-image:
     name: build the image

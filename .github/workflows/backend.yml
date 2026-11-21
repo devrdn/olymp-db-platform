@@ -226,6 +226,11 @@ jobs:
   # the shape of the dependency graph ever get — while the registry keeps
   # deliberate releases rather than one image per merge.
   #
+  # Each image is built for linux/amd64 and linux/arm64 on runners of those
+  # architectures. On a tag the `packages: write` below reaches the jobs that
+  # push each platform by digest and the one that tags both; on a merge
+  # nothing holds more than `contents: read`.
+  #
   # The matrix is the list of images, which is data. Repeating it under both
   # callers is cheaper than the alternative: permissions cannot be made
   # conditional, so one job cannot be both.

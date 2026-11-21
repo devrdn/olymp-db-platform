@@ -4855,9 +4855,12 @@ images, so `deploy-web` does not touch the API or its live sessions.
 **CI is split by component.** The error-dictionary check reads
 `docs/api/error-codes.json`, which the backend generates, rather than the
 backend's sources — so the path filters are honest: a change in Go no longer
-drags a frontend run with it, and the reverse. Images are published only from
-`main` and from tags, after the tests and the security scan (the frontend's is
-a dependency audit).
+drags a frontend run with it, and the reverse. Images are built on a push to
+`main` and published only from a tag, after the tests and the security scan
+(the frontend's is a dependency audit). Each image is built for linux/amd64 and
+linux/arm64 on runners of those architectures, without emulation; a publish
+pushes each platform by digest and only then tags one manifest list naming
+both, so a tag never points at a single platform.
 
 **Migrations at deployment are not an online operation.** `cmd/migrate` hands
 PostgreSQL a file as one string, and a string of several statements runs as
