@@ -526,19 +526,20 @@ describe("QuestionEditor, the title", () => {
 describe("QuestionEditor, hiding the deciding question", () => {
   function renderHiding(
     overrides: Partial<Question>,
-    counts: { otherVisibleQuestions: number; otherVisibleFinals?: number },
+    counts: { otherVisibleQuestions?: number; otherVisibleFinals?: number },
     scoring: "points" | "winner" | "icpc" = "points",
+    editable = true,
   ) {
     render(
       <QuestionEditor
         contestId="c1"
         question={question(overrides)}
         languages={["en"]}
-        editable
+        editable={editable}
         scoring={scoring}
         sequentialActive={false}
         otherVisibleQuestions={counts.otherVisibleQuestions}
-        otherVisibleFinals={counts.otherVisibleFinals ?? 0}
+        otherVisibleFinals={counts.otherVisibleFinals}
         dict={dict}
       />,
     );
@@ -551,11 +552,13 @@ describe("QuestionEditor, hiding the deciding question", () => {
     const checkbox = renderHiding({}, { otherVisibleQuestions: 0 });
     expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
 
-    await userEvent.setup().click(checkbox);
+    const user = userEvent.setup();
+    await user.click(checkbox);
     const warning = screen.getByText(t().hiddenLastVisible);
     expect(checkbox).toHaveAttribute("aria-describedby", warning.id);
+    expect(screen.getByRole("status")).toBe(warning);
 
-    await userEvent.setup().click(checkbox);
+    await user.click(checkbox);
     expect(screen.queryByText(t().hiddenLastVisible)).not.toBeInTheDocument();
   });
 
@@ -598,5 +601,29 @@ describe("QuestionEditor, hiding the deciding question", () => {
   test("warns at once about a question already stored hidden", () => {
     renderHiding({ isVisible: false }, { otherVisibleQuestions: 0 });
     expect(screen.getByText(t().hiddenLastVisible)).toBeInTheDocument();
+  });
+
+  test("says nothing about a non-final question in a winner contest", async () => {
+    const checkbox = renderHiding(
+      { kind: "text" },
+      { otherVisibleQuestions: 2, otherVisibleFinals: 0 },
+      "winner",
+    );
+    await userEvent.setup().click(checkbox);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  test("says nothing when the page could not count the other questions", async () => {
+    const checkbox = renderHiding({ kind: "final" }, {}, "winner");
+    await userEvent.setup().click(checkbox);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  test("says nothing in a locked editor", () => {
+    renderHiding({ isVisible: false }, { otherVisibleQuestions: 0 }, "points", false);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, unstable_rethrow } from "next/navigation";
 
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, questionSchema } from "@/lib/api/content";
@@ -9,6 +9,23 @@ import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../../contest";
 import { QuestionEditor } from "./question-editor";
+
+/**
+ * The contest's questions, for an advisory hint only: a failed read must not
+ * take the editor down, so it answers undefined. Redirects and not-found
+ * signals still propagate.
+ */
+async function otherQuestions(contestId: string) {
+  try {
+    const list = await loadContestResource(contestId, "/questions", (payload) =>
+      questionListSchema.parse(payload),
+    );
+    return list?.items;
+  } catch (error) {
+    unstable_rethrow(error);
+    return undefined;
+  }
+}
 
 /**
  * One question. The API checks the question belongs to this contest (its
@@ -26,13 +43,13 @@ export default async function QuestionPage(
     loadContestResource(contestId, `/questions/${questionId}`, (payload) =>
       questionSchema.parse(payload),
     ),
-    loadContestResource(contestId, "/questions", (payload) => questionListSchema.parse(payload)),
+    otherQuestions(contestId),
   ]);
 
   if (!question) notFound();
 
-  const otherVisible = (list?.items ?? []).filter((q) => q.id !== question.id && q.isVisible);
-  const otherVisibleFinals = otherVisible.filter((q) => q.kind === "final").length;
+  const otherVisible = list?.filter((q) => q.id !== question.id && q.isVisible);
+  const otherVisibleFinals = otherVisible?.filter((q) => q.kind === "final").length;
 
   const t = dict.workspace.question;
   const editable = contentEditable(contest.status);
@@ -65,7 +82,7 @@ export default async function QuestionPage(
         editable={editable}
         sequentialActive={sequentialActive(contest)}
         scoring={contest.scoring}
-        otherVisibleQuestions={otherVisible.length}
+        otherVisibleQuestions={otherVisible?.length}
         otherVisibleFinals={otherVisibleFinals}
         dict={dict}
       />

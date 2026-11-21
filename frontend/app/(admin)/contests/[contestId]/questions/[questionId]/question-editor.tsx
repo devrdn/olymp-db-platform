@@ -42,9 +42,10 @@ export function QuestionEditor({
   sequentialActive: boolean;
   scoring: Scoring;
   // How many of the contest's other questions are shown (and, of those, final
-  // ones), counted by the page, for the hint beside the visibility switch.
-  otherVisibleQuestions: number;
-  otherVisibleFinals: number;
+  // ones), counted by the page for the hint beside the visibility switch.
+  // Undefined when the page could not count them: no hint then.
+  otherVisibleQuestions: number | undefined;
+  otherVisibleFinals: number | undefined;
   dict: Dictionary;
 }) {
   // Option ids are edited in one section and labelled in another, so the label
@@ -177,8 +178,8 @@ function ShapeSection({
   editable: boolean;
   sequentialActive: boolean;
   scoring: Scoring;
-  otherVisibleQuestions: number;
-  otherVisibleFinals: number;
+  otherVisibleQuestions: number | undefined;
+  otherVisibleFinals: number | undefined;
   dict: Dictionary;
   kind: string;
   onKind: (value: Question["kind"]) => void;
@@ -214,13 +215,14 @@ function ShapeSection({
   // final.
   const [visible, setVisible] = useState(question.isVisible);
   const hiddenHintId = useId();
-  const hiddenHint = visible
-    ? undefined
-    : otherVisibleQuestions === 0
-      ? t.shape.hiddenLastVisible
-      : scoring === "winner" && kind === "final" && otherVisibleFinals === 0
-        ? t.shape.hiddenWinnerFinal
-        : undefined;
+  const hiddenHint =
+    visible || !editable
+      ? undefined
+      : otherVisibleQuestions === 0
+        ? t.shape.hiddenLastVisible
+        : scoring === "winner" && kind === "final" && otherVisibleFinals === 0
+          ? t.shape.hiddenWinnerFinal
+          : undefined;
 
   return (
     <>
@@ -394,11 +396,11 @@ function ShapeSection({
             </label>
             <Tooltip label={dict.chrome.helpLabel}>{t.shape.visibleHelp}</Tooltip>
           </div>
-        {hiddenHint ? (
-          <p id={hiddenHintId} className="max-w-body pl-7 text-small text-warn">
-            {hiddenHint}
-          </p>
-        ) : null}
+          {hiddenHint ? (
+            <p id={hiddenHintId} role="status" className="max-w-body pl-7 text-small text-warn">
+              {hiddenHint}
+            </p>
+          ) : null}
         </div>
 
         {/* The rule is spelled out rather than behind a "?": it changes what
