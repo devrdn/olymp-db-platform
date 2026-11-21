@@ -5,7 +5,7 @@
 # application actually reaches, so the image carries neither node_modules nor a
 # package manager.
 
-FROM node:22.23.3-alpine AS build
+FROM node:22.23.5-alpine AS build
 WORKDIR /src
 
 # Dependencies first: this layer is rebuilt only when the lockfile changes.
@@ -19,7 +19,7 @@ COPY . .
 # environment.
 RUN npm run build
 
-FROM node:22.23.3-alpine AS runtime
+FROM node:22.23.5-alpine AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production

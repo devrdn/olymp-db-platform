@@ -357,7 +357,7 @@ on pushes to `main` and published from tags.
 Runs on pushes to `main` and pull requests that touch `backend/**` or the
 workflow itself, and on every `v*` tag.
 
-**Job `build` ("build and test").** A `postgres:16.15-alpine` service holds
+**Job `build` ("build and test").** A `postgres:16.16-alpine` service holds
 `dbcontest_core_test`; `CORE_DB_DSN`, `GAME_DB_DSN` and the three role
 passwords are set for the whole job, so no database test skips. Steps:
 

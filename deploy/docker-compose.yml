@@ -21,7 +21,7 @@ name: db-contest
 
 services:
   pg-core:
-    image: postgres:16.15-alpine
+    image: postgres:16.16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${CORE_DB_USER:?set CORE_DB_USER in .env}
@@ -66,7 +66,7 @@ services:
   # loopback so the role tests can connect as a participant's role and prove
   # what it cannot do — a guarantee asserted in a comment is not a guarantee.
   pg-game:
-    image: postgres:16.15-alpine
+    image: postgres:16.16-alpine
     restart: unless-stopped
     environment:
       # The provisioning role. It owns the templates and creates participant
@@ -348,7 +348,7 @@ services:
   # where a cache that fills refuses every counter, which is why the
   # deployment does not run on it.
   redis:
-    image: redis:7.4.11-alpine
+    image: redis:7.4.12-alpine
     restart: unless-stopped
     # Sessions and rate-limit windows must survive a restart of the cache, so
     # appendonly is on.
