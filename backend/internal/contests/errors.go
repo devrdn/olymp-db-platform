@@ -18,7 +18,7 @@ func Errors() []error {
 		ErrStaffCannotParticipate, ErrParticipantCannotBeStaff,
 		ErrAddressNotAllowed, ErrTrustedEmailRequired, ErrTrustedDomainUnset,
 		ErrNotAParticipant, ErrContestNotRunning, ErrContestEnded, ErrParticipantFinished, ErrDeadlinePassed,
-		ErrInvalidContest, ErrInvalidQuestion, ErrInvalidAnswer,
+		ErrInvalidContest, ErrGraceNotLonger, ErrInvalidQuestion, ErrInvalidAnswer,
 		ErrInvalidPolicy, ErrInvalidRole, ErrUnknownLanguage,
 		ErrRosterTooLarge, ErrQueryTooLong,
 		ErrAnswerTooLong, ErrNotAChoice, ErrQuestionClosed,

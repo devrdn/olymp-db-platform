@@ -230,6 +230,10 @@
       "meaning": "The game definition has more tables, or one table has more columns, than this platform allows — or the whole document is larger once encoded. The message names which."
     },
     {
+      "code": "game_in_use",
+      "meaning": "A database of this draft still has an open connection, so the delete stopped before the draft's rows: the draft and its content are still there, but its game is already marked dropped and the databases dropped before the busy one are gone. A query's idle connection closes on its own within a minute, so the organiser deletes the draft again shortly; a draft kept instead needs its game saved again."
+    },
+    {
       "code": "game_instance_already_dropped",
       "meaning": "The database has already been removed — by the reclaim sweep once the contest's grace period passed, or by somebody else while this page was open. Nothing was changed; reloading the list shows the current state."
     },
@@ -396,6 +400,10 @@
     {
       "code": "game_uploads_disabled",
       "meaning": "This installation has no upload directory configured, so a game can only be written in the editor. The message names nothing about the deployment beyond that fact."
+    },
+    {
+      "code": "grace_not_longer",
+      "meaning": "The new grace period is not longer than the one in force: the contest's own value, or the installation's default (GAME_INSTANCE_GRACE_MIN) while it has none. Choose a longer one."
     },
     {
       "code": "icpc_start_locked",

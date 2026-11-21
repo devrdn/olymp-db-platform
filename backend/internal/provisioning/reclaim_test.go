@@ -604,8 +604,8 @@ func TestDropGameRefusesWhileACopyIsInUseAndFinishesOnTheNextCall(t *testing.T) 
 		template := provisioning.TemplateName(contest.ID)
 		markTemplateReady(t, ctx, contest.ID, template)
 
-		if err := service.DropGame(ctx, contest.ID); err == nil {
-			t.Fatal("DropGame() = nil with a copy still in use")
+		if err := service.DropGame(ctx, contest.ID); !errors.Is(err, provisioning.ErrGameInUse) {
+			t.Fatalf("DropGame() = %v, want ErrGameInUse", err)
 		}
 		if status := statusOf(t, ctx, busy); status == "dropped" {
 			t.Error("the copy in use was marked dropped")
@@ -648,6 +648,30 @@ func TestDropGameFinishesOnTheNextCallAfterTheTemplatesDropFails(t *testing.T) {
 		}
 		if status := templateStatusOf(t, ctx, contest.ID); status != "dropped" {
 			t.Errorf("template status = %q, want dropped", status)
+		}
+	})
+}
+
+// A cluster that fails is not a connection the organiser could wait out: the
+// error stays outside ErrGameInUse, and so a 500 rather than game_in_use.
+func TestDropGameKeepsAClusterFailureApartFromACopyInUse(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		service, fake, _, contest, _ := serviceWithAudit(t, ctx, 0)
+		if _, err := service.TopUp(ctx, contest, 1); err != nil {
+			t.Fatalf("top-up: %v", err)
+		}
+		copied := instancesOf(t, ctx, contest.ID)[0].Database
+		markTemplateReady(t, ctx, contest.ID, provisioning.TemplateName(contest.ID))
+		refused := errors.New("the cluster refused")
+		fake.failIdleDropOf(copied, refused)
+
+		err := service.DropGame(ctx, contest.ID)
+
+		if !errors.Is(err, refused) {
+			t.Fatalf("DropGame() = %v, want the cluster's error", err)
+		}
+		if errors.Is(err, provisioning.ErrGameInUse) {
+			t.Errorf("DropGame() = %v, want it kept apart from ErrGameInUse", err)
 		}
 	})
 }

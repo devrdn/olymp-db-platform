@@ -584,6 +584,23 @@ func TestDeletingADraftWhoseGameIsBeingBuiltIsAConflict(t *testing.T) {
 	}
 }
 
+// A database of the draft still has a connection open: nothing was deleted,
+// and closing it lets the organiser try again.
+func TestDeletingADraftWhoseGameIsStillInUseIsAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	f.stores.Games.DropErr = fmt.Errorf("drop game_c1_u1: %w", provisioning.ErrGameInUse)
+
+	rec := f.do(http.MethodDelete, "/contests/"+c.ID.String(), "")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "game_in_use" {
+		t.Errorf("error code = %q, want game_in_use", code)
+	}
+}
+
 // The organiser is told why, not just that the contest is running.
 func TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
 	f := newContestFixture(t)
@@ -695,6 +712,9 @@ func TestExtendingTheGracePeriodBelowTheInstallationDefaultIsRejected(t *testing
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
+	if code := errorCode(t, rec); code != "grace_not_longer" {
+		t.Errorf("error code = %q, want grace_not_longer", code)
+	}
 }
 
 // Other statuses have the ordinary settings door; this one must not become a
@@ -722,6 +742,9 @@ func TestShorteningAnAlreadyExtendedGracePeriodIsRejected(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "grace_not_longer" {
+		t.Errorf("error code = %q, want grace_not_longer", code)
 	}
 }
 

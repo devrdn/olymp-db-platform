@@ -239,6 +239,10 @@ func (s *Service) DropGame(ctx context.Context, contestID uuid.UUID) error {
 	return s.dropInUse(ctx, templateName(contestID))
 }
 
+// ErrGameInUse is a game database that still has an open connection, so the
+// drop was refused rather than forced.
+var ErrGameInUse = errors.New("a game database is still in use")
+
 // dropInUse is DropIdle with "still in use" as an error.
 func (s *Service) dropInUse(ctx context.Context, database string) error {
 	dropped, err := s.cluster.DropIdle(ctx, database)
@@ -246,7 +250,7 @@ func (s *Service) dropInUse(ctx context.Context, database string) error {
 		return fmt.Errorf("drop %s: %w", database, err)
 	}
 	if !dropped {
-		return fmt.Errorf("drop %s: a connection to it is still open", database)
+		return fmt.Errorf("drop %s: %w", database, ErrGameInUse)
 	}
 	return nil
 }

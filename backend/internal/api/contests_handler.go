@@ -733,11 +733,14 @@ func (h *ContestsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
-// draftDeleteErrors answers the refusal only deleting a draft meets: its game
-// is being built, and the draft can go once the build has finished.
+// draftDeleteErrors answers the refusals only deleting a draft meets: its game
+// is being built, or a database of it is still connected. Either clears and
+// the draft can then go.
 var draftDeleteErrors = errorTable{
 	{err: provisioning.ErrBuildInProgress, status: http.StatusConflict, code: codeBuildInProgress,
 		message: "The draft's game is being built; it can be deleted once the build has finished"},
+	{err: provisioning.ErrGameInUse, status: http.StatusConflict, code: codeGameInUse,
+		message: "A database of this draft is still in use; close the connection and delete the draft again"},
 }
 
 type statusRequest struct {

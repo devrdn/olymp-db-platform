@@ -471,7 +471,7 @@ func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID,
 	if graceMin <= effective {
 		return Contest{}, fmt.Errorf(
 			"%w: %d does not extend the current %d-minute grace period",
-			ErrInvalidContest, graceMin, effective)
+			ErrGraceNotLonger, graceMin, effective)
 	}
 
 	updated := current

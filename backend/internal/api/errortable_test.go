@@ -475,6 +475,8 @@ func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
 			message: "The contest has ended"},
 		contests.ErrParticipantFinished: {status: http.StatusConflict, code: "contest_finished",
 			message: "The contest has ended for this participant"},
+		contests.ErrGraceNotLonger: {status: http.StatusBadRequest, code: "grace_not_longer",
+			message: "the new grace period does not extend the one in force"},
 		contests.ErrInvalidContest: {status: http.StatusBadRequest, code: invalid,
 			message: "contest is not valid"},
 		contests.ErrInvalidQuestion: {status: http.StatusBadRequest, code: invalid,

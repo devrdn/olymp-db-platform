@@ -448,6 +448,7 @@ var contestsErrors = joined(errorTable{
 	{err: contests.ErrParticipantCannotBeStaff, status: http.StatusConflict, code: codeParticipantCannotBeStaff},
 
 	// A request that could never be right; the error's text says why.
+	{err: contests.ErrGraceNotLonger, status: http.StatusBadRequest, code: codeGraceNotLonger},
 	{err: contests.ErrInvalidContest, status: http.StatusBadRequest, code: codeInvalidRequest},
 	{err: contests.ErrInvalidQuestion, status: http.StatusBadRequest, code: codeInvalidRequest},
 	{err: contests.ErrInvalidAnswer, status: http.StatusBadRequest, code: codeInvalidRequest},

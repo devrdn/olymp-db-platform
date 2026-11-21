@@ -2680,6 +2680,10 @@ const en = {
     game_not_editable:
       "This contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — they would be dropped and made again.",
     build_in_progress: "The game is already being built.",
+    game_in_use:
+      "One of this draft's databases is still in use, so the draft was not deleted, though some of its game databases may already be gone. Try again in a minute. If you keep the draft instead, save its game again.",
+    grace_not_longer:
+      "Choose a longer period than the one in force: the contest's own, or the installation's default when the contest has none.",
     game_cluster_full:
       "There is no room left on the game cluster for another copy of this contest's database, so yours could not be made. This is a limit the installation sets on disk, not a mistake of yours — tell whoever is running the olympiad.",
     game_uploads_disabled:

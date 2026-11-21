@@ -259,8 +259,8 @@ func TestExtendGraceRefusesToShortenAnExplicitlyConfiguredGrace(t *testing.T) {
 	}
 
 	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, first-400)
-	if !errors.Is(err, contests.ErrInvalidContest) {
-		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
+	if !errors.Is(err, contests.ErrGraceNotLonger) {
+		t.Errorf("ExtendGrace() = %v, want ErrGraceNotLonger", err)
 	}
 }
 
@@ -293,8 +293,8 @@ func TestExtendGraceRefusesAValueThatDoesNotClearTheInstallationDefault(t *testi
 	}
 
 	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 60)
-	if !errors.Is(err, contests.ErrInvalidContest) {
-		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
+	if !errors.Is(err, contests.ErrGraceNotLonger) {
+		t.Errorf("ExtendGrace() = %v, want ErrGraceNotLonger", err)
 	}
 	stored, err := f.Contests.ByID(context.Background(), c.ID)
 	if err != nil {
@@ -310,8 +310,8 @@ func TestExtendGraceRefusesAValueEqualToTheInstallationDefault(t *testing.T) {
 	c := f.SeedContest(contests.StatusFinished)
 
 	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, conteststest.FixtureDefaultGraceMin)
-	if !errors.Is(err, contests.ErrInvalidContest) {
-		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
+	if !errors.Is(err, contests.ErrGraceNotLonger) {
+		t.Errorf("ExtendGrace() = %v, want ErrGraceNotLonger", err)
 	}
 }
 

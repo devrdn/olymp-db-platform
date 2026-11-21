@@ -363,7 +363,10 @@ stateDiagram-v2
   from the game cluster first (`provisioning.Service.DropGame`), since its
   rows are how every other tool finds them. A game being built refuses the
   delete with `build_in_progress`, and a database still in use refuses it
-  too; either way the rows stay for the next try.
+  with `game_in_use`; either way the rows stay for the next try. A
+  `game_in_use` refusal comes after the game was marked dropped and the
+  copies before the busy one were dropped, so a draft kept after it needs its
+  game saved again.
 - After a move to `published` or `running`, the pool tender is woken
   (`PoolTrigger.Trigger`, [flow 6](#6-provisioning-a-participants-database)).
 - What a status allows: story, questions and the SQL policy are editable only

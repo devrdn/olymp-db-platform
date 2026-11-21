@@ -2447,6 +2447,10 @@ const ro = {
     game_not_editable:
       "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
     build_in_progress: "Jocul este deja în construcție.",
+    game_in_use:
+      "Una dintre bazele de date ale acestei ciorne este încă în uz, așa că ciorna nu a fost ștearsă, deși unele dintre bazele ei de joc pot fi deja șterse. Încercați din nou peste un minut. Dacă păstrați ciorna, salvați din nou jocul ei.",
+    grace_not_longer:
+      "Alegeți o perioadă mai lungă decât cea în vigoare: cea a olimpiadei sau, dacă olimpiada nu are una, cea implicită a instalării.",
     game_cluster_full:
       "Nu mai este loc pe clusterul de joc pentru încă o copie a bazei acestui concurs, așa că a dumneavoastră nu a putut fi creată. Este o limită pe care instalarea o pune pe disc, nu o greșeală a dumneavoastră — anunțați organizatorii olimpiadei.",
     game_uploads_disabled:

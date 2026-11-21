@@ -660,7 +660,41 @@
                 "{{contestId}}"
               ]
             },
-            "description": "Only a draft. Once it was published people could see it, and what they saw is a record — getting rid of one of those is archiving.\n\nResponses: 204 · 409 `not_editable` · 404"
+            "description": "Only a draft. Once it was published people could see it, and what they saw is a record — getting rid of one of those is archiving.\n\nResponses: 204 · 409 `not_editable` · 409 `build_in_progress` (the draft's game is being built; delete once it has finished) · 409 `game_in_use` (a database of the draft still has an open connection; close it and delete again) · 404"
+          },
+          "response": []
+        },
+        {
+          "name": "Extend grace period",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/grace",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "grace"
+              ]
+            },
+            "description": "Finished or archived contests only. Lengthens how long the contest's databases are kept before they are reclaimed: the value must be longer than the grace period in force (the contest's own, or the installation's default while it has none), at most 129600 minutes, and is counted from now.\n\nResponses: 200 `ContestResponse` · 400 `grace_not_longer` (not longer than the one in force) · 400 `invalid_request` (past the bound) · 409 `not_editable` (the contest is not finished or archived) · 404",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grace_period_min\": 4320\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         },

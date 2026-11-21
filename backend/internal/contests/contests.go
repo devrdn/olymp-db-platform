@@ -132,8 +132,11 @@ var (
 	ErrInvalidTransition = errors.New("contest cannot move to that status")
 	// ErrStatusChanged is a move decided against a status that has since
 	// changed: unlike ErrInvalidTransition, the caller should look again.
-	ErrStatusChanged   = errors.New("contest status changed while the request was being decided")
-	ErrInvalidContest  = errors.New("contest is not valid")
+	ErrStatusChanged  = errors.New("contest status changed while the request was being decided")
+	ErrInvalidContest = errors.New("contest is not valid")
+	// ErrGraceNotLonger is a grace period that is not longer than the one in
+	// force, which is the installation default while the contest has none.
+	ErrGraceNotLonger  = errors.New("the new grace period does not extend the one in force")
 	ErrUnknownLanguage = errors.New("language is not available")
 )
 

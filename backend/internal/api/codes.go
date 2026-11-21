@@ -72,6 +72,10 @@ var (
 		"The contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — and a stale copy is dropped and made again, so in a running olympiad it would take every participant's database at once.")
 	codeBuildInProgress = httpx.NewCode("build_in_progress",
 		"The contest's game is already being built, or is waiting to be. The build that is running will load everything stored up to the moment it started, and a change made after that leaves the game marked out of date again, so a second request is never needed to avoid losing work — it would only build the same thing twice. Deleting a draft is refused the same way while its game is being built, since the build is about to create the database the delete would have to drop; once the build finishes the draft can be deleted.")
+	codeGameInUse = httpx.NewCode("game_in_use",
+		"A database of this draft still has an open connection, so the delete stopped before the draft's rows: the draft and its content are still there, but its game is already marked dropped and the databases dropped before the busy one are gone. A query's idle connection closes on its own within a minute, so the organiser deletes the draft again shortly; a draft kept instead needs its game saved again.")
+	codeGraceNotLonger = httpx.NewCode("grace_not_longer",
+		"The new grace period is not longer than the one in force: the contest's own value, or the installation's default (GAME_INSTANCE_GRACE_MIN) while it has none. Choose a longer one.")
 	codeGameTemplateTooLarge = httpx.NewCode("game_template_too_large",
 		"The game's build was stopped because its database grew past the size one game may take on this installation (GAME_TEMPLATE_MAX_BYTES), and the half-built database was dropped. Carried in a failed game's `build_error_code` rather than as an error answer, since a build runs after the request that queued it. The organiser makes the data smaller, or an administrator raises the limit.")
 	codeNoGameToBuild = httpx.NewCode("no_game_to_build",
