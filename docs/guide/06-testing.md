@@ -397,14 +397,42 @@ because it changes what the interface must be able to say.
 
 **Job `security` ("dependency audit")** runs
 `npm audit --omit=dev --audit-level=high` against the lockfile: high and
-critical advisories in runtime dependencies only. Base images are pinned to
-patch tags (`postgres`, `redis`, `caddy`, `node`, and `debian` in the
-backup check) and the same tags run in CI and in the deployment; the distroless
-`:nonroot` images stay floating because they have no patch tags.
+critical advisories in runtime dependencies only.
 
 **Jobs `build-image` and `publish-image`** need both `build` and `security`,
 and build `db-contest-frontend` from `frontend/` through `image.yml`, as for
 the backend.
+
+### Bumping a pinned base image
+
+Base images are pinned to patch tags (`postgres`, `redis`, `caddy`, `node`, and
+`debian` in the backup check), and the same tag runs in CI and in the
+deployment. The distroless `:nonroot` images stay floating because they have
+no patch tags. A bump is one commit that changes every occurrence:
+`deploy/docker-compose.yml`, `deploy/docker-compose.dev.yml`,
+`.github/workflows/backend.yml`, `frontend/Dockerfile`, the check scripts
+(`deploy/edge-check.sh`, `deploy/game-uploads-check.sh`,
+`deploy/restore-covers-check.sh`) and
+`deploy/backups/scheduled-backup-check.sh`.
+
+- Confirm the new tag lists both platforms:
+  `docker buildx imagetools inspect <tag> | grep -E 'Platform: +linux/(amd64|arm64)$'`
+  must print two lines.
+- Prove nothing was missed and nothing disagrees, in bash: zsh passes `$X`
+  to grep as one argument. The first command prints nothing, and each of the
+  four after it prints exactly one tag:
+
+  ```bash
+  X='--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=superpowers --exclude-dir=.superpowers --exclude-dir=research'
+  grep -rnE '(postgres:16|redis:7|caddy:2|node:22)-alpine|debian:12[-]slim' $X .
+  for f in 'postgres:16\.[0-9]+-alpine' 'redis:7\.[0-9.]+-alpine' 'caddy:2\.[0-9.]+-alpine' 'node:22\.[0-9.]+-alpine'; do
+    grep -rhoE "$f" $X . | sort -u
+  done
+  ```
+
+- A minor or patch bump of `postgres:16.N-alpine` recreates the container and
+  keeps the volume. A move to another major version is not a pin edit: it
+  needs a dump and a restore.
 
 ### `e2e.yml`
 

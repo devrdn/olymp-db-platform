@@ -4856,7 +4856,8 @@ images, so `deploy-web` does not touch the API or its live sessions.
 `docs/api/error-codes.json`, which the backend generates, rather than the
 backend's sources — so the path filters are honest: a change in Go no longer
 drags a frontend run with it, and the reverse. Images are published only from
-`main` and from tags, after the tests and the security scan (the frontend's is a dependency audit).
+`main` and from tags, after the tests and the security scan (the frontend's is
+a dependency audit).
 
 **Migrations at deployment are not an online operation.** `cmd/migrate` hands
 PostgreSQL a file as one string, and a string of several statements runs as
