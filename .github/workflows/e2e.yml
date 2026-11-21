@@ -90,11 +90,14 @@ jobs:
       # (smoke.env, stack.env) holds the run's passwords and is never copied;
       # a trace is too, and E2E_TRACE is never set, so any .zip is removed.
       # Staging one directory keeps the artifact's layout at test-results/ and
-      # e2e-logs/. A cancelled run (the timeout) still leaves its logs. A failing CREATE ROLE ... PASSWORD can be logged
-      # by the game cluster, and ::add-mask:: does not reach uploaded files, so
-      # every generated secret is redacted from the staged text first; this runs
-      # even when the stack never came up, as stack.sh writes its env file first.
+      # e2e-logs/, and a cancelled run (the timeout) still leaves its logs.
+      # A failing CREATE ROLE ... PASSWORD can be logged by the game cluster,
+      # and ::add-mask:: does not reach uploaded files, so redact.sh replaces
+      # every generated secret in the staged text, or deletes the staging
+      # directory when it cannot. The upload runs only after this step
+      # succeeded, so a failure before redact.sh uploads nothing either.
       - name: Collect screenshots and container logs
+        id: collect
         if: failure() || cancelled()
         run: |
           set -euo pipefail
@@ -109,7 +112,7 @@ jobs:
           frontend/e2e/redact.sh "$stage" "$E2E_STACK_DIR"
 
       - name: Upload screenshots and logs
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && steps.collect.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-failure

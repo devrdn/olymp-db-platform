@@ -416,7 +416,9 @@ When a run fails, the artifact `e2e-failure` (kept 7 days) holds the failed
 tests' screenshots (`test-results/`) and each container's log
 (`e2e-logs/<container>.log`); read the log of the service the failing screen
 talks to first. It never holds the stack directory or a Playwright trace,
-because both carry the run's passwords.
+because both carry the run's passwords, and every generated secret in what it
+does hold reads `***`. When that replacement cannot be finished, nothing is
+uploaded and the collect step's log says why.
 
 The job is not a required check: a path-filtered workflow cannot be one (see
 `backend.yml`), and the suite's steadiness on a shared runner is unmeasured. It
