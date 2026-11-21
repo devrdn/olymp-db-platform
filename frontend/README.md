@@ -67,9 +67,10 @@ on every pull request (`.github/workflows/frontend.yml`); `smoke` runs after
 the build.
 
 The Playwright suite needs a running stack and seeds it through the API; CI
-runs it on pull requests against a throwaway one (`.github/workflows/e2e.yml`). `make e2e-stack-up` starts a throwaway one from this tree and
-prints how to point `make e2e-smoke` at it; the browser is downloaded into
-Playwright's own cache, never into the repository. What the suite covers and
+runs it on pull requests against a throwaway one
+(`.github/workflows/e2e.yml`). `make e2e-stack-up` starts a throwaway one from
+this tree and prints how to point `make e2e-smoke` at it; the browser is
+downloaded into Playwright's own cache, never into the repository. What the suite covers and
 how it seeds: [docs/guide/06-testing.md](../docs/guide/06-testing.md#the-browser-smoke-test).
 
 ## Environment
