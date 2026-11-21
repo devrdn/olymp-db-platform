@@ -225,6 +225,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		return nil, err
 	}
 	a.closers = append(a.closers, pool.Close)
+	if err := requireRetentionPool(pool.Config().MaxConns); err != nil {
+		return nil, err
+	}
 
 	cacheBackend, err := cache.New(ctx, cfg.RedisAddr, log)
 	if err != nil {

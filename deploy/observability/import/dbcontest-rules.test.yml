@@ -329,6 +329,20 @@ tests:
           - labels: 'ALERTS{alertname="DBContestRetentionFailing", alertstate="firing", severity="warning"}'
             value: 1
 
+  # A counter that restarts from zero is not an increase.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x10'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x10'
+      - series: 'retention_failures_total{job="core-api", instance="api:9090", table="audit_log"}'
+        values: '2 2 0 0 0 0 0 0 0 0'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestRetentionFailing", alertstate="firing"}
+        eval_time: 8m
+        exp_samples: []
+
   # A sweep that is deleting a backlog is working, not failing.
   - interval: 1m
     input_series:

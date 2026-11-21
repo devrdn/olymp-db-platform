@@ -183,7 +183,8 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	CoreDBDSN       string
 	// CoreDBPoolMax overrides the core database pool size; zero keeps the
-	// storage default. Bounded by maxCoreDBPoolMax.
+	// storage default. Otherwise at least 2, for the retention sweep, and at
+	// most maxCoreDBPoolMax. pool_max_conns in the DSN wins over it.
 	CoreDBPoolMax int
 	// ExportConcurrency is how many CSV downloads may hold a pool connection
 	// at once; a download holds it as long as the client takes to read.
@@ -409,6 +410,9 @@ func Load() (Config, error) {
 	}
 	if cfg.CoreDBPoolMax < 0 || cfg.CoreDBPoolMax > maxCoreDBPoolMax {
 		return Config{}, fmt.Errorf("CORE_DB_POOL_MAX: %d is outside [0, %d]", cfg.CoreDBPoolMax, maxCoreDBPoolMax)
+	}
+	if cfg.CoreDBPoolMax == 1 {
+		return Config{}, errors.New("CORE_DB_POOL_MAX: 1 is too small: the retention sweep holds one connection for its lock while its batches need another")
 	}
 	if cfg.ExportConcurrency, err = intEnv("EXPORT_CONCURRENCY", 0); err != nil {
 		return Config{}, err

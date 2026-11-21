@@ -2911,7 +2911,7 @@ several runs. One replica sweeps at a time, under an advisory lock. The audit
 trail goes 18 months after each entry; the database itself refuses to delete
 an entry younger than that, through the setting `olympdb.audit_retention`
 that only the sweep's transaction sets, so no retention period shorter than 18
-months can be configured by mistake. A contest's query log goes 12 months
+months can be set by mistake. A contest's query log goes 12 months
 after the contest is archived (`contests.archived_at`, stamped when the status
 becomes `archived`); a contest that finished and was never archived keeps its
 journal, as does one taken out of the archive. Rows of `mail_outbox` go 30
@@ -2919,7 +2919,7 @@ days after they were sent or abandoned; a message still pending is never
 deleted. The sweep writes no audit entry: it logs a line for each run that
 deleted anything, counts `retention_rows_deleted_total` and
 `retention_failures_total` by table, and the `DBContestRetentionFailing`
-alert fires when a run fails. It leaves the counters of `registration_activity`,
+alert fires when a run fails. It leaves `registration_activity`'s counters,
 `registration_addresses`, `participant_events` and `submissions` alone; those
 are outside the decided periods.
 
@@ -3116,8 +3116,8 @@ somebody named in code can be written.
 **The journal is not a version-control system.** For authored text — the
 story, a question's wording, a title — the **fact of a change and the
 languages** are recorded, not the text: a story is saved often, weighs
-kilobytes and is kept for eighteen months, so previous versions would make `audit_log`
-the largest table in the database, mostly duplicated prose. And it could not
+kilobytes and is kept for eighteen months, so previous versions would make
+`audit_log` the largest table in the database, mostly duplicated prose. And it could not
 be used to roll back anyway: "restore yesterday's story" is content
 versioning — a different store, a different lifetime, a separate feature if it
 is ever needed.

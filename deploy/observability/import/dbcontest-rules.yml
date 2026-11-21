@@ -201,7 +201,7 @@ groups:
         annotations:
           summary: The retention sweep failed in the last hour.
           description: >-
-            Not urgent during a contest. The API log has a "a background job
+            Not urgent during a contest. The API log has an "a background job
             failed" line with job=retention that names the table and the
             cause; expired rows stay until a later pass succeeds.
 

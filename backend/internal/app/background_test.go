@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamedb"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/filestore"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/retention"
 	"github.com/google/uuid"
@@ -717,8 +718,8 @@ func TestPruneRetentionCountsNoFailureForATickTheShutdownEnded(t *testing.T) {
 		}, ctx.Err()
 	}, counters)
 
-	if err := job.run(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("run() = %v, want the cancellation", err)
+	if err := job.run(ctx); err != nil {
+		t.Fatalf("run() = %v, want nil so the shutdown logs no error", err)
 	}
 
 	if got := retentionTotals(t, recorder, "retention_rows_deleted_total")["query_log"]; got != 7 {
@@ -762,9 +763,9 @@ func TestPruneRetentionRunsEveryFifteenMinutes(t *testing.T) {
 func TestTheRetentionSweepSkipsATickWhileAnotherReplicaHoldsTheLock(t *testing.T) {
 	ran, released := 0, 0
 	prune := func(context.Context) ([]retention.Outcome, error) { ran++; return nil, nil }
-	held := true
+	otherHolds := false
 	lock := func(context.Context) (func(), bool, error) {
-		if !held {
+		if otherHolds {
 			return nil, false, nil
 		}
 		return func() { released++ }, true, nil
@@ -774,19 +775,48 @@ func TestTheRetentionSweepSkipsATickWhileAnotherReplicaHoldsTheLock(t *testing.T
 	if _, err := sweep(t.Context()); err != nil || ran != 1 || released != 1 {
 		t.Fatalf("with the lock free: err = %v, ran = %d, released = %d; want nil, 1, 1", err, ran, released)
 	}
-	held = false
+	otherHolds = true
 	if _, err := sweep(t.Context()); err != nil || ran != 1 {
 		t.Fatalf("with the lock taken: err = %v, ran = %d; want nil and no second run", err, ran)
 	}
 }
 
-func TestTheRetentionSweepDoesNotRunWhenTheLockCannotBeAsked(t *testing.T) {
+func TestTheRetentionSweepCountsEveryTableFailedWhenTheLockCannotBeAsked(t *testing.T) {
 	ran := false
-	sweep := underRetentionLock(func(context.Context) (func(), bool, error) { return nil, false, errAway },
-		func(context.Context) ([]retention.Outcome, error) { ran = true; return nil, nil })
+	recorder := metrics.NewPrometheus()
+	job := pruneRetention(quiet(), underRetentionLock(
+		func(context.Context) (func(), bool, error) { return nil, false, errAway },
+		func(context.Context) ([]retention.Outcome, error) { ran = true; return nil, nil }),
+		metrics.NewRetentionCounters(recorder, retention.TableNames()))
 
-	if _, err := sweep(t.Context()); !errors.Is(err, errAway) || ran {
+	if err := job.run(t.Context()); !errors.Is(err, errAway) || ran {
 		t.Errorf("err = %v, ran = %v; want the lock's failure and no run", err, ran)
+	}
+	failures := retentionTotals(t, recorder, "retention_failures_total")
+	for _, table := range retention.TableNames() {
+		if failures[table] != 1 {
+			t.Errorf("%s failures = %v, want 1: an outage at the lock must reach the alert", table, failures[table])
+		}
+	}
+}
+
+// The DSN's pool_max_conns wins over CORE_DB_POOL_MAX, so the refusal has to
+// read the size of the pool as built, not the setting config checked.
+func TestTheRetentionSweepRefusesACorePoolOfOneConnectionFromTheDSN(t *testing.T) {
+	cfg, err := storage.PoolConfigWithMaxConns("postgres://olymp@localhost/olymp_test?pool_max_conns=1", 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxConns != 1 {
+		t.Fatalf("MaxConns = %d, want the DSN's 1 over the configured 25", cfg.MaxConns)
+	}
+	err = requireRetentionPool(cfg.MaxConns)
+	if err == nil || !strings.Contains(err.Error(), "too small") {
+		t.Errorf("requireRetentionPool(1) = %v, want a refusal that says the pool is too small", err)
+	}
+
+	if err := requireRetentionPool(2); err != nil {
+		t.Errorf("requireRetentionPool(2) = %v, want it accepted", err)
 	}
 }
 

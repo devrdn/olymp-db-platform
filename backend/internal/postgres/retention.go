@@ -23,10 +23,10 @@ func (r *Retention) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// retentionLockKey is the advisory lock every replica's sweep competes for.
-// Advisory locks are scoped to a database, so it cannot collide with
-// scheduleLockKey or gamedb's prepareLock.
-const retentionLockKey = 8_531_204_477_119_004_1
+// retentionLockKey is the advisory lock every replica's sweep competes for;
+// the core database's single-key locks are a sequence, and mailOutboxLockKey
+// is the one before it.
+const retentionLockKey = 8_531_204_477_119_003_4
 
 // retentionUnlockTimeout bounds the release, which runs after the sweep's own
 // context may already have ended.
@@ -34,7 +34,8 @@ const retentionUnlockTimeout = 5 * time.Second
 
 // TryLock takes the sweep's advisory lock on a connection of its own, so the
 // sweep's batches run on other connections and outside any transaction, which
-// the audit delete requires. It never blocks: a replica that loses gets
+// the audit delete requires; the connection is held for the whole sweep, so
+// the pool must have at least two. It never blocks: a replica that loses gets
 // held == false. release must be called once when held; a connection that
 // cannot confirm the unlock is closed, which frees the lock.
 func (r *Retention) TryLock(ctx context.Context) (release func(), held bool, err error) {

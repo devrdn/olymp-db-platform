@@ -1,9 +1,12 @@
 package metrics
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -62,17 +65,14 @@ func TestRetentionCountersIgnoreATableTheyWereNotGiven(t *testing.T) {
 }
 
 func TestRetentionCountersDoNothingOnNonPrometheusBackends(t *testing.T) {
-	for name, rec := range allBackends(t) {
-		if name == "prometheus" {
-			continue
-		}
-		t.Run(name, func(t *testing.T) {
-			c := NewRetentionCounters(rec, retentionTables)
-			c.Add("query_log", 5, true)
+	t.Run("log", func(t *testing.T) {
+		var buf bytes.Buffer
+		rec := NewLog(logging.New("info", &buf), time.Minute)
+		NewRetentionCounters(rec, retentionTables).Add("query_log", 5, true)
+		rec.Flush()
 
-			if c.deleted != nil || c.failures != nil {
-				t.Error("a backend that exports nothing was given counters to hold")
-			}
-		})
-	}
+		if strings.Contains(buf.String(), "retention_") {
+			t.Errorf("the log digest mentions retention counters: %q", buf.String())
+		}
+	})
 }

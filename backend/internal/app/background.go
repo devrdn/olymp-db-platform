@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -416,9 +417,11 @@ func pruneRetention(log *slog.Logger, prune func(context.Context) ([]retention.O
 		run: func(ctx context.Context) error {
 			outcomes, err := prune(ctx)
 			var attrs []any
+			failed := false
 			for _, o := range outcomes {
 				stopped := ctx.Err() != nil && errors.Is(o.Err, ctx.Err())
 				counters.Add(string(o.Table), o.Deleted, o.Err != nil && !stopped)
+				failed = failed || (o.Err != nil && !stopped)
 				if o.Deleted > 0 {
 					attrs = append(attrs, string(o.Table), o.Deleted)
 				}
@@ -426,23 +429,51 @@ func pruneRetention(log *slog.Logger, prune func(context.Context) ([]retention.O
 			if len(attrs) > 0 {
 				log.InfoContext(ctx, "deleted rows past their retention", attrs...)
 			}
+			if !failed && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				// A shutdown is not a failure worth an ERROR line.
+				return nil
+			}
 			return err
 		},
 	}
 }
 
+// requireRetentionPool refuses a core pool the retention sweep would deadlock:
+// its lock holds one connection for the whole pass and each batch acquires
+// another, with no deadline on the wait. maxConns is the pool as built, so
+// pool_max_conns in the DSN cannot get past the check CORE_DB_POOL_MAX gets.
+func requireRetentionPool(maxConns int32) error {
+	if maxConns < 2 {
+		return fmt.Errorf("core database pool of %d connection is too small: the retention sweep holds one connection for its lock while its batches need another; "+
+			"set pool_max_conns in CORE_DB_DSN, which overrides CORE_DB_POOL_MAX, to at least 2", maxConns)
+	}
+	return nil
+}
+
 // underRetentionLock runs prune only while holding the sweep's advisory lock,
 // so replicas sharing a database never delete the same batches against each
 // other. A replica that does not get the lock skips the tick; release runs
-// after the pass, whatever its result.
+// after the pass, whatever its result. When the lock cannot be asked for a
+// reason other than the context ending, every table is reported failed, so
+// the alert sees a connection-level outage.
 func underRetentionLock(
 	lock func(context.Context) (release func(), held bool, err error),
 	prune func(context.Context) ([]retention.Outcome, error),
 ) func(context.Context) ([]retention.Outcome, error) {
 	return func(ctx context.Context) ([]retention.Outcome, error) {
 		release, held, err := lock(ctx)
-		if err != nil || !held {
-			return nil, err
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return nil, err
+			}
+			outcomes := make([]retention.Outcome, 0, len(retention.TableNames()))
+			for _, name := range retention.TableNames() {
+				outcomes = append(outcomes, retention.Outcome{Table: retention.Table(name), Err: err})
+			}
+			return outcomes, err
+		}
+		if !held {
+			return nil, nil
 		}
 		defer release()
 		return prune(ctx)

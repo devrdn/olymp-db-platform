@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
@@ -9,12 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// contestWithJournal makes a contest and n query_log rows for it.
-func contestWithJournal(t *testing.T, ctx context.Context, n int) uuid.UUID {
+// contestWithJournal makes a contest and n query_log rows for it, and returns
+// the contest and the user who owns its registration.
+func contestWithJournal(t *testing.T, ctx context.Context, n int) (contest, owner uuid.UUID) {
 	t.Helper()
 
 	user := makeUser(t, ctx, "retention-"+uuid.NewString()[:8])
-	contest := makeContest(t, ctx, user.ID)
+	contest = makeContest(t, ctx, user.ID)
 	registration := makeRegistration(t, ctx, contest, user.ID)
 	for range n {
 		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -23,7 +25,7 @@ func contestWithJournal(t *testing.T, ctx context.Context, n int) uuid.UUID {
 			t.Fatalf("insert a journal row: %v", err)
 		}
 	}
-	return contest
+	return contest, user.ID
 }
 
 func journalRows(t *testing.T, ctx context.Context, contest uuid.UUID) int {
@@ -55,9 +57,9 @@ func setContest(t *testing.T, ctx context.Context, contest uuid.UUID, status, ar
 
 func TestRetentionDeletesTheJournalOfAContestArchivedOverAYearAgo(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
-		old := contestWithJournal(t, ctx, 3)
-		recent := contestWithJournal(t, ctx, 3)
-		finished := contestWithJournal(t, ctx, 3)
+		old, _ := contestWithJournal(t, ctx, 3)
+		recent, _ := contestWithJournal(t, ctx, 3)
+		finished, _ := contestWithJournal(t, ctx, 3)
 		setContest(t, ctx, old, "archived", "13 months")
 		setContest(t, ctx, recent, "archived", "11 months")
 		setContest(t, ctx, finished, "finished", "")
@@ -80,7 +82,7 @@ func TestRetentionDeletesTheJournalOfAContestArchivedOverAYearAgo(t *testing.T) 
 
 func TestRetentionKeepsTheJournalOfAContestThatIsNoLongerArchived(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
-		contest := contestWithJournal(t, ctx, 2)
+		contest, _ := contestWithJournal(t, ctx, 2)
 		setContest(t, ctx, contest, "archived", "13 months")
 		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
 			`UPDATE contests SET status = 'finished' WHERE id = $1`, contest); err != nil {
@@ -99,7 +101,7 @@ func TestRetentionKeepsTheJournalOfAContestThatIsNoLongerArchived(t *testing.T) 
 
 func TestRetentionDeletesTheJournalInBatches(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
-		contest := contestWithJournal(t, ctx, 5)
+		contest, _ := contestWithJournal(t, ctx, 5)
 		setContest(t, ctx, contest, "archived", "13 months")
 		store := NewRetention(testPool)
 
@@ -250,16 +252,19 @@ func TestOnlyOneReplicaHoldsTheRetentionLockAtATime(t *testing.T) {
 	if err != nil || !held {
 		t.Fatalf("first TryLock() = %v, %v, want it held", held, err)
 	}
+	var once sync.Once
+	releaseFirst := func() { once.Do(release) }
+	t.Cleanup(releaseFirst)
 	if _, again, err := second.TryLock(ctx); err != nil || again {
 		t.Fatalf("TryLock() while held = %v, %v, want it refused", again, err)
 	}
 
-	release()
+	releaseFirst()
 	release2, held, err := second.TryLock(ctx)
 	if err != nil || !held {
 		t.Fatalf("TryLock() after release = %v, %v, want it held", held, err)
 	}
-	release2()
+	t.Cleanup(release2)
 }
 
 // Prune on the pool, outside any test transaction, is how the deployment runs
@@ -271,14 +276,15 @@ func TestPruneDeletesExpiredRowsOnThePoolAndKeepsYoungOnes(t *testing.T) {
 	ctx := context.Background()
 	q := storage.QuerierFrom(ctx, testPool)
 
-	author := makeUser(t, ctx, "prune-"+uuid.NewString()[:8])
-	contest := contestWithJournal(t, ctx, 2)
-	young := contestWithJournal(t, ctx, 2)
+	contest, owner := contestWithJournal(t, ctx, 2)
+	young, youngOwner := contestWithJournal(t, ctx, 2)
 	t.Cleanup(func() {
 		for _, id := range []uuid.UUID{contest, young} {
 			_, _ = q.Exec(ctx, `DELETE FROM contests WHERE id = $1`, id)
 		}
-		_, _ = q.Exec(ctx, `DELETE FROM users WHERE id = $1`, author.ID)
+		for _, id := range []uuid.UUID{owner, youngOwner} {
+			_, _ = q.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+		}
 	})
 	setContest(t, ctx, contest, "archived", "13 months")
 	setContest(t, ctx, young, "archived", "11 months")

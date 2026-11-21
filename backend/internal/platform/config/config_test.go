@@ -1474,7 +1474,7 @@ func TestCoreDBPoolMaxIsConfigurableAndBounded(t *testing.T) {
 		t.Errorf("CoreDBPoolMax = %d, want 40", cfg.CoreDBPoolMax)
 	}
 
-	for _, raw := range []string{"-1", "101"} {
+	for _, raw := range []string{"-1", "101", "1"} {
 		t.Setenv("CORE_DB_POOL_MAX", raw)
 		if _, err := Load(); err == nil {
 			t.Errorf("Load() accepted CORE_DB_POOL_MAX=%s, want error", raw)
