@@ -44,7 +44,7 @@ on:
         type: string
       expect:
         description: A path the built image must contain, asserted before it is
-          published. Empty to skip.
+          tagged. Empty to skip.
         required: false
         default: ""
         type: string
@@ -256,7 +256,8 @@ jobs:
           shopt -s nullglob
           digests=(*)
           if [ "${#digests[@]}" -ne 2 ]; then
-            echo "expected a digest from each of the two platforms, got ${#digests[@]}"
+            echo "expected a digest from each of the two platforms, got ${#digests[@]}."
+            echo "Re-run all jobs: a digest artifact is kept for one day, so an older one has expired."
             exit 1
           fi
 
@@ -271,15 +272,26 @@ jobs:
           for digest in "${digests[@]}"; do
             args+=("ghcr.io/$OWNER/$IMAGE@sha256:$digest")
           done
+          # Attestations are listed as platform unknown/unknown and left out.
+          platforms() {
+            jq -r '.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"' \
+              | sort | paste -sd ' ' -
+          }
+
+          # The list is checked once before any tag exists and once as the
+          # registry serves it under the tag.
+          planned=$(docker buildx imagetools create --dry-run "${args[@]}" | platforms)
+          if [ "$planned" != "linux/amd64 linux/arm64" ]; then
+            echo "the list would name '$planned', not linux/amd64 and linux/arm64; nothing was tagged"
+            exit 1
+          fi
+
           docker buildx imagetools create "${args[@]}"
 
-          # Attestations are listed as platform unknown/unknown and left out.
           first=$(jq -r '.tags[0]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
-          platforms=$(docker buildx imagetools inspect --raw "$first" \
-            | jq -r '.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"' \
-            | sort | paste -sd ' ' -)
-          if [ "$platforms" != "linux/amd64 linux/arm64" ]; then
-            echo "$first lists '$platforms', not linux/amd64 and linux/arm64"
+          tagged=$(docker buildx imagetools inspect --raw "$first" | platforms)
+          if [ "$tagged" != "linux/amd64 linux/arm64" ]; then
+            echo "$first lists '$tagged', not linux/amd64 and linux/arm64"
             exit 1
           fi
         env:

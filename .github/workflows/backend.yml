@@ -24,11 +24,13 @@ on:
       - "backend/**"
       - "deploy/observability/import/**"
       - ".github/workflows/backend.yml"
+      - ".github/workflows/image.yml"
   pull_request:
     paths:
       - "backend/**"
       - "deploy/observability/import/**"
       - ".github/workflows/backend.yml"
+      - ".github/workflows/image.yml"
 
 # Least privilege: the workflow only reads the repository.
 permissions:

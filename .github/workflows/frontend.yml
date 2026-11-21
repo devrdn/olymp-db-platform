@@ -22,12 +22,14 @@ on:
       - "docs/api/error-codes.json"
       - "docs/api/audit-actions.json"
       - ".github/workflows/frontend.yml"
+      - ".github/workflows/image.yml"
   pull_request:
     paths:
       - "frontend/**"
       - "docs/api/error-codes.json"
       - "docs/api/audit-actions.json"
       - ".github/workflows/frontend.yml"
+      - ".github/workflows/image.yml"
 
 # Least privilege: the workflow only reads the repository.
 permissions:

@@ -354,8 +354,9 @@ on pushes to `main` and published from tags.
 
 ### `backend.yml`
 
-Runs on pushes to `main` and pull requests that touch `backend/**` or the
-workflow itself, and on every `v*` tag.
+Runs on pushes to `main` and pull requests that touch `backend/**`,
+`deploy/observability/import/**`, the workflow itself or `image.yml`, and on
+every `v*` tag.
 
 **Job `build` ("build and test").** A `postgres:16.16-alpine` service holds
 `dbcontest_core_test`; `CORE_DB_DSN`, `GAME_DB_DSN` and the three role
@@ -387,8 +388,8 @@ published.
 ### `frontend.yml`
 
 Runs on pushes to `main` and pull requests that touch `frontend/**`,
-`docs/api/error-codes.json`, `docs/api/audit-actions.json` or the workflow,
-and on every `v*` tag. A change to either contract file runs the interface's checks,
+`docs/api/error-codes.json`, `docs/api/audit-actions.json`, the workflow or
+`image.yml`, and on every `v*` tag. A change to either contract file runs the interface's checks,
 because it changes what the interface must be able to say.
 
 **Job `build` ("check and build"),** on Node 22: `npm ci`, then `lint`,
@@ -486,8 +487,8 @@ right user. On a merge the image is only loaded locally. On a publish each
 platform pushes its image by digest, pulls it back for the check, and hands
 the digest on; job `manifest` then tags (`sha-<commit>`, the version from a
 tag, and `latest` for a release) one manifest list naming both digests with
-`docker buildx imagetools create`, and fails unless it lists exactly the two
-platforms. Nothing is tagged until both platforms have passed.
+`docker buildx imagetools create`, refusing unless a dry run of that command
+and then the tag as pushed list exactly the two platforms. Nothing is tagged until both platforms have passed.
 
 ### Matching CI on your machine
 
