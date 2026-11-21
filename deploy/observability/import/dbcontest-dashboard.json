@@ -1475,7 +1475,7 @@
     {
       "type": "timeseries",
       "title": "Database resets and game builds per hour",
-      "description": "The HTTP calls that start provisioning, by status; the queue they feed is the next panel.",
+      "description": "The HTTP calls that start provisioning, by status; the queue they feed is in the panel below.",
       "id": 27,
       "datasource": {
         "type": "prometheus",

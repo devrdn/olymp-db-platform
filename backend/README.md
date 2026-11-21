@@ -1392,7 +1392,8 @@ the labels in `deploy/docker-compose.yml`, where a test also holds it.
 | `contest_active_participants` | gauge | active registrations of running contests whose own time, grace included, has not run out, counted every 30 s. Exported only when Prometheus is the metrics backend. A count of the shared database, so read it with `max()` |
 
 `DBContestProvisioningQueueBacklog` warns when the queue has not been empty
-once in 30 minutes. Active participants carry no alert; the dashboard shows
+once in 30 minutes. The gauge is read at scrape time, so an empty moment
+shorter than the scrape interval cannot be seen. Active participants carry no alert; the dashboard shows
 them beside the queue.
 
 ### Query Runner metrics

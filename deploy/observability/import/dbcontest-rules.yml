@@ -190,12 +190,12 @@ groups:
             game cluster still holds, and ARGS=-apply removes it.
 
       - alert: DBContestProvisioningQueueBacklog
-        # The tender makes the default worker count of copies at a time and a copy takes seconds, so a queue that is not once empty for thirty minutes is copies asked for faster than they are made, or a cluster that stopped making them; a genuinely huge template's legitimate fill warns too. The five-minute subquery lets one empty sample between two evaluations reset the clock.
+        # The tender makes the default worker count of copies at a time and a copy takes seconds, so a queue not once empty for thirty minutes is copies asked for faster than they are made, or a cluster that stopped making them. The gauge is read at scrape time, so an empty moment shorter than the scrape interval cannot be seen; the five-minute minimum plus the 25-minute wait makes thirty minutes from the last empty sample.
         expr: |
-          min_over_time(sum(provisioning_queue_depth
-            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})[5m:])
+          sum(min_over_time(provisioning_queue_depth[5m])
+            * on (job, instance) group_left () dbcontest:target{dbcontest="api"})
           > 0
-        for: 30m
+        for: 25m
         labels:
           severity: warning
         annotations:

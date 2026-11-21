@@ -361,8 +361,8 @@ tests:
         eval_time: 8m
         exp_samples: []
 
-  # A queue that is never empty for thirty minutes is copies asked for faster
-  # than they are made.
+  # A queue that was empty at 0m and has been waiting since: the rule needs
+  # 30 minutes from the last empty sample.
   - interval: 1m
     input_series:
       - series: 'up{job="core-api", instance="api:9090"}'
@@ -370,31 +370,57 @@ tests:
       - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
         values: '1x40'
       - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
-        values: '5x40'
+        values: '0 5x39'
     promql_expr_test:
       - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
         eval_time: 29m
         exp_samples: []
-      - expr: ALERTS{alertstate="firing"}
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
         eval_time: 31m
         exp_samples:
           - labels: 'ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing", severity="warning"}'
             value: 1
 
-  # One empty sample resets the clock: the queue emptied at 21m, so only
-  # 25 minutes of backlog have passed since.
+  # The queue emptied at 20m. Thirty minutes after that sample it is still
+  # quiet, and just after it fires; a rule that counted from the first
+  # non-empty sample or from a coarser window would answer differently.
   - interval: 1m
     input_series:
       - series: 'up{job="core-api", instance="api:9090"}'
-        values: '1x50'
+        values: '1x60'
       - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
-        values: '1x50'
+        values: '1x60'
       - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
-        values: '5x20 0 5x25'
+        values: '5x20 0 5x35'
     promql_expr_test:
-      - expr: ALERTS{alertstate="firing"}
-        eval_time: 47m
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
+        eval_time: 49m
         exp_samples: []
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
+        eval_time: 51m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # An empty sample between two evaluation steps still resets the clock: it
+  # is scraped at 20m30s, the rule evaluates on the minute.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="core-api", instance="api:9090"}'
+        values: '1x120'
+      - series: 'up{job="queryrunner", instance="queryrunner:9101"}'
+        values: '1x120'
+      - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
+        values: '5x41 0 5x70'
+    promql_expr_test:
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
+        eval_time: 50m
+        exp_samples: []
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
+        eval_time: 52m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing", severity="warning"}'
+            value: 1
 
   # A process that started 20 minutes ago has not had thirty minutes to fail.
   - interval: 1m
@@ -406,7 +432,7 @@ tests:
       - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
         values: '_x20 5x20'
     promql_expr_test:
-      - expr: ALERTS{alertstate="firing"}
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
         eval_time: 39m
         exp_samples: []
 
@@ -421,7 +447,7 @@ tests:
       - series: 'provisioning_queue_depth{job="core-api", instance="api:9090"}'
         values: '5x20 _x10 5x20'
     promql_expr_test:
-      - expr: ALERTS{alertstate="firing"}
+      - expr: ALERTS{alertname="DBContestProvisioningQueueBacklog", alertstate="firing"}
         eval_time: 49m
         exp_samples: []
 
