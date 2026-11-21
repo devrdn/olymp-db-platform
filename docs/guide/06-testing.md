@@ -29,7 +29,7 @@ uses). The backend's own notes on its tests are in
 | Contract checks | `cmd/apicontract`, `cmd/auditcontract`, `migrations`, `sentineltest`, `internal/api/errortable_test.go` | Go and a C compiler | `make test` |
 | Frontend unit and component tests | `*.test.ts` and `*.test.tsx` beside their source in `frontend/` | nothing | `make front-test` |
 | Frontend checks | `npm run lint`, `typecheck`, `contrast`, `type-scale`, `error-codes` (in `make front-check`) and `smoke` (CI only) | nothing | `make front-check`, `npm run smoke` |
-| Browser smoke test | `frontend/e2e/` (Playwright) | a running stack; Docker for the throwaway one | `make e2e-smoke` (not in CI) |
+| Browser smoke test | `frontend/e2e/` (Playwright) | a running stack; Docker for the throwaway one | `make e2e-smoke` (CI: `e2e.yml`, not required) |
 
 ### Go unit tests
 
@@ -345,7 +345,7 @@ The frontend tests need neither Docker nor the API.
 
 ## 3. What CI runs
 
-Three workflows in `.github/workflows/`. `backend` and `frontend` are filtered
+Four workflows in `.github/workflows/`. `backend` and `frontend` are filtered
 by path, on pushes to `main` as well as on pull requests, so a change runs only
 the workflow for the half it touches; a `v*` tag runs both, since GitHub does
 not apply path filters to tags. Pull requests run the checks; images are built
@@ -396,6 +396,31 @@ because it changes what the interface must be able to say.
 
 **Jobs `build-image` and `publish-image`** build `db-contest-frontend` from
 `frontend/` through `image.yml`, as for the backend.
+
+### `e2e.yml`
+
+Runs on non-draft pull requests that touch `backend/**`, `frontend/**`, the two
+compose files, the Caddyfile, the Makefile or the workflow itself (Markdown
+excluded), and on manual dispatch; it does not run on pushes to `main`. One
+run per pull request: a new push cancels the one in progress, and the job
+stops after 45 minutes.
+
+**Job `smoke` ("browser smoke test").** It builds the three images from the
+pull request's tree and starts the throwaway stack (`make e2e-stack-up`), runs
+the Playwright suite against it (`make e2e-smoke`), and removes the stack
+whatever the outcome. It needs no secret: `frontend/e2e/stack.sh` generates
+every value, the stack listens on loopback and dies with the runner, so a pull
+request from a fork runs it the same way.
+
+When a run fails, the artifact `e2e-failure` (kept 7 days) holds the failed
+tests' screenshots (`test-results/`) and each container's log
+(`e2e-logs/<container>.log`); read the log of the service the failing screen
+talks to first. It never holds the stack directory or a Playwright trace,
+because both carry the run's passwords.
+
+The job is not a required check: a path-filtered workflow cannot be one (see
+`backend.yml`), and the suite's steadiness on a shared runner is unmeasured. It
+becomes required, through an always-running gate job, after two weeks green.
 
 ### `image.yml`
 

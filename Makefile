@@ -546,7 +546,7 @@ front-check: front-install ## Everything CI runs for the interface but the smoke
 # the post-beta changes added (e2e/features-*). It runs against a stack that
 # is already up, named by E2E_BASE_URL or by E2E_ENV_FILE (a file of the E2E_*
 # variables, which e2e-stack-up writes), and seeds it through the public API.
-# Not in CI.
+# CI runs it on pull requests against a throwaway stack (.github/workflows/e2e.yml).
 #
 # e2e-stack-up and e2e-stack-down are a throwaway stack for it: the deployment's
 # compose file with images built from this tree, under its own project name,
