@@ -1213,6 +1213,12 @@ the investigation. The gate fires both at publication and again at the start,
 so a contest already published with such a question will not begin until the
 limit exists.
 
+A hidden question never reaches a participant, so the gate also refuses a
+`winner` contest whose final questions are all hidden (`winner_final_hidden`):
+one visible final is enough, whatever hidden ones stand beside it. A contest
+whose every question is hidden is refused as `every_question_hidden`, and then
+`winner_final_hidden` is not reported as well.
+
 **Answers have a rate limit of their own, not a share of the SQL budget.**
 `ANSWER_RATE_PER_MINUTE` (twelve by default, separate from the console's budget)
 counts per registration, counts refused attempts too — so a deliberately wrong
@@ -1323,7 +1329,9 @@ The order is `questions.ord`, the same one used for display. Hidden questions
 (`is_visible = false`) count in the sequence like any other: hidden is not
 absent. Since a participant can never answer one, the publication gate refuses
 a sequential contest with a hidden question ordered before another
-(`sequential_hides_question`).
+(`sequential_hides_question`). The same reason makes the gate refuse a contest
+whose deciding question is hidden (`winner_final_hidden`,
+`every_question_hidden`).
 
 **The server checks it, not the interface.** Submitting an answer to a
 question that has not opened is refused by the API. Hiding the question in the
@@ -5180,7 +5188,8 @@ and what is built.
 Product decisions the items below are built on.
 
 - **A hidden question is not answerable.** It is for staff only: it never
-  reaches a participant, and nothing reveals it during a contest.
+  reaches a participant, and nothing reveals it during a contest. So the gate
+  refuses a contest whose deciding question is hidden.
 - **A registration is finished when its contest ends.** The move to
   `finished` writes it for every participant who started (item 24).
 

@@ -878,9 +878,9 @@ scores and attempts.
 **Mode `single`** — a different screen, not a list of one: the panel stops being a
 list, and the whole contest carries one question.
 
-**A hidden question** (`questions.is_visible = false`) — the participant sees the
-story and the answer field but not the question's text. That is a format, not a
-blank, and the interface has to say so explicitly or it reads as a bug.
+**A hidden question** (`questions.is_visible = false`) — staff only: it never
+reaches the participant, and nothing reveals it during a contest. The
+publication gate refuses a contest whose deciding question is hidden.
 
 **A bonus question** (`questions.is_bonus`, points scoring only) — marked with a
 `good` tag, its points read as "up to N back" rather than "N pts", and one line

@@ -31,6 +31,15 @@ const (
 	// gets a hidden question's identifier, so it can never be answered or
 	// spent, and everything after it is unreachable.
 	ProblemSequentialHidesQuestion = "sequential_hides_question"
+	// ProblemWinnerFinalHidden names a winner-mode contest whose final
+	// questions are all hidden. A participant never gets a hidden question,
+	// so none can be answered and nobody could win. One visible final is
+	// enough, whatever hidden ones stand beside it.
+	ProblemWinnerFinalHidden = "winner_final_hidden"
+	// ProblemEveryQuestionHidden names a contest whose questions are all
+	// hidden: participants would be given nothing to answer. It stands in
+	// for ProblemWinnerFinalHidden when both would apply.
+	ProblemEveryQuestionHidden = "every_question_hidden"
 	// ProblemWinnerNeedsFinal names a winner-mode contest with no final
 	// question, which would end with nobody placed (§6.1.1).
 	ProblemWinnerNeedsFinal = "winner_needs_final"
@@ -193,6 +202,15 @@ func publishProblems(c Contest, story Story, questions []Question) []PublishProb
 		return q.Kind == KindFinal
 	}) {
 		add(PublishProblem{Code: ProblemWinnerNeedsFinal})
+	}
+	anyShown := slices.ContainsFunc(questions, func(q Question) bool { return q.IsVisible })
+	switch {
+	case len(questions) > 0 && !anyShown:
+		add(PublishProblem{Code: ProblemEveryQuestionHidden})
+	case c.Scoring == ScoringWinner && !slices.ContainsFunc(questions, func(q Question) bool {
+		return q.Kind == KindFinal && q.IsVisible
+	}) && slices.ContainsFunc(questions, func(q Question) bool { return q.Kind == KindFinal }):
+		add(PublishProblem{Code: ProblemWinnerFinalHidden})
 	}
 	if c.ScoresPoints() && len(questions) > 0 && !slices.ContainsFunc(questions, func(q Question) bool {
 		return !q.IsBonus

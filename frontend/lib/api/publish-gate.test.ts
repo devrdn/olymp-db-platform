@@ -88,6 +88,18 @@ describe("summarisePublishCheck, contest-wide problems", () => {
     expect(gate.byLanguage).toHaveLength(1);
   });
 
+  test("keeps the hidden deciding-question problems in the global list", () => {
+    const gate = summarisePublishCheck(
+      { ready: false, problems: [{ code: "winner_final_hidden" }, { code: "every_question_hidden" }] },
+      ["en"],
+    );
+
+    expect(gate.global).toEqual([
+      { code: "winner_final_hidden", count: 1 },
+      { code: "every_question_hidden", count: 1 },
+    ]);
+  });
+
   test("has no matrix at all for a contest that declares no language", () => {
     const gate = summarisePublishCheck({ ready: false, problems: [{ code: "no_languages" }] }, []);
 

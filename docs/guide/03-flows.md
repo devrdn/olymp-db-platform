@@ -385,6 +385,7 @@ and the scheduler. It reports every problem at once; the codes are constants in
 | Each question translated, with choice labels and a reference answer | `missing_question_translation`, `missing_choice_label`, `no_reference_answer` |
 | Attempt caps where guessing would otherwise win; none is asked under `icpc` scoring, where a wrong attempt costs penalty time | `choice_needs_attempt_limit`, `winner_final_needs_attempt_limit`, `sequential_needs_max_attempts` |
 | Winner scoring: at least one final question | `winner_needs_final` |
+| No deciding question hidden: winner scoring shows a final question, and some question is shown | `winner_final_hidden`, `every_question_hidden` |
 | Bonus questions only under points scoring, and not every question a bonus | `bonus_needs_points`, `no_regular_question` |
 | Sequential progression: no hidden question before the last | `sequential_hides_question` |
 | No account with `contest.admin_all` registered as a participant | `staff_registered` |
@@ -395,7 +396,7 @@ The game check is `GameInstances.GameReady`, a read of `game_templates` in the
 core database, never the game cluster
 ([ARCHITECTURE.md §4.2](../ARCHITECTURE.md#42-provisioning-without-a-spike)).
 A game saved again while the contest is published holds the start until the
-rebuild finishes.
+rebuild finishes. The hidden-question checks apply at the start too: a published contest whose deciding question was hidden afterwards stays published and is audited as start-blocked.
 
 Rules that matter:
 

@@ -21,6 +21,10 @@ export const PUBLISH_PROBLEMS = {
   sequentialNeedsMaxAttempts: "sequential_needs_max_attempts",
   sequentialHidesQuestion: "sequential_hides_question",
   winnerNeedsFinal: "winner_needs_final",
+  // A hidden question never reaches a participant, so a contest whose deciding
+  // question is hidden cannot be won or has nothing to answer.
+  winnerFinalHidden: "winner_final_hidden",
+  everyQuestionHidden: "every_question_hidden",
   // A bonus question outside points scoring, or a points contest whose every
   // question is a bonus (docs/ARCHITECTURE.md §6.1.1).
   bonusNeedsPoints: "bonus_needs_points",

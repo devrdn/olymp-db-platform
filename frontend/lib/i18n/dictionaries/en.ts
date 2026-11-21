@@ -1009,6 +1009,8 @@ const en = {
         sequential_needs_max_attempts: "A question has no attempt limit, so a participant stuck on it in sequential order could never move on.",
         sequential_hides_question: "A hidden question in sequential order has another question after it, which could never be reached.",
         winner_needs_final: "Scoring is first to solve, but no question is a final one, so nobody could win.",
+        winner_final_hidden: "Scoring is first to solve, but every final question is hidden. A hidden question can never be answered, so nobody could win. Show at least one final question to participants.",
+        every_question_hidden: "Every question is hidden. A hidden question can never be answered, so participants would have nothing to do. Show at least one question to participants.",
         bonus_needs_points: "A question is marked as a bonus, but only Points scoring has bonus questions. Untick it or switch the scoring to Points.",
         no_regular_question: "Every question is a bonus, so nobody could score: a bonus only gives back points lost on regular questions.",
         winner_final_needs_attempt_limit: "A final question has no attempt limit while scoring is first to solve, so the contest could be won by trying candidates one after another.",

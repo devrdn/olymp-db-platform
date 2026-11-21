@@ -336,6 +336,41 @@ func TestAdvanceDoesNotStartAContestWhoseGameWasNeverBuilt(t *testing.T) {
 	}
 }
 
+// A contest that could produce no winner must not open, even if it was
+// published before the question was hidden.
+func TestAdvanceDoesNotStartAWinnerContestWhoseEveryFinalIsHidden(t *testing.T) {
+	f := newScheduler()
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	limit := 3
+	f.stories.Save(context.Background(), c.ID, story.Bodies)
+	for _, q := range questions {
+		q.ContestID = c.ID
+		q.MaxAttempts = &limit
+		q.IsVisible = false
+		f.questions.Put(q)
+		shown := q
+		shown.ID, shown.Ord, shown.Kind, shown.IsVisible = uuid.New(), 2, contests.KindText, true
+		f.questions.Put(shown)
+	}
+	f.games.Built(c.ID)
+	c = putDue(f, c)
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 0 || f.repo.SetStatusCalls != 0 {
+		t.Errorf("started = %d, SetStatus calls = %d, want neither", started, f.repo.SetStatusCalls)
+	}
+	if got := statusOf(t, f, c.ID); got != contests.StatusPublished {
+		t.Errorf("status = %q, want the contest left published", got)
+	}
+	if codes := blockedCodes(t, f); !slices.Equal(codes, []string{contests.ProblemWinnerFinalHidden}) {
+		t.Errorf("problems = %v, want exactly [%s]", codes, contests.ProblemWinnerFinalHidden)
+	}
+}
+
 func TestAdvanceStartsADueContestWhoseGameIsBuilt(t *testing.T) {
 	f := newScheduler()
 	c := duePublishable(f)

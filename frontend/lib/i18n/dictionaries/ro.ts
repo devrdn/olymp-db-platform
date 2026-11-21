@@ -903,6 +903,8 @@ const ro = {
         sequential_needs_max_attempts: "O întrebare nu are limită de încercări, așa că un participant blocat pe ea în ordine secvențială nu ar putea trece mai departe.",
         sequential_hides_question: "O întrebare ascunsă în ordine secvențială are o altă întrebare după ea, care nu ar putea fi niciodată atinsă.",
         winner_needs_final: "Punctajul este pe primul care rezolvă, dar nicio întrebare nu este finală, deci nimeni nu ar putea câștiga.",
+        winner_final_hidden: "Punctajul este pe primul care rezolvă, dar toate întrebările finale sunt ascunse. O întrebare ascunsă nu poate primi niciodată răspuns, deci nimeni nu ar putea câștiga. Afișați participanților cel puțin o întrebare finală.",
+        every_question_hidden: "Toate întrebările sunt ascunse. O întrebare ascunsă nu poate primi niciodată răspuns, deci participanții nu ar avea nimic de făcut. Afișați participanților cel puțin o întrebare.",
         bonus_needs_points: "O întrebare este marcată ca bonus, dar doar punctajul „Puncte” are întrebări bonus. Debifați-o sau treceți punctajul la „Puncte”.",
         no_regular_question: "Toate întrebările sunt bonus, deci nimeni nu ar putea obține puncte: un bonus doar redă punctele pierdute la întrebările obișnuite.",
         winner_final_needs_attempt_limit: "O întrebare finală nu are o limită de încercări, iar punctajul este pe primul care rezolvă, deci olimpiada ar putea fi câștigată încercând variante una după alta.",

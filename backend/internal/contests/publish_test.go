@@ -573,3 +573,92 @@ func TestGateAcceptsABonusQuestionBesideARegularOneUnderPointsScoring(t *testing
 		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
 	}
 }
+
+func count(codes []string, want string) int {
+	n := 0
+	for _, code := range codes {
+		if code == want {
+			n++
+		}
+	}
+	return n
+}
+
+// A hidden question never reaches a participant, so a winner contest whose
+// finals are all hidden could never be won.
+func TestGateRefusesAWinnerContestWhoseEveryFinalQuestionIsHidden(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	limit := 3
+	questions[0].MaxAttempts = &limit
+	questions[0].IsVisible = false
+	questions = append(questions, contests.Question{
+		ID:        uuid.New(),
+		ContestID: c.ID,
+		Ord:       2,
+		Kind:      contests.KindText,
+		IsVisible: true,
+		Texts:     questions[0].Texts,
+		Answers:   questions[0].Answers,
+	})
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if count(codes, contests.ProblemWinnerFinalHidden) != 1 {
+		t.Errorf("problems = %v, want %s once", codes, contests.ProblemWinnerFinalHidden)
+	}
+	if contains(codes, contests.ProblemEveryQuestionHidden) {
+		t.Errorf("problems = %v, want no %s: a question is shown", codes, contests.ProblemEveryQuestionHidden)
+	}
+}
+
+func TestGateAcceptsAWinnerContestWithOneVisibleFinalBesideAHiddenOne(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	limit := 3
+	questions[0].MaxAttempts = &limit
+	questions[0].IsVisible = false
+	shown := questions[0]
+	shown.ID = uuid.New()
+	shown.Ord = 2
+	shown.IsVisible = true
+	questions = append(questions, shown)
+
+	err := contests.CheckPublishable(c, story, questions)
+	if err != nil && contains(problemCodes(t, err), contests.ProblemWinnerFinalHidden) {
+		t.Errorf("CheckPublishable() = %v, want no %s", err, contests.ProblemWinnerFinalHidden)
+	}
+}
+
+// One report, not two: when nothing is shown the winner problem would only
+// repeat it.
+func TestGateRefusesAContestWhoseEveryQuestionIsHidden(t *testing.T) {
+	for _, scoring := range []string{contests.ScoringPoints, contests.ScoringWinner} {
+		t.Run(scoring, func(t *testing.T) {
+			c, story, questions := publishable()
+			c.Scoring = scoring
+			limit := 3
+			questions[0].MaxAttempts = &limit
+			questions[0].IsVisible = false
+
+			codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+			if count(codes, contests.ProblemEveryQuestionHidden) != 1 {
+				t.Errorf("problems = %v, want %s once", codes, contests.ProblemEveryQuestionHidden)
+			}
+			if contains(codes, contests.ProblemWinnerFinalHidden) {
+				t.Errorf("problems = %v, want no %s beside %s", codes, contests.ProblemWinnerFinalHidden, contests.ProblemEveryQuestionHidden)
+			}
+		})
+	}
+}
+
+func TestGateSaysNothingOfHiddenQuestionsInAContestWithNone(t *testing.T) {
+	c, story, _ := publishable()
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, nil))
+	if !contains(codes, contests.ProblemNoQuestions) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemNoQuestions)
+	}
+	if contains(codes, contests.ProblemEveryQuestionHidden) {
+		t.Errorf("problems = %v, want no %s", codes, contests.ProblemEveryQuestionHidden)
+	}
+}
