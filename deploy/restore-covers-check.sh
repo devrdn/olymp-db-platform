@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="restorecheck$$"
 WORK="$(mktemp -d)"
 COVERS=/var/lib/dbcontest/covers
-READER="${READER_IMAGE:-caddy:2-alpine}"
+READER="${READER_IMAGE:-caddy:2.11.9-alpine}"
 API_IMAGE="${API_IMAGE:-}"
 
 compose() { docker compose -f "$WORK/compose.yml" -p "$PROJECT" "$@"; }

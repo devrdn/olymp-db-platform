@@ -28,7 +28,7 @@
 # Usage: deploy/edge-check.sh   (or `make edge-check`). Needs Docker.
 set -euo pipefail
 
-IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
+IMAGE="${CADDY_IMAGE:-caddy:2.11.9-alpine}"
 SUBNET="${EDGE_CHECK_SUBNET:-10.231.42.0/24}"
 PREFIX="${SUBNET%.*}"
 CADDY_IP="$PREFIX.10"

@@ -35,7 +35,7 @@ outside() {
 	if [ -z "${CHECK_IMAGE:-}" ]; then
 		echo "building the check image"
 		docker build -q -t "$image" - >/dev/null <<-'EOF'
-			FROM debian:12-slim
+			FROM debian:12.15-slim
 			RUN apt-get update \
 			 && apt-get install -y --no-install-recommends systemd rsync rclone make \
 			 && rm -rf /var/lib/apt/lists/*

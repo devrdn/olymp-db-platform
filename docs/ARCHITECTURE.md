@@ -4620,9 +4620,11 @@ section 7. In addition:
   the core database; with validation and a size limit.
 - **Secrets:** through environment variables; the repository
   holds only `.env.example`; different passwords for each database role.
-- **Dependencies:** `govulncheck` and `gosec` in the backend's CI; the
-  frontend's CI runs no dependency audit. The Go builder is pinned to a patch
-  release; the other base images follow floating tags.
+- **Dependencies:** `govulncheck` and `gosec` in the backend's CI;
+  `npm audit --omit=dev --audit-level=high` in the frontend's, and the
+  frontend's image is not built or published until it passes. Base images are
+  pinned to patch releases and bumped by hand, one commit per bump; the
+  distroless runtime images stay on `:nonroot`, which has no patch tags.
 - **The integrity of the competition:** reference answers are unreachable from
   any participant endpoint; attempts are limited per question; changes to
   questions and answers after publication are in the audit trail; the SQL
@@ -4854,7 +4856,7 @@ images, so `deploy-web` does not touch the API or its live sessions.
 `docs/api/error-codes.json`, which the backend generates, rather than the
 backend's sources — so the path filters are honest: a change in Go no longer
 drags a frontend run with it, and the reverse. Images are published only from
-`main` and from tags, after the tests and the security scan.
+`main` and from tags, after the tests and the security scan (the frontend's is a dependency audit).
 
 **Migrations at deployment are not an online operation.** `cmd/migrate` hands
 PostgreSQL a file as one string, and a string of several statements runs as

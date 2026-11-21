@@ -65,7 +65,7 @@ jobs:
     # guard is exercised on every pull request.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16.15-alpine
         env:
           POSTGRES_USER: dbcontest
           POSTGRES_PASSWORD: dbcontest

@@ -55,7 +55,7 @@ services:
   # The maintenance database ends in _test, which is how the tests recognise a
   # cluster that is theirs (internal/platform/storage/storagetest).
   pg-game-test:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     profiles: [test]
     environment:
       POSTGRES_USER: ${GAME_DB_USER:?set GAME_DB_USER in .env}

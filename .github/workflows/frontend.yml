@@ -88,13 +88,29 @@ jobs:
       - name: Serve the build and open a page
         run: npm run smoke
 
+  # High and critical advisories in runtime dependencies only, read from the
+  # lockfile: the backend's `security` job gates its images the same way, and a
+  # development-only advisory is not a reason to withhold a release.
+  security:
+    name: dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - run: npm audit --omit=dev --audit-level=high
+
   # Same shape as the backend's: a merge proves the image builds, a tag
   # publishes it, and only the second holds a token that can write to the
   # registry.
 
   build-image:
     name: build the image
-    needs: build
+    needs: [build, security]
     if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
@@ -107,7 +123,7 @@ jobs:
 
   publish-image:
     name: publish the image
-    needs: build
+    needs: [build, security]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read

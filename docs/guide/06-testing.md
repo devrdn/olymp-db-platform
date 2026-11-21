@@ -357,7 +357,7 @@ on pushes to `main` and published from tags.
 Runs on pushes to `main` and pull requests that touch `backend/**` or the
 workflow itself, and on every `v*` tag.
 
-**Job `build` ("build and test").** A `postgres:16-alpine` service holds
+**Job `build` ("build and test").** A `postgres:16.15-alpine` service holds
 `dbcontest_core_test`; `CORE_DB_DSN`, `GAME_DB_DSN` and the three role
 passwords are set for the whole job, so no database test skips. Steps:
 
@@ -395,8 +395,16 @@ because it changes what the interface must be able to say.
 `contrast`, `type-scale`, `error-codes`, `typecheck`, `npm test`,
 `npm run build`, and `npm run smoke` (serve the build, open `/login`).
 
-**Jobs `build-image` and `publish-image`** build `db-contest-frontend` from
-`frontend/` through `image.yml`, as for the backend.
+**Job `security` ("dependency audit")** runs
+`npm audit --omit=dev --audit-level=high` against the lockfile: high and
+critical advisories in runtime dependencies only. Base images are pinned to
+patch tags (`postgres`, `redis`, `caddy`, `node`, and `debian` in the
+backup check) and the same tags run in CI and in the deployment; the distroless
+`:nonroot` images stay floating because they have no patch tags.
+
+**Jobs `build-image` and `publish-image`** need both `build` and `security`,
+and build `db-contest-frontend` from `frontend/` through `image.yml`, as for
+the backend.
 
 ### `e2e.yml`
 
