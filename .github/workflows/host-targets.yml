@@ -1,20 +1,28 @@
 name: host-targets
 
-# The Makefile's host targets and the check that proves them. They need only
-# make and bash, so this runs on the runner's GNU Make 4.x: together with a
-# developer's macOS run on Make 3.81, the check covers both.
+# The Makefile's host targets and the check that proves them, and the
+# redaction of the e2e failure artifact (frontend/e2e/redact.sh) with its
+# check. They need only make, bash and shellcheck, so this runs on the
+# runner's GNU Make 4.x and GNU tools: together with a developer's macOS run
+# on Make 3.81 and the BSD tools, the checks cover both. The redaction check
+# runs here rather than in e2e.yml so that it also runs on drafts, on pushes
+# to main, and in seconds without building a stack.
 on:
   push:
     branches: [main]
     paths:
       - "Makefile"
       - "deploy/**"
+      - "frontend/e2e/**"
       - ".github/workflows/host-targets.yml"
+      - ".github/workflows/e2e.yml"
   pull_request:
     paths:
       - "Makefile"
       - "deploy/**"
+      - "frontend/e2e/**"
       - ".github/workflows/host-targets.yml"
+      - ".github/workflows/e2e.yml"
 
 permissions:
   contents: read
@@ -26,8 +34,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - run: shellcheck deploy/host-targets-check.sh
+      - run: shellcheck deploy/host-targets-check.sh frontend/e2e/*.sh
 
       - run: make --version
 
       - run: make host-targets-check
+
+      # The runner is thrown away, so the case that hands redact.sh / runs too.
+      - run: make e2e-redact-check
+        env:
+          REDACT_CHECK_ROOT: "1"

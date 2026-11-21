@@ -289,6 +289,7 @@ or readable by other accounts.
 | `make restore-covers-check`, `make game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
 | `make e2e-smoke` | the browser smoke test against `E2E_BASE_URL` or `E2E_ENV_FILE` ([above](#the-browser-smoke-test)) | Node and a running stack; `make e2e-stack-up` for a throwaway one (Docker) |
 | `make host-targets-check` | what `make run` and `make runner` take from `deploy/.env`, that no target shows a password on its echoed command line, the checks of `make migrate-force` and of the teardown targets, that the restores and `migrate-force` take `CONFIRM` and `FILE` only from the command line, when `make front-install` reinstalls, and that a value make cannot expand stops no other target, on throwaway env files with `go`, `docker` and `npm` stubbed | make and a shell |
+| `make e2e-redact-check` | that the failure artifact of `e2e.yml` keeps no generated secret in a text file, and that the artifact is deleted rather than uploaded when that cannot be made sure of, on fake env files and a fake artifact | a shell; not root |
 | `make scheduled-backup-check` | the backup rotation, the scheduled run and its systemd units, on synthetic sets in a throwaway container | Docker |
 
 One test or one package, from `backend/`:
@@ -345,7 +346,7 @@ The frontend tests need neither Docker nor the API.
 
 ## 3. What CI runs
 
-Four workflows in `.github/workflows/`. `backend` and `frontend` are filtered
+Five workflows in `.github/workflows/`. `backend` and `frontend` are filtered
 by path, on pushes to `main` as well as on pull requests, so a change runs only
 the workflow for the half it touches; a `v*` tag runs both, since GitHub does
 not apply path filters to tags. Pull requests run the checks; images are built
@@ -416,13 +417,28 @@ When a run fails, the artifact `e2e-failure` (kept 7 days) holds the failed
 tests' screenshots (`test-results/`) and each container's log
 (`e2e-logs/<container>.log`); read the log of the service the failing screen
 talks to first. It never holds the stack directory or a Playwright trace,
-because both carry the run's passwords, and every generated secret in what it
-does hold reads `***`. When that replacement cannot be finished, nothing is
-uploaded and the collect step's log says why.
+because both carry the run's passwords, and every generated secret in every
+text file it holds reads `***` (a binary file, such as a screenshot, is left
+as it is). When that replacement cannot be finished, nothing is uploaded and
+the collect step's log says why; `make e2e-redact-check` proves it.
 
 The job is not a required check: a path-filtered workflow cannot be one (see
 `backend.yml`), and the suite's steadiness on a shared runner is unmeasured. It
 becomes required, through an always-running gate job, after two weeks green.
+
+### `host-targets.yml`
+
+Runs on pushes to `main` and pull requests, drafts included, that touch the
+`Makefile`, `deploy/**`, `frontend/e2e/**`, the workflow itself or `e2e.yml`.
+
+**Job `host-targets-check` ("host targets").** `shellcheck` over
+`deploy/host-targets-check.sh` and `frontend/e2e/*.sh`, then
+`make host-targets-check` and `make e2e-redact-check` on the runner's GNU Make
+4.x and GNU tools; a run on macOS covers Make 3.81 and the BSD tools. The
+redaction check runs with `REDACT_CHECK_ROOT=1`, which adds the case that
+hands `redact.sh` the root directory, safe only on a runner that is thrown
+away. It runs here rather than in `e2e.yml` so that it takes seconds and needs
+no stack.
 
 ### `image.yml`
 
@@ -438,6 +454,7 @@ the right user, and pushes only when asked to publish.
 | backend `build` | `make test-all`, then `make test-db`, `make test-game` and `make test-game-build` (`test-all` alone runs the database tests as skips) |
 | backend `security` | `make vuln sec` |
 | frontend `build` | `make front-check`, then `cd frontend && npm run smoke` |
+| host-targets `host-targets-check` | `make host-targets-check e2e-redact-check` |
 
 CI does not run `make proto-check`; run it yourself after changing
 `backend/proto/` ([04-backend.md, recipe h](04-backend.md#h-change-the-query-runner-contract)).

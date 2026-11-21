@@ -159,7 +159,7 @@ GOVULN  = $(GOBIN)/govulncheck
 GOSEC   = $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version migrate-force bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-measure e2e-stack-up e2e-stack-down
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans game-check api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check restore-game-uploads game-uploads-check scheduled-backup-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version migrate-force bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint e2e-smoke e2e-measure e2e-stack-up e2e-stack-down e2e-redact-check
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -581,6 +581,12 @@ e2e-stack-up: ## Build and start a throwaway stack for the smoke test
 
 e2e-stack-down: ## Remove the throwaway stack, its volumes and its images
 	$(FRONTEND)/e2e/stack.sh down
+
+# What a failed run uploads is public for a week, so frontend/e2e/redact.sh,
+# which strips the run's secrets from it or deletes it, is proven on fake
+# files in a throwaway directory; it needs no stack and no Docker.
+e2e-redact-check: ## Prove the failure artifact's redaction on fake files
+	$(FRONTEND)/e2e/redact-check.sh
 
 ## --- Containers -------------------------------------------------------------
 
