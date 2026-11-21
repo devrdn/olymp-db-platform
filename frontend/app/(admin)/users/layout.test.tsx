@@ -14,7 +14,7 @@ vi.mock("@/lib/auth/session", () => ({ fetchIdentity }));
 import UsersLayout from "./layout";
 
 function identity(id: string): CurrentIdentity {
-  return { id, login: id, fullName: id, roles: [], permissions: [] };
+  return { id, login: id, fullName: id, roles: [], permissions: [], managesContests: false };
 }
 
 /**

@@ -17,6 +17,7 @@ vi.mock("@/lib/auth/session", () => ({
     fullName: "Sergiu Popescu",
     roles: ["student"],
     permissions: [],
+    managesContests: false,
   }),
 }));
 vi.mock("@/components/layout/session-actions", () => ({ signOutAction: vi.fn() }));

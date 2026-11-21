@@ -43,8 +43,8 @@ export default async function ArchiveLayout({ children }: { children: React.Reac
       locale={locale}
       theme={theme}
       dict={dict}
-      home={identity ? homeFor(identity.permissions) : "/"}
-      destinations={identity ? destinationsFor(identity.permissions, dict, brand.archive) : undefined}
+      home={identity ? homeFor(identity) : "/"}
+      destinations={identity ? destinationsFor(identity, dict, brand.archive) : undefined}
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {/* The `archive` section, for the error boundary, which cannot await the dictionary. */}

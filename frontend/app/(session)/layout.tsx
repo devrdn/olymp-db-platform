@@ -35,7 +35,7 @@ export default async function SessionLayout({ children }: { children: React.Reac
       locale={locale}
       theme={theme}
       dict={dict}
-      home={homeFor(identity.permissions)}
+      home={homeFor(identity)}
       account={{ fullName: identity.fullName, login: identity.login }}
     >
       {/* This group's dictionary sections (`profile`, plus retry wording from

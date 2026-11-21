@@ -46,7 +46,14 @@ export default async function LoginPage(props: PageProps<"/login">) {
     const identity = await fetchIdentity().catch(() => null);
     // redirect() throws, so it stays outside any try/catch.
     if (identity) {
-      redirect(destinationAfterLogin({ mustChangePassword: false, permissions: identity.permissions }, next));
+      redirect(destinationAfterLogin(
+          {
+            mustChangePassword: false,
+            permissions: identity.permissions,
+            managesContests: identity.managesContests,
+          },
+          next,
+        ));
     }
   }
 

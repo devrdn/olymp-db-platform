@@ -61,12 +61,16 @@ describe("staffDestinations", () => {
 
 describe("destinationsFor", () => {
   test("leaves the archive out when it is off, for both audiences", () => {
-    expect(hrefs(destinationsFor([], en, false))).toEqual(["/my", "/open"]);
-    expect(hrefs(destinationsFor(["contest.create"], en, false))).toEqual(["/contests"]);
+    expect(hrefs(destinationsFor({ permissions: [], managesContests: false }, en, false))).toEqual(["/my", "/open"]);
+    expect(hrefs(destinationsFor({ permissions: ["contest.create"], managesContests: false }, en, false))).toEqual(["/contests"]);
+  });
+
+  test("gives an account that manages a contest the staff menu", () => {
+    expect(hrefs(destinationsFor({ permissions: [], managesContests: true }, en, false))).toEqual(["/contests"]);
   });
 
   test("picks the audience from the permissions", () => {
-    expect(hrefs(destinationsFor(["contest.create"], en, true))).toEqual(["/contests", "/archive"]);
-    expect(hrefs(destinationsFor([], en, true))).toEqual(["/my", "/open", "/archive"]);
+    expect(hrefs(destinationsFor({ permissions: ["contest.create"], managesContests: false }, en, true))).toEqual(["/contests", "/archive"]);
+    expect(hrefs(destinationsFor({ permissions: [], managesContests: false }, en, true))).toEqual(["/my", "/open", "/archive"]);
   });
 });

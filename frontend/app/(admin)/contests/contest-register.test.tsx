@@ -37,7 +37,7 @@ beforeAll(async () => {
 
 describe("ContestRegister", () => {
   test("names a contest's state in the dictionary's language", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+    render(<ContestRegister mayCreate contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
@@ -45,7 +45,7 @@ describe("ContestRegister", () => {
   });
 
   test("carries the same row into another language without touching the component", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={ro} locale="ro" />);
+    render(<ContestRegister mayCreate contests={[nightInTheArchive]} total={1} dict={ro} locale="ro" />);
 
     const row = screen.getByRole("row", { name: /Ночь în arhivă|Ночь в архиве/ });
 
@@ -55,7 +55,7 @@ describe("ContestRegister", () => {
 
 describe("ContestRegister, nothing to show", () => {
   test("offers no filter reset when nothing has been created yet", () => {
-    render(<ContestRegister contests={[]} total={0} dict={en} locale="en" />);
+    render(<ContestRegister mayCreate contests={[]} total={0} dict={en} locale="en" />);
 
     expect(screen.getByText(en.contests.empty.title)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /clear/i })).not.toBeInTheDocument();
@@ -65,6 +65,7 @@ describe("ContestRegister, nothing to show", () => {
     // Filters live in the URL, so the reset is a link.
     render(
       <ContestRegister
+        mayCreate
         contests={[]}
         total={0}
         dict={en}
@@ -83,7 +84,7 @@ describe("ContestRegister, nothing to show", () => {
 
 describe("ContestRegister, dates", () => {
   test("shows the contest window as readable dates, not as ISO strings", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+    render(<ContestRegister mayCreate contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
@@ -92,7 +93,7 @@ describe("ContestRegister, dates", () => {
   });
 
   test("prints a one-day window as a date and a time range, not the date twice", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+    render(<ContestRegister mayCreate contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
@@ -104,6 +105,7 @@ describe("ContestRegister, dates", () => {
   test("repeats the full moment when the window crosses midnight", () => {
     render(
       <ContestRegister
+        mayCreate
         contests={[{ ...nightInTheArchive, endsAt: "2026-11-09T03:00:00Z" }]}
         total={1}
         dict={en}
@@ -119,6 +121,7 @@ describe("ContestRegister, dates", () => {
   test("says so when a contest has no date rather than leaving the cell blank", () => {
     render(
       <ContestRegister
+        mayCreate
         contests={[{ ...nightInTheArchive, startsAt: undefined, endsAt: undefined }]}
         total={1}
         dict={en}
@@ -135,7 +138,7 @@ describe("ContestRegister, dates", () => {
 /** SPEC.md §5: the register loses columns, not rows, up to `wide`. */
 describe("ContestRegister below a desktop's width", () => {
   test("folds enrollment and format into the caption until wide", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+    render(<ContestRegister mayCreate contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     for (const name of [en.contests.columns.enrollment, en.contests.columns.mode]) {
       expect(screen.getByRole("columnheader", { name })).toHaveClass("max-wide:hidden");
@@ -152,8 +155,21 @@ describe("ContestRegister below a desktop's width", () => {
   });
 
   test("keeps the table inside its own positioned scroller", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+    render(<ContestRegister mayCreate contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+});
+
+describe("ContestRegister, creating a contest", () => {
+  test("offers a new contest only to an account that may create one", () => {
+    const { unmount } = render(
+      <ContestRegister mayCreate={false} contests={[]} total={0} dict={en} locale="en" />,
+    );
+    expect(screen.queryByRole("link", { name: en.workspace.create.action })).toBeNull();
+    unmount();
+
+    render(<ContestRegister mayCreate contests={[]} total={0} dict={en} locale="en" />);
+    expect(screen.getByRole("link", { name: en.workspace.create.action })).toBeInTheDocument();
   });
 });

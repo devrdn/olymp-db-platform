@@ -1,4 +1,4 @@
-import { homeFor } from "@/lib/auth/destination";
+import { homeFor, type Access } from "@/lib/auth/destination";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 export type Destination = { href: string; label: string };
@@ -38,9 +38,9 @@ export function staffDestinations(dict: Dictionary, permissions: string[], archi
   ];
 }
 
-/** The menu for whoever holds these permissions: staff when their home is the register, else a participant. */
-export function destinationsFor(permissions: string[], dict: Dictionary, archive: boolean): Destination[] {
-  return homeFor(permissions) === "/contests"
-    ? staffDestinations(dict, permissions, archive)
+/** The menu for this account: staff when their home is the register, else a participant. */
+export function destinationsFor(access: Access, dict: Dictionary, archive: boolean): Destination[] {
+  return homeFor(access) === "/contests"
+    ? staffDestinations(dict, access.permissions, archive)
     : participantDestinations(dict, archive);
 }

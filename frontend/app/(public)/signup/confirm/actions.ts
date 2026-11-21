@@ -54,6 +54,7 @@ export async function confirmSignupAction(_previous: ConfirmState, form: FormDat
     destinationAfterLogin({
       mustChangePassword: outcome.mustChangePassword,
       permissions: identity?.permissions ?? [],
+      managesContests: identity?.managesContests ?? false,
     }),
   );
 }

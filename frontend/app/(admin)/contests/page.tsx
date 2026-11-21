@@ -5,6 +5,7 @@ import { ContestRegister } from "./contest-register";
 import { contestListSchema } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 export async function generateMetadata() {
@@ -14,10 +15,13 @@ export async function generateMetadata() {
 
 /** The contest register. A Server Component; filters live in the URL. */
 export default async function ContestsPage(props: PageProps<"/contests">) {
-  const [params, locale, dict] = await Promise.all([
+  const [params, locale, dict, identity] = await Promise.all([
     props.searchParams,
     activeLocale(),
     activeDictionary(),
+    // Tolerated: the link is decoration, since the API refuses a creation by
+    // anyone without `contest.create` whatever the page showed.
+    fetchIdentity().catch(() => null),
   ]);
 
   const query = typeof params.q === "string" ? params.q : "";
@@ -48,6 +52,7 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
   return (
     <Band fill className="py-12">
       <ContestRegister
+        mayCreate={identity?.permissions.includes("contest.create") ?? false}
         contests={items}
         total={total}
         dict={dict}

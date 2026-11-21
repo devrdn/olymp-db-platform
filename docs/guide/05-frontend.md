@@ -95,7 +95,10 @@ flowchart LR
 The `(admin)` layout builds its navigation from the permissions `/auth/me`
 returns: `/users` appears only with `users.manage`, `/audit` with
 `audit.view`, `/settings` with `settings.manage`. A role that gains a
-permission as data gets the link with no code change.
+permission as data gets the link with no code change. An account with no staff
+permission that manages a contest (`manages_contests` in `/auth/me`) also lands
+on `/contests` and gets this menu; the register's "New contest" link needs
+`contest.create`.
 
 ### How access is enforced
 

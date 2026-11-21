@@ -51,6 +51,15 @@ describe("the archive's frame", () => {
     expect(screen.queryByRole("link", { name: "Archive" })).not.toBeInTheDocument();
   });
 
+  test("gives an account that manages a contest the staff menu and home", async () => {
+    const en = await getDictionary("en");
+    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: true });
+    const { container } = render(await ArchiveLayout({ children: <p>inside</p> }));
+
+    expect(container.firstElementChild).toHaveAttribute("data-home", "/contests");
+    expect(screen.getByRole("link", { name: en.contests.heading })).toBeInTheDocument();
+  });
+
   test("answers not found while the archive is off, even without a session", async () => {
     branding.mockResolvedValue({ name: "", images: {}, archive: false });
     fetchIdentity.mockResolvedValue(null);
@@ -61,7 +70,7 @@ describe("the archive's frame", () => {
 
   test("gives a participant their own menu and home, with the archive among it", async () => {
     const en = await getDictionary("en");
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [] });
+    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: false });
     const { container } = render(await ArchiveLayout({ children: <p>inside</p> }));
 
     expect(container.firstElementChild).toHaveAttribute("data-home", "/my");
@@ -72,7 +81,7 @@ describe("the archive's frame", () => {
 
   test("gives staff theirs", async () => {
     const en = await getDictionary("en");
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: ["contest.create"] });
+    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: ["contest.create"], managesContests: false });
     const { container } = render(await ArchiveLayout({ children: <p>inside</p> }));
 
     expect(container.firstElementChild).toHaveAttribute("data-home", "/contests");
@@ -81,7 +90,7 @@ describe("the archive's frame", () => {
 
   test("answers not found while the archive is off, before any page streams", async () => {
     branding.mockResolvedValue({ name: "", images: {}, archive: false });
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [] });
+    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: false });
     await expect(ArchiveLayout({ children: <p>inside</p> })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(notFound).toHaveBeenCalled();
   });

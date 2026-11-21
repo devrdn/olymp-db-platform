@@ -4,8 +4,11 @@
  * no change here.
  */
 
+/** What decides an account's home and menu: its permissions and whether it runs a contest. */
+export type Access = { permissions: string[]; managesContests: boolean };
+
 /** What routing needs to know about the signed-in account. */
-export type Identity = { mustChangePassword: boolean; permissions: string[] };
+export type Identity = Access & { mustChangePassword: boolean };
 
 /**
  * Any of these sends the account to the constructor. Per-contest permissions
@@ -39,9 +42,14 @@ export function resumable(next: string | undefined): string | null {
   return next;
 }
 
-/** An account's home; also used by screens both audiences share, such as the profile. */
-export function homeFor(permissions: string[]): string {
-  const isStaff = permissions.some((held) => STAFF_PERMISSIONS.includes(held));
+/**
+ * An account's home; also used by screens both audiences share, such as the
+ * profile. An account that manages a contest is staff even with no staff
+ * permission: its register lists the contests it staffs.
+ */
+export function homeFor(access: Access): "/contests" | "/my" {
+  const isStaff =
+    access.managesContests || access.permissions.some((held) => STAFF_PERMISSIONS.includes(held));
   return isStaff ? "/contests" : "/my";
 }
 
@@ -53,5 +61,5 @@ export function destinationAfterLogin(identity: Identity, next?: string): string
   const resumed = resumable(next);
   if (resumed) return resumed;
 
-  return homeFor(identity.permissions);
+  return homeFor(identity);
 }

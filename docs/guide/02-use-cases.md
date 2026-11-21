@@ -499,11 +499,15 @@ a contest, so it unlocks nothing on its own.
 | `settings.manage` | | | yes | | | `GET /settings/all` and every settings write |
 | `contest.admin_all` | | | yes | | | Passes every contest-scoped check without a contest role; lists every contest; also bars its holder from participating |
 
-The frontend never reads roles, only the permission list from `GET /auth/me`:
+The frontend never reads roles, only the permission list and the
+`manages_contests` flag from `GET /auth/me`:
 [`lib/auth/destination.ts`](../../frontend/lib/auth/destination.ts) sends an
 account holding `contest.create`, `contest.admin_all`, `users.manage`
-or `audit.view` to `/contests` after sign-in and everyone else
-to `/my`. A new role added as data therefore needs no frontend change.
+or `audit.view`, or one that manages or owns a contest that is not archived
+(`manages_contests`), to `/contests` after sign-in and everyone else
+to `/my`. A new role added as data therefore needs no frontend change. The
+register shows "New contest" only to holders of `contest.create`; every
+route still authorises on the server.
 
 ## What a participant is refused
 

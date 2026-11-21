@@ -30,6 +30,8 @@ export type CurrentIdentity = {
   email?: string;
   roles: string[];
   permissions: string[];
+  /** Manages or owns a contest that is not archived; a staff signal with no permission behind it. */
+  managesContests: boolean;
 };
 
 /**
@@ -97,6 +99,7 @@ export async function identityFrom(
     email?: string;
     roles?: string[];
     permissions?: string[];
+    manages_contests?: boolean;
   };
 
   return {
@@ -107,5 +110,6 @@ export async function identityFrom(
     email: body.email,
     roles: body.roles ?? [],
     permissions: body.permissions ?? [],
+    managesContests: body.manages_contests ?? false,
   };
 }

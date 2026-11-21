@@ -8,30 +8,37 @@ describe("destinationAfterLogin", () => {
       destinationAfterLogin({
         mustChangePassword: true,
         permissions: ["contest.create", "users.manage"],
+        managesContests: false,
       }),
     ).toBe("/password");
   });
 
   test("sends staff to the constructor", () => {
     expect(
-      destinationAfterLogin({ mustChangePassword: false, permissions: ["contest.create"] }),
+      destinationAfterLogin({ mustChangePassword: false, permissions: ["contest.create"], managesContests: false }),
     ).toBe("/contests");
   });
 
   test("sends an account with no staff permission to the participant area", () => {
-    expect(destinationAfterLogin({ mustChangePassword: false, permissions: [] })).toBe("/my");
+    expect(destinationAfterLogin({ mustChangePassword: false, permissions: [], managesContests: false })).toBe("/my");
+  });
+
+  test("sends an account that manages a contest to the register, whatever it holds", () => {
+    expect(
+      destinationAfterLogin({ mustChangePassword: false, permissions: [], managesContests: true }),
+    ).toBe("/contests");
   });
 
   test("no longer counts reports.view as a staff permission", () => {
     expect(
-      destinationAfterLogin({ mustChangePassword: false, permissions: ["reports.view"] }),
+      destinationAfterLogin({ mustChangePassword: false, permissions: ["reports.view"], managesContests: false }),
     ).toBe("/my");
   });
 });
 
 // An unchecked `next` would make sign-in an open redirect.
 describe("destinationAfterLogin, resuming an interrupted journey", () => {
-  const staff = { mustChangePassword: false, permissions: ["contest.create"] };
+  const staff = { mustChangePassword: false, permissions: ["contest.create"], managesContests: false };
 
   test("returns to the page the visitor was asking for", () => {
     expect(destinationAfterLogin(staff, "/contests/3f1a/questions")).toBe(
@@ -65,7 +72,7 @@ describe("destinationAfterLogin, resuming an interrupted journey", () => {
 
   test("ignores it entirely while a one-time password is still in force", () => {
     expect(
-      destinationAfterLogin({ mustChangePassword: true, permissions: ["contest.create"] },
+      destinationAfterLogin({ mustChangePassword: true, permissions: ["contest.create"], managesContests: false },
         "/contests"),
     ).toBe("/password");
   });

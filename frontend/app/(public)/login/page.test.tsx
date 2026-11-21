@@ -199,8 +199,8 @@ describe.each(["en", "ro", "ru"] as const)("the sign-in lede in %s", (locale) =>
  * is decided by one rule.
  */
 describe("the sign-in page for a visitor already signed in", () => {
-  function signedIn(permissions: string[]): CurrentIdentity {
-    return { id: "u-1", login: "ana", fullName: "Ana", roles: [], permissions };
+  function signedIn(permissions: string[], managesContests = false): CurrentIdentity {
+    return { id: "u-1", login: "ana", fullName: "Ana", roles: [], permissions, managesContests };
   }
 
   test("sends a participant to their contests", async () => {
@@ -213,6 +213,13 @@ describe("the sign-in page for a visitor already signed in", () => {
   test("sends staff to the constructor", async () => {
     methods(false, false, ["microsoft"]);
     fetchIdentity.mockResolvedValue(signedIn(["contest.create"]));
+
+    await expect(renderPage()).rejects.toThrow("NEXT_REDIRECT /contests");
+  });
+
+  test("sends an account that manages a contest to the register", async () => {
+    methods(false, false, ["microsoft"]);
+    fetchIdentity.mockResolvedValue(signedIn([], true));
 
     await expect(renderPage()).rejects.toThrow("NEXT_REDIRECT /contests");
   });

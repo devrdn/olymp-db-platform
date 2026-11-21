@@ -107,6 +107,16 @@ describe("identityFrom", () => {
     await expect(identityFrom(null)).rejects.toThrow();
   });
 
+  test("reports whether the account manages a contest, false when the key is absent", async () => {
+    const respond = (body: object) =>
+      identityFrom(new Response(JSON.stringify(body), { status: 200 }));
+
+    expect(await respond({ id: "u1", login: "a", manages_contests: true })).toMatchObject({
+      managesContests: true,
+    });
+    expect(await respond({ id: "u1", login: "a" })).toMatchObject({ managesContests: false });
+  });
+
   test("falls back to the login when the account carries no name yet", async () => {
     const identity = await identityFrom(
       new Response(JSON.stringify({ id: "u1", login: "s.popescu" }), { status: 200 }),

@@ -24,6 +24,8 @@ const HEAD =
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
 
 type RegisterProps = {
+  /** Whether to offer "New contest"; the route itself still checks `contest.create`. */
+  mayCreate: boolean;
   contests: ContestSummary[];
   total: number;
   dict: Dictionary;
@@ -33,6 +35,7 @@ type RegisterProps = {
 };
 
 export function ContestRegister({
+  mayCreate,
   contests,
   total,
   dict,
@@ -53,9 +56,11 @@ export function ContestRegister({
             {total} {t.countLabel}
           </span>
           {/* A link, not a button: it navigates, and keeps middle click and new tab. */}
-          <Link href="/contests/new" className={buttonVariants({ size: "sm" })}>
-            {dict.workspace.create.action}
-          </Link>
+          {mayCreate && (
+            <Link href="/contests/new" className={buttonVariants({ size: "sm" })}>
+              {dict.workspace.create.action}
+            </Link>
+          )}
         </div>
       </div>
 

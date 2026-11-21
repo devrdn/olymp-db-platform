@@ -58,6 +58,7 @@ export async function signInAction(
       {
         mustChangePassword: outcome.mustChangePassword,
         permissions: identity?.permissions ?? [],
+        managesContests: identity?.managesContests ?? false,
       },
       typeof next === "string" ? next : undefined,
     ),
