@@ -483,9 +483,17 @@ func underRetentionLock(
 // activeParticipantsEvery is how often the participant count is refreshed.
 const activeParticipantsEvery = 30 * time.Second
 
-// countActiveParticipants refreshes contest_active_participants. It is one
-// indexed count per tick and the gauge's only source, so a scrape never
-// reaches the database (CLAUDE.md rule 6). A failed count keeps the last value.
+// participantJobs is the count task where the gauge is exported, and nothing
+// elsewhere: the count is a database query whose only reader is the gauge.
+func participantJobs(count func(context.Context, time.Time) (int, error), gauge *metrics.ParticipantGauge) []task {
+	if !gauge.Live() {
+		return nil
+	}
+	return []task{countActiveParticipants(count, gauge)}
+}
+
+// countActiveParticipants refreshes contest_active_participants. A failed
+// count keeps the last value.
 func countActiveParticipants(count func(context.Context, time.Time) (int, error), gauge *metrics.ParticipantGauge) task {
 	return task{
 		name: "active-participants",

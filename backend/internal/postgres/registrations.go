@@ -432,20 +432,25 @@ func (r *Registrations) SetStatus(ctx context.Context, registrationID uuid.UUID,
 	return nil
 }
 
-// countActiveSQL is the whole contract of CountActive and is what the plan
-// test explains. An individual session counts only while its own time runs;
-// a fixed one while its contest does.
+// countActiveSQL counts who can still answer. Its time rule is the SQL twin
+// of contests.Deadline plus the grace Gate.closesAt adds: fixed timing runs to
+// ends_at; individual timing to LEAST(started_at + duration, ends_at), and not
+// at all before the participant's clock starts. $1 is now, $2 the grace.
 const countActiveSQL = `
 	SELECT count(*)
 	FROM registrations r JOIN contests c ON c.id = r.contest_id
 	WHERE r.status = 'active' AND c.status = 'running'
-	  AND (c.timing = 'fixed' OR r.started_at + make_interval(mins => c.duration_min) > $1)`
+	  AND CASE c.timing
+	        WHEN 'fixed' THEN c.ends_at + $2::interval > $1
+	        WHEN 'individual' THEN r.started_at IS NOT NULL
+	          AND LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) + $2::interval > $1
+	      END`
 
 // CountActive counts registrations in status 'active' of a running contest
-// whose own time has not run out at now.
-func (r *Registrations) CountActive(ctx context.Context, now time.Time) (int, error) {
+// whose own time and grace have not run out at now.
+func (r *Registrations) CountActive(ctx context.Context, now time.Time, grace time.Duration) (int, error) {
 	var n int
-	if err := r.querier(ctx).QueryRow(ctx, countActiveSQL, now).Scan(&n); err != nil {
+	if err := r.querier(ctx).QueryRow(ctx, countActiveSQL, now, grace).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count active participants: %w", err)
 	}
 	return n, nil

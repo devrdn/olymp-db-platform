@@ -49,3 +49,11 @@ func TestParticipantGaugeDoesNothingOnNonPrometheusBackends(t *testing.T) {
 		}
 	})
 }
+
+func TestParticipantGaugeIsLiveOnlyOnPrometheus(t *testing.T) {
+	for name, rec := range allBackends(t) {
+		if got, want := NewParticipantGauge(rec).Live(), name == "prometheus"; got != want {
+			t.Errorf("%s: Live() = %v, want %v", name, got, want)
+		}
+	}
+}

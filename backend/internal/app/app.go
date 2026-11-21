@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/api"
 	"github.com/devrdn/olymp-db-platform/backend/internal/archive"
@@ -269,7 +270,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
-	a.tasks = append(a.tasks, countActiveParticipants(postgres.NewRegistrations(pool).CountActive, metrics.NewParticipantGauge(recorder)))
+	participantStore := postgres.NewRegistrations(pool)
+	a.tasks = append(a.tasks, participantJobs(func(ctx context.Context, now time.Time) (int, error) {
+		return participantStore.CountActive(ctx, now, cfg.DeadlineGrace)
+	}, metrics.NewParticipantGauge(recorder))...)
 
 	retentionStore := postgres.NewRetention(pool)
 	a.tasks = append(a.tasks, pruneRetention(log,

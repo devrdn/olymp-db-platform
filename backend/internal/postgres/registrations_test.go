@@ -587,43 +587,67 @@ func TestCountActiveCountsParticipantsWhoseTimeIsRunning(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewRegistrations(testPool)
 		now := txNow(t, ctx)
-		before, err := repo.CountActive(ctx, now)
+		const grace = 5 * time.Minute
+		before, err := repo.CountActive(ctx, now, grace)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		author := makeUser(t, ctx, "author-count-active")
-		contest := func(status, timing string, durationMin any) uuid.UUID {
+		contest := func(status, timing string, durationMin any, endsIn *time.Duration) uuid.UUID {
 			id := makeContest(t, ctx, author.ID)
-			exec(t, ctx, `UPDATE contests SET status = $2, timing = $3, duration_min = $4 WHERE id = $1`,
-				id, status, timing, durationMin)
+			var ends *time.Time
+			if endsIn != nil {
+				e := now.Add(*endsIn)
+				ends = &e
+			}
+			exec(t, ctx, `UPDATE contests SET status = $2, timing = $3, duration_min = $4, ends_at = $5 WHERE id = $1`,
+				id, status, timing, durationMin, ends)
 			return id
 		}
-		register := func(contestID uuid.UUID, login, status string, startedAgo time.Duration) {
+		in := func(d time.Duration) *time.Duration { return &d }
+		register := func(contestID uuid.UUID, login, status string, started *time.Duration) {
 			user := makeUser(t, ctx, login)
+			var at *time.Time
+			if started != nil {
+				v := now.Add(*started)
+				at = &v
+			}
 			exec(t, ctx, `INSERT INTO registrations (contest_id, user_id, status, started_at) VALUES ($1, $2, $3, $4)`,
-				contestID, user.ID, status, now.Add(-startedAgo))
+				contestID, user.ID, status, at)
 		}
 
-		fixed := contest("running", "fixed", nil)
-		register(fixed, "count-active-fixed-1", "active", time.Minute)
-		register(fixed, "count-active-fixed-2", "active", time.Minute)
-		register(fixed, "count-active-registered", "registered", 0)
-		register(fixed, "count-active-finished", "finished", time.Minute)
+		fixed := contest("running", "fixed", nil, in(time.Hour))
+		register(fixed, "count-active-fixed-1", "active", in(-time.Minute))
+		register(fixed, "count-active-fixed-2", "active", in(-time.Minute))
+		register(fixed, "count-active-registered", "registered", nil)
+		register(fixed, "count-active-finished", "finished", in(-time.Minute))
 
-		individual := contest("running", "individual", 60)
-		register(individual, "count-active-inside", "active", 30*time.Minute)
-		register(individual, "count-active-outside", "active", 90*time.Minute)
+		// Past ends_at but inside the grace: a late answer is still accepted.
+		graced := contest("running", "fixed", nil, in(-time.Minute))
+		register(graced, "count-active-graced", "active", in(-time.Hour))
+		// Still running by status, but its time and grace are over.
+		lapsed := contest("running", "fixed", nil, in(-time.Hour))
+		register(lapsed, "count-active-lapsed", "active", in(-2*time.Hour))
 
-		over := contest("finished", "fixed", nil)
-		register(over, "count-active-over", "active", time.Minute)
+		individual := contest("running", "individual", 60, in(time.Hour))
+		register(individual, "count-active-inside", "active", in(-30*time.Minute))
+		register(individual, "count-active-outside", "active", in(-90*time.Minute))
+		register(individual, "count-active-unstarted", "active", nil)
 
-		after, err := repo.CountActive(ctx, now)
+		// started_at + duration is still ahead, but the contest's own end is not.
+		capped := contest("running", "individual", 60, in(-30*time.Minute))
+		register(capped, "count-active-capped", "active", in(-10*time.Minute))
+
+		over := contest("finished", "fixed", nil, in(time.Hour))
+		register(over, "count-active-over", "active", in(-time.Minute))
+
+		after, err := repo.CountActive(ctx, now, grace)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if after-before != 3 {
-			t.Errorf("CountActive rose by %d, want 3: two in a fixed contest and one inside an individual session", after-before)
+		if after-before != 4 {
+			t.Errorf("CountActive rose by %d, want 4: two in a running fixed contest, one within its grace and one inside an individual session", after-before)
 		}
 	})
 }
@@ -636,7 +660,7 @@ func TestCountActiveReadsItsPartialIndex(t *testing.T) {
 		q := storage.QuerierFrom(ctx, testPool)
 		author := makeUser(t, ctx, "author-count-plan")
 		contest := makeContest(t, ctx, author.ID)
-		exec(t, ctx, `UPDATE contests SET status = 'running' WHERE id = $1`, contest)
+		exec(t, ctx, `UPDATE contests SET status = 'running', ends_at = now() + interval '1 hour' WHERE id = $1`, contest)
 		exec(t, ctx, `
 			WITH people AS (
 				INSERT INTO users (login, full_name, password_hash)
@@ -651,7 +675,9 @@ func TestCountActiveReadsItsPartialIndex(t *testing.T) {
 		// plan test does not price its tables by this one's.
 		t.Cleanup(func() {
 			for _, table := range []string{"users", "contests", "registrations"} {
-				_, _ = testPool.Exec(context.Background(), "ANALYZE "+table)
+				if _, err := testPool.Exec(context.Background(), "ANALYZE "+table); err != nil {
+					t.Logf("ANALYZE %s after the test: %v", table, err)
+				}
 			}
 		})
 		for _, table := range []string{"users", "contests", "registrations"} {
@@ -663,7 +689,7 @@ func TestCountActiveReadsItsPartialIndex(t *testing.T) {
 		exec(t, ctx, `SET LOCAL enable_seqscan = off`)
 
 		var raw []byte
-		if err := q.QueryRow(ctx, "EXPLAIN (FORMAT JSON) "+countActiveSQL, txNow(t, ctx)).Scan(&raw); err != nil {
+		if err := q.QueryRow(ctx, "EXPLAIN (FORMAT JSON) "+countActiveSQL, txNow(t, ctx), time.Minute).Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
 		var plans []struct {

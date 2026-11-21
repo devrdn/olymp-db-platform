@@ -28,3 +28,7 @@ func (g *ParticipantGauge) SetActive(n int) {
 		g.active.Set(float64(n))
 	}
 }
+
+// Live reports whether the series is exported, so a caller can skip the work
+// that feeds it where nothing reads it.
+func (g *ParticipantGauge) Live() bool { return g.active != nil }

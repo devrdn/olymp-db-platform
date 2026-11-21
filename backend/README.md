@@ -1239,6 +1239,8 @@ one's, "abandoned unsent: queued more than 24h0m0s ago".
 `max(mail_outbox_due)` falling by about `SMTP_MAX_PER_MINUTE` a minute is a
 bulk send going out. The dashboard has no email panel; ask Grafana's Explore.
 
+Mail aside, the API exports `contest_active_participants` (gauge) when Prometheus is the metrics backend: the active registrations whose own time, grace included, has not run out, counted every 30 s. It is a count of the shared database, so read it with `max()`.
+
 **The alerts** ([the table](#alerts-and-the-dashboard)) are both warnings:
 `DBContestMailAbandoned` fires on any message abandoned in the last hour,
 each one a person who will not get it, and `DBContestMailRelayFailing` on ten

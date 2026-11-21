@@ -895,3 +895,15 @@ func TestCountActiveParticipantsRunsEveryThirtySeconds(t *testing.T) {
 		t.Errorf("every = %s, constant = %s, want 30s", job.every, activeParticipantsEvery)
 	}
 }
+
+func TestNoCountTaskIsScheduledWhereNobodyReadsTheGauge(t *testing.T) {
+	count := func(context.Context, time.Time) (int, error) { return 0, nil }
+
+	if jobs := participantJobs(count, metrics.NewParticipantGauge(metrics.Noop{})); len(jobs) != 0 {
+		t.Errorf("a non-Prometheus recorder got %d count tasks, want none", len(jobs))
+	}
+	jobs := participantJobs(count, metrics.NewParticipantGauge(metrics.NewPrometheus()))
+	if len(jobs) != 1 || jobs[0].name != "active-participants" {
+		t.Errorf("a Prometheus recorder got %v, want the one count task", jobs)
+	}
+}
