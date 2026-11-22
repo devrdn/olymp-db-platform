@@ -346,7 +346,7 @@ The frontend tests need neither Docker nor the API.
 
 ## 3. What CI runs
 
-Five workflows in `.github/workflows/`. `backend` and `frontend` are filtered
+Six workflows in `.github/workflows/`. `backend` and `frontend` are filtered
 by path, on pushes to `main` as well as on pull requests, so a change runs only
 the workflow for the half it touches; a `v*` tag runs both, since GitHub does
 not apply path filters to tags. Pull requests run the checks; images are built
@@ -477,6 +477,16 @@ redaction check runs with `REDACT_CHECK_ROOT=1`, which adds the case that
 hands `redact.sh` the root directory, safe only on a runner that is thrown
 away. It runs here rather than in `e2e.yml` so that it takes seconds and needs
 no stack.
+
+### `actionlint.yml`
+
+Runs on pushes to `main` and pull requests, drafts included, that touch
+anything under `.github/workflows/`. **Job `actionlint` ("lint the
+workflows")** runs actionlint, pinned to a version, over every workflow: syntax,
+expression types, the inputs of the actions used and, through the runner's
+`shellcheck`, each `run:` block. It exists so that a mistake in a workflow is
+found on the pull request and not on the tag that publishes the images. It has
+no local equivalent in this repository; the check is CI's.
 
 ### `image.yml`
 
