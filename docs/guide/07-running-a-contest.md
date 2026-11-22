@@ -77,6 +77,21 @@ make observability-check
 make scheduled-backup-check
 ```
 
+The images are published one by one, so a release tag can exist on some of
+the three packages and not on the others, and `deploy-api` and `deploy-web`
+would not notice. Tag a release candidate first (`v0.5.0-rc.1`) and, before the
+real tag, check both of these:
+
+- In the `backend` and `frontend` runs for the candidate tag, the `manifest`
+  job of every image succeeded: its dry run refuses a list that lacks
+  linux/amd64 or linux/arm64, and nothing is tagged before it passes.
+- The candidate tag is on all three packages:
+  `gh api /users/<owner>/packages/container/<name>/versions --jq '.[].metadata.container.tags[]'`
+  for `db-contest-backend`, `db-contest-queryrunner` and `db-contest-frontend`
+  (or each package's page on GitHub) lists it. The call needs a token with
+  `read:packages`, for example after `gh auth refresh -s read:packages`; the
+  package page shows the same without one.
+
 On the host, back up with the checkout as it is, then bring the checkout to
 the same tag. The images carry the code, but `make deploy` runs the compose
 file, the Makefile and the scripts of the host's checkout: the Query Runner's

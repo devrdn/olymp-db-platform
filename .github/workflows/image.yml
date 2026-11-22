@@ -102,8 +102,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Two tags on every image: the commit it was built from, which is
-      # unambiguous and never reused, and a moving one for convenience. A
+      # Two tags on every image: the commit it was built from, and a moving
+      # one for convenience. A release candidate and the release on one
+      # commit both write the first, the later replacing the earlier. A
       # deploy names a version explicitly; nothing deploys "latest".
       # Anchored, because `manifest` must compute exactly these tags.
       - &metadata

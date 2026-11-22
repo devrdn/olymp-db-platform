@@ -4849,7 +4849,10 @@ previous version: `cmd/migrate up` leaves a schema newer than its release
 alone, which is safe one release back because every migration keeps the
 release before it working (developer guide, chapter 4). Further back, the
 newer migrations are taken back first. The API and the interface have separate
-images, so `deploy-web` does not touch the API or its live sessions.
+images, so `deploy-web` pulls only the interface image. It runs
+`up -d web` without `--no-deps`, and `web` waits for `api`, so the API is
+brought to the same `VERSION` as well: a frontend release leaves the API alone
+only when the API is already at that tag.
 
 
 **CI is split by component.** The error-dictionary check reads
@@ -4860,7 +4863,16 @@ drags a frontend run with it, and the reverse. Images are built on a push to
 (the frontend's is a dependency audit). Each image is built for linux/amd64 and
 linux/arm64 on runners of those architectures, without emulation; a publish
 pushes each platform by digest and only then tags one manifest list naming
-both, so a tag never points at a single platform.
+both, so a tag never points at a single platform; `make images-push` refuses
+every tag CI writes (a version, `sha-<commit>` and `latest`) for that reason.
+The three images are published independently, so a failed one can leave a
+version tag on the others. `make deploy` pulls all three and stops on the
+missing one, but `deploy-api` pulls only the API images and `deploy-web` only
+the interface, so neither notices a missing query runner. What catches a
+partial release is the check made on the release candidate before the real tag,
+in the [release procedure](guide/07-running-a-contest.md): every image's
+`manifest` job succeeded and the tag is on all three packages. A release candidate and the release on one commit
+both write `sha-<commit>`, and the second replaces the first.
 
 **Migrations at deployment are not an online operation.** `cmd/migrate` hands
 PostgreSQL a file as one string, and a string of several statements runs as
