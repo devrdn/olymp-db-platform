@@ -19,6 +19,10 @@ import (
 // index on registration_id (query_log and submissions, migration 33). Any
 // signed-in user may open a profile, so it must not scan the largest tables;
 // TestProfileReadsScanNoJournal checks the plans.
+//
+// Query totals come from registration_activity, not from counting query_log:
+// the retention sweep deletes an archived contest's journal and leaves the
+// counters, so a count would fall to zero a year after the archive.
 var _ profile.Store = (*Profile)(nil)
 
 // Profile reads a participant's own account.
@@ -44,9 +48,9 @@ func (r *Profile) querier(ctx context.Context) storage.Querier {
 // public contests Enrolments lists.
 //
 // It has no limit: these numbers are the account's whole record, not one
-// page. The work is bounded by the account's own registrations, each counter
-// a lateral aggregate over one registration's index range. Solved counts
-// distinct questions per registration.
+// page. The work is bounded by the account's own registrations: queries is
+// each one's counter row, solved a lateral aggregate over its index range of
+// submissions, counting distinct questions.
 func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summary, error) {
 	var s profile.Summary
 	err := r.querier(ctx).QueryRow(ctx, `
@@ -56,9 +60,7 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 		       COALESCE(SUM(a.solved), 0)::int
 		FROM registrations r
 		JOIN contests c ON c.id = r.contest_id
-		CROSS JOIN LATERAL (
-		    SELECT count(*) AS queries FROM query_log q WHERE q.registration_id = r.id
-		) j
+		LEFT JOIN registration_activity j ON j.registration_id = r.id
 		CROSS JOIN LATERAL (
 		    SELECT count(DISTINCT s.question_id) AS solved
 		    FROM submissions s WHERE s.registration_id = r.id AND s.is_correct
@@ -171,18 +173,24 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 	return enrolments, nil
 }
 
-// Activity counts one registration's queries, how many succeeded, and when it
-// last answered, in one pass over its query log range.
+// Activity reads one registration's query counters, and when it last
+// answered.
+//
+// registration_activity counts every query, running ones included, and the
+// errors and refusals among them, so the successful ones are the rest once
+// the journal's running rows are taken off. Only a contest in progress has
+// any, so a journal the sweep deleted takes nothing off. The status is a
+// filter, not a condition, or the plan reads every running query of every
+// contest through query_log_running_idx instead of this registration's range.
 func (r *Profile) Activity(ctx context.Context, registration uuid.UUID) (profile.Activity, error) {
 	var a profile.Activity
 	err := r.querier(ctx).QueryRow(ctx, `
-		SELECT j.queries, j.successful,
+		SELECT COALESCE(j.queries, 0)::int,
+		       (COALESCE(j.queries - j.query_errors - j.query_rejected, 0)
+		        - (SELECT count(*) FILTER (WHERE q.status = $2) FROM query_log q WHERE q.registration_id = $1))::int,
 		       (SELECT max(s.submitted_at) FROM submissions s WHERE s.registration_id = $1)
-		FROM (
-		    SELECT count(*)::int AS queries,
-		           (count(*) FILTER (WHERE q.status = $2))::int AS successful
-		    FROM query_log q WHERE q.registration_id = $1
-		) j`, registration, queryrunner.StatusOK).
+		FROM (SELECT) one
+		LEFT JOIN registration_activity j ON j.registration_id = $1`, registration, queryrunner.StatusRunning).
 		Scan(&a.Queries, &a.Successful, &a.LastAnswerAt)
 	if err != nil {
 		return profile.Activity{}, fmt.Errorf("count the activity of %s: %w", registration, err)

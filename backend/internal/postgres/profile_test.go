@@ -8,6 +8,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/google/uuid"
 )
 
@@ -468,7 +469,7 @@ func TestProfileActivityCountsOneRegistrationsOwnJournal(t *testing.T) {
 		question := f.question(contest, 1)
 		stranger := f.strangerIn(contest)
 
-		for _, status := range []string{"ok", "ok", "error", "rejected", "timeout"} {
+		for _, status := range []string{"ok", "ok", "error", "rejected", "timeout", "running"} {
 			f.query(mine, status, f.base)
 		}
 		f.query(stranger, "ok", f.base)
@@ -480,8 +481,8 @@ func TestProfileActivityCountsOneRegistrationsOwnJournal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Activity() = %v", err)
 		}
-		if got.Queries != 5 || got.Successful != 2 {
-			t.Errorf("Activity() = %+v, want 5 queries of which 2 succeeded", got)
+		if got.Queries != 6 || got.Successful != 2 {
+			t.Errorf("Activity() = %+v, want 6 queries of which 2 succeeded", got)
 		}
 		if got.LastAnswerAt == nil || !got.LastAnswerAt.Equal(f.base.Add(30*time.Minute)) {
 			t.Errorf("last answer = %v, want the caller's own last one", got.LastAnswerAt)
@@ -500,6 +501,106 @@ func TestProfileActivityOfARegistrationThatDidNothing(t *testing.T) {
 		}
 		if got.Queries != 0 || got.Successful != 0 || got.LastAnswerAt != nil {
 			t.Errorf("Activity() = %+v, want an empty session", got)
+		}
+	})
+}
+
+// Queries are opened running and closed the ways production closes them, so
+// the derived successful count is held to the journal through the completion
+// trigger, not only through rows inserted with their final status.
+func TestProfileActivityFollowsEveryWayAQueryCloses(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		_, mine := f.contest(contests.StatusRunning, 0)
+		log, repo := NewQueryLog(testPool), NewProfile(testPool)
+		open := func() int64 {
+			t.Helper()
+			id, err := log.Begin(ctx, queryrunner.Entry{Registration: mine, RequestID: uuid.New(), SQL: "SELECT 1"})
+			if err != nil {
+				t.Fatalf("Begin() = %v", err)
+			}
+			return id
+		}
+		complete := func(id int64, status queryrunner.Status) {
+			t.Helper()
+			if err := log.Complete(ctx, id, queryrunner.Outcome{Status: status}); err != nil {
+				t.Fatalf("Complete(%s) = %v", status, err)
+			}
+		}
+		agree := func(step string) {
+			t.Helper()
+			var total, ok int
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+				SELECT count(*), count(*) FILTER (WHERE status = 'ok') FROM query_log WHERE registration_id = $1`,
+				mine).Scan(&total, &ok); err != nil {
+				t.Fatal(err)
+			}
+			got, err := repo.Activity(ctx, mine)
+			if err != nil {
+				t.Fatalf("%s: Activity() = %v", step, err)
+			}
+			if got.Queries != total || got.Successful != ok {
+				t.Errorf("%s: Activity() = %d queries, %d successful; the journal holds %d, %d ok",
+					step, got.Queries, got.Successful, total, ok)
+			}
+		}
+
+		finished := open()
+		agree("opened")
+		complete(finished, queryrunner.StatusOK)
+		agree("finished")
+
+		refused := open()
+		complete(refused, queryrunner.StatusRejected)
+		agree("refused")
+
+		abandoned := open()
+		f.exec(`UPDATE query_log SET executed_at = now() - interval '1 hour' WHERE id = $1`, abandoned)
+		if _, err := log.SweepAbandoned(ctx, time.Minute); err != nil {
+			t.Fatalf("SweepAbandoned() = %v", err)
+		}
+		agree("abandoned")
+		complete(abandoned, queryrunner.StatusOK)
+		agree("closed late")
+
+		open()
+		agree("in flight")
+	})
+}
+
+// The retention sweep deletes an archived contest's journal; the profile's
+// query totals for it are counters, and stay.
+func TestProfileQueryTotalsSurviveTheJournalsRetention(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		contest, mine := f.contest(contests.StatusFinished, -24*time.Hour)
+		for _, status := range []string{"ok", "ok", "error", "rejected", "timeout"} {
+			f.query(mine, status, f.base)
+		}
+		setContest(t, ctx, contest, contests.StatusArchived, "13 months")
+		if _, err := NewRetention(testPool).DeleteQueryLog(ctx, 12, 1000); err != nil {
+			t.Fatalf("DeleteQueryLog() = %v", err)
+		}
+		var left int
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT count(*) FROM query_log WHERE registration_id = $1`, mine).Scan(&left); err != nil || left != 0 {
+			t.Fatalf("journal rows left = %d, %v; want the sweep to have deleted them", left, err)
+		}
+
+		repo := NewProfile(testPool)
+		summary, err := repo.Summary(ctx, f.user)
+		if err != nil {
+			t.Fatalf("Summary() = %v", err)
+		}
+		if summary.Queries != 5 {
+			t.Errorf("Summary() queries = %d, want 5", summary.Queries)
+		}
+		activity, err := repo.Activity(ctx, mine)
+		if err != nil {
+			t.Fatalf("Activity() = %v", err)
+		}
+		if activity.Queries != 5 || activity.Successful != 2 {
+			t.Errorf("Activity() = %+v, want 5 queries of which 2 succeeded", activity)
 		}
 	})
 }

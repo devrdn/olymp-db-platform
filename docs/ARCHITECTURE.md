@@ -2926,7 +2926,9 @@ deleted anything, counts `retention_rows_deleted_total` and
 `retention_failures_total` by table, and the `DBContestRetentionFailing`
 alert fires when a run fails. It leaves `registration_activity`'s counters,
 `registration_addresses`, `participant_events` and `submissions` alone; those
-are outside the decided periods.
+are outside the decided periods. What a participant's profile says they ran
+reads those counters rather than counting the journal, so it survives the
+sweep (`postgres.Profile`).
 
 The rules: the audit entry is written in the same transaction as the action;
 passwords and hashes are never logged; `request_id` is threaded from the
