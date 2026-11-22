@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
+import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { NewContestForm } from "./new-contest-form";
@@ -10,8 +12,16 @@ export async function generateMetadata() {
   return { title: dict.workspace.create.heading };
 }
 
-/** A new contest. `new` cannot collide with a contest id, which is a UUID checked before use. */
+/**
+ * A new contest. `new` cannot collide with a contest id, which is a UUID checked before use.
+ * Without `contest.create` the page is answered as not found, as the contest workspace answers
+ * a forbidden one; an identity read that fails propagates, since "unknown" is no refusal.
+ */
 export default async function NewContestPage() {
+  const identity = await fetchIdentity();
+  if (!identity) redirect("/login?next=%2Fcontests%2Fnew");
+  if (!identity.permissions.includes("contest.create")) notFound();
+
   const [dict, locale] = await Promise.all([activeDictionary(), activeLocale()]);
   const t = dict.workspace.create;
 
