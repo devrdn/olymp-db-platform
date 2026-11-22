@@ -63,13 +63,11 @@ describe("DeleteDraftPanel", () => {
     confirm.mockRestore();
   });
 
-  // React replays a submission queued before hydration without its submit
-  // handler, so an enabled button would delete with no question asked.
   test("the server's markup leaves the button disabled until the page is hydrated", () => {
     const html = renderToString(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
-    const document = new DOMParser().parseFromString(html, "text/html");
+    const page = new DOMParser().parseFromString(html, "text/html");
 
-    expect(document.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true);
+    expect(page.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true);
   });
 
   test("hydrating the server's markup enables the button", async () => {
