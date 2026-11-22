@@ -4849,10 +4849,11 @@ previous version: `cmd/migrate up` leaves a schema newer than its release
 alone, which is safe one release back because every migration keeps the
 release before it working (developer guide, chapter 4). Further back, the
 newer migrations are taken back first. The API and the interface have separate
-images, so `deploy-web` pulls only the interface image. It runs
-`up -d web` without `--no-deps`, and `web` waits for `api`, so the API is
-brought to the same `VERSION` as well: a frontend release leaves the API alone
-only when the API is already at that tag.
+images, so `deploy-web` pulls and recreates only the interface (`up -d
+--no-deps web`; without `--no-deps` Compose also brought the API, which the
+interface waits for, and its migrations to the new tag, which an
+interface-only deploy must not do) and does not touch the API or its live
+sessions.
 
 
 **CI is split by component.** The error-dictionary check reads
@@ -4871,8 +4872,9 @@ missing one, but `deploy-api` pulls only the API images and `deploy-web` only
 the interface, so neither notices a missing query runner. What catches a
 partial release is the check made on the release candidate before the real tag,
 in the [release procedure](guide/07-running-a-contest.md): every image's
-`manifest` job succeeded and the tag is on all three packages. A release candidate and the release on one commit
-both write `sha-<commit>`, and the second replaces the first.
+`manifest` job succeeded and the tag is on all three packages. A release
+candidate and the release on one commit both write `sha-<commit>`, and the
+second replaces the first.
 
 **Migrations at deployment are not an online operation.** `cmd/migrate` hands
 PostgreSQL a file as one string, and a string of several statements runs as

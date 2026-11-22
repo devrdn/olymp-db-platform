@@ -425,6 +425,19 @@ for goal in backup "deploy VERSION=v1.2.3" "deploy-api VERSION=v1.2.3" "deploy-w
 	fi
 done
 
+echo "== deploy-web and deploy-api"
+# Every image is tagged ${VERSION}, so `up web` without --no-deps would
+# also bring api, which web waits for, and its migrations to the new tag, which
+# an interface-only deploy must not do.
+up="$(mk "$normal" -n deploy-web VERSION=v1.2.3 2>&1 | grep -F ' up ')" || up=""
+if grep -qE ' up -d --no-deps web$' <<<"$up"; then pass "deploy-web recreates only the interface: $up"
+else fail "deploy-web does not pass --no-deps to up: ${up:-no up command}"; fi
+# api's dependency on migrate is what runs the migrations before the new API.
+up="$(mk "$normal" -n deploy-api VERSION=v1.2.3 2>&1 | grep -F ' up ')" || up=""
+if grep -qE ' up -d api$' <<<"$up" && ! grep -q -- '--no-deps' <<<"$up"; then
+	pass "deploy-api keeps api's dependencies, so migrate runs first: $up"
+else fail "deploy-api must start api with its dependencies: ${up:-no up command}"; fi
+
 echo "== images-push"
 # The workstation builds for its own architecture only, so a tag CI writes
 # (a version, sha-<commit>, latest) pushed from here would point at one

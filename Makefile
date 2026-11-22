@@ -1038,7 +1038,11 @@ deploy: require-env require-version ## Deploy a version of everything (VERSION=v
 	@echo "deployed $(VERSION)"
 
 # One service at a time, which is how a frontend release leaves the API — and
-# every session it is serving — untouched.
+# every session it is serving — untouched. Every image is tagged $(VERSION), so
+# deploy-web passes --no-deps: without it `up` also brought the API, which the
+# interface waits for, and its migrations to the new tag, which an
+# interface-only deploy must not do. deploy-api keeps the dependencies on
+# purpose, as the migration job is one of them.
 deploy-api: require-env require-version ## Deploy only the API (VERSION=vX.Y.Z)
 	VERSION=$(VERSION) $(COMPOSE) pull api migrate
 	VERSION=$(VERSION) $(COMPOSE) up -d api
@@ -1046,7 +1050,7 @@ deploy-api: require-env require-version ## Deploy only the API (VERSION=vX.Y.Z)
 
 deploy-web: require-env require-version ## Deploy only the interface (VERSION=vX.Y.Z)
 	VERSION=$(VERSION) $(COMPOSE) pull web
-	VERSION=$(VERSION) $(COMPOSE) up -d web
+	VERSION=$(VERSION) $(COMPOSE) up -d --no-deps web
 	@echo "deployed web $(VERSION)"
 
 deployed: ## Print the versions currently running
