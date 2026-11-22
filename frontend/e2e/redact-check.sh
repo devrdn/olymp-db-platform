@@ -3,10 +3,13 @@
 # artifact, with the real script on fake env files and a fake artifact in a
 # throwaway directory:
 #
-#   - every generated secret in every text file becomes ***, longest value
+#   - every generated secret in every file becomes ***, longest value
 #     first and escaped for sed, under a UTF-8 locale and with an invalid
-#     UTF-8 byte in the file; a binary file is left alone and a file keeps
-#     its mode;
+#     UTF-8 byte in the file; a binary file (a NUL byte in a log, a
+#     screenshot) is redacted like any other, one without a secret comes out
+#     byte for byte, and a file keeps its mode;
+#   - a symlink or another special file is removed from the artifact, with
+#     its target left alone, whether or not a secret is known;
 #   - staged container logs without a secret from stack.env (missing, empty
 #     or unreadable) fail and delete the artifact; without logs and without
 #     stack.env nothing happens;
@@ -73,13 +76,15 @@ stage() {
 	chmod 640 "$A/e2e-logs/game-db.log"
 	printf 'admin %s\n' "$ADMIN" >"$A/test-results/error-context.md"
 	printf '\x89PNG\r\n\x1a\n\x00\x00%s' "$S1" >"$A/test-results/shot.png"
+	printf '\x89PNG\r\n\x1a\n\x00\x00clean pixels' >"$A/test-results/clean.png"
+	cp "$A/test-results/clean.png" "$c/clean.png.expected"
 }
 run() { # <redact.sh arguments>: sets rc
 	rc=0
 	TMPDIR="$T" LC_ALL="$utf8" "$redact" "$@" >"$c/out" 2>&1 || rc=$?
 }
 leaks() {
-	grep -raF -e "$S1" -e "$S2SUB" -e "$ADMIN" --exclude=shot.png "$A" >/dev/null 2>&1
+	grep -raF -e "$S1" -e "$S2SUB" -e "$ADMIN" "$A" >/dev/null 2>&1
 }
 tmp_left() { find "$T" -mindepth 1 | tr '\n' ' '; }
 tmp_empty() { [ -z "$(tmp_left)" ]; }
@@ -91,8 +96,9 @@ run "$A" "$ST"
 if [ "$rc" -eq 0 ] && ! leaks && grep -q 'PASSWORD \*\*\*$' "$A/e2e-logs/game-db.log" &&
 	grep -qx 'secret=\*\*\* token=\*\*\* admin=\*\*\*' "$A/e2e-logs/game-db.log" &&
 	[ -n "$(find "$A/e2e-logs/game-db.log" -perm 0640)" ] &&
-	grep -aqF "$S1" "$A/test-results/shot.png" && tmp_empty; then
-	pass "every secret becomes ***, longest first, the mode is kept, a binary file is left alone"
+	cmp -s "$A/test-results/clean.png" "$c/clean.png.expected" &&
+	tmp_empty; then
+	pass "every secret becomes ***, longest first, the mode is kept, a binary file is redacted and one without a secret is untouched"
 else fail "normal path: rc=$rc"; fi
 
 new_case invalid-byte
@@ -103,6 +109,36 @@ run "$A" "$ST"
 if [ "$rc" -eq 0 ] && ! leaks && grep -aq 'PASSWORD \*\*\* ' "$A/e2e-logs/odd.log"; then
 	pass "a file with an invalid UTF-8 byte is redacted under LC_ALL=$utf8"
 else fail "invalid UTF-8 byte: rc=$rc, artifact $([ -d "$A" ] && echo kept || echo removed)"; fi
+
+new_case binary-log
+write_env
+stage
+printf 'PASSWORD %s\n\x00\nadmin %s\n' "$S1" "$ADMIN" >"$A/e2e-logs/nul.log"
+run "$A" "$ST"
+if [ "$rc" -eq 0 ] && ! leaks && grep -aq 'PASSWORD \*\*\*$' "$A/e2e-logs/nul.log"; then
+	pass "a log with a NUL byte is redacted, not skipped as binary"
+else fail "binary log: rc=$rc, artifact $([ -d "$A" ] && echo kept || echo removed)"; fi
+
+new_case symlink-in-artifact
+write_env
+stage
+printf 'outside %s\n' "$S1" >"$c/outside.txt"
+ln -s "$c/outside.txt" "$A/test-results/link.txt"
+ln -s "$c/stack" "$A/e2e-logs/dir-link"
+run "$A" "$ST"
+if [ "$rc" -eq 0 ] && ! leaks && [ ! -L "$A/test-results/link.txt" ] && [ ! -L "$A/e2e-logs/dir-link" ] &&
+	[ -z "$(find "$A" -type l)" ] && grep -qF "$S1" "$c/outside.txt" && [ -f "$A/e2e-logs/game-db.log" ]; then
+	pass "a symlink is removed from the artifact and its target is left alone"
+else fail "symlink in the artifact: rc=$rc, links left: $(find "$A" -type l | tr '\n' ' ')"; fi
+
+new_case symlink-no-secret
+mkdir -p "$A/test-results"
+printf 'nothing\n' >"$A/test-results/note.txt"
+ln -s "$c/stack" "$A/test-results/link"
+run "$A" "$ST"
+if [ "$rc" -eq 0 ] && [ -z "$(find "$A" -type l)" ] && [ -f "$A/test-results/note.txt" ]; then
+	pass "a symlink is removed when no secret is known too"
+else fail "symlink without a secret: rc=$rc, links left: $(find "$A" -type l | tr '\n' ' ')"; fi
 
 new_case trailing-slash
 write_env

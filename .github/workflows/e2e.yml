@@ -93,7 +93,7 @@ jobs:
       # e2e-logs/, and a cancelled run (the timeout) still leaves its logs.
       # A failing CREATE ROLE ... PASSWORD can be logged by the game cluster,
       # and ::add-mask:: does not reach uploaded files, so redact.sh replaces
-      # every generated secret in the staged text, or deletes the staging
+      # every generated secret in the staged files, or deletes the staging
       # directory when it cannot. The upload runs only after this step
       # succeeded, so a failure before redact.sh uploads nothing either.
       - name: Collect screenshots and container logs

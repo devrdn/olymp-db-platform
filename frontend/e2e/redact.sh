@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Replaces the run's generated secrets with *** in every text file under the
-# failure artifact, so it can be published: the workflow's ::add-mask::
-# protects only its own log, never an uploaded file.
+# Replaces the run's generated secrets with *** in every file under the
+# failure artifact, binary ones included, so it can be published: the
+# workflow's ::add-mask:: protects only its own log, never an uploaded file.
+# Anything that is not a regular file or a directory, a symlink above all, is
+# deleted first: the upload follows a link out of the artifact to whatever it
+# names.
 #
 #   frontend/e2e/redact.sh <path>/e2e-artifact <stack dir>
 #
@@ -13,11 +16,11 @@
 # failure is seen, rather than trusting every caller to remember to. Container
 # logs in e2e-logs/ exist only if a stack did, and so its stack.env: staged
 # logs without a secret read from it are such a failure. A run that stopped
-# before stack.env was written has no secret, and its artifact is left as is.
+# before stack.env was written has no secret, and its files are left as they are.
 set -euo pipefail
 
-# Bytes, not characters: under a UTF-8 locale one invalid byte can make grep
-# skip a file as binary or sed refuse it. Only a NUL marks a file binary here.
+# Bytes, not characters: under a UTF-8 locale one invalid byte can make sed
+# refuse a file.
 export LC_ALL=C
 
 usage="usage: redact.sh <path>/e2e-artifact <stack dir>"
@@ -69,6 +72,9 @@ if [ -f "$stack/smoke.env" ]; then
 	[ -z "$value" ] || values+=("$value")
 fi
 
+# Before anything reads a file, so that nothing below follows a link out.
+find "$dir" ! -type f ! -type d -delete
+
 logs=""
 [ ! -d "$dir/e2e-logs" ] || logs="$(ls -A "$dir/e2e-logs")"
 if [ -n "$logs" ] && [ "$from_stack" -eq 0 ]; then
@@ -86,10 +92,7 @@ if [ "${#values[@]}" -gt 0 ]; then
 
 	list="$(mktemp "${TMPDIR:-/tmp}/redact.XXXXXX")"
 	tmp="$(mktemp "${TMPDIR:-/tmp}/redact.XXXXXX")"
-	# Exit 1 is "no text file", fine; 2 is an error, which must not pass.
-	status=0
-	grep -rIl --null . "$dir" >"$list" || status=$?
-	[ "$status" -le 1 ] || exit 1
+	find "$dir" -type f -print0 >"$list"
 
 	while IFS= read -r -d '' file; do
 		sed "$script" "$file" >"$tmp"

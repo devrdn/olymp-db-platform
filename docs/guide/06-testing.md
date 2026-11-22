@@ -289,7 +289,7 @@ or readable by other accounts.
 | `make restore-covers-check`, `make game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
 | `make e2e-smoke` | the browser smoke test against `E2E_BASE_URL` or `E2E_ENV_FILE` ([above](#the-browser-smoke-test)) | Node and a running stack; `make e2e-stack-up` for a throwaway one (Docker) |
 | `make host-targets-check` | what `make run` and `make runner` take from `deploy/.env`, that no target shows a password on its echoed command line, the checks of `make migrate-force` and of the teardown targets, that the restores and `migrate-force` take `CONFIRM` and `FILE` only from the command line, when `make front-install` reinstalls, and that a value make cannot expand stops no other target, on throwaway env files with `go`, `docker` and `npm` stubbed | make and a shell |
-| `make e2e-redact-check` | that the failure artifact of `e2e.yml` keeps no generated secret in a text file, and that the artifact is deleted rather than uploaded when that cannot be made sure of, on fake env files and a fake artifact | a shell; not root |
+| `make e2e-redact-check` | that the failure artifact of `e2e.yml` keeps no generated secret in any file and no symlink, and that the artifact is deleted rather than uploaded when that cannot be made sure of, on fake env files and a fake artifact | a shell; not root |
 | `make scheduled-backup-check` | the backup rotation, the scheduled run and its systemd units, on synthetic sets in a throwaway container | Docker |
 
 One test or one package, from `backend/`:
@@ -455,9 +455,10 @@ tests' screenshots (`test-results/`) and each container's log
 (`e2e-logs/<container>.log`); read the log of the service the failing screen
 talks to first. It never holds the stack directory or a Playwright trace,
 because both carry the run's passwords, and every generated secret in every
-text file it holds reads `***` (a binary file, such as a screenshot, is left
-as it is). When that replacement cannot be finished, nothing is uploaded and
-the collect step's log says why; `make e2e-redact-check` proves it.
+file it holds reads `***`, a binary one included; a symlink is deleted, as
+the upload would follow it out of the artifact. When that replacement cannot
+be finished, nothing is uploaded and the collect step's log says why;
+`make e2e-redact-check` proves it.
 
 The job is not a required check: a path-filtered workflow cannot be one (see
 `backend.yml`), and the suite's steadiness on a shared runner is unmeasured. It
