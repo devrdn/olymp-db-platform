@@ -10,6 +10,7 @@ import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
 
 import { dropGameInstanceAction, type GameState } from "./actions";
@@ -159,6 +160,7 @@ function DropDatabase({
     dropGameInstanceAction,
     {},
   );
+  const hydrated = useHydrated();
   const failure = message(state.code, dict);
   const who = instance.participantName || instance.participant || instance.database;
 
@@ -173,7 +175,7 @@ function DropDatabase({
       <input type="hidden" name="contestId" value={contestId} />
       <input type="hidden" name="database" value={instance.database} />
 
-      <Button type="submit" size="sm" variant="quiet" disabled={pending}>
+      <Button type="submit" size="sm" variant="quiet" disabled={!hydrated || pending}>
         {t.drop}
       </Button>
 

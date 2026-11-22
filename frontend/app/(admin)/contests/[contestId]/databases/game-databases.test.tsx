@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
@@ -164,6 +165,35 @@ describe("the contest's databases", () => {
 
     expect(screen.getByText(t.empty)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+});
+
+describe("the drop button before hydration", () => {
+  const list = (
+    <GameDatabases
+      contestId={contestId}
+      databases={{ instances: [instance()], truncated: false }}
+      ended={false}
+      locale="en"
+      dict={en}
+    />
+  );
+
+  test("is disabled in the server's markup", () => {
+    const page = new DOMParser().parseFromString(renderToString(list), "text/html");
+
+    expect(page.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true);
+  });
+
+  test("is enabled once the server's markup is hydrated", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    container.innerHTML = renderToString(list);
+
+    render(list, { container, hydrate: true });
+
+    expect(await screen.findByRole("button", { name: t.drop })).toBeEnabled();
+    container.remove();
   });
 });
 
