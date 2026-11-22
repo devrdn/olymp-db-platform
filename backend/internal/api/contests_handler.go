@@ -740,7 +740,7 @@ var draftDeleteErrors = errorTable{
 	{err: provisioning.ErrBuildInProgress, status: http.StatusConflict, code: codeBuildInProgress,
 		message: "The draft's game is being built; it can be deleted once the build has finished"},
 	{err: provisioning.ErrGameInUse, status: http.StatusConflict, code: codeGameInUse,
-		message: "A database of this draft is still in use; close the connection and delete the draft again"},
+		message: "A database of this draft is still in use; it frees once its open connections close, within minutes, and the draft can then be deleted again"},
 }
 
 type statusRequest struct {

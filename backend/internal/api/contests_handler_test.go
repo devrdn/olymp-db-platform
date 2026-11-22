@@ -584,8 +584,10 @@ func TestDeletingADraftWhoseGameIsBeingBuiltIsAConflict(t *testing.T) {
 	}
 }
 
-// A database of the draft still has a connection open: nothing was deleted,
-// and closing it lets the organiser try again.
+// A database of the draft still has a connection open: the draft was not
+// deleted, and the organiser tries again once the connection has gone. That
+// connection is the Query Runner's, not one the organiser can close, and it
+// may idle for up to QUERY_CONN_IDLE_TIMEOUT.
 func TestDeletingADraftWhoseGameIsStillInUseIsAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
@@ -598,6 +600,9 @@ func TestDeletingADraftWhoseGameIsStillInUseIsAConflict(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "game_in_use" {
 		t.Errorf("error code = %q, want game_in_use", code)
+	}
+	if message := errorMessage(t, rec); strings.Contains(message, "close the connection") || !strings.Contains(message, "minutes") {
+		t.Errorf("message = %q, want it to say the database frees within minutes, with nothing for the organiser to close", message)
 	}
 }
 

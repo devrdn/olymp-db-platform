@@ -231,7 +231,7 @@
     },
     {
       "code": "game_in_use",
-      "meaning": "A database of this draft still has an open connection, so the delete stopped before the draft's rows: the draft and its content are still there, but its game is already marked dropped and the databases dropped before the busy one are gone. A query's idle connection closes on its own within a minute, so the organiser deletes the draft again shortly; a draft kept instead needs its game saved again."
+      "meaning": "A database of this draft still has an open connection, so the delete stopped before the draft's rows: the draft and its content are still there, but its game is already marked dropped and the databases dropped before the busy one are gone. The database frees once its open connections close: a query's idle connection closes on its own after QUERY_CONN_IDLE_TIMEOUT (thirty seconds by default, at most five minutes), so the organiser deletes the draft again within minutes; a draft kept instead needs its game saved again."
     },
     {
       "code": "game_instance_already_dropped",
