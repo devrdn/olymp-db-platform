@@ -1,13 +1,17 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
+const { deleteQuestionAction } = vi.hoisted(() => ({ deleteQuestionAction: vi.fn(async () => ({})) }));
+
 // The real Server Actions would pull in Next's server runtime.
 vi.mock("./actions", () => ({
   addQuestionAction: vi.fn(async () => ({})),
-  deleteQuestionAction: vi.fn(async () => ({})),
+  deleteQuestionAction,
   reorderQuestionsAction: vi.fn(async () => ({})),
 }));
 
@@ -165,5 +169,65 @@ describe("QuestionList on a phone", () => {
     );
 
     expect(screen.getByRole("table")).toHaveClass("min-w-3xl");
+  });
+});
+
+describe("QuestionList, deleting a question", () => {
+  test("the server's markup leaves the delete button disabled until the page is hydrated", () => {
+    const html = renderToString(
+      <QuestionList
+        contestId="c1"
+        questions={[question()]}
+        languages={["en"]}
+        editable
+        scoring="points"
+        dict={dict}
+      />,
+    );
+    const page = new DOMParser().parseFromString(html, "text/html");
+    const remove = page.querySelector(`button[aria-label="${dict.workspace.questions.remove}"]`);
+
+    expect(remove?.hasAttribute("disabled")).toBe(true);
+  });
+
+  test("asks first and sends nothing on no", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <QuestionList
+        contestId="c1"
+        questions={[question()]}
+        languages={["en"]}
+        editable
+        scoring="points"
+        dict={dict}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
+
+    expect(confirm).toHaveBeenCalledWith(dict.workspace.questions.confirmRemove);
+    expect(deleteQuestionAction).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  test("hydrating the server's markup enables the delete button", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const list = (
+      <QuestionList
+        contestId="c1"
+        questions={[question()]}
+        languages={["en"]}
+        editable
+        scoring="points"
+        dict={dict}
+      />
+    );
+    container.innerHTML = renderToString(list);
+
+    render(list, { container, hydrate: true });
+
+    expect(await screen.findByRole("button", { name: dict.workspace.questions.remove })).toBeEnabled();
+    container.remove();
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, useSyncExternalStore } from "react";
 
 import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,8 @@ import {
   type QuestionListState,
 } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+
+const subscribeNever = () => () => {};
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -267,12 +269,14 @@ function DeleteQuestion({
     deleteQuestionAction,
     {},
   );
+  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
 
   return (
     <form
       action={formAction}
       className="contents"
-      /* Deletion is permanent. A native confirm also works before hydration. */
+      /* Deletion is permanent. The question is asked here, which React skips when it replays a
+         submission queued before hydration, so the button stays disabled until then. */
       onSubmit={(event) => {
         if (!window.confirm(t.confirmRemove)) event.preventDefault();
       }}
@@ -280,7 +284,13 @@ function DeleteQuestion({
       <input type="hidden" name="contestId" value={contestId} />
       <input type="hidden" name="questionId" value={questionId} />
 
-      <Button type="submit" size="icon" variant="quiet" disabled={pending} aria-label={t.remove}>
+      <Button
+        type="submit"
+        size="icon"
+        variant="quiet"
+        disabled={!hydrated || pending}
+        aria-label={t.remove}
+      >
         <span aria-hidden className="text-bad">
           ×
         </span>
