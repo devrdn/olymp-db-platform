@@ -66,7 +66,6 @@ describe("the button's keyboard focus", () => {
 
   test("a link styled as a button carries the same classes, so the same ring", () => {
     render(
-      // eslint-disable-next-line @next/next/no-html-link-for-pages
       <a href="/login" className={buttonVariants({ variant: "secondary" })}>
         Back
       </a>,

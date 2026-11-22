@@ -36,7 +36,8 @@ describe("the ways in", () => {
   });
 
   test("are not the contract without a providers list", () => {
-    const { providers: _omitted, ...without } = body;
+    const without: Record<string, unknown> = { ...body };
+    delete without.providers;
 
     expect(authMethodsSchema.safeParse(without).success).toBe(false);
   });
@@ -64,7 +65,8 @@ describe("the ways in", () => {
   });
 
   test("are unknown, and warned about, when the answer has no providers list", async () => {
-    const { providers: _omitted, ...without } = body;
+    const without: Record<string, unknown> = { ...body };
+    delete without.providers;
     serverRequest.mockResolvedValueOnce(without);
 
     expect(await fetchAuthMethods()).toBeNull();

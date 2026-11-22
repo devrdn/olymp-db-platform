@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { SwitchState } from "./actions";
 
-const switchProviderAction = vi.hoisted(() => vi.fn(async (_previous: SwitchState, _form: FormData): Promise<SwitchState> => ({})));
+const switchProviderAction = vi.hoisted(() => vi.fn<(previous: SwitchState, form: FormData) => Promise<SwitchState>>(async () => ({})));
 vi.mock("./actions", () => ({ switchProviderAction }));
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";

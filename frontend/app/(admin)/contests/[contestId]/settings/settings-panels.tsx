@@ -694,7 +694,6 @@ export function ArchivePanel({
 }) {
   const t = dict.workspace.settings.archive;
   const [state, formAction, pending] = useActionState<SettingsState, FormData>(saveArchiveSettingsAction, {});
-  const legendId = useId();
   const reasonId = useId();
   const tasksHintId = useId();
 
