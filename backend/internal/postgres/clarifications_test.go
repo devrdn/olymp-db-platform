@@ -242,6 +242,13 @@ func TestEveryClarificationReadIsARangeOfItsIndex(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		// A rollback does not shrink an index, so on a test database earlier
+		// runs leave these indexes several times larger than their rows, and the
+		// planner then prices a scan of this small table below a range. What the
+		// test owns is that each read can be served by its index.
+		if _, err := q.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+			t.Fatal(err)
+		}
 
 		plans := clarificationPlans{t: t, scanned: map[string]bool{}, indexes: map[string]bool{}}
 		repo := NewClarifications(testPool)
