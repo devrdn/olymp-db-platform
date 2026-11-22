@@ -2928,7 +2928,9 @@ alert fires when a run fails. It leaves `registration_activity`'s counters,
 `registration_addresses`, `participant_events` and `submissions` alone; those
 are outside the decided periods. What a participant's profile says they ran
 reads those counters rather than counting the journal, so it survives the
-sweep (`postgres.Profile`).
+sweep (`postgres.Profile`). The console's history of a contest that was ever
+archived counts the rows still there instead, so it offers no page past them
+(`postgres.QueryLog.History`).
 
 The rules: the audit entry is written in the same transaction as the action;
 passwords and hashes are never logged; `request_id` is threaded from the

@@ -605,6 +605,46 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 	})
 }
 
+// The retention sweep deletes an archived contest's journal and leaves its
+// counters, so the history counts what the journal still holds: nothing is
+// offered past the rows that are left, after a whole sweep or part of one,
+// and after the contest leaves the archive.
+func TestHistoryOfASweptContestCountsOnlyTheRowsLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		batch int
+		left  int
+	}{
+		{"swept whole", 1000, 0},
+		{"swept in part", 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				log := NewQueryLog(testPool)
+				user := makeUser(t, ctx, "querylog-swept-"+uuid.NewString()[:8])
+				contest := makeContest(t, ctx, user.ID)
+				registration := makeRegistration(t, ctx, contest, user.ID)
+				for _, sql := range []string{"SELECT 1", "SELECT 2", "SELECT 3"} {
+					completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
+				}
+				setContest(t, ctx, contest, "archived", "13 months")
+				if _, err := NewRetention(testPool).DeleteQueryLog(ctx, 12, tc.batch); err != nil {
+					t.Fatalf("DeleteQueryLog() = %v", err)
+				}
+				setContest(t, ctx, contest, "finished", "")
+
+				found, total, err := log.History(ctx, registration, 50, 0, 0)
+				if err != nil {
+					t.Fatalf("History: %v", err)
+				}
+				if total != tc.left || len(found) != tc.left {
+					t.Errorf("found = %d, total = %d, want both %d, the rows the sweep left", len(found), total, tc.left)
+				}
+			})
+		})
+	}
+}
+
 // Such a registration has no registration_activity row yet.
 func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
