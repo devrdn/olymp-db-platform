@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useSyncExternalStore } from "react";
+import { useActionState } from "react";
 
 import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { answerable, untranslated } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
 import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
 
 import {
@@ -21,8 +22,6 @@ import {
   type QuestionListState,
 } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
-
-const subscribeNever = () => () => {};
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -269,7 +268,7 @@ function DeleteQuestion({
     deleteQuestionAction,
     {},
   );
-  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
+  const hydrated = useHydrated();
 
   return (
     <form

@@ -1,15 +1,14 @@
 "use client";
 
-import { useActionState, useSyncExternalStore } from "react";
+import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { useHydrated } from "@/lib/use-hydrated";
 
 import { type DeleteDraftState, deleteDraftAction } from "./actions";
 import { Panel } from "./settings-panels";
-
-const subscribeNever = () => () => {};
 
 /**
  * Deleting a draft, last on the page and away from the status buttons. The
@@ -28,7 +27,7 @@ export function DeleteDraftPanel({
 }) {
   const t = dict.workspace.settings.deleteDraft;
   const [state, formAction, pending] = useActionState<DeleteDraftState, FormData>(deleteDraftAction, {});
-  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
+  const hydrated = useHydrated();
 
   return (
     <form
