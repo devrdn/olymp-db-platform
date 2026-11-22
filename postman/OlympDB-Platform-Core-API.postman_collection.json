@@ -660,7 +660,7 @@
                 "{{contestId}}"
               ]
             },
-            "description": "Only a draft. Once it was published people could see it, and what they saw is a record — getting rid of one of those is archiving.\n\nResponses: 204 · 409 `not_editable` · 409 `build_in_progress` (the draft's game is being built; delete once it has finished) · 409 `game_in_use` (a database of the draft still has an open connection; close it and delete again) · 404"
+            "description": "Only a draft. Once it was published people could see it, and what they saw is a record — getting rid of one of those is archiving.\n\nResponses: 204 · 409 `not_editable` · 409 `build_in_progress` (the draft's game is being built; delete once it has finished) · 409 `game_in_use` (a database of the draft still has an open connection; it closes on its own after its idle timeout, so delete again in a few minutes — the draft's game is already marked dropped, so a draft kept instead needs its game saved again) · 404"
           },
           "response": []
         },

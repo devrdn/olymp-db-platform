@@ -2462,7 +2462,7 @@ const ro = {
       "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
     build_in_progress: "Jocul este deja în construcție.",
     game_in_use:
-      "Una dintre bazele de date ale acestei ciorne este încă în uz, așa că ciorna nu a fost ștearsă, deși unele dintre bazele ei de joc pot fi deja șterse. Încercați din nou peste un minut. Dacă păstrați ciorna, salvați din nou jocul ei.",
+      "Una dintre bazele de date ale acestei ciorne este încă în uz, așa că ciorna nu a fost ștearsă, deși unele dintre bazele ei de joc pot fi deja șterse. Conexiunile deschise se închid singure, cel mult în câteva minute; încercați din nou atunci. Dacă păstrați ciorna, salvați din nou jocul ei.",
     grace_not_longer:
       "Alegeți o perioadă mai lungă decât cea în vigoare: cea a olimpiadei sau, dacă olimpiada nu are una, cea implicită a instalării.",
     game_cluster_full:
