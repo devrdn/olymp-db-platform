@@ -3,7 +3,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 // Both read the current request (`headers()`, `cookies()`), which does not
 // exist here; what is tested is what `serverRequest` adds to the transport.
 vi.mock("./caller", () => ({ callerHeaders: async () => ({ "x-forwarded-for": "203.0.113.7" }) }));
-vi.mock("@/lib/auth/session", () => ({ sessionHeader: async () => ({ cookie: "dbcontest_session=abc" }) }));
+const { sessionHeader } = vi.hoisted(() => ({
+  sessionHeader: vi.fn(async (): Promise<Record<string, string>> => ({ cookie: "dbcontest_session=abc" })),
+}));
+vi.mock("@/lib/auth/session", () => ({ sessionHeader }));
 
 import { SERVER_REQUEST_TIMEOUT_MS, serverRequest } from "./server";
 
@@ -12,6 +15,14 @@ afterEach(() => {
 });
 
 describe("serverRequest", () => {
+  test("reads the request before the API's address, so a prerender stops there", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("API_ORIGIN", "");
+    sessionHeader.mockRejectedValueOnce(new Error("prerender bail"));
+
+    await expect(serverRequest("/contests")).rejects.toThrow("prerender bail");
+  });
+
   test("bounds how long the API may take to answer, with a deadline longer than the API's own", async () => {
     vi.stubEnv("API_ORIGIN", "http://api:8080");
     let seen: RequestInit | undefined;

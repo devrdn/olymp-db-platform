@@ -23,14 +23,15 @@ export async function generateMetadata() {
  * fetched, not baked in, since roles are data.
  */
 export default async function UsersPage(props: PageProps<"/users">) {
-  // Rejects only with Next's own control flow, so it can start before the reads
-  // below and be awaited last.
-  const mailRead = readMailOffer();
   const [params, locale, dict] = await Promise.all([
     props.searchParams,
     activeLocale(),
     activeDictionary(),
   ]);
+  // Started only once the request is known, so a prerender that stops above
+  // leaves no read behind. Rejects only with Next's own control flow, so it can
+  // run beside the reads below and be awaited last.
+  const mailRead = readMailOffer();
 
   const text = (key: string) => (typeof params[key] === "string" ? params[key] : "");
   const query = text("q");

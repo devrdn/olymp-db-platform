@@ -19,10 +19,13 @@ export const SERVER_REQUEST_TIMEOUT_MS = 30_000;
  * deadline; a timed-out one surfaces as the `unreachable` ApiError.
  */
 export async function serverRequest(path: string, options: RequestOptions = {}) {
+  // The request first: a prerender stops on it, where `apiOrigin()` would
+  // throw because a build has no API to name.
+  const headers = { ...options.headers, ...(await callerHeaders()), ...(await sessionHeader()) };
   return request(path, {
     ...options,
     origin: apiOrigin(),
-    headers: { ...options.headers, ...(await callerHeaders()), ...(await sessionHeader()) },
+    headers,
     signal: options.signal ?? AbortSignal.timeout(SERVER_REQUEST_TIMEOUT_MS),
   });
 }

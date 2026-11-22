@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "./client";
@@ -52,6 +53,14 @@ describe("the ways in", () => {
     serverRequest.mockRejectedValueOnce(new ApiError("unreachable", 502, "down"));
 
     expect(await fetchAuthMethods()).toBeNull();
+  });
+
+  // A prerender stops the read with an error of Next's own; swallowing it would
+  // make the page render as if the API were down.
+  test("lets Next's own control flow through rather than calling it a failure", async () => {
+    serverRequest.mockImplementationOnce(async () => notFound());
+
+    await expect(fetchAuthMethods()).rejects.toThrow();
   });
 
   test("are unknown, and warned about, when the answer has no providers list", async () => {
