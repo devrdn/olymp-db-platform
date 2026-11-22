@@ -14,6 +14,7 @@ import { type Manager, type Participant, type RegistrationStatus } from "@/lib/a
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
 
 import {
@@ -321,6 +322,7 @@ function RowAction({
   dict: Dictionary;
 }) {
   const [state, formAction, pending] = useActionState<PeopleState, FormData>(action, {});
+  const hydrated = useHydrated();
   const failure = message(state.code, dict);
 
   return (
@@ -334,7 +336,12 @@ function RowAction({
       <input type="hidden" name="contestId" value={contestId} />
       <input type="hidden" name="userId" value={userId} />
 
-      <Button type="submit" size="sm" variant="quiet" disabled={pending}>
+      <Button
+        type="submit"
+        size="sm"
+        variant="quiet"
+        disabled={(confirm !== undefined && !hydrated) || pending}
+      >
         {label}
       </Button>
 
