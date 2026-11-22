@@ -22,7 +22,7 @@ uses). The backend's own notes on its tests are in
 |---|---|---|---|
 | Go unit tests | `foo_test.go` beside `foo.go` | Go and a C compiler | `make test` |
 | In-memory fakes and repository contracts | `internal/<pkg>/<pkg>test/` | Go and a C compiler | `make test` |
-| Repository tests on PostgreSQL | `internal/postgres`, `internal/provisioning`, `internal/queryproxy`, `cmd/migrate`, `internal/platform/storage` | the core test database | `make test-db` |
+| Repository tests on PostgreSQL | `internal/postgres`, `internal/provisioning`, `internal/queryproxy`, `cmd/migrate`, `internal/platform/storage`, `internal/app` (`app.New`'s pool check) | the core test database | `make test-db` |
 | Game cluster tests | `internal/gamedb`, `internal/queryrunner`, `internal/rpc` | the test game cluster | `make test-game` |
 | The cross-cluster build tests | `internal/provisioning/game_integration_test.go` | both | `make test-game-build` |
 | Whole-service tests | `integration_test.go` in `internal/api`, `internal/contests`, `internal/provisioning`, `internal/queryproxy`, `internal/rpc` | varies by package | the target for that package |

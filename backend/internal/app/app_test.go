@@ -20,6 +20,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/mail"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
 	"github.com/devrdn/olymp-db-platform/backend/internal/signup"
@@ -238,4 +239,44 @@ func TestSelfSignupWithoutMailIsWarnedAtStartUp(t *testing.T) {
 			t.Errorf("%s: warned %v, want %v:\n%s", name, got, tc.warned, logs.String())
 		}
 	}
+}
+
+// New sizes the check by the pool it built, so pool_max_conns=1 in the DSN is
+// refused although CORE_DB_POOL_MAX asks for more.
+func TestNewRefusesACorePoolOfOneConnectionFromTheDSN(t *testing.T) {
+	ctx := context.Background()
+	probe, err := storagetest.OpenCore(ctx, nil)
+	if err != nil {
+		t.Fatalf("open the test database: %v", err)
+	}
+	if probe == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	dsn := oneConnection(t, probe.Config().ConnString())
+	probe.Close()
+
+	built, err := New(ctx, config.Config{LogLevel: "error", CoreDBDSN: dsn, CoreDBPoolMax: 25}, "test")
+	if err == nil {
+		built.close()
+		t.Fatal("New() built the service on a pool of one connection")
+	}
+	if !strings.Contains(err.Error(), "too small") {
+		t.Errorf("New() = %v, want the refusal of a pool too small for the retention sweep", err)
+	}
+}
+
+// oneConnection returns dsn with pool_max_conns=1, in either DSN form.
+func oneConnection(t *testing.T, dsn string) string {
+	t.Helper()
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return dsn + " pool_max_conns=1"
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal("the test database DSN is not a valid URL")
+	}
+	query := u.Query()
+	query.Set("pool_max_conns", "1")
+	u.RawQuery = query.Encode()
+	return u.String()
 }
