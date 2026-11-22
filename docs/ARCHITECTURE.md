@@ -2234,9 +2234,11 @@ room, or this campus network". An empty list means no restriction.
 **Passwords use argon2id** (64 MiB, three iterations, the OWASP baseline) in
 `platform/password`. The parameters are encoded into the digest itself as a
 PHC string, so raising the cost later **rehashes** accounts at their next
-sign-in rather than invalidating them. Comparison is constant-time. An empty
-password and an over-long one are refused: argon2 hashes the whole input, and
-unbounded length is a way to burn CPU on an unauthenticated endpoint.
+sign-in rather than invalidating them. The new digest is written only over the
+one the sign-in verified, so a password change or a link committed in between
+is never undone. Comparison is constant-time. An empty password and an
+over-long one are refused: argon2 hashes the whole input, and unbounded length
+is a way to burn CPU on an unauthenticated endpoint.
 
 **Sessions are server-side, and the token is stored hashed.** The client gets
 a 256-bit opaque token; the cache holds **its SHA-256**. A dump of the cache

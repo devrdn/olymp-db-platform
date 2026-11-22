@@ -66,9 +66,6 @@ const testPassword = "correct horse battery staple"
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
-	c := cache.NewMemory(1000)
-	t.Cleanup(func() { _ = c.Close() })
-
 	repo := userstest.New()
 	sink := &collectingSink{}
 	hash := passwordtest.Hash(t, testPassword)
@@ -79,17 +76,9 @@ func newFixture(t *testing.T) *fixture {
 		Status:       users.StatusActive,
 	})
 
-	service := NewService(ServiceConfig{
-		Users:     repo,
-		Sessions:  NewSessionStore(c, time.Hour),
-		Audit:     audit.New(sink),
-		Limiter:   NewLimiter(c),
-		Logger:    logging.New("error", io.Discard),
-		Passwords: passwordtest.NewHasher(),
-		Devices:   testDevices(t),
-	})
-
-	return &fixture{service: service, repo: repo, sink: sink, user: user}
+	f := &fixture{repo: repo, sink: sink, user: user}
+	f.service = f.withUsers(t, repo)
+	return f
 }
 
 func loginCmd(password string) LoginCommand {
@@ -387,6 +376,80 @@ func TestLoginUpgradesAnOutdatedPasswordHash(t *testing.T) {
 	}
 	if password.NeedsRehash(stored.PasswordHash) {
 		t.Error("the replacement digest still uses outdated parameters")
+	}
+}
+
+// changedAfterRead runs change on the account right after a sign-in reads it,
+// as a password change or a link committed in between would.
+type changedAfterRead struct {
+	*userstest.Repository
+	change func(id uuid.UUID)
+}
+
+func (r changedAfterRead) ByLogin(ctx context.Context, login string) (users.User, error) {
+	u, err := r.Repository.ByLogin(ctx, login)
+	if err == nil {
+		r.change(u.ID)
+	}
+	return u, err
+}
+
+// withUsers builds a service over store, with the fixture's audit sink and a
+// cache of its own.
+func (f *fixture) withUsers(t *testing.T, store UserStore) *Service {
+	t.Helper()
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	return NewService(ServiceConfig{
+		Users:     store,
+		Sessions:  NewSessionStore(c, time.Hour),
+		Audit:     audit.New(f.sink),
+		Limiter:   NewLimiter(c),
+		Logger:    logging.New("error", io.Discard),
+		Passwords: passwordtest.NewHasher(),
+		Devices:   testDevices(t),
+	})
+}
+
+func TestLoginLeavesADigestChangedSinceItWasVerified(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	_ = f.repo.SetPassword(ctx, f.user.ID, passwordtest.WeakHash(t, testPassword), true)
+	newer := passwordtest.Hash(t, "a password chosen meanwhile")
+	service := f.withUsers(t, changedAfterRead{Repository: f.repo, change: func(id uuid.UUID) {
+		_ = f.repo.SetPassword(ctx, id, newer, false)
+	}})
+
+	if _, err := service.Login(ctx, loginCmd(testPassword)); err != nil {
+		t.Fatalf("Login() = %v, want success with the digest it verified", err)
+	}
+
+	stored, _ := f.repo.Get(f.user.ID)
+	if stored.PasswordHash != newer || stored.MustChangePassword {
+		t.Errorf("stored digest %q, one-time %v; want the newer digest %q, not one-time",
+			stored.PasswordHash, stored.MustChangePassword, newer)
+	}
+}
+
+func TestLoginUpgradeKeepsTheOneTimeFlagAsStored(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	outdated := passwordtest.WeakHash(t, testPassword)
+	_ = f.repo.SetPassword(ctx, f.user.ID, outdated, true)
+	service := f.withUsers(t, changedAfterRead{Repository: f.repo, change: func(id uuid.UUID) {
+		_ = f.repo.SetPassword(ctx, id, outdated, false)
+	}})
+
+	if _, err := service.Login(ctx, loginCmd(testPassword)); err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+
+	stored, _ := f.repo.Get(f.user.ID)
+	if stored.PasswordHash == outdated {
+		t.Error("the outdated digest was left in place")
+	}
+	if stored.MustChangePassword {
+		t.Error("the upgrade restored the one-time flag the sign-in read")
 	}
 }
 

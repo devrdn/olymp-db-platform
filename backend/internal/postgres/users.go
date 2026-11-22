@@ -422,6 +422,19 @@ func (r *Users) SetPassword(ctx context.Context, id uuid.UUID, hash string, must
 		WHERE id = $1`, id, nullIfEmpty(hash), mustChange)
 }
 
+// UpgradePasswordHash replaces the digest only while the stored one is still
+// verified. The comparison is the UPDATE's own condition, so a change that
+// commits first makes it match no row rather than be overwritten.
+func (r *Users) UpgradePasswordHash(ctx context.Context, id uuid.UUID, verified, upgraded string) (bool, error) {
+	tag, err := r.querier(ctx).Exec(ctx, `
+		UPDATE users SET password_hash = $3, updated_at = now()
+		WHERE id = $1 AND password_hash = $2`, id, verified, upgraded)
+	if err != nil {
+		return false, fmt.Errorf("upgrade the password hash: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // SetPasswordMany stores a digest per account and marks each one as carrying
 // a one-time password, in one statement rather than one per account.
 func (r *Users) SetPasswordMany(ctx context.Context, creds []users.Credential) error {

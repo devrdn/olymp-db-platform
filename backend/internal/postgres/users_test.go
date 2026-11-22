@@ -1007,6 +1007,151 @@ func TestSetPasswordWithNoDigestStoresNone(t *testing.T) {
 	})
 }
 
+// The upgrade replaces the digest it was handed and nothing else: the
+// one-time flag and the time of the last change stay as stored.
+func TestUpgradePasswordHashReplacesTheVerifiedDigestAlone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		created := makeUser(t, ctx, "upgrade-the-digest")
+		changedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		exec(t, ctx, `UPDATE users SET password_hash = 'weak', must_change_password = true,
+			password_changed_at = $2 WHERE id = $1`, created.ID, changedAt)
+
+		upgraded, err := repo.UpgradePasswordHash(ctx, created.ID, "weak", "strong")
+		if err != nil || !upgraded {
+			t.Fatalf("UpgradePasswordHash() = %v, %v; want true, nil", upgraded, err)
+		}
+
+		stored, err := repo.ByID(ctx, created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.PasswordHash != "strong" {
+			t.Errorf("stored digest %q, want the upgraded one", stored.PasswordHash)
+		}
+		if !stored.MustChangePassword {
+			t.Error("the upgrade cleared the one-time flag")
+		}
+		if stored.PasswordChangedAt == nil || !stored.PasswordChangedAt.Equal(changedAt) {
+			t.Errorf("password changed at %v, want %v", stored.PasswordChangedAt, changedAt)
+		}
+	})
+}
+
+// A digest that changed after it was verified, to another one or to none, is
+// left as it is, and so is the one-time flag beside it.
+func TestUpgradePasswordHashLeavesADigestThatChanged(t *testing.T) {
+	for _, newer := range []string{"chosen-meanwhile", ""} {
+		withTx(t, func(ctx context.Context) {
+			repo := NewUsers(testPool)
+			created := makeUser(t, ctx, "upgrade-lost-race")
+			if err := repo.SetPassword(ctx, created.ID, newer, false); err != nil {
+				t.Fatal(err)
+			}
+
+			upgraded, err := repo.UpgradePasswordHash(ctx, created.ID, "not-a-real-hash", "strong")
+			if err != nil || upgraded {
+				t.Fatalf("UpgradePasswordHash() over %q = %v, %v; want false, nil", newer, upgraded, err)
+			}
+
+			stored, err := repo.ByID(ctx, created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.PasswordHash != newer || stored.MustChangePassword {
+				t.Errorf("stored digest %q, one-time %v; want %q, not one-time",
+					stored.PasswordHash, stored.MustChangePassword, newer)
+			}
+		})
+	}
+}
+
+// A link that retires the one-time password under the row lock, committed
+// while the upgrade waits for that lock, is what the upgrade's condition is
+// checked against: it writes nothing and the password stays retired.
+func TestUpgradePasswordHashWaitsForALinkInFlight(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	tag := "upgrade-race-" + uuid.NewString()[:8]
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM users WHERE login LIKE $1`, escapeLike(tag)+"%")
+	})
+	ana := oneTimePasswordStudent(t, tag)
+	ctx := context.Background()
+	repo := NewUsers(testPool)
+	verified, err := repo.ByID(ctx, ana.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locked, release, linked := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		linked <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			if err := repo.Lock(ctx, ana.ID); err != nil {
+				return err
+			}
+			if err := repo.SetPassword(ctx, ana.ID, "", false); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-linked:
+		t.Fatalf("the link returned %v before taking the row", err)
+	}
+
+	type outcome struct {
+		upgraded bool
+		err      error
+	}
+	upgrade := make(chan outcome, 1)
+	go func() {
+		upgraded, err := repo.UpgradePasswordHash(ctx, ana.ID, verified.PasswordHash, "strong")
+		upgrade <- outcome{upgraded, err}
+	}()
+	select {
+	case got := <-upgrade:
+		close(release)
+		t.Fatalf("UpgradePasswordHash() = %+v with the link still open, want it to wait", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-linked; err != nil {
+		t.Fatalf("the link failed: %v", err)
+	}
+
+	select {
+	case got := <-upgrade:
+		if got.err != nil || got.upgraded {
+			t.Errorf("UpgradePasswordHash() = %+v, want false, nil", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("UpgradePasswordHash did not return after the link committed")
+	}
+	stored, err := repo.ByID(ctx, ana.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.HasPassword() || stored.MustChangePassword {
+		t.Errorf("stored %q, one-time %v; want the password the link retired to stay retired",
+			stored.PasswordHash, stored.MustChangePassword)
+	}
+}
+
+func TestUpgradePasswordHashOfAMissingAccountIsNoUpgrade(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		upgraded, err := NewUsers(testPool).UpgradePasswordHash(ctx, uuid.New(), "weak", "strong")
+		if err != nil || upgraded {
+			t.Errorf("UpgradePasswordHash(unknown) = %v, %v; want false, nil", upgraded, err)
+		}
+	})
+}
+
 func TestUpdateProfileClearsTheVerifiedMarkUnlessToldToKeepIt(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)

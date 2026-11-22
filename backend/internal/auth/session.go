@@ -30,12 +30,16 @@ const (
 // ErrSessionNotFound reports a token that is unknown, expired or withdrawn.
 var ErrSessionNotFound = errors.New("session not found")
 
-// UserStore is the slice of users.Repository authentication needs (CLAUDE.md
+// UserStore is what authentication needs of the account store (CLAUDE.md
 // layout rule 3).
 type UserStore interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
 	ByLogin(ctx context.Context, login string) (users.User, error)
-	SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
+	// UpgradePasswordHash replaces the digest with upgraded only while the
+	// stored one is still verified, in one compare-and-set, and writes the
+	// digest and its updated_at, nothing else. False means the digest had
+	// changed or the account is gone.
+	UpgradePasswordHash(ctx context.Context, id uuid.UUID, verified, upgraded string) (bool, error)
 	RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) error
 }
 

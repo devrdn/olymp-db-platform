@@ -313,6 +313,25 @@ func (r *Repository) SetPassword(_ context.Context, id uuid.UUID, hash string, m
 	})
 }
 
+// UpgradePasswordHash replaces the digest only while it is still verified, as
+// the real one does.
+func (r *Repository) UpgradePasswordHash(_ context.Context, id uuid.UUID, verified, upgraded string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return false, r.Err
+	}
+	u, ok := r.byID[id]
+	if !ok || u.PasswordHash != verified {
+		return false, nil
+	}
+	u.PasswordHash = upgraded
+	u.UpdatedAt = time.Now().UTC()
+	r.byID[id] = u
+	return true, nil
+}
+
 // SetPasswordMany skips a missing account, as the real one does.
 func (r *Repository) SetPasswordMany(_ context.Context, creds []users.Credential) error {
 	r.mu.Lock()

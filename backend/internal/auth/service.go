@@ -691,15 +691,20 @@ func (s *Service) UnlockSignIn(ctx context.Context, actorID, userID uuid.UUID) e
 }
 
 // upgradeHash replaces a digest made with weaker parameters; a failure is
-// retried at the next login.
+// retried at the next login. It writes only over the digest it verified, since
+// a password change or a link may have committed since the account was read.
 func (s *Service) upgradeHash(ctx context.Context, user users.User, plaintext string) {
 	hash, err := s.passwords.Hash(ctx, plaintext)
 	if err != nil {
 		s.log.WarnContext(ctx, "could not re-hash password", "user_id", user.ID, "error", err)
 		return
 	}
-	if err := s.users.SetPassword(ctx, user.ID, hash, user.MustChangePassword); err != nil {
+	upgraded, err := s.users.UpgradePasswordHash(ctx, user.ID, user.PasswordHash, hash)
+	switch {
+	case err != nil:
 		s.log.WarnContext(ctx, "could not store the upgraded password hash", "user_id", user.ID, "error", err)
+	case !upgraded:
+		s.log.WarnContext(ctx, "password hash changed during sign-in; upgrade skipped", "user_id", user.ID)
 	}
 }
 
