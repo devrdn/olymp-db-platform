@@ -1,0 +1,32 @@
+name: actionlint
+
+# The workflows themselves: syntax, expression types, action inputs and, through
+# the runner's shellcheck, every `run:` block. A mistake in one is otherwise
+# found on the next tag, which is the run that publishes the images.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: lint the workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The linter's own version is pinned too, so a release of it cannot turn
+      # an unrelated pull request red. From 1.7.10 on it reads the YAML
+      # anchors image.yml uses.
+      - uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2.1.2
+        with:
+          version: "1.7.12"
