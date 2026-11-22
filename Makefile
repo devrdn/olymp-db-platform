@@ -1002,7 +1002,19 @@ images: ## Build the release images from this working tree
 # can be built, a tag says somebody meant to ship it. This target exists for
 # the day the registry is unreachable from CI and somebody has to do it by
 # hand.
-images-push: images ## Push the release images to the registry
+#
+# Every tag CI writes is CI's alone (a version, sha-<commit> and latest): this
+# machine builds for its own architecture, so such a tag pushed from here would
+# replace a manifest list naming both platforms with one image of one.
+# Refused before anything is pushed.
+.PHONY: no-version-tag
+no-version-tag:
+	@case "$(VERSION)" in v[0-9]*|sha-*|latest) \
+		echo "refusing to push $(VERSION) from a workstation: CI writes this tag, naming both platforms, and only CI builds both."; \
+		echo "Push the git tag and let CI publish it; this target is for a tag CI never writes."; \
+		exit 1;; esac
+
+images-push: no-version-tag images ## Push the release images to the registry
 	docker push $(IMAGE_BACKEND):$(VERSION)
 	docker push $(IMAGE_RUNNER):$(VERSION)
 	docker push $(IMAGE_FRONTEND):$(VERSION)

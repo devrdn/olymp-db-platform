@@ -425,6 +425,30 @@ for goal in backup "deploy VERSION=v1.2.3" "deploy-api VERSION=v1.2.3" "deploy-w
 	fi
 done
 
+echo "== images-push"
+# The workstation builds for its own architecture only, so a tag CI writes
+# (a version, sha-<commit>, latest) pushed from here would point at one
+# platform.
+for tag in v1.2.3 v1.2.3-rc.1 sha-0123abc latest; do
+	: > "$WORK/docker.calls"
+	if mk "$normal" images-push VERSION="$tag" > "$WORK/push.out" 2>&1; then
+		fail "images-push VERSION=$tag pushed a tag CI writes from a workstation"
+	elif [ -s "$WORK/docker.calls" ]; then
+		fail "images-push refuses $tag, but ran docker first: $(head -1 "$WORK/docker.calls")"
+	elif ! grep -qF "CI" "$WORK/push.out"; then
+		fail "images-push refuses $tag without pointing at CI: $(tail -1 "$WORK/push.out")"
+	else
+		pass "images-push refuses $tag before building: $(grep -F CI "$WORK/push.out" | head -1)"
+	fi
+done
+: > "$WORK/docker.calls"
+if mk "$normal" images-push VERSION=dev-test > "$WORK/push.out" 2>&1 &&
+	[ "$(grep -c '^push ' "$WORK/docker.calls")" -eq 3 ]; then
+	pass "images-push still pushes the three images under a tag CI never writes"
+else
+	fail "images-push VERSION=dev-test: $(tail -1 "$WORK/push.out")"
+fi
+
 if [ "$failures" -gt 0 ]; then
 	echo "$failures check(s) failed"
 	exit 1
