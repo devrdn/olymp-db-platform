@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { API_PREFIX, request } from "./client";
+import { browserRequest } from "./browser";
+import { API_PREFIX } from "./client";
 import { CONTEST_STATUSES } from "./contests";
 import { SCORINGS } from "./contests-terms";
 import { queriesSchema, type QueriesPage, type QueriesParams, type ReadOptions } from "./journal";
@@ -250,10 +251,7 @@ export async function fetchMyQueries(
   params: QueriesParams,
   options: ReadOptions = {},
 ): Promise<QueriesPage> {
-  const payload = await request(myQueriesPath(contestId, params), {
-    credentials: "same-origin",
-    signal: options.signal,
-  });
+  const payload = await browserRequest(myQueriesPath(contestId, params), { signal: options.signal });
   return queriesSchema.parse(payload);
 }
 

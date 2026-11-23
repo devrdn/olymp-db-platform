@@ -1,5 +1,5 @@
 import type { StandingsResult } from "@/components/product/use-standings";
-import { ApiError, request } from "@/lib/api/client";
+import { browserCall, browserRequest } from "@/lib/api/browser";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema } from "@/lib/api/leaderboard";
 import type { Locale } from "@/lib/i18n/config";
@@ -12,11 +12,8 @@ import type { Locale } from "@/lib/i18n/config";
  */
 export async function fetchPublicStandings(contestId: string, locale: Locale): Promise<StandingsResult> {
   if (!isId(contestId)) return { kind: "refused", code: "not_found" };
-  try {
-    const payload = await request(`/contests/${contestId}/leaderboard?lang=${locale}`, { credentials: "same-origin" });
-    return { kind: "ok", standings: standingsSchema.parse(payload) };
-  } catch (error: unknown) {
-    if (error instanceof ApiError) return { kind: "refused", code: error.code };
-    return { kind: "refused", code: "unreachable" };
-  }
+  return browserCall(async () => ({
+    kind: "ok" as const,
+    standings: standingsSchema.parse(await browserRequest(`/contests/${contestId}/leaderboard?lang=${locale}`)),
+  }));
 }

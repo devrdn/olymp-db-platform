@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { API_PREFIX, request } from "./client";
+import { browserRequest } from "./browser";
+import { API_PREFIX } from "./client";
 import {
   queriesSchema,
   type QueriesPage,
@@ -324,15 +325,12 @@ export {
 } from "./journal";
 
 export async function fetchRoster(contestId: string, options: ReadOptions = {}): Promise<Roster> {
-  const payload = await request(`${monitorBase(contestId)}/participants`, {
-    credentials: "same-origin",
-    signal: options.signal,
-  });
+  const payload = await browserRequest(`${monitorBase(contestId)}/participants`, { signal: options.signal });
   return rosterSchema.parse(payload);
 }
 
 export async function fetchFeed(contestId: string, params: FeedParams, options: ReadOptions = {}): Promise<FeedPage> {
-  const payload = await request(feedPath(contestId, params), { credentials: "same-origin", signal: options.signal });
+  const payload = await browserRequest(feedPath(contestId, params), { signal: options.signal });
   return feedSchema.parse(payload);
 }
 
@@ -342,10 +340,7 @@ export async function fetchTimeline(
   params: FeedParams,
   options: ReadOptions = {},
 ): Promise<FeedPage> {
-  const payload = await request(timelinePath(contestId, registrationId, params), {
-    credentials: "same-origin",
-    signal: options.signal,
-  });
+  const payload = await browserRequest(timelinePath(contestId, registrationId, params), { signal: options.signal });
   return feedSchema.parse(payload);
 }
 
@@ -388,10 +383,7 @@ export async function fetchQueries(
   params: QueriesParams,
   options: ReadOptions = {},
 ): Promise<QueriesPage> {
-  const payload = await request(queriesPath(contestId, registrationId, params), {
-    credentials: "same-origin",
-    signal: options.signal,
-  });
+  const payload = await browserRequest(queriesPath(contestId, registrationId, params), { signal: options.signal });
   return queriesSchema.parse(payload);
 }
 
@@ -460,9 +452,9 @@ export async function fetchRevision(
   revisionId: number,
   options: ReadOptions = {},
 ): Promise<Revision> {
-  const payload = await request(
+  const payload = await browserRequest(
     `${participantBase(contestId, registrationId)}/workspace/revisions/${encodeURIComponent(String(revisionId))}`,
-    { credentials: "same-origin", signal: options.signal },
+    { signal: options.signal },
   );
   return revisionSchema.parse(payload);
 }

@@ -74,7 +74,7 @@ describe("PersonPicker, debouncing", () => {
     await new Promise((resolve) => setTimeout(resolve, 350));
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(expect.stringContaining("q=ivan"));
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("q=ivan"), { credentials: "same-origin" });
   });
 
   test("an empty or whitespace-only box asks nothing at all", async () => {

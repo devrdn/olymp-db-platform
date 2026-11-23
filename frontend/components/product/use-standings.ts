@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { Refused } from "@/lib/api/browser";
 import type { Standings, StandingsState } from "@/lib/api/leaderboard";
 
-export type StandingsResult = { kind: "ok"; standings: Standings } | { kind: "refused"; code: string };
+export type StandingsResult = { kind: "ok"; standings: Standings } | Refused;
 
 /**
  * Poll interval per state in ms, or null for never. Frozen and not-started

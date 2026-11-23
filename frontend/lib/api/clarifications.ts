@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ApiError, request } from "./client";
+import { browserCall, browserRequest, type Refused } from "./browser";
 import { isId } from "./ids";
 
 /**
@@ -180,21 +180,12 @@ export const announcementListSchema = z.object({
 
 export type AnnouncementList = z.infer<typeof announcementListSchema>;
 
-/** A staff read or write, or why it was refused. */
-type Result<K extends string, T> = ({ kind: "ok" } & Record<K, T>) | { kind: "refused"; code: string };
-
-function refusal(error: unknown): { kind: "refused"; code: string } {
-  return { kind: "refused", code: error instanceof ApiError ? error.code : "unreachable" };
-}
-
 /**
- * The staff desk's requests, made from the browser with the session cookie, as
- * monitoring's are: the desk polls every five seconds, and Next runs a page's
- * server actions one at a time.
+ * A staff read or write, or why it was refused. The desk's requests are made
+ * from the browser, as monitoring's are: the desk polls every five seconds,
+ * and Next runs a page's server actions one at a time.
  */
-function staffRequest(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}) {
-  return request(path, { ...options, credentials: "same-origin" });
-}
+type Result<K extends string, T> = ({ kind: "ok" } & Record<K, T>) | Refused;
 
 /** The most of one state the desk keeps live: the server's `MaxPageSize`. */
 export const QUEUE_MAX_SHOWN = 100;
@@ -210,20 +201,17 @@ export async function fetchQueue(
   contestId: string,
   state: QueueState,
   page: { limit: number; after?: string },
-  signal?: AbortSignal,
 ): Promise<Result<"queue", ClarificationQueue>> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
   if (page.after !== undefined && !isId(page.after)) return { kind: "refused", code: "clarification_invalid_cursor" };
   const limit = Math.min(Math.max(1, page.limit), QUEUE_MAX_SHOWN);
   const after = page.after === undefined ? "" : `&after=${page.after}`;
-  try {
-    const payload = await staffRequest(`/contests/${contestId}/clarifications?state=${state}&limit=${limit}${after}`, {
-      signal,
-    });
-    return { kind: "ok", queue: clarificationQueueSchema.parse(payload) };
-  } catch (error: unknown) {
-    return refusal(error);
-  }
+  return browserCall(async () => ({
+    kind: "ok" as const,
+    queue: clarificationQueueSchema.parse(
+      await browserRequest(`/contests/${contestId}/clarifications?state=${state}&limit=${limit}${after}`),
+    ),
+  }));
 }
 
 export type AnswerInput = { body: string; declined: boolean; visibility: Visibility };
@@ -237,39 +225,39 @@ export async function answerClarification(
 ): Promise<Result<"clarification", StaffClarification>> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
   if (!isId(clarificationId)) return { kind: "refused", code: "clarification_not_found" };
-  try {
-    const payload = await staffRequest(`/contests/${contestId}/clarifications/${clarificationId}/answer`, {
-      method: mode === "answer" ? "POST" : "PUT",
-      body: answer,
-    });
-    return { kind: "ok", clarification: staffClarificationSchema.parse(payload) };
-  } catch (error: unknown) {
-    return refusal(error);
-  }
+  return browserCall(async () => ({
+    kind: "ok" as const,
+    clarification: staffClarificationSchema.parse(
+      await browserRequest(`/contests/${contestId}/clarifications/${clarificationId}/answer`, {
+        method: mode === "answer" ? "POST" : "PUT",
+        body: answer,
+      }),
+    ),
+  }));
 }
 
 /** One page of the contest's announcements, newest first. */
 export async function fetchAnnouncements(contestId: string, offset: number): Promise<Result<"list", AnnouncementList>> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
-  try {
-    const payload = await staffRequest(
-      `/contests/${contestId}/announcements?limit=${CLARIFICATION_PAGE_SIZE}&offset=${Math.max(0, offset)}`,
-    );
-    return { kind: "ok", list: announcementListSchema.parse(payload) };
-  } catch (error: unknown) {
-    return refusal(error);
-  }
+  return browserCall(async () => ({
+    kind: "ok" as const,
+    list: announcementListSchema.parse(
+      await browserRequest(
+        `/contests/${contestId}/announcements?limit=${CLARIFICATION_PAGE_SIZE}&offset=${Math.max(0, offset)}`,
+      ),
+    ),
+  }));
 }
 
 /** Posts a message to every participant; an empty one is not sent. */
 export async function postAnnouncement(contestId: string, body: string): Promise<Result<"announcement", Announcement>> {
   if (!isId(contestId)) return { kind: "refused", code: "invalid_contest_id" };
   if (body.trim() === "") return { kind: "refused", code: "clarification_empty" };
-  try {
-    const payload = await staffRequest(`/contests/${contestId}/announcements`, { method: "POST", body: { body } });
-    return { kind: "ok", announcement: announcementSchema.parse(payload) };
-  } catch (error: unknown) {
-    return refusal(error);
-  }
+  return browserCall(async () => ({
+    kind: "ok" as const,
+    announcement: announcementSchema.parse(
+      await browserRequest(`/contests/${contestId}/announcements`, { method: "POST", body: { body } }),
+    ),
+  }));
 }
 

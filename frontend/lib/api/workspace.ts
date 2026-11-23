@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { request, type RequestOptions } from "./client";
+import { browserRequest } from "./browser";
 
 /**
  * The participant's workspace on the play screen: notes and SQL tabs, kept on
@@ -84,10 +84,6 @@ export type WriteOptions = {
   /** Lets the request survive the page being hidden or closed. */
   keepalive?: boolean;
 };
-
-function browserRequest(path: string, options: Omit<RequestOptions, "origin" | "credentials">) {
-  return request(path, { ...options, credentials: "same-origin" });
-}
 
 function playPath(contestId: string, rest: string): string {
   return `/contests/${encodeURIComponent(contestId)}/play/${rest}`;

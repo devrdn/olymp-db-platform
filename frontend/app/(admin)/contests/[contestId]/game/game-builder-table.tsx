@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
-import { ApiError, failureCode, isAbortError, request } from "@/lib/api/client";
+import { browserRequest } from "@/lib/api/browser";
+import { ApiError, isAbortError } from "@/lib/api/client";
+import { failureCodeOf } from "@/lib/api/outcome";
 import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -43,7 +45,7 @@ async function putTableChunk(
   chunk: Blob,
   signal: AbortSignal,
 ): Promise<number> {
-  const payload = await request(
+  const payload = await browserRequest(
     `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/chunk?offset=${offset}`,
     { method: "PUT", rawBody: chunk, signal },
   );
@@ -227,7 +229,7 @@ export function GameBuilderTable({
         }
 
         setPhase("error");
-        setErrorCode(failureCode(error));
+        setErrorCode(failureCodeOf(error));
         // The PUT goes straight to the API, so the full `ApiError` (e.g. a
         // header mismatch) is available here.
         setErrorDetail(error instanceof ApiError ? error.message : null);

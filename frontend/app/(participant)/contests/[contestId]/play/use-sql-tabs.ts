@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { ApiError, failureCode } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/client";
+import { failureCodeOf } from "@/lib/api/outcome";
 import {
   MAX_TABS,
   TAB_BODY_MAX_BYTES,
@@ -238,7 +239,7 @@ export function useSqlTabs({
       setClosed(failure.code);
       return;
     }
-    setError(failureCode(failure));
+    setError(failureCodeOf(failure));
   }, []);
 
   const select = choose;

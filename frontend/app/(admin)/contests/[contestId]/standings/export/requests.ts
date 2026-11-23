@@ -1,4 +1,4 @@
-import { failureCode, request, requestDownload, type RequestOptions } from "@/lib/api/client";
+import { browserCall, browserDownload, browserRequest, type Refused } from "@/lib/api/browser";
 import { isId } from "@/lib/api/ids";
 import { resultsReportSchema, type ResultsExportBody, type ResultsReport } from "@/lib/api/results";
 
@@ -12,34 +12,24 @@ import { resultsFileName } from "./request";
  * `messageForCode`.
  */
 
-export type DownloadOutcome = { kind: "ok"; blob: Blob; fileName: string } | { kind: "refused"; code: string };
+export type DownloadOutcome = { kind: "ok"; blob: Blob; fileName: string } | Refused;
 
-export type ReportOutcome = { kind: "ok"; report: ResultsReport } | { kind: "refused"; code: string };
-
-const browserOptions = (body: ResultsExportBody): RequestOptions => ({
-  method: "POST",
-  body,
-  credentials: "same-origin",
-});
+export type ReportOutcome = { kind: "ok"; report: ResultsReport } | Refused;
 
 /** The CSV as the API writes it, under the name its `Content-Disposition` gives. */
 export async function downloadResultsCsv(contestId: string, body: ResultsExportBody): Promise<DownloadOutcome> {
   if (!isId(contestId)) return { kind: "refused", code: "not_found" };
-  try {
-    const { blob, fileName } = await requestDownload(`/contests/${contestId}/results/export`, browserOptions(body));
-    return { kind: "ok", blob, fileName: fileName ?? resultsFileName("csv", contestId, new Date().toISOString()) };
-  } catch (error: unknown) {
-    return { kind: "refused", code: failureCode(error) };
-  }
+  return browserCall(async () => {
+    const { blob, fileName } = await browserDownload(`/contests/${contestId}/results/export`, { method: "POST", body });
+    return { kind: "ok" as const, blob, fileName: fileName ?? resultsFileName("csv", contestId, new Date().toISOString()) };
+  });
 }
 
 /** The same report as JSON, which the browser draws as a PDF. */
 export async function fetchResultsReport(contestId: string, body: ResultsExportBody): Promise<ReportOutcome> {
   if (!isId(contestId)) return { kind: "refused", code: "not_found" };
-  try {
-    const payload = await request(`/contests/${contestId}/results/export`, browserOptions(body));
-    return { kind: "ok", report: resultsReportSchema.parse(payload) };
-  } catch (error: unknown) {
-    return { kind: "refused", code: failureCode(error) };
-  }
+  return browserCall(async () => ({
+    kind: "ok" as const,
+    report: resultsReportSchema.parse(await browserRequest(`/contests/${contestId}/results/export`, { method: "POST", body })),
+  }));
 }

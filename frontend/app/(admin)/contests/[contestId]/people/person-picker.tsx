@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
-import { ApiError, request } from "@/lib/api/client";
+import { browserRequest } from "@/lib/api/browser";
+import { ApiError } from "@/lib/api/client";
 import { MIN_DIRECTORY_QUERY_LENGTH } from "@/lib/api/people-terms";
 import { debounce, type Debounced } from "@/lib/format/debounce";
 import { fill } from "@/lib/i18n/fill";
@@ -125,7 +126,7 @@ export function PersonPicker({
       setLoading(true);
       setFailed(false);
 
-      request(`/contests/${contestId}/people/directory?q=${encodeURIComponent(trimmed)}`)
+      browserRequest(`/contests/${contestId}/people/directory?q=${encodeURIComponent(trimmed)}`)
         .then((payload) => {
           if (thisGeneration !== generation.current) return;
           setOptions(parseDirectory(payload));

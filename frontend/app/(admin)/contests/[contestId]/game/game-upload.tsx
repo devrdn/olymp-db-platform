@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
-import { ApiError, failureCode, isAbortError, request } from "@/lib/api/client";
+import { browserRequest } from "@/lib/api/browser";
+import { ApiError, isAbortError } from "@/lib/api/client";
+import { failureCodeOf } from "@/lib/api/outcome";
 import type { Game, Upload } from "@/lib/api/game";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -35,9 +37,8 @@ type Phase = "idle" | "resumable" | "uploading" | "completing" | "done" | "error
  * Sends one chunk straight to the API, not through a Server Action: an action's
  * body is capped at 1 MiB while `chunk_bytes` is configured per installation at
  * runtime, and an action buffers its `FormData` where `rawBody: Blob` streams
- * the slice from disk. `request()`'s default empty origin makes it a
- * same-origin `/api` call, forwarded by the reverse proxy or, without one,
- * the `next.config.ts` rewrite.
+ * the slice from disk. It is a same-origin `/api` call, forwarded by the
+ * reverse proxy or, without one, the `next.config.ts` rewrite.
  */
 async function putChunk(
   contestId: string,
@@ -46,7 +47,7 @@ async function putChunk(
   chunk: Blob,
   signal: AbortSignal,
 ): Promise<number> {
-  const payload = await request(`/contests/${contestId}/game/uploads/${uploadId}/chunk?offset=${offset}`, {
+  const payload = await browserRequest(`/contests/${contestId}/game/uploads/${uploadId}/chunk?offset=${offset}`, {
     method: "PUT",
     rawBody: chunk,
     signal,
@@ -226,7 +227,7 @@ export function GameUpload({
         }
 
         setPhase("error");
-        setErrorCode(failureCode(error));
+        setErrorCode(failureCodeOf(error));
         return;
       }
     }

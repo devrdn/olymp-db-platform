@@ -7,7 +7,8 @@ import { PublicStandings } from "@/components/product/public-standings";
 import { Tag } from "@/components/ui/tag";
 import { archiveContestSchema, type ArchiveContest } from "@/lib/api/archive";
 import { branding } from "@/lib/api/branding";
-import { ApiError, failureCode } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/client";
+import { failureCodeOf } from "@/lib/api/outcome";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema, type Standings } from "@/lib/api/leaderboard";
@@ -38,7 +39,7 @@ async function load(contestId: string, locale: Locale): Promise<Loaded> {
     ),
     serverRequest(`/contests/${contestId}/leaderboard?lang=${locale}`)
       .then((payload): Table => ({ kind: "ok", standings: standingsSchema.parse(payload) }))
-      .catch((error: unknown): Table => ({ kind: "refused", code: failureCode(error) })),
+      .catch((error: unknown): Table => ({ kind: "refused", code: failureCodeOf(error) })),
   ]);
 
   if (contest.ok) return { kind: "ok", contest: contest.contest, table };
