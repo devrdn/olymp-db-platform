@@ -1,18 +1,16 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button, buttonVariants } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
+import { buttonVariants } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
 import { ProviderLogo } from "@/components/product/provider-logo";
 import { externalStartHref, PROVIDER_NAMES, type ProviderId } from "@/lib/auth/external";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
-import { signInAction, type SignInState } from "./actions";
+import { signInAction } from "./actions";
 import type { SignInErrors } from "./codes";
 
 /** The one message both fields point at on rejection. */
@@ -38,22 +36,38 @@ export function SignInForm({
   next?: string;
   offers?: SignInOffers;
 }) {
-  const t = dict.signIn;
-  const [state, formAction, pending] = useActionState<SignInState, FormData>(signInAction, {});
+  // Where the visitor was headed, in the form so it works without
+  // JavaScript; the action validates it, since it is forgeable.
+  return (
+    <ActionForm
+      action={signInAction}
+      fields={next ? { next } : {}}
+      errors={dict.errors}
+      className="flex w-full max-w-96 flex-col gap-7"
+      noValidate
+    >
+      {(state) => <SignIn t={dict.signIn} next={next} offers={offers} code={state.code} />}
+    </ActionForm>
+  );
+}
 
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
+function SignIn({
+  t,
+  next,
+  offers,
+  code,
+}: {
+  t: Dictionary["auth"]["signIn"];
+  next?: string;
+  offers: SignInOffers;
+  code?: string;
+}) {
   // A busy server says nothing about the input, so the fields are not marked
   // invalid.
-  const blamesFields = Boolean(failure) && state.code !== "sign_in_busy";
+  const blamesFields = code !== undefined && code !== "sign_in_busy";
 
   return (
-    <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
-      {/* Where the visitor was headed. In the form so it works without
-         JavaScript; the action validates it, since it is forgeable. */}
-      {next ? <input type="hidden" name="next" value={next} /> : null}
-
+    <>
       <Field
         id="login"
         label={t.login}
@@ -76,11 +90,7 @@ export function SignInForm({
           <Input name="password" type="password" autoComplete="current-password" required />
         </Field>
 
-        {failure ? (
-          <p id={FAILURE_ID} role="alert" className="text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
+        <ActionOutcome id={FAILURE_ID} />
 
         {offers.forgot ? (
           <InlineLink href="/forgot" className="self-start">
@@ -90,9 +100,7 @@ export function SignInForm({
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={pending}>
-          {pending ? t.submitting : t.submit}
-        </Button>
+        <ActionButton pendingLabel={t.submitting}>{t.submit}</ActionButton>
       </div>
 
       {offers.providers.length > 0 ? (
@@ -126,6 +134,6 @@ export function SignInForm({
           {t.noAccount} <InlineLink href="/signup">{t.signUp}</InlineLink>
         </p>
       ) : null}
-    </form>
+    </>
   );
 }

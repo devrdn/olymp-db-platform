@@ -4,6 +4,6 @@
  * chose, and `constructor` or `__proto__` must not find what every object
  * inherits. The caller decides what an unknown key shows.
  */
-export function labelFor(section: Readonly<Record<string, string>>, key: string): string | undefined {
+export function labelFor<T = string>(section: Readonly<Record<string, T>>, key: string): T | undefined {
   return Object.hasOwn(section, key) ? section[key] : undefined;
 }

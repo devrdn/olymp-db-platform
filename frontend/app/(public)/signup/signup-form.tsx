@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
@@ -15,7 +15,7 @@ import {
   type SignupField,
 } from "@/lib/auth/signup-rules";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
+import { labelFor } from "@/lib/i18n/label";
 
 import { signUpAction, type SignUpState } from "./actions";
 
@@ -50,7 +50,14 @@ const RULE_TEXT: Record<BrokenRule, keyof Text> = {
  * becomes that field's message.
  */
 export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
-  const [state, formAction, pending] = useActionState<SignUpState, FormData>(signUpAction, {});
+  return (
+    <ActionForm action={signUpAction} errors={errors} className="flex w-full max-w-96 flex-col gap-7" noValidate>
+      {(state) => <SignUp t={t} state={state} />}
+    </ActionForm>
+  );
+}
+
+function SignUp({ t, state }: { t: Text; state: SignUpState }) {
   const values = state.values;
 
   // Controlled, so a capital becomes lowercase as it is typed; the action
@@ -64,8 +71,7 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
   }
 
   const broken = state.broken;
-  const failure = state.code && !broken ? messageForCode(state.code, errors) : null;
-  const blamed = failure && state.code ? (BLAMED[state.code] ?? []) : [];
+  const blamed = state.code && !broken ? (labelFor(BLAMED, state.code) ?? []) : [];
 
   const wiring = (field: SignupField) =>
     blamed.includes(field) ? { invalid: true, describedBy: FAILURE_ID } : { invalid: false };
@@ -75,7 +81,7 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
     broken && RULE_FIELD[broken] === field ? { error: t[RULE_TEXT[broken]] } : { hint };
 
   return (
-    <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
+    <>
       <Field id="full_name" label={t.fullName} {...rule("fullName", t.fullNameHint)} {...wiring("fullName")}>
         <Input
           name="full_name"
@@ -122,20 +128,17 @@ export function SignUpForm({ t, errors }: { t: Text; errors: Dictionary["errors"
           <Input name="confirm" type="password" autoComplete="new-password" required />
         </Field>
 
-        {failure ? (
-          <p id={FAILURE_ID} role="alert" className="text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
+        {/* A rule this side found broken is said under its own field instead. */}
+        {broken ? null : <ActionOutcome id={FAILURE_ID} />}
       </div>
 
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? t.submitting : t.submit}
-      </Button>
+      <ActionButton pendingLabel={t.submitting} className="self-start">
+        {t.submit}
+      </ActionButton>
 
       <p className="text-small text-ink-3">
         {t.haveAccount} <InlineLink href="/login">{t.signIn}</InlineLink>
       </p>
-    </form>
+    </>
   );
 }

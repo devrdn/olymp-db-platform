@@ -7,6 +7,7 @@ import { signupAnswerCode, startSignup } from "@/lib/api/signup";
 import { browserRelay } from "@/lib/auth/relay";
 import { rememberSignupEmail } from "@/lib/auth/signup-email";
 import { checkSignup, normalizeLogin, type BrokenRule } from "@/lib/auth/signup-rules";
+import type { ActionState } from "@/lib/api/server";
 import { activeLocale } from "@/lib/i18n/server";
 
 export type SignUpValues = { fullName: string; login: string; email: string };
@@ -15,7 +16,7 @@ export type SignUpValues = { fullName: string; login: string; email: string };
  * A code, and the rule that was broken when this side knows it, with what was
  * typed: React resets an action's form. The passwords are never returned.
  */
-export type SignUpState = { code?: string; broken?: BrokenRule; values?: SignUpValues };
+export type SignUpState = ActionState & { broken?: BrokenRule; values?: SignUpValues };
 
 /**
  * Starts a sign-up. The API mails a code and sets the sign-up cookie, which is

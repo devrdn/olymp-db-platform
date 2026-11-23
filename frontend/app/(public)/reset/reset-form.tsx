@@ -1,15 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
+import { labelFor } from "@/lib/i18n/label";
 
-import { resetPasswordAction, type ResetState } from "./actions";
+import { resetPasswordAction } from "./actions";
 
 type Text = Dictionary["auth"]["reset"];
 
@@ -37,17 +35,26 @@ export function ResetForm({
   errors: Dictionary["errors"];
   token: string;
 }) {
-  const [state, formAction, pending] = useActionState<ResetState, FormData>(resetPasswordAction, {});
+  return (
+    <ActionForm
+      action={resetPasswordAction}
+      fields={{ token }}
+      errors={errors}
+      className="flex w-full max-w-96 flex-col gap-7"
+      noValidate
+    >
+      {(state) => <NewPassword t={t} passwordHint={passwordHint} code={state.code} />}
+    </ActionForm>
+  );
+}
 
-  const failure = state.code ? messageForCode(state.code, errors) : null;
-  const blamed = state.code ? (BLAMED[state.code] ?? []) : [];
+function NewPassword({ t, passwordHint, code }: { t: Text; passwordHint: string; code?: string }) {
+  const blamed = code ? (labelFor(BLAMED, code) ?? []) : [];
   const wiring = (field: "next" | "confirm") =>
     blamed.includes(field) ? { invalid: true, describedBy: FAILURE_ID } : { invalid: false };
 
   return (
-    <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
-      <input type="hidden" name="token" value={token} />
-
+    <>
       <Field id="password" label={t.next} hint={passwordHint} {...wiring("next")}>
         <Input name="password" type="password" autoComplete="new-password" required />
       </Field>
@@ -58,22 +65,18 @@ export function ResetForm({
           <Input name="confirm" type="password" autoComplete="new-password" required />
         </Field>
 
-        {failure ? (
-          <p id={FAILURE_ID} role="alert" className="text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
+        <ActionOutcome id={FAILURE_ID} />
 
-        {state.code === "reset_link_invalid" ? (
+        {code === "reset_link_invalid" ? (
           <InlineLink href="/forgot" className="self-start">
             {t.requestNew}
           </InlineLink>
         ) : null}
       </div>
 
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? t.submitting : t.submit}
-      </Button>
-    </form>
+      <ActionButton pendingLabel={t.submitting} className="self-start">
+        {t.submit}
+      </ActionButton>
+    </>
   );
 }

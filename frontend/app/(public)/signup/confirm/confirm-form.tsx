@@ -1,17 +1,17 @@
 "use client";
 
-import { useActionState, useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome, FailureAlert } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
 import { RESEND_COOLDOWN_SECONDS } from "@/lib/auth/signup-rules";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
-import { confirmSignupAction, resendCodeAction, type ConfirmState, type ResendOutcome } from "./actions";
+import { confirmSignupAction, resendCodeAction, type ResendOutcome } from "./actions";
 
 type Text = Dictionary["auth"]["confirm"];
 
@@ -31,48 +31,49 @@ const START_AGAIN = "signup_code_expired";
  * answers alike, and so does this.
  */
 export function ConfirmForm({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
-  const [state, formAction, pending] = useActionState<ConfirmState, FormData>(confirmSignupAction, {});
-
-  const failure = state.code ? messageForCode(state.code, errors) : null;
-  const blamesCode = Boolean(state.code && BLAMES_CODE.has(state.code));
-
   return (
     <div className="flex w-full max-w-96 flex-col gap-10">
-      <form action={formAction} className="flex flex-col gap-7" noValidate>
-        {/* In the flow: positioned absolutely, a wrapped message would overlap the button. */}
-        <div className="flex flex-col gap-1.5">
-          <Field
-            id="code"
-            label={t.code}
-            hint={t.codeHint}
-            invalid={blamesCode}
-            describedBy={blamesCode ? FAILURE_ID : undefined}
-          >
-            <Input
-              name="code"
-              autoComplete="one-time-code"
-              inputMode="numeric"
-              className="font-mono"
-              required
-            />
-          </Field>
-
-          {failure ? (
-            <p id={FAILURE_ID} role="alert" className="text-small text-bad">
-              {failure}
-            </p>
-          ) : null}
-
-          {state.code === START_AGAIN ? <StartOver t={t} /> : null}
-        </div>
-
-        <Button type="submit" disabled={pending} className="self-start">
-          {pending ? t.submitting : t.submit}
-        </Button>
-      </form>
+      <ActionForm action={confirmSignupAction} errors={errors} className="flex flex-col gap-7" noValidate>
+        {(state) => <Code t={t} code={state.code} />}
+      </ActionForm>
 
       <Resend t={t} errors={errors} />
     </div>
+  );
+}
+
+function Code({ t, code }: { t: Text; code?: string }) {
+  const blamesCode = code !== undefined && BLAMES_CODE.has(code);
+
+  return (
+    <>
+      {/* In the flow: positioned absolutely, a wrapped message would overlap the button. */}
+      <div className="flex flex-col gap-1.5">
+        <Field
+          id="code"
+          label={t.code}
+          hint={t.codeHint}
+          invalid={blamesCode}
+          describedBy={blamesCode ? FAILURE_ID : undefined}
+        >
+          <Input
+            name="code"
+            autoComplete="one-time-code"
+            inputMode="numeric"
+            className="font-mono"
+            required
+          />
+        </Field>
+
+        <ActionOutcome id={FAILURE_ID} />
+
+        {code === START_AGAIN ? <StartOver t={t} /> : null}
+      </div>
+
+      <ActionButton pendingLabel={t.submitting} className="self-start">
+        {t.submit}
+      </ActionButton>
+    </>
   );
 }
 
@@ -124,9 +125,7 @@ function Resend({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
         </p>
       ) : outcome ? (
         <>
-          <p role="alert" className="text-small text-bad">
-            {messageForCode(outcome.code, errors)}
-          </p>
+          <FailureAlert code={outcome.code} errors={errors} />
           {outcome.code === START_AGAIN ? <StartOver t={t} /> : null}
         </>
       ) : null}

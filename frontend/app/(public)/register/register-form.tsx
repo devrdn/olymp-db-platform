@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -10,7 +11,6 @@ import type { RegistrationOutcome } from "@/lib/api/registrations";
 import { displayCode, EMAIL_MAX_CHARS, NAME_MAX_CHARS } from "@/lib/api/registrations-terms";
 import { copyText } from "@/lib/clipboard";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 import { registerAction, type RegisterState } from "./actions";
@@ -25,17 +25,21 @@ const FAILURE_ID = "register-failure";
  * its place. The Server Action still works without JavaScript.
  */
 export function RegisterForm({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
-  const [state, formAction, pending] = useActionState<RegisterState, FormData>(registerAction, {});
+  // `contents`: the answer that replaces the fields is wider than they are.
+  return (
+    <ActionForm action={registerAction} errors={errors} className="contents" noValidate>
+      {(state) => (state.outcome ? <Outcome outcome={state.outcome} t={t} /> : <Fields t={t} state={state} />)}
+    </ActionForm>
+  );
+}
 
-  if (state.outcome) return <Outcome outcome={state.outcome} t={t} />;
-
-  const failure = state.code ? messageForCode(state.code, errors) : null;
+function Fields({ t, state }: { t: Text; state: RegisterState }) {
   const blamesNames = state.code === "registration_invalid_name";
   const blamesEmail = state.code === "registration_invalid_email";
   const values = state.values;
 
   return (
-    <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
+    <div className="flex w-full max-w-96 flex-col gap-7">
       <Field
         id="first_name"
         label={t.firstName}
@@ -85,17 +89,13 @@ export function RegisterForm({ t, errors }: { t: Text; errors: Dictionary["error
           />
         </Field>
 
-        {failure ? (
-          <p id={FAILURE_ID} role="alert" className="text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
+        <ActionOutcome id={FAILURE_ID} />
       </div>
 
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? t.submitting : t.submit}
-      </Button>
-    </form>
+      <ActionButton pendingLabel={t.submitting} className="self-start">
+        {t.submit}
+      </ActionButton>
+    </div>
   );
 }
 

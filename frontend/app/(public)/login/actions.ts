@@ -4,13 +4,15 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { callerHeaders } from "@/lib/api/caller";
+import type { ActionState } from "@/lib/api/server";
 import { browserCookieOptions } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { DEVICE_COOKIE, signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
 import { readIdentity } from "@/lib/auth/identity";
 import { sessionCookie } from "@/lib/auth/session";
-export type SignInState = { code?: string };
+/** Only a refusal comes back: a sign-in that worked redirects. */
+export type SignInState = ActionState;
 
 /**
  * A Server Action: works without JavaScript and keeps the API origin on the

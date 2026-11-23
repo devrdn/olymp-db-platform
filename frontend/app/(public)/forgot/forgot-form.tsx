@@ -1,14 +1,13 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InlineLink } from "@/components/ui/inline-link";
 import { EMAIL_MAX_CHARS } from "@/lib/auth/signup-rules";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 
 import { forgotPasswordAction, type ForgotState } from "./actions";
 
@@ -21,18 +20,23 @@ const FAILURE_ID = "forgot-failure";
  * the same whatever was typed.
  */
 export function ForgotForm({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
-  const [state, formAction, pending] = useActionState<ForgotState, FormData>(forgotPasswordAction, {});
+  return (
+    <ActionForm action={forgotPasswordAction} errors={errors} className="flex w-full max-w-96 flex-col gap-7" noValidate>
+      {(state) => <Ask t={t} state={state} />}
+    </ActionForm>
+  );
+}
 
+function Ask({ t, state }: { t: Text; state: ForgotState }) {
   if (state.ok) return <Sent t={t} />;
   if (state.unavailable) return <Unavailable t={t} />;
 
-  const failure = state.code ? messageForCode(state.code, errors) : null;
   // Only a malformed request is about what was typed; the throttle and an
   // outage are not.
   const blamesField = state.code === "invalid_request";
 
   return (
-    <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
+    <>
       <div className="flex flex-col gap-1.5">
         <Field id="login" label={t.login} invalid={blamesField} describedBy={blamesField ? FAILURE_ID : undefined}>
           <Input
@@ -46,21 +50,17 @@ export function ForgotForm({ t, errors }: { t: Text; errors: Dictionary["errors"
           />
         </Field>
 
-        {failure ? (
-          <p id={FAILURE_ID} role="alert" className="text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
+        <ActionOutcome id={FAILURE_ID} />
       </div>
 
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? t.submitting : t.submit}
-      </Button>
+      <ActionButton pendingLabel={t.submitting} className="self-start">
+        {t.submit}
+      </ActionButton>
 
       <InlineLink href="/login" className="self-start">
         {t.backToSignIn}
       </InlineLink>
-    </form>
+    </>
   );
 }
 

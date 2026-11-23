@@ -46,7 +46,7 @@ describe("EnrollButton, refused for an address outside the site's domain", () =>
     const lead = en.participant.trustedDomain.split("{domain}")[0].trim();
     expect(lead).not.toBe("");
     expect(alert).not.toHaveTextContent(lead);
-    expect(alert.querySelectorAll("p")).toHaveLength(1);
+    expect(alert.textContent).toBe(en.errors.contest_trusted_email_required);
   });
 });
 
