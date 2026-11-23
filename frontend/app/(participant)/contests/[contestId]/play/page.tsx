@@ -198,8 +198,8 @@ async function PlayPanels({
       : { question, index: index + 1, body: <QuestionBody markdown={question.bodyMd} /> },
   );
 
-  // The print copy's byline: who is printing, and when. This shares
-  // `ParticipantLayout`'s read of the identity. A failed read only drops the
+  // The print copy's byline: who is printing, and when. This shares the
+  // participant frame's read of the identity. A failed read only drops the
   // name; `PrintView` then prints the date alone.
   const identity = await readIdentity();
   const participantName = identity ? identity.fullName || identity.login : "";

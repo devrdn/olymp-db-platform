@@ -1,97 +1,53 @@
-import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { getDictionary } from "@/lib/i18n/dictionary";
-
-const { fetchIdentity, branding, redirect, notFound } = vi.hoisted(() => ({
+const { fetchIdentity, branding, notFound } = vi.hoisted(() => ({
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
   }),
   fetchIdentity: vi.fn(),
   branding: vi.fn(),
-  redirect: vi.fn((target: string) => {
-    throw new Error(`NEXT_REDIRECT ${target}`);
-  }),
 }));
 vi.mock("@/lib/auth/session", () => ({ fetchIdentity }));
 vi.mock("@/lib/api/branding", () => ({ branding }));
-vi.mock("next/navigation", () => ({ redirect, notFound, usePathname: () => "/archive" }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  notFound,
+}));
+
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");
   return { activeLocale: async () => "en", activeDictionary: async () => getDictionary("en") };
 });
 vi.mock("@/lib/theme/server", () => ({ activeTheme: async () => "light" }));
-vi.mock("@/components/layout/product-shell", () => ({
-  ProductShell: (props: { home: string; destinations?: { href: string; label: string }[]; children: React.ReactNode }) => (
-    <div data-home={props.home}>
-      {props.destinations?.map((item) => (
-        <a key={item.href} href={item.href}>
-          {item.label}
-        </a>
-      ))}
-      {props.children}
-    </div>
-  ),
-}));
+
+import { Frame } from "@/components/layout/frame";
 
 import ArchiveLayout from "./layout";
 
+/** The layout and then the frame it returns, as Next renders them in one request. */
+async function serve(children: React.ReactNode) {
+  const element = await ArchiveLayout({ children });
+  return Frame(element.props as Parameters<typeof Frame>[0]);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  branding.mockResolvedValue({ name: "", images: {}, archive: true });
+  fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: false });
 });
 
-describe("the archive's frame", () => {
-  test("leaves a dead session to the page, which knows the address to come back to", async () => {
-    fetchIdentity.mockResolvedValue(null);
-    render(await ArchiveLayout({ children: <p>inside</p> }));
-
-    expect(redirect).not.toHaveBeenCalled();
-    expect(screen.getByText("inside")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Archive" })).not.toBeInTheDocument();
-  });
-
-  test("gives an account that manages a contest the staff menu and home", async () => {
-    const en = await getDictionary("en");
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: true });
-    const { container } = render(await ArchiveLayout({ children: <p>inside</p> }));
-
-    expect(container.firstElementChild).toHaveAttribute("data-home", "/contests");
-    expect(screen.getByRole("link", { name: en.contests.heading })).toBeInTheDocument();
-  });
-
-  test("answers not found while the archive is off, even without a session", async () => {
+describe("the archive's layout", () => {
+  test("answers not found while the archive is off, before the frame asks who this is", async () => {
     branding.mockResolvedValue({ name: "", images: {}, archive: false });
-    fetchIdentity.mockResolvedValue(null);
-    await expect(ArchiveLayout({ children: <p>inside</p> })).rejects.toThrow("NEXT_NOT_FOUND");
-    expect(redirect).not.toHaveBeenCalled();
+
+    await expect(serve(<p>inside</p>)).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFound).toHaveBeenCalled();
     expect(fetchIdentity).not.toHaveBeenCalled();
   });
 
-  test("gives a participant their own menu and home, with the archive among it", async () => {
-    const en = await getDictionary("en");
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: false });
-    const { container } = render(await ArchiveLayout({ children: <p>inside</p> }));
+  test("wears the archive's frame while the archive is on", async () => {
+    branding.mockResolvedValue({ name: "", images: {}, archive: true });
+    const children = <p>inside</p>;
 
-    expect(container.firstElementChild).toHaveAttribute("data-home", "/my");
-    expect(screen.getByRole("link", { name: en.participant.mine.heading })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: en.archive.heading })).toHaveAttribute("href", "/archive");
-    expect(screen.getByText("inside")).toBeInTheDocument();
-  });
-
-  test("gives staff theirs", async () => {
-    const en = await getDictionary("en");
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: ["contest.create"], managesContests: false });
-    const { container } = render(await ArchiveLayout({ children: <p>inside</p> }));
-
-    expect(container.firstElementChild).toHaveAttribute("data-home", "/contests");
-    expect(screen.getByRole("link", { name: en.contests.heading })).toBeInTheDocument();
-  });
-
-  test("answers not found while the archive is off, before any page streams", async () => {
-    branding.mockResolvedValue({ name: "", images: {}, archive: false });
-    fetchIdentity.mockResolvedValue({ id: "u", login: "u", fullName: "U", roles: [], permissions: [], managesContests: false });
-    await expect(ArchiveLayout({ children: <p>inside</p> })).rejects.toThrow("NEXT_NOT_FOUND");
-    expect(notFound).toHaveBeenCalled();
+    expect(await ArchiveLayout({ children })).toEqual(<Frame audience="archive">{children}</Frame>);
   });
 });

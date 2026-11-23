@@ -10,8 +10,8 @@ import { SelectionProvider } from "./selection";
  *
  * The same durability is why `owner` is passed: `SelectionStore.syncOwner`
  * clears picks when the signed-in administrator changes. Identity is read
- * tolerantly, as `AdminLayout` does; a failure only scopes the selection to
- * `null`. Also wraps `/users/[userId]`, which reads no selection.
+ * tolerantly, as the admin frame reads it; a failure only scopes the
+ * selection to `null`. Also wraps `/users/[userId]`, which reads no selection.
  */
 export default async function UsersLayout({ children }: { children: React.ReactNode }) {
   const identity = await readIdentity();

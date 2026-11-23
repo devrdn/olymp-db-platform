@@ -52,12 +52,11 @@ export function AppBar({
   account,
   signedIn,
   destinations,
-  children,
 }: {
   locale: Locale;
   theme: Theme;
   dict: Dictionary;
-  /** Where the mark links, if anywhere; each shell names its own home. */
+  /** Where the mark links, if anywhere; each audience's frame names its own home. */
   home?: string;
   name?: string;
   /** The installation's uploaded logo, if any. */
@@ -71,10 +70,8 @@ export function AppBar({
    * refused nearly every endpoint), so sign-out goes in the bar.
    */
   signedIn?: boolean;
-  /** Where the account may go; when there are any, they replace `children`. */
+  /** Where the account may go. */
   destinations?: Destination[];
-  /** Beside the mark when there are no destinations, such as a section's name. */
-  children?: React.ReactNode;
 }) {
   const items = destinations?.length ? destinations : undefined;
   const fold = items ? FOLD[items.length > ROW_FROM_WIDE ? "wider" : "wide"] : undefined;
@@ -130,24 +127,17 @@ export function AppBar({
           )}
         </div>
 
-        {items || children ? (
+        {items && fold ? (
           <>
             <span
               aria-hidden
               data-slot="app-bar-divider"
-              className={cn("h-4.5 w-px shrink-0 bg-line-2 max-narrow:hidden", fold?.row)}
+              className={cn("h-4.5 w-px shrink-0 bg-line-2 max-narrow:hidden", fold.row)}
             />
             {/* Destinations keep their full width, which their fold point
-               guarantees, and the name gives way instead. At phone width a
-               section's name takes a row of its own below the mark and controls. */}
-            <div
-              data-slot="app-bar-nav"
-              className={cn(
-                "flex items-center gap-3.5 max-narrow:order-last max-narrow:basis-full",
-                fold ? ["grow shrink-0", fold.row] : "min-w-0 flex-1",
-              )}
-            >
-              {items ? <SectionNav items={items} /> : children}
+               guarantees, and the name gives way instead. */}
+            <div data-slot="app-bar-nav" className={cn("flex grow shrink-0 items-center gap-3.5", fold.row)}>
+              <SectionNav items={items} />
             </div>
           </>
         ) : (

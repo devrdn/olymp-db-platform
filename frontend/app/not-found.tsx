@@ -1,9 +1,6 @@
-import { FocusShell } from "@/components/layout/focus-shell";
+import { Frame } from "@/components/layout/frame";
 import { NotFoundView } from "@/components/product/not-found-view";
-import { branding } from "@/lib/api/branding";
-import { imageHref } from "@/lib/api/settings";
-import { activeDictionary, activeLocale } from "@/lib/i18n/server";
-import { activeTheme } from "@/lib/theme/server";
+import { activeDictionary } from "@/lib/i18n/server";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
@@ -11,27 +8,13 @@ export async function generateMetadata() {
 }
 
 /**
- * Not-found for addresses outside every route group; the only one with a shell,
+ * Not-found for addresses outside every route group; the only one with a frame,
  * since no group layout supplies one.
  */
-export default async function NotFound() {
-  const [brand, dict, locale, theme] = await Promise.all([
-    branding(),
-    activeDictionary(),
-    activeLocale(),
-    activeTheme(),
-  ]);
-
+export default function NotFound() {
   return (
-    <FocusShell
-      name={brand.name}
-      logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined}
-      logoDark={brand.images["logo-dark"] ? imageHref("logo-dark", brand.images["logo-dark"]) : undefined}
-      locale={locale}
-      theme={theme}
-      dict={dict}
-    >
+    <Frame audience="public">
       <NotFoundView />
-    </FocusShell>
+    </Frame>
   );
 }

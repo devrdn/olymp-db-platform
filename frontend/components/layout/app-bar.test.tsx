@@ -13,9 +13,8 @@ vi.mock("./session-actions", () => ({ signOutAction: vi.fn() }));
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/contests" }));
 
-import { FocusShell } from "./focus-shell";
+import { AppBar } from "./app-bar";
 import { installPopoverStandIn } from "./popover-test-support";
-import { ProductShell } from "./product-shell";
 
 let en: Dictionary;
 let uninstall: () => void;
@@ -27,11 +26,9 @@ beforeAll(async () => {
 afterAll(() => uninstall());
 
 describe("the product mark", () => {
-  test("leads to the home of whichever audience the shell was built for", () => {
+  test("leads to the home of whichever audience the bar was built for", () => {
     render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" />,
     );
 
     expect(screen.getByRole("link", { name: en.chrome.product })).toHaveAttribute(
@@ -43,15 +40,7 @@ describe("the product mark", () => {
   /** A participant sent to the author's register would find it empty. */
   test("leads somewhere else for a participant", () => {
     render(
-      <ProductShell
-        locale="en"
-        theme="system"
-        dict={en}
-        home="/my"
-        section={en.participant.mine.heading}
-      >
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/my" />,
     );
 
     expect(screen.getByRole("link", { name: en.chrome.product })).toHaveAttribute("href", "/my");
@@ -59,17 +48,13 @@ describe("the product mark", () => {
 
   test("shows the product's logo until the installation uploads its own", () => {
     const { container, rerender } = render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests">
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" />,
     );
     const link = screen.getByRole("link", { name: en.chrome.product });
     expect(link.querySelector('svg[data-slot="logo"]')).not.toBeNull();
 
     rerender(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" logo="/api/v1/settings/images/logo/abc">
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" logo="/api/v1/settings/images/logo/abc" />,
     );
     expect(container.querySelector('svg[data-slot="logo"]')).toBeNull();
     expect(container.querySelector('header img[src="/api/v1/settings/images/logo/abc"]')).not.toBeNull();
@@ -80,9 +65,7 @@ describe("the product mark", () => {
     const DARK = "/api/v1/settings/images/logo-dark?v=d1";
     const bar = (props: { logo?: string; logoDark?: string }) =>
       render(
-        <ProductShell locale="en" theme="system" dict={en} home="/contests" {...props}>
-          <p>rows</p>
-        </ProductShell>,
+        <AppBar locale="en" theme="system" dict={en} home="/contests" {...props} />,
       ).container.querySelector("header")!;
 
     test("shows each upload only in its own theme", () => {
@@ -123,9 +106,7 @@ describe("the product mark", () => {
 
   test("is not a link on the sign-in screen, where there is nowhere to go yet", () => {
     render(
-      <FocusShell locale="en" theme="system" dict={en}>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} />,
     );
 
     expect(screen.getByText(en.chrome.product)).toBeInTheDocument();
@@ -134,21 +115,9 @@ describe("the product mark", () => {
 });
 
 describe("the app bar", () => {
-  test("names the section a signed-in visitor is in", () => {
-    render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
-        <p>rows</p>
-      </ProductShell>,
-    );
-
-    expect(screen.getByRole("banner")).toHaveTextContent(en.contests.heading);
-  });
-
   test("offers the language the visitor is not already reading", () => {
     render(
-      <FocusShell locale="en" theme="system" dict={en}>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} />,
     );
 
     expect(screen.getByRole("button", { name: "ro" })).toBeInTheDocument();
@@ -158,16 +127,7 @@ describe("the app bar", () => {
   test("names the account and leads to its profile", () => {
     // Also answers "who am I signed in as" on a shared lab machine.
     render(
-      <ProductShell
-        locale="en"
-        theme="system"
-        dict={en}
-        home="/contests"
-        section={en.contests.heading}
-        account={{ fullName: "Ivan Ivanov", login: "ivanov" }}
-      >
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" account={{ fullName: "Ivan Ivanov", login: "ivanov" }} />,
     );
 
     expect(screen.getByRole("link", { name: "Ivan Ivanov" })).toHaveAttribute("href", "/profile");
@@ -177,15 +137,7 @@ describe("the app bar", () => {
     // SPEC 10.4: initials, never a photograph. Decorative, since the link
     // already carries the name.
     const { container } = render(
-      <ProductShell
-        locale="en"
-        theme="system"
-        dict={en}
-        home="/contests"
-        account={{ fullName: "Ivan Ivanov", login: "ivanov" }}
-      >
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" account={{ fullName: "Ivan Ivanov", login: "ivanov" }} />,
     );
 
     expect(container.querySelector("header [aria-hidden='true']")).toBeTruthy();
@@ -194,9 +146,7 @@ describe("the app bar", () => {
 
   test("offers no account door on the sign-in screen", () => {
     render(
-      <FocusShell locale="en" theme="system" dict={en}>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} />,
     );
 
     expect(screen.queryByRole("link", { name: /profile/i })).not.toBeInTheDocument();
@@ -207,9 +157,7 @@ describe("the app bar", () => {
     // The forced password change: /profile would answer 403, so sign-out must
     // be in the bar.
     render(
-      <FocusShell locale="en" theme="system" dict={en} signedIn>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} signedIn />,
     );
 
     expect(screen.getByRole("button", { name: en.chrome.signOut })).toBeInTheDocument();
@@ -218,9 +166,7 @@ describe("the app bar", () => {
 
   test("says where the theme control leads, not where it is", () => {
     render(
-      <FocusShell locale="en" theme="system" dict={en}>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} />,
     );
 
     // Standing on `system`, the press moves to `light`.
@@ -230,9 +176,7 @@ describe("the app bar", () => {
   // One rule here, so no route has to remember to hide the bar when printing.
   test("hides itself when the page it sits on is printed", () => {
     const { container } = render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" />,
     );
 
     expect(container.querySelector("header")?.className).toMatch(/(^|\s)print:hidden(\s|$)/);
@@ -256,11 +200,9 @@ const CROWDED = [
 ];
 const ACCOUNT = { fullName: "Ivan Ivanov", login: "ivanov" };
 
-function staffShell(props: { name?: string; destinations?: { href: string; label: string }[] } = {}) {
+function staffBar(props: { name?: string; destinations?: { href: string; label: string }[] } = {}) {
   return render(
-    <ProductShell locale="en" theme="system" dict={en} home="/contests" destinations={SHORT} account={ACCOUNT} {...props}>
-      <p>rows</p>
-    </ProductShell>,
+    <AppBar locale="en" theme="system" dict={en} home="/contests" destinations={SHORT} account={ACCOUNT} {...props} />,
   );
 }
 
@@ -297,7 +239,7 @@ function foldPoints(container: HTMLElement) {
 
 describe("the bar from 1024px up", () => {
   test("lists the destinations in a row between the mark and the controls", () => {
-    const { container } = staffShell();
+    const { container } = staffBar();
 
     const row = container.querySelector('[data-slot="app-bar-nav"]');
     expect(row).not.toBeNull();
@@ -315,7 +257,7 @@ describe("the bar from 1024px up", () => {
   });
 
   test("keeps the theme, the language and the account beside the row", () => {
-    const { container } = staffShell();
+    const { container } = staffBar();
 
     const controls = container.querySelector('[data-slot="app-bar-controls"]') as HTMLElement;
     expect(within(controls).getByRole("button", { name: en.chrome.theme.light })).toBeInTheDocument();
@@ -325,20 +267,20 @@ describe("the bar from 1024px up", () => {
 
   test("shows a row of up to three destinations from 1024px, and the menu only below", () => {
     // CSS rather than measurement, so the server-rendered bar is right before hydration.
-    const { container } = staffShell({ destinations: SHORT });
+    const { container } = staffBar({ destinations: SHORT });
 
     expect(foldPoints(container)).toEqual({ row: ["wide"], divider: ["wide"], controls: ["wide"], menu: ["wide"] });
   });
 
   test("keeps four destinations in the menu at 1024px, where they were measured not to fit", () => {
     const four = [...SHORT, { href: "/registrations", label: "Registrations" }];
-    const { container } = staffShell({ destinations: four });
+    const { container } = staffBar({ destinations: four });
 
     expect(foldPoints(container)).toEqual({ row: ["wider"], divider: ["wider"], controls: ["wider"], menu: ["wider"] });
   });
 
   test("keeps a crowded bar in the menu until its row fits, and only then shows the row", () => {
-    const { container } = staffShell({ destinations: CROWDED });
+    const { container } = staffBar({ destinations: CROWDED });
 
     expect(foldPoints(container)).toEqual({ row: ["wider"], divider: ["wider"], controls: ["wider"], menu: ["wider"] });
     expect(hasClass(container.querySelector('[data-slot="app-bar-menu"]')?.parentElement?.firstElementChild, "max-wider:grow")).toBe(true);
@@ -358,7 +300,7 @@ describe("the bar from 1024px up", () => {
 
 describe("the bar below its row", () => {
   test("offers a menu button, closed, named from the dictionary", () => {
-    staffShell();
+    staffBar();
 
     const button = screen.getByRole("button", { name: en.chrome.menu.open });
     expect(button).toHaveAttribute("aria-expanded", "false");
@@ -366,7 +308,7 @@ describe("the bar below its row", () => {
   });
 
   test("puts the mark and the button on one row of the narrow bar's height, which cannot wrap", () => {
-    const { container } = staffShell();
+    const { container } = staffBar();
 
     const menu = container.querySelector('[data-slot="app-bar-menu"]');
     const bar = menu?.parentElement as HTMLElement;
@@ -383,7 +325,7 @@ describe("the bar below its row", () => {
   // The panel hangs at `top-12`, which is right only while the bar is one row.
   test("never lets a folded bar wrap, at any width, whatever the number of destinations", () => {
     for (const destinations of [SHORT, CROWDED]) {
-      const { container, unmount } = staffShell({ destinations });
+      const { container, unmount } = staffBar({ destinations });
 
       const bar = container.querySelector('[data-slot="app-bar-menu"]')?.parentElement as HTMLElement;
       expect(bar.className.split(/\s+/).filter((utility) => /(^|:)flex-wrap$/.test(utility))).toEqual([]);
@@ -392,7 +334,7 @@ describe("the bar below its row", () => {
   });
 
   test("opens onto every destination, with the current one marked", async () => {
-    staffShell();
+    staffBar();
 
     const panel = await openMenu();
     const links = within(within(panel).getByRole("navigation")).getAllByRole("link");
@@ -404,7 +346,7 @@ describe("the bar below its row", () => {
   });
 
   test("holds, after a separator, the account and then the theme and the language", async () => {
-    staffShell();
+    staffBar();
 
     const panel = await openMenu();
     const nav = within(panel).getByRole("navigation");
@@ -431,7 +373,7 @@ describe("the bar below its row", () => {
   });
 
   test("hangs under the bar, on the bar's own column, and scrolls inside what the screen leaves", async () => {
-    staffShell();
+    staffBar();
 
     const body = await openMenu();
     const panel = body.parentElement as HTMLElement;
@@ -447,9 +389,7 @@ describe("the bar below its row", () => {
 
   test("has no menu on a screen without destinations", () => {
     render(
-      <FocusShell locale="en" theme="system" dict={en} signedIn>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} signedIn />,
     );
 
     expect(screen.queryByRole("button", { name: en.chrome.menu.open })).not.toBeInTheDocument();
@@ -459,15 +399,10 @@ describe("the bar below its row", () => {
     expect(within(controls as HTMLElement).getByRole("button", { name: en.chrome.signOut })).toBeInTheDocument();
   });
 
-  test("has no menu on a signed-in screen without destinations, which names its section instead", () => {
-    render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading} account={ACCOUNT}>
-        <p>rows</p>
-      </ProductShell>,
-    );
+  test("has no menu on a signed-in screen without destinations, and keeps its controls in the bar", () => {
+    render(<AppBar locale="en" theme="system" dict={en} home="/contests" account={ACCOUNT} />);
 
     expect(screen.queryByRole("button", { name: en.chrome.menu.open })).not.toBeInTheDocument();
-    expect(screen.getByRole("banner")).toHaveTextContent(en.contests.heading);
     expect(document.querySelector('[data-slot="app-bar-controls"]')?.className).not.toMatch(/max-wider?:hidden/);
   });
 });
@@ -476,7 +411,7 @@ describe("the installation's name", () => {
   const LONG = "Olimpiada de baze de date a unei instituții cu un nume foarte, foarte lung";
 
   test("takes one line with an ellipsis from 760px up, so it cannot push anything off the screen", () => {
-    staffShell({ name: LONG });
+    staffBar({ name: LONG });
 
     const name = screen.getByText(LONG);
     expect(hasClass(name, "narrow:truncate")).toBe(true);
@@ -488,7 +423,7 @@ describe("the installation's name", () => {
   });
 
   test("gives way to the destinations, which keep their full width in the row", () => {
-    const { container } = staffShell({ name: LONG });
+    const { container } = staffBar({ name: LONG });
 
     const row = container.querySelector('[data-slot="app-bar-nav"]');
     expect(hasClass(row, "shrink-0")).toBe(true);
@@ -497,9 +432,7 @@ describe("the installation's name", () => {
 
   test("is not capped where there is no row to make room for", () => {
     render(
-      <FocusShell locale="en" theme="system" dict={en} name={LONG}>
-        <p>form</p>
-      </FocusShell>,
+      <AppBar locale="en" theme="system" dict={en} name={LONG} />,
     );
 
     expect(screen.getByText(LONG).closest("div")?.className).not.toMatch(/max-w-/);
@@ -507,9 +440,7 @@ describe("the installation's name", () => {
 
   test("takes two lines at phone width rather than push the controls onto a row of their own", () => {
     render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" name="Olimpiada de baze de date">
-        <p>rows</p>
-      </ProductShell>,
+      <AppBar locale="en" theme="system" dict={en} home="/contests" name="Olimpiada de baze de date" />,
     );
 
     const link = screen.getByRole("link", { name: "Olimpiada de baze de date" });

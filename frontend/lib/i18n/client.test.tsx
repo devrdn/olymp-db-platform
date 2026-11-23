@@ -48,7 +48,8 @@ describe("a dictionary scope", () => {
   });
 });
 
-// The two rules the type system cannot state.
+// A rule the type system cannot state; the other, that every boundary's scope
+// is provided above it, is the frame's (`components/layout/frame.test.tsx`).
 describe("how the scopes are wired into the app", () => {
   const appDir = path.resolve(__dirname, "../../app");
 
@@ -64,7 +65,7 @@ describe("how the scopes are wired into the app", () => {
     const layouts = filesNamed("layout.tsx");
     expect(layouts.length).toBeGreaterThan(0);
 
-    const providers = layouts.flatMap((file) =>
+    const providers = [...layouts, path.resolve(__dirname, "../../components/layout/frame.tsx")].flatMap((file) =>
       [...readFileSync(file, "utf8").matchAll(/<(\w+Dictionary)Provider\s+dict=\{([^}]*)\}/g)].map(
         ([, scope, value]) => ({ file, scope, value }),
       ),
@@ -84,35 +85,6 @@ describe("how the scopes are wired into the app", () => {
       expect(value, `${file} hands ${scope} something other than its own slice`).toBe(
         `${selectorFor[scope]}(dict)`,
       );
-    }
-  });
-
-  test("every boundary's scope is provided by a layout above it", () => {
-    const boundaries = filesNamed("error.tsx");
-    expect(boundaries.length).toBeGreaterThan(0);
-
-    for (const file of boundaries) {
-      const used = [...readFileSync(file, "utf8").matchAll(/(\w+Dictionary)\.use\(\)/g)].map(
-        ([, scope]) => scope,
-      );
-
-      for (const scope of used) {
-        let dir = path.dirname(file);
-        let provided = false;
-        while (dir.startsWith(appDir)) {
-          const layout = path.join(dir, "layout.tsx");
-          try {
-            if (readFileSync(layout, "utf8").includes(`<${scope}Provider`)) {
-              provided = true;
-              break;
-            }
-          } catch {
-            // No layout at this level; keep walking up.
-          }
-          dir = path.dirname(dir);
-        }
-        expect(provided, `${file} reads ${scope}, which no layout above it provides`).toBe(true);
-      }
     }
   });
 });
