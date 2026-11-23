@@ -1,9 +1,10 @@
 import type { PdfMake } from "pdfmake";
 
-import { FAMILIES, fetchFont, loadFonts, type ReadFont } from "./fonts";
-import { loadLogo, type LogoImage } from "./logo";
+import { renderPdf, type PdfOptions } from "@/lib/pdf/render";
+import type { Measured } from "@/lib/pdf/types";
+
+import { storyDocument } from "./story-document";
 import { fitColumns, type TableRef } from "./story-markdown";
-import { HEADER_TITLE, storyDocument, titleSpace } from "./story-document";
 
 export type StoryPdfRequest = {
   title: string;
@@ -14,32 +15,6 @@ export type StoryPdfRequest = {
   /** The installation's uploaded logo; none means the product mark. */
   logoHref?: string;
 };
-
-export type StoryPdfOptions = {
-  /** Where the faces are read from: a URL path in the browser, a directory in a test. */
-  fontSource?: string;
-  readFont?: ReadFont;
-  /** Draws the uploaded logo; a test replaces the browser's canvas. */
-  drawLogo?: (href: string) => Promise<LogoImage>;
-};
-
-/**
- * The PDF library with the faces installed. It is imported here, on demand, so
- * it is part of no page's own code.
- */
-export async function preparedLibrary(fontSource: string, readFont: ReadFont): Promise<PdfMake> {
-  const [loaded, fonts] = await Promise.all([import("pdfmake"), loadFonts(fontSource, readFont)]);
-  const pdfMake = ((loaded as { default?: PdfMake }).default ?? loaded) as PdfMake;
-  // Everything the file holds is handed over in memory; the library is never to fetch or open anything.
-  pdfMake.setUrlAccessPolicy(() => false);
-  pdfMake.setLocalAccessPolicy?.(() => false);
-  for (const [file, bytes] of fonts) pdfMake.virtualfs.writeFileSync(file, bytes);
-  // A copy: the library rewrites the table it is given.
-  pdfMake.setFonts(structuredClone(FAMILIES));
-  return pdfMake;
-}
-
-type Measured = { _minWidth: number; _maxWidth: number };
 
 /**
  * Each table's column widths as the screen's table layout gives them. The
@@ -60,62 +35,11 @@ export async function measureColumns(pdfMake: PdfMake, tables: TableRef[]): Prom
   });
 }
 
-/** How wide `text` sets in the header's title, as the library measures it. */
-export async function titleWidth(pdfMake: PdfMake, text: string): Promise<number> {
-  const node = { ...HEADER_TITLE, text };
-  await pdfMake.createPdf({ pageSize: "A4", content: [node] }).getBuffer();
-  return (node as typeof node & Measured)._maxWidth;
-}
-
-/**
- * Points a fitted title keeps clear of its space: the library wraps against
- * the width its star column works out, which can come out a rounding error
- * narrower than the space, and a wrapped title would push into the text.
- */
-export const TITLE_SLACK = 0.5;
-
-/**
- * The title as the header prints it, on one line: its whitespace collapsed,
- * whole when it fits `width`, else the longest start of it that fits followed
- * by an ellipsis. It is cut between graphemes, so a letter keeps its accent.
- */
-export async function fitTitle(pdfMake: PdfMake, title: string, width: number): Promise<string> {
-  const line = title.replace(/\s+/g, " ").trim();
-  const limit = width - TITLE_SLACK;
-  if ((await titleWidth(pdfMake, line)) <= limit) return line;
-  const graphemes = Array.from(new Intl.Segmenter().segment(line), ({ segment }) => segment);
-  const cut = (count: number) => `${graphemes.slice(0, count).join("").trimEnd()}…`;
-  // A binary search: `cut(fits)` fits, or is the bare ellipsis; `cut(over)` does not fit.
-  let fits = 0;
-  let over = graphemes.length;
-  while (over - fits > 1) {
-    const middle = Math.floor((fits + over) / 2);
-    if ((await titleWidth(pdfMake, cut(middle))) <= limit) fits = middle;
-    else over = middle;
-  }
-  return cut(fits);
-}
-
-/**
- * The story as a PDF file. A logo that cannot be loaded or drawn is left out
- * rather than stopping the download. Anything else, such as a face that fails
- * to load, rejects, and the caller says so; the next call loads it again.
- */
-export async function makeStoryPdf(
-  request: StoryPdfRequest,
-  { fontSource = "/fonts/pdf", readFont = fetchFont, drawLogo = loadLogo }: StoryPdfOptions = {},
-): Promise<Blob> {
-  const [pdfMake, logo] = await Promise.all([
-    preparedLibrary(fontSource, readFont),
-    request.logoHref ? drawLogo(request.logoHref).catch(() => null) : Promise.resolve("mark" as const),
-  ]);
-
-  const input = { title: request.title, language: request.language, markdown: request.markdown, logo };
-  const [columnWidths, headerTitle] = await Promise.all([
-    measureColumns(pdfMake, storyDocument(input).tables),
-    fitTitle(pdfMake, request.title, titleSpace(logo)),
-  ]);
-  const { definition } = storyDocument({ ...input, columnWidths, headerTitle });
-  const bytes = await pdfMake.createPdf(definition).getBuffer();
-  return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "application/pdf" });
+/** The story as a PDF file. */
+export async function makeStoryPdf(request: StoryPdfRequest, options?: PdfOptions): Promise<Blob> {
+  return renderPdf({ title: request.title, logoHref: request.logoHref }, async ({ pdfMake, logo, headerTitle }) => {
+    const input = { title: request.title, language: request.language, markdown: request.markdown, logo };
+    const columnWidths = await measureColumns(pdfMake, storyDocument(input).tables);
+    return storyDocument({ ...input, columnWidths, headerTitle }).definition;
+  }, options);
 }

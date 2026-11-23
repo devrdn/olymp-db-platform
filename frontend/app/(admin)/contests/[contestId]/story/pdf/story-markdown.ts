@@ -3,8 +3,8 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { cleanEditorMarkdown, safeUrl } from "@/lib/format/markdown";
-
-import { ASCENDER, COLOR, DATA_SIZE, MEASURE, NATURAL, PX, SPACE, STEP, inset, lineHeight, type Face, type Step } from "./theme";
+import { ASCENDER, COLOR, DATA_SIZE, MEASURE, NATURAL, PX, SPACE, STEP, inset, lineHeight, type Face, type Step } from "@/lib/pdf/theme";
+import type { Node } from "@/lib/pdf/types";
 
 /**
  * The story's Markdown as the PDF library's document tree, set as `StoryText`
@@ -24,9 +24,6 @@ import { ASCENDER, COLOR, DATA_SIZE, MEASURE, NATURAL, PX, SPACE, STEP, inset, l
  * - CSS collapses a box's top margin into its first child's; the library adds
  *   them. `stack` collapses them as CSS does.
  */
-
-/** A node of the library's document tree. */
-export type Node = Record<string, unknown>;
 
 /** A table, with the width its column has, for the caller to measure its content. */
 export type TableRef = { node: Node; width: number };

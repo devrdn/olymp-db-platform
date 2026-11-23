@@ -1,14 +1,13 @@
 import { describe, expect, test } from "vitest";
 
 import { CAT, markSvg } from "@/lib/brand/marks.mjs";
+import { uploaded } from "@/lib/pdf/pdf-test-support";
+import { A4, COLOR, HEADER, LOGO, MEASURE, MM, NATURAL, PAGE, SPACE, STEP } from "@/lib/pdf/theme";
+import type { Node } from "@/lib/pdf/types";
 
-import { storyDocument, titleSpace } from "./story-document";
-import type { Node } from "./story-markdown";
-import { A4, COLOR, HEADER, LOGO, MEASURE, MM, NATURAL, PAGE, SPACE, STEP } from "./theme";
+import { storyDocument } from "./story-document";
 
 const input = { title: "Crima din seră", language: "ro", markdown: "Ștefan a venit." };
-
-const uploaded = (width: number, height: number) => ({ src: "data:image/jpeg;base64,", width, height });
 
 function content(definition: Node): Node[] {
   return definition.content as Node[];
@@ -107,12 +106,6 @@ describe("the running header", () => {
     expect(columns[0]).toMatchObject({ text: "Crima din seră", alignment: "right", width: "*" });
   });
 
-  test("gives the title the measure less the logo and the gap before it", () => {
-    expect(titleSpace(null)).toBeCloseTo(MEASURE, 6);
-    expect(titleSpace("mark")).toBeCloseTo(MEASURE - (28 * 90) / 116 - HEADER.titleGap, 6);
-    expect(titleSpace(uploaded(480, 140))).toBeCloseTo(MEASURE - 96 - HEADER.titleGap, 6);
-  });
-
   test("spans the measure and stands on a 1px rule in line, as the app bar on its border", () => {
     const top = header(storyDocument({ ...input, logo: "mark" }).definition);
     const [line] = headerRule(top).canvas as Node[];
@@ -174,6 +167,8 @@ describe("storyDocument", () => {
     const footer = storyDocument({ ...input, logo: null }).definition.footer as (page: number, pages: number) => Node;
 
     expect(footer(2, 5)).toMatchObject({ text: "2 / 5", font: "Onest", fontSize: STEP.small.size, color: COLOR.ink3, margin: [PAGE.side, PAGE.footer, PAGE.side, 0] });
+    // The footer's position is worked out for the line's natural height, so no leading, tracking or weight is added.
+    for (const key of ["lineHeight", "characterSpacing", "bold"]) expect(footer(2, 5)).not.toHaveProperty(key);
   });
 
   test("never leaves a heading as the last thing on a page, though the header and footer follow it there", () => {

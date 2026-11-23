@@ -1,5 +1,5 @@
 /**
- * The part of pdfmake 0.3 the story PDF uses. The package ships no types; the
+ * The part of pdfmake 0.3 the PDFs use. The package ships no types; the
  * browser build and the Node build both export one instance with this shape
  * (`setLocalAccessPolicy` only in Node).
  */

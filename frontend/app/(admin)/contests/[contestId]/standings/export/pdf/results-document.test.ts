@@ -5,7 +5,7 @@ import type { ResultsReport, ResultsRow } from "@/lib/api/results";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
 
-import { A4, MM } from "../../../story/pdf/theme";
+import { A4, COLOR, MM, PAGE, SPACE, STEP } from "@/lib/pdf/theme";
 import {
   contestTitle,
   offsetLabel,
@@ -258,6 +258,19 @@ describe("resultsTableDocument", () => {
     expect(strings((definition.footer as PageFunction)(1, 2, A4))).toEqual(["1 / 2"]);
   });
 
+  test("numbers its pages as the story does: small, ink-3, centred, in the text column's margins, with the natural line height", () => {
+    const footer = (resultsTableDocument(input).footer as PageFunction)(2, 5, A4) as Record<string, unknown>;
+
+    expect(footer).toEqual({
+      text: "2 / 5",
+      alignment: "center",
+      font: STEP.small.face,
+      fontSize: STEP.small.size,
+      color: COLOR.ink3,
+      margin: [PAGE.side, PAGE.footer, PAGE.side, 0],
+    });
+  });
+
   test("a disqualified row is marked and holds no place", () => {
     const { body } = resultsTable(
       resultsTableDocument({
@@ -380,6 +393,21 @@ describe("resultsProtocolDocument", () => {
       ]),
     );
     expect(strings(jury)).toEqual(expect.arrayContaining(members));
+  });
+
+  test("the protocol footer sets the page number as the table's does, between the two lines, in the same margins", () => {
+    const footer = (resultsProtocolDocument(input).footer as PageFunction)(2, 5, A4) as Record<string, unknown>;
+    const [, number] = footer.columns as Record<string, unknown>[];
+
+    expect(footer).toMatchObject({ columnGap: SPACE.block, margin: [PAGE.side, PAGE.footer, PAGE.side, 0] });
+    expect(number).toEqual({
+      text: "2 / 5",
+      alignment: "center",
+      font: STEP.small.face,
+      fontSize: STEP.small.size,
+      color: COLOR.ink3,
+      width: "auto",
+    });
   });
 
   test("the protocol footer carries the generation time and the fingerprint", () => {

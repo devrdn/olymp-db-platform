@@ -44,3 +44,10 @@ export function missingGlyphs(pdf: Buffer): number {
   }
   return count;
 }
+
+/** A 2 x 2 JPEG, standing in for what the browser's canvas produces. */
+export const PIXEL =
+  "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAACAAIDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAFB//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ACOTSp//2Q==";
+
+/** A drawn logo of the given size, as the browser's canvas hands it over. */
+export const uploaded = (width: number, height: number) => ({ src: "data:image/jpeg;base64,", width, height });

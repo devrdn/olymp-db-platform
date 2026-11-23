@@ -2,9 +2,10 @@ import { render } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { StoryText } from "@/components/product/story-text";
+import { ASCENDER, COLOR, DATA_SIZE, MEASURE, NATURAL, PX, SPACE, STEP, inset } from "@/lib/pdf/theme";
+import type { Node } from "@/lib/pdf/types";
 
-import { fitColumns, givenTags, storyBlocks, type Node } from "./story-markdown";
-import { ASCENDER, COLOR, DATA_SIZE, MEASURE, NATURAL, PX, SPACE, STEP, inset } from "./theme";
+import { fitColumns, givenTags, storyBlocks } from "./story-markdown";
 
 /**
  * The mapping is tested on the document tree it hands the PDF library, without

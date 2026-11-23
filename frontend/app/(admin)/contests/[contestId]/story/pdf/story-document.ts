@@ -1,71 +1,8 @@
-import { CAT, markSvg } from "@/lib/brand/marks.mjs";
+import { ofBody, pageFooter, running, runningHeader, type Logo } from "@/lib/pdf/running-header";
+import { COLOR, PAGE, SPACE, STEP, inset, lineHeight } from "@/lib/pdf/theme";
+import type { Node } from "@/lib/pdf/types";
 
-import type { LogoImage } from "./logo";
-import { storyBlocks, tracked, type Node } from "./story-markdown";
-import { COLOR, HEADER, LOGO, MEASURE, NATURAL, PAGE, SPACE, STEP, inset, lineHeight } from "./theme";
-
-/** The product's cat (`lib/brand/marks.mjs`), standing the logo box's full height. */
-function productMark(): Node & { width: number } {
-  const [, , width, height] = CAT.viewBox.split(" ").map(Number);
-  return {
-    svg: markSvg(CAT, { ink: COLOR.logoInk, chalk: COLOR.logoChalk }),
-    width: (LOGO.height * width) / height,
-    height: LOGO.height,
-  };
-}
-
-/** The logo's cell in the header's row, centred in the row's height. */
-function logoCell(logo: LogoImage | "mark"): Node & { width: number } {
-  if (logo === "mark") return productMark();
-  const scale = Math.min(LOGO.height / logo.height, LOGO.maxWidth / logo.width);
-  const [width, height] = [logo.width * scale, logo.height * scale];
-  const room = (LOGO.height - height) / 2;
-  return { image: "logo", width, height, margin: [0, room, 0, room] };
-}
-
-/** The header's title, `text-small` in ink-2; `fitTitle` measures in it. */
-export const HEADER_TITLE = { font: STEP.small.face, fontSize: STEP.small.size, color: COLOR.ink2 } as const;
-
-/** The width the header leaves the title, beside the logo, on a text column `width` wide. */
-export function titleSpace(logo: StoryDocumentInput["logo"], width: number = MEASURE): number {
-  return logo ? width - logoCell(logo).width - HEADER.titleGap : width;
-}
-
-/**
- * The style every node of the running header and footer carries. It names no
- * style, so it changes nothing drawn; it tells them apart from the story in
- * `pageBreakBefore`, since the library lists them among a page's nodes.
- */
-const RUNNING = "running";
-
-/** Marks a node and its `stack` and `columns` children; a header or footer built with another container needs it here too. */
-function running(node: Node): Node {
-  const marked: Node = { ...node, style: RUNNING };
-  for (const key of ["stack", "columns"]) if (Array.isArray(node[key])) marked[key] = (node[key] as Node[]).map(running);
-  return marked;
-}
-
-/**
- * The running header: the logo, the title on its right, and a rule below
- * spanning the text column, `width` wide. Built afresh for each page, since
- * the library consumes the nodes it lays out.
- */
-export function runningHeader(logo: StoryDocumentInput["logo"], title: string, width: number = MEASURE): Node {
-  // The title's line centred on the row, as `items-center` centres it.
-  const room = (LOGO.height - NATURAL[HEADER_TITLE.font] * HEADER_TITLE.fontSize) / 2;
-  const titleCell = { text: title, ...HEADER_TITLE, alignment: "right", width: "*", margin: [0, room, 0, room] };
-  const rule = SPACE.rule / 2;
-  return {
-    margin: [PAGE.side, HEADER.top, PAGE.side, 0],
-    stack: [
-      { columns: logo ? [logoCell(logo), titleCell] : [titleCell], columnGap: HEADER.titleGap },
-      {
-        canvas: [{ type: "line", x1: 0, y1: rule, x2: width, y2: rule, lineWidth: SPACE.rule, lineColor: COLOR.line }],
-        margin: [0, HEADER.ruleGap, 0, 0],
-      },
-    ],
-  };
-}
+import { storyBlocks, tracked } from "./story-markdown";
 
 /** What the library tells `pageBreakBefore` of a laid-out node. */
 type NodeInfo = { headlineLevel?: number; style?: unknown };
@@ -73,14 +10,12 @@ type NodeInfo = { headlineLevel?: number; style?: unknown };
 /** The nodes around the one `pageBreakBefore` is asked about, in document order. */
 type PageNodes = { getFollowingNodesOnPage(): NodeInfo[]; getNodesOnNextPage(): NodeInfo[] };
 
-const ofStory = (node: NodeInfo) => node.style !== RUNNING;
-
 /**
  * What a heading must share its page with: the story's text, not another
  * heading. The library asks about each node once, in order, so a run of
  * headings at a page's foot has to move at its first heading.
  */
-const text = (node: NodeInfo) => ofStory(node) && !node.headlineLevel;
+const text = (node: NodeInfo) => ofBody(node) && !node.headlineLevel;
 
 export type StoryDocumentInput = {
   title: string;
@@ -88,7 +23,7 @@ export type StoryDocumentInput = {
   language: string;
   markdown: string;
   /** The uploaded logo, drawn; `"mark"` for the product mark; `null` for none. */
-  logo: LogoImage | "mark" | null;
+  logo: Logo;
   /** One list of column widths per table, from measuring them. */
   columnWidths?: number[][];
   /** The title as the header prints it, cut by `fitTitle` to `titleSpace`; the whole title when absent. */
@@ -128,18 +63,10 @@ export function storyDocument({ title, language, markdown, logo, columnWidths, h
       },
       { stack: story.content, margin: [0, storyGap, 0, 0] },
     ],
-    footer: (page: number, pages: number) =>
-      running({
-        text: `${page} / ${pages}`,
-        alignment: "center",
-        font: STEP.small.face,
-        fontSize: STEP.small.size,
-        color: COLOR.ink3,
-        margin: [PAGE.side, PAGE.footer, PAGE.side, 0],
-      }),
+    footer: (page: number, pages: number) => running(pageFooter(page, pages)),
     // A heading is never the last thing on a page, apart from what it heads.
     pageBreakBefore: (node: NodeInfo, nodes: PageNodes) =>
-      Boolean(node.headlineLevel) && !nodes.getFollowingNodesOnPage().some(text) && nodes.getNodesOnNextPage().some(ofStory),
+      Boolean(node.headlineLevel) && !nodes.getFollowingNodesOnPage().some(text) && nodes.getNodesOnNextPage().some(ofBody),
   };
   return { definition, tables: story.tables };
 }

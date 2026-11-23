@@ -6,15 +6,17 @@ import { describe, expect, test, vi } from "vitest";
 import type { ResultsReport, ResultsRow } from "@/lib/api/results";
 import ro from "@/lib/i18n/dictionaries/ro";
 import ru from "@/lib/i18n/dictionaries/ru";
+import type { ReadFont } from "@/lib/pdf/fonts";
+import { preparedLibrary } from "@/lib/pdf/library";
+import { embeddedFaces, missingGlyphs, namedFaces, readFromDisk } from "@/lib/pdf/pdf-test-support";
+import type { PdfOptions } from "@/lib/pdf/render";
+import { A4 } from "@/lib/pdf/theme";
 
-import { preparedLibrary, type StoryPdfOptions } from "../../../story/pdf/make-story-pdf";
-import { embeddedFaces, missingGlyphs, namedFaces, readFromDisk } from "../../../story/pdf/pdf-test-support";
-import { A4 } from "../../../story/pdf/theme";
 import { makeResultsPdf, type ResultsPdfRequest } from "./make-results-pdf";
 
 const FONTS = join(process.cwd(), "public/fonts/pdf");
 
-const options = (overrides: Partial<StoryPdfOptions> = {}): StoryPdfOptions => ({
+const options = (overrides: Partial<PdfOptions> = {}): PdfOptions => ({
   fontSource: FONTS,
   readFont: readFromDisk,
   drawLogo: async () => Promise.reject(new Error("no canvas in a test")),
@@ -173,7 +175,13 @@ describe("makeResultsPdf", () => {
   });
 
   test("the protocol of a report still moving is refused before anything is drawn", async () => {
-    await expect(makeResultsPdf("protocol", request("ro", icpcReport("preliminary", "summary")), options())).rejects.toThrow();
+    // A source no other test has loaded: the faces are cached per source, so a warm one would hide a read.
+    const readFont = vi.fn<ReadFont>(async (_source, file) => readFromDisk(FONTS, file));
+
+    await expect(
+      makeResultsPdf("protocol", request("ro", icpcReport("preliminary", "summary")), options({ fontSource: "never-read", readFont })),
+    ).rejects.toThrow();
+    expect(readFont).not.toHaveBeenCalled();
   });
 
   test("a logo that cannot be drawn is left out and the file is still made", async () => {

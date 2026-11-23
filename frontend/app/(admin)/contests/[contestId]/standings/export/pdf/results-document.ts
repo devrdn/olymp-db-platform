@@ -1,6 +1,6 @@
 /**
  * The results table and the results protocol as pdfmake document definitions,
- * drawn from the JSON report in the story PDF's theme. Nothing here loads the
+ * drawn from the JSON report in the PDF theme. Nothing here loads the
  * library; `make-results-pdf.ts` does, on demand.
  */
 
@@ -11,9 +11,8 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { plural } from "@/lib/i18n/plural";
-
-import type { LogoImage } from "../../../story/pdf/logo";
-import { runningHeader } from "../../../story/pdf/story-document";
+import type { LogoImage } from "@/lib/pdf/logo";
+import { pageFooter, pageNumber, runningHeader } from "@/lib/pdf/running-header";
 import {
   A4,
   ASCENDER,
@@ -28,7 +27,7 @@ import {
   inset,
   lineHeight,
   type Step,
-} from "../../../story/pdf/theme";
+} from "@/lib/pdf/theme";
 
 export type ResultsPdfTexts = Dictionary["leaderboard"]["export"]["pdf"];
 
@@ -331,10 +330,6 @@ function resultsTable(input: ResultsPdfInput): Content[] {
   return [table, ...legends.map((legend) => ({ text: legend, ...textStyle(STEP.small, COLOR.ink3), margin: [0, SPACE.item, 0, 0] }))];
 }
 
-function pageNumber(page: number, pages: number): Content {
-  return { text: `${page} / ${pages}`, ...textStyle(STEP.small, COLOR.ink3), alignment: "center" };
-}
-
 /** What both PDFs share: the page, the running header with the contest's title, and the file's own description. */
 function frame(input: ResultsPdfInput, title: string): Content {
   const { report, language, logo } = input;
@@ -369,7 +364,7 @@ export function resultsTableDocument(input: ResultsPdfInput): Content {
       ...(report.hiddenByFreeze ? [band(texts.hiddenByFreeze)] : []),
       ...resultsTable(input),
     ],
-    footer: (page: number, pages: number) => ({ ...pageNumber(page, pages), margin: [PAGE.side, PAGE.footer, PAGE.side, 0] }),
+    footer: pageFooter,
   };
 }
 
