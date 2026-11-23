@@ -131,7 +131,7 @@ export function GameBuilder({
 
   async function removeTable(key: string, name: string) {
     const question = { title: fill(tb.removeTableConfirm, { name }), answer: tb.removeTable, cancel: dict.chrome.cancel, danger: true };
-    if (!(await ask(question))) return;
+    if (!(await ask(question).catch(() => false))) return;
     setTables((prev) => prev.filter((t) => t.key !== key));
   }
 

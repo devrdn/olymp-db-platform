@@ -340,7 +340,8 @@ export function GameBuilderTable({
   }
 
   async function cancel() {
-    if (!(await ask({ title: td.cancelConfirm, answer: td.cancel, cancel: td.keepUploading, danger: true }))) return;
+    const question = { title: td.cancelConfirm, answer: td.cancel, cancel: td.keepUploading, danger: true };
+    if (!(await ask(question).catch(() => false))) return;
     // The page went on while the question was open: an upload that finished
     // meanwhile is not cancelled, nor is one that has become another.
     const now = live.current;
@@ -405,7 +406,7 @@ export function GameBuilderTable({
 
   async function removeRow(row: number) {
     const question = { title: fill(td.deleteRowConfirm, { row }), answer: td.deleteRow, cancel: dict.chrome.cancel, danger: true };
-    if (!(await ask(question))) return;
+    if (!(await ask(question).catch(() => false))) return;
     setDeletingRow(row);
     const result = await deleteTableRowAction(contestId, table.name, row);
     setDeletingRow(null);

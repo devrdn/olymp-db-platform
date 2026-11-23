@@ -127,7 +127,7 @@ export function ConsoleEditor({
         answer: fill(te.close, { tab: title }),
         cancel: te.keep,
         danger: true,
-      }),
+      }).catch(() => false),
     // A draft that beat the server copy goes into that tab's document and, if
     // the tab is open, into the field a run is built from.
     onRestore: (id, text) => {

@@ -3,12 +3,26 @@ import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 import type { ActionState } from "@/lib/api/server";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import { ActionButton, ActionFooter, ActionForm, ActionOutcome } from "./action-form";
+
+// The dialog chunk's first load waits for the test, which fails it; later
+// loads go through.
+const dialogChunk = vi.hoisted(() => {
+  let fail: (error: Error) => void = () => {};
+  const first = new Promise<void>((_resolve, reject) => (fail = reject));
+  return { first: first as Promise<void> | null, fail: (error: Error) => fail(error) };
+});
+vi.mock("@/components/ui/confirm-dialog", async (importOriginal) => {
+  const waiting = dialogChunk.first;
+  dialogChunk.first = null;
+  if (waiting) await waiting;
+  return importOriginal();
+});
 
 let dict: Dictionary;
 let ro: Dictionary;
@@ -49,6 +63,29 @@ function Destructive({ action }: { action: (previous: ActionState, form: FormDat
     </ActionForm>
   );
 }
+
+// The first describe, since a dialog chunk that loaded once stays loaded.
+describe("ActionForm whose question cannot be shown yet", () => {
+  test("sends nothing while the dialog loads, refuses with a sentence when it fails, and asks on a retry", async () => {
+    const { action } = recording();
+    render(<Destructive action={action} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(action).not.toHaveBeenCalled();
+
+    dialogChunk.fail(new Error("chunk failed"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(ro.errors.unreachable);
+    expect(action).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("dialog", { name: asked().title })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+    await vi.waitFor(() => expect(action).toHaveBeenCalledOnce());
+  });
+});
 
 describe("ActionForm that asks first", () => {
   test("is disabled in the server's markup, so nothing is sent before hydration", () => {

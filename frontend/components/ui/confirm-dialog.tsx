@@ -12,14 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-import type { Question } from "./use-confirm";
-
-/**
- * How long the answer stays disabled once the question is on screen. The
- * dialog opens where the pointer may already be, so the second click of a
- * double-click on the control that asked can land on the answer.
- */
-export const CONFIRM_ARM_MS = 400;
+import { CONFIRM_ARM_MS, type Question } from "./use-confirm";
 
 /**
  * False for `CONFIRM_ARM_MS` after the calling component mounts, then true:

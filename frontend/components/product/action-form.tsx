@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useState,
   type ComponentProps,
   type FormEvent,
   type ReactNode,
@@ -32,6 +33,8 @@ type Bound = {
   pending: boolean;
   /** The submit cannot be pressed yet: the form asks first and is not hydrated. */
   locked: boolean;
+  /** A code the form refused itself before sending: its question could not be asked. */
+  unasked?: string;
   errors: ErrorSentences;
 };
 
@@ -137,9 +140,10 @@ export function ActionForm<S extends ActionState>({
   const [ask, dialog] = useConfirm(confirm !== undefined);
   // What a yes was given for, set only while its own submission is dispatched.
   const approved = useRef<string | null>(null);
+  const [unasked, setUnasked] = useState<string | undefined>(undefined);
 
   return (
-    <BoundForm.Provider value={{ state, pending, locked, errors }}>
+    <BoundForm.Provider value={{ state, pending, locked, unasked, errors }}>
       <form
         action={formAction}
         className={className}
@@ -149,6 +153,7 @@ export function ActionForm<S extends ActionState>({
           // never carries over to a later one.
           const yesFor = approved.current;
           approved.current = null;
+          setUnasked(undefined);
           onSubmit?.(event);
           if (event.defaultPrevented || confirm === undefined) return;
 
@@ -162,18 +167,22 @@ export function ActionForm<S extends ActionState>({
 
           event.preventDefault();
           const asked = sent(data);
-          void ask(question).then((yes) => {
-            // The button that was pressed went away while the question was open.
-            if (!yes || (submitter !== null && !form.contains(submitter))) return;
-            approved.current = asked;
-            // Dispatched at once, or not at all when the browser's validation
-            // stops it; either way the approval ends here.
-            try {
-              form.requestSubmit(submitter);
-            } finally {
-              approved.current = null;
-            }
-          });
+          ask(question).then(
+            (yes) => {
+              // The button that was pressed went away while the question was open.
+              if (!yes || (submitter !== null && !form.contains(submitter))) return;
+              approved.current = asked;
+              // Dispatched at once, or not at all when the browser's validation
+              // stops it; either way the approval ends here.
+              try {
+                form.requestSubmit(submitter);
+              } finally {
+                approved.current = null;
+              }
+            },
+            // The question could not even be shown, so nothing is sent.
+            () => setUnasked("unreachable"),
+          );
         }}
       >
         {Object.entries(fields).flatMap(([name, value]) =>
@@ -233,8 +242,8 @@ export function ActionOutcome({
   /** What the screen adds under a refusal's sentence, announced with it. */
   children?: ReactNode;
 }) {
-  const { state, errors } = useBound("ActionOutcome");
-  const code = refusal ?? state.code;
+  const { state, unasked, errors } = useBound("ActionOutcome");
+  const code = refusal ?? unasked ?? state.code;
 
   if (code) {
     return elsewhere.includes(code) ? null : (

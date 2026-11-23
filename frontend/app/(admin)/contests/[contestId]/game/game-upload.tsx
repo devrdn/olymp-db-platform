@@ -329,7 +329,8 @@ export function GameUpload({
   }
 
   async function cancel() {
-    if (!(await ask({ title: tu.cancelConfirm, answer: tu.cancel, cancel: tu.keepUploading, danger: true }))) return;
+    const question = { title: tu.cancelConfirm, answer: tu.cancel, cancel: tu.keepUploading, danger: true };
+    if (!(await ask(question).catch(() => false))) return;
     // The page went on while the question was open: an upload that finished
     // meanwhile is not cancelled, nor is one that has become another.
     const now = live.current;
