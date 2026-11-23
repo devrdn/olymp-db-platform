@@ -24,7 +24,7 @@ import {
 } from "./actions";
 import { knownMessage } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 

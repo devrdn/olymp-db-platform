@@ -24,7 +24,7 @@ import {
 import { useGamePoll } from "./game-poll";
 import { knownMessage } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 /**
  * Consecutive out-of-order refusals resynced automatically (this tab's offset

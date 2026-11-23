@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { saveGameDefinitionAction } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
 import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useConfirm } from "@/components/ui/use-confirm";
 import { labelFor } from "@/lib/i18n/label";
 
 /**

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, test } from "vitest";
 
-import { type Question, useConfirm } from "./confirm-dialog";
+import { type Question, useConfirm } from "./use-confirm";
 import { answerYes } from "./confirm-dialog-test-support";
 
 const asked: Question = {

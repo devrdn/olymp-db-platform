@@ -13,7 +13,7 @@ import { runQuery, type ConsoleState } from "./requests";
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
 import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
 import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 /**
  * The SQL editor: always visible, never behind a tab. It is only the input

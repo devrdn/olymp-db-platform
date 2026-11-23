@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
-import { type Question, useConfirm } from "@/components/ui/confirm-dialog";
+import { type Question, useConfirm } from "@/components/ui/use-confirm";
 import type { ActionState } from "@/lib/api/server";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
@@ -95,7 +95,7 @@ export function ActionForm<S extends ActionState>({
   // React replays a submission queued before hydration without `onSubmit`,
   // where the question is asked, so a form that asks cannot be sent until then.
   const locked = confirm !== undefined && !hydrated;
-  const [ask, dialog] = useConfirm();
+  const [ask, dialog] = useConfirm(confirm !== undefined);
   // Set by a yes, for the one submission it lets through.
   const approved = useRef(false);
 

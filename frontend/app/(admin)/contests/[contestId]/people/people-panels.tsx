@@ -2,7 +2,7 @@
 
 import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { StateView } from "@/components/product/state-view";
-import type { Question } from "@/components/ui/confirm-dialog";
+import type { Question } from "@/components/ui/use-confirm";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
