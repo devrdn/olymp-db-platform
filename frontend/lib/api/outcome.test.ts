@@ -192,6 +192,19 @@ describe("outcome on the server", () => {
     expect(line).not.toContain("api:8080");
     for (const [entry] of logged.mock.calls) expect(String(entry)).not.toMatch(/[\r\n]/);
   });
+
+  test("lets no line or paragraph separator into a log line, since a log viewer breaks lines on them too", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await outcome(
+      async () => {
+        throw new ApiError("internal_error", 500, "", "req-7\u2028FAKE\u2029LINE");
+      },
+      { report: "/users/mail-status" },
+    );
+
+    expect(logOf(logged)).not.toMatch(/[\u2028\u2029]/);
+  });
 });
 
 describe("failureCodeOf", () => {

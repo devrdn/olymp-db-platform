@@ -1,5 +1,7 @@
 import { unstable_rethrow } from "next/navigation";
 
+import { printable } from "@/lib/printable";
+
 import { ApiError, CLIENT_ERROR_CODES, isAbortError } from "./client";
 
 /**
@@ -93,11 +95,6 @@ function driftedFields(error: unknown): string | undefined {
       return `${path || "(root)"}: ${String(issue?.code)}`;
     })
     .join(", ");
-}
-
-/** Strips control characters, so a value from a request cannot start a forged log line, and bounds the length. */
-function printable(text: string): string {
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").slice(0, 500);
 }
 
 /**
