@@ -1,4 +1,6 @@
-import { feedSchema, MAX_FEED_PAGE, rosterSchema } from "@/lib/api/monitor";
+import { RefusalNote } from "@/components/product/refusal-note";
+import { feedSchema, MAX_FEED_PAGE, MONITOR_SHOWN, rosterSchema } from "@/lib/api/monitor";
+import { Refusal } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
@@ -14,17 +16,24 @@ export default async function MonitorPage(props: PageProps<"/contests/[contestId
 
   const [contest, roster, feed] = await Promise.all([
     loadContest(contestId),
-    loadContestResource(contestId, "/monitor/participants", (payload) => rosterSchema.parse(payload)),
+    loadContestResource(contestId, "/monitor/participants", (payload) => rosterSchema.parse(payload), {
+      shown: MONITOR_SHOWN,
+    }),
     // The newest page; the browser polls after it.
-    loadContestResource(contestId, `/monitor/feed?limit=${MAX_FEED_PAGE}`, (payload) => feedSchema.parse(payload)),
+    loadContestResource(contestId, `/monitor/feed?limit=${MAX_FEED_PAGE}`, (payload) => feedSchema.parse(payload), {
+      shown: MONITOR_SHOWN,
+    }),
   ]);
+
+  if (roster instanceof Refusal) return <RefusalNote code={roster.code} errors={dict.errors} />;
+  if (feed instanceof Refusal) return <RefusalNote code={feed.code} errors={dict.errors} />;
 
   return (
     <MonitorView
       contestId={contest.id}
       changing={contest.status === "published" || contest.status === "running"}
-      roster={roster ?? { generatedAt: "", truncated: false, rows: [] }}
-      feed={feed ?? { items: [], more: false }}
+      roster={roster}
+      feed={feed}
       // Every prop of a client component is serialised into the page; the
       // screen reads one section of the dictionary.
       dict={{ workspace: dict.workspace }}

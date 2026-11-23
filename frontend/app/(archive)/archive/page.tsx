@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
+import { RefusalNote } from "@/components/product/refusal-note";
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,6 @@ import { ARCHIVE_PAGE_SIZE, ARCHIVE_QUERY_MAX, archivePageSchema, archiveSearch 
 import { branding } from "@/lib/api/branding";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 import { readPage, Refusal } from "@/lib/api/page-read";
-import { messageForCode } from "@/lib/i18n/errors";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { plural } from "@/lib/i18n/plural";
 import { fill } from "@/lib/i18n/fill";
@@ -70,9 +70,7 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
     return (
       <Band fill className="py-12">
         <h1 className="text-h2 text-ink">{t.heading}</h1>
-        <p role="status" className="pt-6 text-body text-warn">
-          {messageForCode(loaded.code, dict.errors)}
-        </p>
+        <RefusalNote code={loaded.code} errors={dict.errors} className="pt-6" />
       </Band>
     );
   }

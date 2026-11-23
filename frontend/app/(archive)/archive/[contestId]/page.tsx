@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { PublicStandings } from "@/components/product/public-standings";
+import { RefusalNote } from "@/components/product/refusal-note";
 import { Tag } from "@/components/ui/tag";
 import { archiveContestSchema, type ArchiveContest } from "@/lib/api/archive";
 import { branding } from "@/lib/api/branding";
@@ -14,7 +15,6 @@ import { standingsSchema, type Standings } from "@/lib/api/leaderboard";
 import { readPage, Refusal } from "@/lib/api/page-read";
 import { serverRequest } from "@/lib/api/server";
 import type { Locale } from "@/lib/i18n/config";
-import { messageForCode } from "@/lib/i18n/errors";
 import { plural } from "@/lib/i18n/plural";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -69,9 +69,7 @@ export default async function ArchiveContestPage(props: PageProps<"/archive/[con
     return (
       <Band fill className="flex flex-col gap-6 py-12">
         {back}
-        <p role="status" className="text-body text-warn">
-          {messageForCode(loaded.code, dict.errors)}
-        </p>
+        <RefusalNote code={loaded.code} errors={dict.errors} />
       </Band>
     );
   }
@@ -112,11 +110,7 @@ export default async function ArchiveContestPage(props: PageProps<"/archive/[con
           dict={{ leaderboard: dict.leaderboard }}
           locale={locale}
           placeholder={
-            table.kind === "refused" ? (
-              <p role="status" className="text-body text-warn">
-                {messageForCode(table.code, dict.errors)}
-              </p>
-            ) : null
+            table.kind === "refused" ? <RefusalNote code={table.code} errors={dict.errors} /> : null
           }
         />
       </section>

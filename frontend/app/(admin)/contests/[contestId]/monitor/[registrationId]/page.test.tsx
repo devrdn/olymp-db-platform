@@ -200,3 +200,19 @@ describe("an address that leads nowhere", () => {
     expect(serverRequest).not.toHaveBeenCalled();
   });
 });
+
+/** The organiser's own read budget is a refusal to show, not a failed load. */
+describe("an organiser who refreshes too often", () => {
+  test("is told so in words, whichever of the participant's reads is refused", async () => {
+    serverRequest.mockImplementation(async (path: string) => {
+      if (path === `/contests/${CONTEST}/monitor/participants`) {
+        throw new ApiError("monitor_too_often", 429, "Too many monitoring reads");
+      }
+      return answer(path);
+    });
+
+    await renderPage();
+
+    expect(screen.getByRole("status")).toHaveTextContent(dict.errors.monitor_too_often);
+  });
+});

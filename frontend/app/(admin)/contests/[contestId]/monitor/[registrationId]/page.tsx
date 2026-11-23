@@ -1,16 +1,19 @@
 import { notFound } from "next/navigation";
 
+import { RefusalNote } from "@/components/product/refusal-note";
 import { isId } from "@/lib/api/ids";
 import {
   answersSchema,
   feedSchema,
   MAX_FEED_PAGE,
+  MONITOR_SHOWN,
   participantSchema,
   queriesSchema,
   rosterSchema,
   timelinePath,
   workspaceSchema,
 } from "@/lib/api/monitor";
+import { Refusal } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { loadContestResource } from "../../contest";
@@ -49,6 +52,9 @@ export default async function ParticipantPage(
     read(contestId, "/monitor/participants", (payload) => rosterSchema.parse(payload)),
     loadTab(tab, contestId, registrationId),
   ]);
+  if (participant instanceof Refusal) return <RefusalNote code={participant.code} errors={dict.errors} />;
+  if (roster instanceof Refusal) return <RefusalNote code={roster.code} errors={dict.errors} />;
+  if (panel instanceof Refusal) return <RefusalNote code={panel.code} errors={dict.errors} />;
   const flags = roster.rows.find((row) => row.registrationId === registrationId)?.flags ?? null;
   const names = dict.workspace.monitor.participant.tabs;
 
@@ -104,8 +110,13 @@ export default async function ParticipantPage(
 }
 
 /** One monitoring read, of this registration or the roster. */
-function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
-  return loadContestResource(contestId, path, parse, { missing: ["monitor_participant_not_found"] });
+function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T | Refusal> {
+  return loadContestResource(contestId, path, parse, { missing: ["monitor_participant_not_found"], shown: MONITOR_SHOWN });
+}
+
+/** A tab's panel, or the refusal its read met. */
+function panelOf<const Tab extends ParticipantTab, T>(tab: Tab, data: T | Refusal) {
+  return data instanceof Refusal ? data : ({ tab, data } as const);
 }
 
 function timeline(contestId: string, registrationId: string, kinds: string[] = []): string {
@@ -117,20 +128,17 @@ async function loadTab(tab: ParticipantTab, contestId: string, registrationId: s
   const one = `/monitor/participants/${registrationId}`;
   switch (tab) {
     case "queries":
-      return { tab, data: await read(contestId, `${one}/queries`, (p) => queriesSchema.parse(p)) } as const;
+      return panelOf(tab, await read(contestId, `${one}/queries`, (p) => queriesSchema.parse(p)));
     case "answers":
-      return { tab, data: await read(contestId, `${one}/answers`, (p) => answersSchema.parse(p)) } as const;
+      return panelOf(tab, await read(contestId, `${one}/answers`, (p) => answersSchema.parse(p)));
     case "workspace":
-      return { tab, data: await read(contestId, `${one}/workspace`, (p) => workspaceSchema.parse(p)) } as const;
+      return panelOf(tab, await read(contestId, `${one}/workspace`, (p) => workspaceSchema.parse(p)));
     case "sessions":
-      return {
+      return panelOf(
         tab,
-        data: await read(contestId, timeline(contestId, registrationId, SESSION_KINDS), (p) => feedSchema.parse(p)),
-      } as const;
+        await read(contestId, timeline(contestId, registrationId, SESSION_KINDS), (p) => feedSchema.parse(p)),
+      );
     default:
-      return {
-        tab: "timeline",
-        data: await read(contestId, timeline(contestId, registrationId), (p) => feedSchema.parse(p)),
-      } as const;
+      return panelOf("timeline", await read(contestId, timeline(contestId, registrationId), (p) => feedSchema.parse(p)));
   }
 }

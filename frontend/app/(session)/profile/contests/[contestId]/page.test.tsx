@@ -185,3 +185,21 @@ describe("an address that leads nowhere", () => {
     expect(notFound).toHaveBeenCalled();
   });
 });
+
+/** The reader's own read budget is a refusal to show, not a failed load. */
+describe("a reader who opens their reports too often", () => {
+  test.each([
+    ["the report", undefined, `${base}/report`],
+    ["a tab", "queries", `${base}/queries`],
+  ])("is told so in words when %s is refused, with the way back", async (_name, tab, refused) => {
+    serverRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith(refused)) throw new ApiError("profile_too_often", 429, "Too many profile reads");
+      return answer(path);
+    });
+
+    await renderPage(tab);
+
+    expect(screen.getByRole("status")).toHaveTextContent(dict.errors.profile_too_often);
+    expect(screen.getByRole("link", { name: dict.profile.report.back })).toHaveAttribute("href", "/profile");
+  });
+});

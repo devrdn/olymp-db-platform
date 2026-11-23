@@ -4,9 +4,10 @@ import { notFound } from "next/navigation";
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { ExportMenu } from "@/components/product/export-menu";
+import { RefusalNote } from "@/components/product/refusal-note";
 import { isId } from "@/lib/api/ids";
 import { answersSchema, queriesSchema } from "@/lib/api/journal";
-import { readPage } from "@/lib/api/page-read";
+import { readPage, Refusal } from "@/lib/api/page-read";
 import { myCsvHref, profileReportSchema, profileWorkspaceSchema } from "@/lib/api/profile";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -62,16 +63,29 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
   const shared = dict.contests;
   const statuses = dict.participant.play.workspace.log.status;
 
+  const back = (
+    <Link
+      href="/profile"
+      className="self-start text-control text-ink-3 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:underline"
+    >
+      {t.back}
+    </Link>
+  );
+
+  const refused = (code: string) => (
+    <Band className="gap-6 pt-9 pb-7">
+      {back}
+      <RefusalNote code={code} errors={dict.errors} />
+    </Band>
+  );
+  if (report instanceof Refusal) return refused(report.code);
+  if (panel instanceof Refusal) return refused(panel.code);
+
   return (
     <Band className="gap-8 pt-9 pb-7">
       <div className="flex min-w-0 flex-col gap-6">
         <div className="flex min-w-0 flex-col gap-3">
-          <Link
-            href="/profile"
-            className="self-start text-control text-ink-3 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:underline"
-          >
-            {t.back}
-          </Link>
+          {back}
           <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-8 gap-y-3">
             <div className="flex min-w-0 flex-col gap-1.5">
               {/* Wrapped, not truncated, and never wider than the column. */}
@@ -114,25 +128,32 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
 
 /**
  * One read under `/me/contests/{id}`. A contest that is not this reader's
- * finished one is `profile_contest_not_found`, the not-found page; the report
- * cannot stand without any of them.
+ * finished one is `profile_contest_not_found`, the not-found page; the
+ * reader's own read budget is shown in words. The report cannot stand without
+ * any of them.
  */
-function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
+function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T | Refusal> {
   return readPage(`/me/contests/${contestId}${path}`, parse, {
     here: `/profile/contests/${contestId}`,
     missing: ["profile_contest_not_found"],
+    shown: ["profile_too_often"],
   });
+}
+
+/** A tab's panel, or the refusal its read met. */
+function panelOf<const Tab extends ReportTab, T>(tab: Tab, data: T | Refusal) {
+  return data instanceof Refusal ? data : ({ tab, data } as const);
 }
 
 /** The current tab's data, read on the server. */
 async function loadTab(tab: ReportTab, contestId: string) {
   switch (tab) {
     case "queries":
-      return { tab, data: await read(contestId, "/queries", (p) => queriesSchema.parse(p)) } as const;
+      return panelOf(tab, await read(contestId, "/queries", (p) => queriesSchema.parse(p)));
     case "answers":
-      return { tab, data: await read(contestId, "/answers", (p) => answersSchema.parse(p)) } as const;
+      return panelOf(tab, await read(contestId, "/answers", (p) => answersSchema.parse(p)));
     case "notes":
-      return { tab, data: await read(contestId, "/workspace", (p) => profileWorkspaceSchema.parse(p)) } as const;
+      return panelOf(tab, await read(contestId, "/workspace", (p) => profileWorkspaceSchema.parse(p)));
     default:
       // The summary is the report, already read.
       return { tab: "summary" } as const;

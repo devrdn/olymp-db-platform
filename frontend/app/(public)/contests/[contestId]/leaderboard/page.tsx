@@ -7,7 +7,7 @@ import { readPage, Refusal } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { PublicStandings } from "@/components/product/public-standings";
-import { messageForCode } from "@/lib/i18n/errors";
+import { RefusalNote } from "@/components/product/refusal-note";
 
 /** The table, or the rate limit's refusal; the metadata and the page share the request. */
 async function load(contestId: string, locale: string) {
@@ -44,9 +44,7 @@ export default async function PublicLeaderboardPage(props: PageProps<"/contests/
       </header>
 
       {loaded instanceof Refusal ? (
-        <p role="status" className="text-body text-warn">
-          {messageForCode(loaded.code, dict.errors)}
-        </p>
+        <RefusalNote code={loaded.code} errors={dict.errors} />
       ) : (
         <PublicStandings
           contestId={contestId}
