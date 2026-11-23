@@ -14,6 +14,7 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
+import { labelFor } from "@/lib/i18n/label";
 
 /**
  * The audit trail as a register, scanned down a column. Action codes are
@@ -113,7 +114,7 @@ export function AuditTrailRegister({
                   <Actor entry={entry} dict={dict} />
                 </td>
                 <td className={cn(CELL, "text-body text-ink")}>
-                  {(t.actions as Record<string, string>)[entry.action] ?? (
+                  {labelFor(t.actions, entry.action) ?? (
                     <span className="font-mono text-data" title={t.unknownAction}>
                       {entry.action}
                     </span>
@@ -256,14 +257,14 @@ function BlockedProblems({ payload, dict }: { payload: AuditEntry["payload"]; di
   const codes = blockedProblems(payload);
   if (codes.length === 0) return null;
 
-  const problems = dict.workspace.gate.problems as Record<string, string>;
+  const problems = dict.workspace.gate.problems;
 
   return (
     <ul className="mt-1.5 flex flex-col gap-1">
       {codes.map((code, index) => (
         <li key={`${code}-${index}`} className="flex gap-2 text-small text-ink-2">
           <span aria-hidden className="mt-1.5 size-1 shrink-0 rounded-full bg-warn" />
-          <span>{problems[code] ?? <span className="font-mono text-data">{code}</span>}</span>
+          <span>{labelFor(problems, code) ?? <span className="font-mono text-data">{code}</span>}</span>
         </li>
       ))}
     </ul>
@@ -279,11 +280,11 @@ function LoginFailureReason({ payload, dict }: { payload: AuditEntry["payload"];
   const reason = loginFailureReason(payload);
   if (!reason) return null;
 
-  const reasons = dict.audit.failureReasons as Record<string, string>;
+  const reasons = dict.audit.failureReasons;
 
   return (
     <p className="mt-1 text-small text-ink-2">
-      {reasons[reason] ?? <span className="font-mono text-data">{reason}</span>}
+      {labelFor(reasons, reason) ?? <span className="font-mono text-data">{reason}</span>}
     </p>
   );
 }
@@ -295,7 +296,7 @@ function LoginFailureReason({ payload, dict }: { payload: AuditEntry["payload"];
 function Subject({ entry, dict }: { entry: AuditEntry; dict: Dictionary }) {
   if (!entry.entity) return null;
 
-  const kind = (dict.audit.entities as Record<string, string>)[entry.entity] ?? entry.entity;
+  const kind = labelFor(dict.audit.entities, entry.entity) ?? entry.entity;
 
   if (!entry.entity_label) {
     return entry.entity_id ? (

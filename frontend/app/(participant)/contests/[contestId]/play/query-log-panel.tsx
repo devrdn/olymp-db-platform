@@ -7,14 +7,15 @@ import { CopyButton, SqlBlock } from "@/components/product/sql-block";
 import { buttonVariants } from "@/components/ui/button";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import { API_PREFIX } from "@/lib/api/client";
-import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
+import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import { formatMoment } from "@/lib/format/datetime";
 import type { PlayDictionary } from "./dictionary";
 import type { Locale } from "@/lib/i18n/config";
 import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
+import { labelFor } from "@/lib/i18n/label";
 
 import { fetchQueryLog, fetchQueryLogEntry } from "./requests";
 
@@ -340,7 +341,7 @@ function LogRow({
  * bad.
  */
 function StatusBadge({ status, labels }: { status: string; labels: Record<string, string> }) {
-  const label = labels[status] ?? status;
+  const label = labelFor(labels, status) ?? status;
   const tone =
     status === "ok" ? "text-good" : status === "running" ? "text-ink-2" : "text-bad";
   return <span className={cn("font-mono text-small", tone)}>{label}</span>;

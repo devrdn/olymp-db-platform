@@ -38,6 +38,7 @@ import {
 } from "./bulk-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 export type SelectedAccount = { id: string; display: string };
 
@@ -237,7 +238,7 @@ export function SelectAllCheckbox({
  */
 function SkippedList({ skipped, dict }: { skipped: readonly SkippedAccount[]; dict: Dictionary }) {
   if (skipped.length === 0) return null;
-  const reasons = dict.accounts.selection.bulk.reason as Record<string, string>;
+  const reasons = dict.accounts.selection.bulk.reason;
 
   return (
     <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto border-t border-line pt-3">
@@ -245,7 +246,7 @@ function SkippedList({ skipped, dict }: { skipped: readonly SkippedAccount[]; di
         <li key={row.id} className="font-mono text-data text-ink-2">
           {/* A not_found row carries no login. */}
           {row.login || row.id}
-          <span className="ml-3 text-warn">{reasons[row.reason] ?? row.reason}</span>
+          <span className="ml-3 text-warn">{labelFor(reasons, row.reason) ?? row.reason}</span>
         </li>
       ))}
     </ul>

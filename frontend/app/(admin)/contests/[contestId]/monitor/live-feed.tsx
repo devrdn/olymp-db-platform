@@ -11,6 +11,7 @@ import { readableDuration } from "@/lib/format/bytes";
 import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 import { cn } from "@/lib/utils";
 
 import type { FeedState } from "./feed-list";
@@ -310,7 +311,7 @@ const FeedLine = memo(function FeedLine({
   t: MonitorDict;
   locale: string;
 }) {
-  const kindLabel = (t.feed.kind as Record<string, string>)[item.kind] ?? item.kind;
+  const kindLabel = labelFor(t.feed.kind, item.kind) ?? item.kind;
   const quiet = QUIET_KINDS.has(item.kind);
 
   return (
@@ -357,10 +358,10 @@ function Detail({ item, t, quiet }: { item: FeedItem; t: MonitorDict; quiet: boo
   switch (detail.type) {
     case "query": {
       const first = detail.sql.split("\n").find((part) => part.trim() !== "") ?? detail.sql;
-      const status = (t.feed.queryStatus as Record<string, string>)[detail.status] ?? detail.status;
+      const status = labelFor(t.feed.queryStatus, detail.status) ?? detail.status;
       return (
         <p className={cn(line, "flex gap-2")} title={detail.error ?? detail.sql}>
-          <span className={cn("shrink-0 font-mono text-label uppercase", QUERY_TONE[detail.status] ?? "text-ink-3")}>
+          <span className={cn("shrink-0 font-mono text-label uppercase", labelFor(QUERY_TONE, detail.status) ?? "text-ink-3")}>
             {status}
           </span>
           <span className="min-w-0 truncate font-mono text-data text-ink-2">{first}</span>
@@ -376,7 +377,7 @@ function Detail({ item, t, quiet }: { item: FeedItem; t: MonitorDict; quiet: boo
     case "page_left":
       return <p className={line}>{fill(d.pageLeft, { duration: readableDuration(detail.awayMs / 1000) })}</p>;
     case "paste": {
-      const target = (d.pasteTarget as Record<string, string>)[detail.target] ?? detail.target;
+      const target = labelFor(d.pasteTarget, detail.target) ?? detail.target;
       return (
         <p className={line} title={detail.text}>
           {detail.count > 1

@@ -15,6 +15,7 @@ import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
+import { messageForCode } from "@/lib/i18n/errors";
 
 import { ClarificationSignalProvider } from "./clarification-signal";
 import { ContentLoadedProvider, ContentLoadedSignal, RenderedRefusalSignal } from "./content-loaded";
@@ -175,11 +176,11 @@ async function PlayPanels({
   locale: Locale;
   dict: PlayDictionary;
 }) {
-  const errors = dict.errors as Record<string, string>;
+  const errors = dict.errors;
 
   const read = await readPlay(contestId, locale);
   if (read.kind === "unavailable") {
-    return <ScreenUnavailable body={errors[read.code]} code={read.code} dict={dict} />;
+    return <ScreenUnavailable body={messageForCode(read.code, errors)} code={read.code} dict={dict} />;
   }
   const { questions, story, log: initialLog, schema, workspace } = read;
   const storyBody = story?.bodyMd ?? null;

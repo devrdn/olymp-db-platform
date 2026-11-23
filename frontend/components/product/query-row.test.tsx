@@ -32,6 +32,13 @@ function renderRow(query = loggedQuery(1), address = true) {
 }
 
 describe("one query", () => {
+  // The status is the server's text; the labels only inherit these.
+  test.each(["constructor", "toString"])("names a status %s as it came, not what the labels inherit", (status) => {
+    renderRow(loggedQuery(1, { status }));
+
+    expect(screen.getByText(status)).toBeInTheDocument();
+  });
+
   test("says when, how it ended, how long it took, how many rows and from where", () => {
     renderRow(loggedQuery(1, { sql: "SELECT name\nFROM guests", durationMs: 42, rowCount: 7, ip: "10.0.0.5" }));
 

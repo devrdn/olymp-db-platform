@@ -4,10 +4,11 @@ import { memo, useId, useState } from "react";
 
 import type { LoggedQuery } from "@/lib/api/journal";
 import { formatMoment, formatSeconds } from "@/lib/format/datetime";
+import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 import { cn } from "@/lib/utils";
 
 import { CopyButton, SqlBlock } from "./sql-block";
-import { fill } from "@/lib/i18n/fill";
 
 /** Status colours; running is the one live tone. */
 export const QUERY_TONE: Record<string, string> = {
@@ -72,8 +73,8 @@ export const QueryRow = memo(function QueryRow({
         >
           {formatSeconds(query.executedAt, { locale })}
         </time>
-        <span className={cn("font-mono text-label uppercase", QUERY_TONE[query.status] ?? "text-ink-3")}>
-          {statuses[query.status] ?? query.status}
+        <span className={cn("font-mono text-label uppercase", labelFor(QUERY_TONE, query.status) ?? "text-ink-3")}>
+          {labelFor(statuses, query.status) ?? query.status}
         </span>
         {query.durationMs !== null ? (
           <span className="font-mono text-label text-ink-2 tabular-nums">

@@ -5,6 +5,7 @@ import { MONITOR_FLAGS, participantCsvHref, type MonitorFlags, type Participant 
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 import { FlagBadges } from "../participants-table";
 
@@ -29,7 +30,7 @@ export function ParticipantHeader({
   locale: string;
 }) {
   const t = dict.workspace.monitor.participant;
-  const statuses = dict.workspace.people.registration as Record<string, string>;
+  const statuses = dict.workspace.people.registration;
   const anyFlag = flags !== null && MONITOR_FLAGS.some((flag) => flags[flag]);
 
   return (
@@ -47,7 +48,7 @@ export function ParticipantHeader({
         <dl className="mt-2 flex flex-wrap gap-x-8 gap-y-3">
           <div className="flex flex-col gap-1">
             <dt className={TERM}>{t.status}</dt>
-            <dd className="text-small text-ink">{statuses[participant.status] ?? participant.status}</dd>
+            <dd className="text-small text-ink">{labelFor(statuses, participant.status) ?? participant.status}</dd>
           </div>
           <div className="flex flex-col gap-1">
             <dt className={TERM}>{t.clock}</dt>

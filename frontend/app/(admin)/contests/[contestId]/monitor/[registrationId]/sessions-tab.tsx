@@ -8,6 +8,7 @@ import type { FeedItem, FeedPage } from "@/lib/api/monitor";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
+import { labelFor } from "@/lib/i18n/label";
 
 import { Problem } from "../monitor-view";
 import { useMonitor } from "../use-monitor";
@@ -121,7 +122,7 @@ const CELL = "border-b border-line px-2 py-1.5 align-top";
 /** One event, memoised on the item. */
 const SessionRow = memo(function SessionRow({ item, t, locale }: { item: FeedItem; t: SessionsDict; locale: string }) {
   const d = item.detail;
-  const event = (t.events as Record<string, string>)[item.kind] ?? item.kind;
+  const event = labelFor(t.events, item.kind) ?? item.kind;
   const address =
     d.type === "audit" ? (d.ip ?? "") : d.type === "ip_changed" ? `${d.from} → ${d.to}` : d.type === "parallel_session" ? d.otherIp : "";
   const browser = d.type === "audit" ? (d.userAgent ?? "") : d.type === "parallel_session" ? d.userAgent : "";

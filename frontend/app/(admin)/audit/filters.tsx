@@ -4,6 +4,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
+import { labelFor } from "@/lib/i18n/label";
 
 /**
  * The trail filters as a GET form: the view lives in the address and needs no
@@ -41,7 +42,7 @@ export function AuditFilters({
           <option value="">{t.filters.anyAction}</option>
           {actions.map((code) => (
             <option key={code} value={code}>
-              {(t.actions as Record<string, string>)[code] ?? code}
+              {labelFor(t.actions, code) ?? code}
             </option>
           ))}
         </select>

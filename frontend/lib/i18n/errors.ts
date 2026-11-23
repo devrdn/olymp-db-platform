@@ -1,14 +1,11 @@
 import type { Dictionary } from "./dictionary";
+import { labelFor } from "./label";
 
 type Errors = Pick<Dictionary["errors"], "fallback">;
 
-/**
- * The dictionary's own sentence for an API code, or undefined for a code this
- * build does not know. Only the section's own keys count: a code is text the
- * API chose, and `constructor` must not find what every object inherits.
- */
+/** The dictionary's own sentence for an API code, or undefined for a code this build does not know. */
 export function knownMessage(code: string, errors: Errors): string | undefined {
-  return Object.hasOwn(errors, code) ? (errors as Record<string, string>)[code] : undefined;
+  return labelFor(errors, code);
 }
 
 /**

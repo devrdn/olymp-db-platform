@@ -27,6 +27,7 @@ import {
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 /**
  * Creating accounts from the register: one account (`NewAccountForm`) or a
@@ -153,7 +154,7 @@ function SkippedRows({
       {skipped.map((row, index) => (
         <li key={`${row.login}-${index}`} className="font-mono text-data text-ink-2">
           {row.login}
-          <span className="ml-3 text-warn">{reasons[row.reason] ?? row.reason}</span>
+          <span className="ml-3 text-warn">{labelFor(reasons, row.reason) ?? row.reason}</span>
         </li>
       ))}
     </ul>
@@ -321,7 +322,7 @@ function ImportRosterForm({
     const skipped = state.result.skipped;
     const notImported = state.result.not_imported ?? [];
     const stopped = state.result.stopped;
-    const reasons = t.roster.reason as Record<string, string>;
+    const reasons = t.roster.reason;
 
     return (
       <>

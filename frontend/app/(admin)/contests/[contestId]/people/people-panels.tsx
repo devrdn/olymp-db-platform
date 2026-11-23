@@ -25,6 +25,7 @@ import {
 } from "./actions";
 import { PersonPicker } from "./person-picker";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -371,7 +372,7 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
              read it through the import's reason vocabulary. */}
           {state.skipReason ? (
             <p role="alert" className="max-w-body text-small text-warn">
-              {(t.import.reason as Record<string, string>)[state.skipReason] ?? state.skipReason}
+              {labelFor(t.import.reason, state.skipReason) ?? state.skipReason}
             </p>
           ) : null}
 
@@ -431,7 +432,7 @@ function ImportParticipants({ contestId, dict }: { contestId: string; dict: Dict
                     <li key={row.ref} className="font-mono text-data text-ink-2">
                       {row.ref}
                       <span className="ml-3 text-warn">
-                        {(t.import.reason as Record<string, string>)[row.reason] ?? row.reason}
+                        {labelFor(t.import.reason, row.reason) ?? row.reason}
                       </span>
                     </li>
                   ))}

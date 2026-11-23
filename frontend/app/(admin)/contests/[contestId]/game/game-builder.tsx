@@ -14,6 +14,7 @@ import { saveGameDefinitionAction, type GameState } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
 import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 /**
  * `ColumnDefinition` plus a client-only `key`, so reordering or removing keeps
@@ -390,7 +391,7 @@ function TableCard({
               >
                 {limits.columnTypes.map((type) => (
                   <option key={type} value={type}>
-                    {(tb.columnTypes as Record<string, string>)[type] ?? type}
+                    {labelFor(tb.columnTypes, type) ?? type}
                   </option>
                 ))}
               </select>

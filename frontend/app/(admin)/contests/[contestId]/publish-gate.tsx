@@ -4,6 +4,7 @@ import type { CellState, PublishGate } from "@/lib/api/publish-gate";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
+import { labelFor } from "@/lib/i18n/label";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -47,7 +48,7 @@ export function PublishGateReport({
             <li key={problem.code} className="flex gap-2.5 text-small text-ink-2">
               <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-warn" />
               <span>
-                {(t.problems as Record<string, string>)[problem.code] ?? problem.code}
+                {labelFor(t.problems, problem.code) ?? problem.code}
                 {/* The server's detail is an English developer aid, shown in
                    monospace so it never reads as translated text; so is the
                    count. */}

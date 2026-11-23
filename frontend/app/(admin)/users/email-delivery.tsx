@@ -7,6 +7,7 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { plural } from "@/lib/i18n/plural";
 import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 /**
  * Emailing sign-in details beside an issued one-time password: the option on
@@ -147,7 +148,7 @@ export function EmailSummary({
   if (!summary) return null;
 
   const t = dict.accounts.signInMail;
-  const reasons = dict.accounts.emailSkipped as Record<string, string>;
+  const reasons = dict.accounts.emailSkipped;
   const open = summary.notEmailed <= OPEN_UP_TO;
 
   return (
@@ -170,7 +171,7 @@ export function EmailSummary({
           {summary.groups.map((group) => (
             <details key={group.reason} open={open}>
               <summary className="cursor-pointer text-small text-ink-2 marker:text-ink-3 hover:text-ink">
-                {fill(t.group, { n: group.logins.length, reason: reasons[group.reason] ?? group.reason })}
+                {fill(t.group, { n: group.logins.length, reason: labelFor(reasons, group.reason) ?? group.reason })}
               </summary>
               <ul className="mt-1.5 flex max-h-40 flex-wrap gap-x-3 gap-y-1 overflow-y-auto font-mono text-data text-ink-2">
                 {group.logins.map((login, index) => (

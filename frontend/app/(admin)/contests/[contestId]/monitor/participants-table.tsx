@@ -14,6 +14,7 @@ import { formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
+import { labelFor } from "@/lib/i18n/label";
 
 import {
   COUNTER_KEYS,
@@ -75,7 +76,7 @@ export function ParticipantsTable({
   locale: string;
 }) {
   const t = dict.workspace.monitor;
-  const statuses = dict.workspace.people.registration as Record<string, string>;
+  const statuses = dict.workspace.people.registration;
   const [order, setOrder] = useState<SortOrder>({ key: "name", dir: "asc" });
   const [filter, setFilter] = useState<RosterFilter>({ flaggedOnly: false, status: "", search: "" });
   const ids = useId();
@@ -182,7 +183,7 @@ export function ParticipantsTable({
             <option value="">{t.table.filters.anyStatus}</option>
             {REGISTRATION_STATUSES.map((status) => (
               <option key={status} value={status}>
-                {statuses[status] ?? status}
+                {labelFor(statuses, status) ?? status}
               </option>
             ))}
           </select>
@@ -359,7 +360,7 @@ const ColumnSizer = memo(
           <div className={hold}>
             {widest.statuses.map((status) => (
               <span key={status} className="block">
-                {statuses[status] ?? status}
+                {labelFor(statuses, status) ?? status}
               </span>
             ))}
           </div>
@@ -447,7 +448,7 @@ const ParticipantRow = memo(function ParticipantRow({
         </Link>
         <span className={cn(ONE_LINE, "block truncate font-mono text-label text-ink-3")}>{row.login}</span>
       </td>
-      <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2")}>{statuses[row.status] ?? row.status}</td>
+      <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2")}>{labelFor(statuses, row.status) ?? row.status}</td>
       <td className={cn(CELL, "min-w-28")}>
         <FlagBadges flags={row.flags} t={t} />
       </td>
