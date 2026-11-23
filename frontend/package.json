@@ -15,7 +15,7 @@
     "test:watch": "vitest",
     "contrast": "node scripts/contrast.mjs",
     "typecheck": "next typegen && tsc --noEmit",
-    "error-codes": "node scripts/error-codes.mjs",
+    "error-codes": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/error-codes.mjs",
     "type-scale": "node scripts/type-scale.mjs",
     "icons": "node scripts/icons.mjs",
     "smoke": "node scripts/smoke.mjs"

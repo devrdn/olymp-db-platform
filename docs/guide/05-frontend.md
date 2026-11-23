@@ -822,10 +822,11 @@ These add to "Things worth knowing before changing them" in
   constants from the `*-terms.ts` file instead.
 - **The production error boundary sees only a digest.** Branch on the API code
   in the page or action, before the error reaches `error.tsx`.
-- **`scripts/error-codes.mjs` reads the dictionary as text.** It reads every
-  key indented by exactly four spaces after the first `errors:` in each file.
-  Keep `errors` the only key with that name, the last section of the
-  dictionary, and flat.
+- **`scripts/error-codes.mjs` imports the dictionaries.** It reads the keys of
+  `errors` in every locale file under Node's type stripping, so the files must
+  stay erasable-syntax TypeScript (`import type`, `satisfies`; no enums, no
+  path aliases or runtime imports). It fails on an empty `errors` block or an
+  empty sentence as well as on a missing code.
 - **Removing a code on the Go side fails the check too.** The script reports
   translations the API no longer returns as `unused`; delete them from all
   three locales.
