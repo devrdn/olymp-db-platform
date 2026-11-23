@@ -1086,6 +1086,7 @@ func TestBeginningAnUploadIsRateLimitedPerAddressAcrossContests(t *testing.T) {
 	if !strings.Contains(last.Body.String(), "from this address") {
 		t.Fatalf("the refusal does not name the address budget: %s", last.Body)
 	}
+	assertRetryAfter(t, last, "600")
 }
 
 func TestBeginningAnUploadLimitsAnIPv6NetworkAsOneAddress(t *testing.T) {
@@ -1123,6 +1124,7 @@ func TestBeginningAnUploadIsRateLimitedPerContestAcrossAddresses(t *testing.T) {
 	if !strings.Contains(last.Body.String(), "for this contest") {
 		t.Fatalf("the refusal does not name the contest budget: %s", last.Body)
 	}
+	assertRetryAfter(t, last, "600")
 }
 
 // CLAUDE.md rule 5. Both keys answer alike, so the order shows in the contest

@@ -42,6 +42,11 @@ type watchStore struct {
 	reads     int
 	// tooWide makes the contest too large to stream whole.
 	tooWide bool
+	// stall, when set, holds every source read until it is closed; started is
+	// closed at the first.
+	stall     chan struct{}
+	started   chan struct{}
+	startOnce sync.Once
 }
 
 func (s *watchStore) FeedRegistrations(_ context.Context, contest uuid.UUID) ([]uuid.UUID, error) {
@@ -60,6 +65,10 @@ func (s *watchStore) FeedRegistrations(_ context.Context, contest uuid.UUID) ([]
 }
 
 func (s *watchStore) FeedSource(_ context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
+	if s.stall != nil {
+		s.startOnce.Do(func() { close(s.started) })
+		<-s.stall
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastFeed = q

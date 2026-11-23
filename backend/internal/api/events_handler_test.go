@@ -576,6 +576,9 @@ func TestEventsEnforcesTheConnectionLimitByCounting(t *testing.T) {
 	if code := errorCode(t, rec); code != "too_many_connections" {
 		t.Fatalf("code = %q, want too_many_connections", code)
 	}
+	// A stale connection holds its slot until the next resync's write times
+	// out: an hour and ten seconds under this fixture.
+	assertRetryAfter(t, rec, "3610")
 }
 
 // The limit bounds how many are open at once, not how many an account may ever

@@ -367,9 +367,30 @@ func TestThePublicTableIsLimitedPerAddress(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "leaderboard_too_often" {
 		t.Fatalf("status = %d (%s), want 429 leaderboard_too_often", rec.Code, rec.Body.String())
 	}
+	assertRetryAfter(t, rec, "60")
 	if rec := f.request(http.MethodGet, path, nil, "203.0.113.8"); rec.Code != http.StatusOK {
 		t.Errorf("another address: status = %d, want 200", rec.Code)
 	}
+}
+
+// The participant's copy is budgeted per account, before the contest is looked
+// up; sixty a minute, apart from the public table's per-address budget.
+func TestTheParticipantsTableIsLimitedPerAccount(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.contest(t, contests.StatusRunning, nil)
+	path := "/contests/" + c.ID.String() + "/play/leaderboard"
+	student := f.student.ID
+
+	for i := range 60 {
+		if rec := f.request(http.MethodGet, path, &student, ""); rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i+1, rec.Code)
+		}
+	}
+	rec := f.request(http.MethodGet, path, &student, "")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "leaderboard_too_often" {
+		t.Fatalf("status = %d (%s), want 429 leaderboard_too_often", rec.Code, rec.Body.String())
+	}
+	assertRetryAfter(t, rec, "60")
 }
 
 func TestThePublicTableLimitsAnIPv6NetworkAsOneAddress(t *testing.T) {

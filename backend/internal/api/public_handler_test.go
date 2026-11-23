@@ -144,6 +144,7 @@ func TestPublicReadsAreRefusedPastTheirBudget(t *testing.T) {
 	if code := errorCode(t, last); code != "public_too_often" {
 		t.Errorf("code = %q, want public_too_often", code)
 	}
+	assertRetryAfter(t, last, "60")
 }
 
 // The contest list is the same read and the same budget.

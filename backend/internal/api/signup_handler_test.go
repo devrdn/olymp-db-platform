@@ -486,6 +486,7 @@ func TestConfirmSpendsTheAddressBudgetBeforeTheEmailBudget(t *testing.T) {
 		if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 			t.Fatalf("over the address budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 		}
+		assertRetryAfter(t, rec, "600")
 		assertNoStore(t, "refused", rec)
 	}
 
@@ -506,6 +507,7 @@ func TestConfirmLimitsAnEmailWhateverItsCase(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
+	assertRetryAfter(t, rec, "3600")
 	if rec := f.start("192.0.2.100", "ana@example.edu", "ana"); rec.Code != http.StatusAccepted {
 		t.Errorf("a start after confirm spent its budget = %d, want 202", rec.Code)
 	}
@@ -522,15 +524,33 @@ func TestAStartPastTheAddressBudgetReachesNothing(t *testing.T) {
 		}
 	}
 
-	if rec := f.start("192.0.2.1", "ana@example.edu", "ana"); rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+	rec := f.start("192.0.2.1", "ana@example.edu", "ana")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("past the address budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
+	assertRetryAfter(t, rec, "600")
 	if f.Hasher.Calls() != 0 || len(f.Outbox.Queued()) != 0 {
 		t.Error("a start past the address budget reached the service")
 	}
 	if rec := f.start("192.0.2.2", "ana@example.edu", "ana"); rec.Code != http.StatusAccepted {
 		t.Errorf("from another address = %d, want 202: the refusals spent a mail budget", rec.Code)
 	}
+}
+
+// A resend spends an address budget of its own, before the body is read.
+func TestAResendPastTheAddressBudgetIsRefused(t *testing.T) {
+	f := newSignupFixture(t)
+	for i := range api.SignupsPerAddress {
+		if rec := f.post("192.0.2.1", "/public/signup/resend", `{}`, nil); rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("resend %d was refused inside the budget: %s", i+1, rec.Body.String())
+		}
+	}
+
+	rec := f.resend("192.0.2.1", "ana@example.edu")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Fatalf("past the address budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
+	}
+	assertRetryAfter(t, rec, "600")
 }
 
 // An email's budget counts the codes mailed to it, so a form refused for a

@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -341,6 +342,7 @@ func (h *LeaderboardHandler) admit(w http.ResponseWriter, r *http.Request, subje
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(leaderboardWindow/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeLeaderboardTooOften,
 			"The leaderboard is being asked for too often; wait before asking again")
 		return false

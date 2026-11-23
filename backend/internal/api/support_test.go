@@ -75,6 +75,15 @@ func (b *logBuffer) loggedError(message string) bool {
 	return false
 }
 
+// assertRetryAfter fails t unless a refusal says to wait want, in seconds as
+// the header carries it.
+func assertRetryAfter(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if got := rec.Header().Get("Retry-After"); got != want {
+		t.Errorf("Retry-After = %q, want %q", got, want)
+	}
+}
+
 func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	body := decode(t, rec)

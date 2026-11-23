@@ -201,6 +201,7 @@ func (h *ArchiveHandler) admit(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(archiveWindow/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeArchiveTooOften,
 			"The archive is being asked for too often; wait before asking again")
 		return false

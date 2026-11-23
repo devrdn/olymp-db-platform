@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -192,6 +193,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	participant, contest := admission.Participant, admission.Contest
 
 	if !h.limiter.acquire(participant.ID) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(h.staleSlotRelease()/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyConnections,
 			"This participant already holds as many live event channels as this installation allows")
 		return
@@ -323,6 +325,13 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 // deadlines, and that is no reason to refuse a write.
 func (h *EventsHandler) setWriteDeadline(rc *http.ResponseController) {
 	_ = rc.SetWriteDeadline(time.Now().Add(h.writeTimeout))
+}
+
+// staleSlotRelease is the longest a connection whose reader is gone keeps its
+// slot: until the next resync's write times out. A refused connection is told
+// to wait that long, since a slot an open tab holds frees only when it closes.
+func (h *EventsHandler) staleSlotRelease() time.Duration {
+	return h.resync + h.writeTimeout
 }
 
 // reconnectDelay is one connection's retry field: from the default resync

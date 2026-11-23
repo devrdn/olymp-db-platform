@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,6 +141,7 @@ func (h *RecoveryHandler) admit(w http.ResponseWriter, r *http.Request, subject 
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many password recovery attempts from this address or for this account; wait before trying again")
 		return false

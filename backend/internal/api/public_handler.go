@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,6 +152,7 @@ func (h *PublicHandler) admit(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(publicWindow/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codePublicTooOften,
 			"The landing page is being asked for too often; wait before asking again")
 		return false

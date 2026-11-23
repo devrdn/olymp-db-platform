@@ -528,7 +528,7 @@ func (h *ProfileHandler) logCSV(w http.ResponseWriter, r *http.Request) {
 		serve(w, r, access.Participant.ID, access.Contest.ID, func() {
 			// A second download while the first is still writing is refused
 			// like the read budget.
-			w.Header().Set("Retry-After", strconv.Itoa(int(profileWindow/time.Second)))
+			retryAfterDownload(w)
 			httpx.Error(w, r, http.StatusTooManyRequests, codeProfileTooOften,
 				"A download of this log is already running; wait for it to finish")
 		})

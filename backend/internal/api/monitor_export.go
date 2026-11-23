@@ -83,6 +83,7 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	release, free := h.exports.enter(identity.UserID)
 	if !free {
 		// A second download while the first runs is refused as asking too fast.
+		retryAfterDownload(w)
 		httpx.Error(w, r, http.StatusTooManyRequests, codeMonitorTooOften,
 			"A monitoring export of this account is still running; wait for it to finish")
 		return

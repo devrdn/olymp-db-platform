@@ -211,6 +211,7 @@ func TestArchiveReadsAreLimitedPerAccount(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "archive_too_often" {
 		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
 	}
+	assertRetryAfter(t, rec, "60")
 	if got := f.store.lists.Load(); got != int64(api.ArchiveReadsPerMinute) {
 		t.Errorf("the service saw %d reads, want %d", got, api.ArchiveReadsPerMinute)
 	}

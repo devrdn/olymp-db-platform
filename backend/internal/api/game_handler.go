@@ -650,6 +650,7 @@ func (h *GameHandler) allowUploadBegin(w http.ResponseWriter, r *http.Request, c
 			return false
 		}
 		if !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(int(uploadBeginWindow/time.Second)))
 			httpx.Error(w, r, http.StatusTooManyRequests, codeGameUploadTooOften,
 				"Too many uploads have been started from this address; wait before trying again")
 			return false
@@ -663,6 +664,7 @@ func (h *GameHandler) allowUploadBegin(w http.ResponseWriter, r *http.Request, c
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(uploadBeginWindow/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeGameUploadTooOften,
 			"Too many uploads have been started for this contest; wait before trying again")
 		return false

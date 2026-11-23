@@ -3,9 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"sync"
-	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 )
@@ -78,11 +76,10 @@ func (s *ExportSlots) enter() (release func(), err error) {
 
 // exportsBusy answers a download that found every slot taken. 503, not 429, as
 // for sign-in's hashing slots: the caller is within every budget, and it is the
-// process that is at capacity. Retry-After is exportDeadline, the longest a
-// slot can be held. The refusal still cost the caller one read of their budget
-// (CLAUDE.md rule 13).
+// process that is at capacity. The refusal still cost the caller one read of
+// their budget (CLAUDE.md rule 13).
 func exportsBusy(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Retry-After", strconv.Itoa(int(exportDeadline/time.Second)))
+	retryAfterDownload(w)
 	httpx.Error(w, r, http.StatusServiceUnavailable, codeTooManyExports,
 		"The service is writing as many downloads at once as it will; try again in a moment")
 }

@@ -251,6 +251,7 @@ func TestForgotSpendsTheAddressBudgetFirst(t *testing.T) {
 		if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 			t.Fatalf("over the address budget = %d %s, want 429 too_many_attempts", rec.Code, rec.Body.String())
 		}
+		assertRetryAfter(t, rec, "600")
 		assertNoStore(t, "refused", rec)
 	}
 
@@ -277,6 +278,7 @@ func TestForgotLimitsAnIdentifierWhateverItsCaseAndWhetherItExists(t *testing.T)
 			if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 				t.Errorf("= %d %s, want 429 too_many_attempts", rec.Code, rec.Body.String())
 			}
+			assertRetryAfter(t, rec, "3600")
 			if rec := f.forgot("192.0.2.100", "someone-else"); rec.Code != http.StatusAccepted {
 				t.Errorf("another identifier from the same address = %d, want 202", rec.Code)
 			}
@@ -302,6 +304,7 @@ func TestResetSpendsTheAddressBudgetBeforeHashing(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Fatalf("over the budget = %d %s, want 429 too_many_attempts", rec.Code, rec.Body.String())
 	}
+	assertRetryAfter(t, rec, "600")
 	assertNoStore(t, "refused", rec)
 	if f.Hasher.Calls() != 0 {
 		t.Errorf("spent %d password hashes, want none", f.Hasher.Calls())

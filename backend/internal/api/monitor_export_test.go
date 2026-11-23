@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,6 +96,31 @@ func TestViewsAreRecordedOncePerOrganiserAndParticipant(t *testing.T) {
 	if got := f.count(audit.ActionContestMonitorView); got != 2 {
 		t.Errorf("after a 404: %d view entries, want 2", got)
 	}
+}
+
+// One download per account at a time; the refusal says to wait out the
+// longest a download may run.
+func TestASecondExportOfTheSameAccountIsRefusedWhileTheFirstRuns(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.store.stall, f.store.started = make(chan struct{}), make(chan struct{})
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- f.get(f.base()+"/export.csv", &f.organizer) }()
+	select {
+	case <-f.store.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first export never began reading")
+	}
+
+	second := f.get(f.one(f.reg)+"/export.csv", &f.organizer)
+	close(f.store.stall)
+	if rec := <-first; rec.Code != http.StatusOK {
+		t.Errorf("the first export = %d, want 200", rec.Code)
+	}
+
+	if second.Code != http.StatusTooManyRequests || errorCode(t, second) != "monitor_too_often" {
+		t.Fatalf("the second export = %d %s, want 429 monitor_too_often", second.Code, second.Body.String())
+	}
+	assertRetryAfter(t, second, "60")
 }
 
 func TestAnExportDefusesSpreadsheetFormulas(t *testing.T) {

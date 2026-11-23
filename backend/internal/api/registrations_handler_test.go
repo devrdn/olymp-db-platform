@@ -288,6 +288,7 @@ func TestRegistrationsAreLimitedPerAddressBeforeAnyStorage(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
+	assertRetryAfter(t, rec, "600")
 	if f.Store.Writes != reads {
 		t.Error("a refused registration reached the store")
 	}
@@ -310,6 +311,7 @@ func TestRegistrationsAreLimitedPerEmailWhateverItsCase(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
+	assertRetryAfter(t, rec, "3600")
 }
 
 // CLAUDE.md rule 5: a caller refused for its address spends no email budget,

@@ -162,6 +162,7 @@ func (h *ResultsHandler) export(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	release, free := h.exports.enter(identity.UserID)
 	if !free {
+		retryAfterDownload(w)
 		httpx.Error(w, r, http.StatusTooManyRequests, codeResultsExportTooOften,
 			"A results export of this account is still being written; wait for it to finish")
 		return

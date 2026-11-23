@@ -621,6 +621,7 @@ func TestASecondResultsExportOfTheSameAccountIsRefused(t *testing.T) {
 	first := release()
 
 	wantStatus(t, second, http.StatusTooManyRequests, "results_export_too_often")
+	assertRetryAfter(t, second, "60")
 	if f.reports.reads.Load() != reads || f.results.exports.Load() != 1 {
 		t.Errorf("the refused export read or exported: reads %d → %d, exports %d", reads, f.reports.reads.Load(), f.results.exports.Load())
 	}

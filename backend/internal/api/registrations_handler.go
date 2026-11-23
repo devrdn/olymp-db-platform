@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -235,6 +236,7 @@ func (h *RegistrationsHandler) admit(w http.ResponseWriter, r *http.Request, sub
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many registrations from this address or for this email; wait before trying again")
 		return false

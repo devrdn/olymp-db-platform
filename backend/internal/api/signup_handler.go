@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,6 +272,7 @@ func (h *SignupHandler) admit(w http.ResponseWriter, r *http.Request, subject st
 		return false
 	}
 	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many sign-up attempts from this address or for this email; wait before trying again")
 		return false

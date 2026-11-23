@@ -77,9 +77,15 @@ var queryLogCSVTruncatedNotice = []string{"", "truncated", "", "", "This file ca
 //
 // A full three-hour log is about a megabyte, seconds even on a poor network,
 // and with ExportSlots capping concurrent holders a minute of them is a stall a
-// contest recovers from. It is also the Retry-After a refused download gets
-// (exportsBusy).
+// contest recovers from. It is also the Retry-After of every download refused
+// because another is running (retryAfterDownload).
 const exportDeadline = time.Minute
+
+// retryAfterDownload tells a refused download to wait exportDeadline, the
+// longest the download in its way can still run.
+func retryAfterDownload(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", strconv.Itoa(int(exportDeadline/time.Second)))
+}
 
 // queryLogCSVExport streams one registration's query log to a response.
 type queryLogCSVExport struct {

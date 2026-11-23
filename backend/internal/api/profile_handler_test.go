@@ -649,9 +649,7 @@ func TestOneRegistrationHasOneLogDownloadAcrossHandlersSharingTheGate(t *testing
 	if second.Code != http.StatusTooManyRequests || errorCode(t, second) != "profile_too_often" {
 		t.Errorf("the second download: %d %s, want 429 profile_too_often", second.Code, second.Body.String())
 	}
-	if second.Header().Get("Retry-After") == "" {
-		t.Errorf("the refusal carries no Retry-After")
-	}
+	assertRetryAfter(t, second, "60")
 
 	close(f.history.hold)
 	if done := <-first; done.Code != http.StatusOK {
