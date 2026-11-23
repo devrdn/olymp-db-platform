@@ -25,7 +25,7 @@ import {
   type PeopleState,
 } from "./actions";
 import { PersonPicker } from "./person-picker";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 import { labelFor } from "@/lib/i18n/label";
 
 const HEAD =
@@ -269,7 +269,7 @@ export function ParticipantPanel({
                           ended
                             ? {
                                 title: fill(t.participants.confirmRemoveEnded, {
-                                  name: participant.fullName || participant.login,
+                                  name: isolate(participant.fullName || participant.login),
                                 }),
                                 detail: t.participants.confirmRemoveEndedBody,
                                 answer: t.participants.remove,

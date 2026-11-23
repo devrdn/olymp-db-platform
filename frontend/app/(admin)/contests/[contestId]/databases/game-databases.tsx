@@ -11,7 +11,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import { dropGameInstanceAction } from "./actions";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -154,7 +154,7 @@ function DropDatabase({
     <ActionForm
       action={dropGameInstanceAction}
       fields={{ contestId, database: instance.database }}
-      confirm={{ title: fill(t.confirm, { who }), answer: t.drop, cancel: dict.chrome.cancel, danger: true }}
+      confirm={{ title: fill(t.confirm, { who: isolate(who) }), answer: t.drop, cancel: dict.chrome.cancel, danger: true }}
       errors={dict.errors}
       className="flex flex-col items-end gap-1"
     >

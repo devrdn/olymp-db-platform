@@ -1,10 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Participant } from "@/lib/api/people";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 // The real Server Actions would pull in Next's server runtime.
 const { disqualifyParticipantAction, removeParticipantAction } = vi.hoisted(() => ({
@@ -24,6 +24,11 @@ import { ManagerPanel, ParticipantPanel } from "./people-panels";
 import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
+
+beforeEach(() => {
+  removeParticipantAction.mockClear();
+  disqualifyParticipantAction.mockClear();
+});
 
 beforeAll(async () => {
   dict = await getDictionary("en");
@@ -57,7 +62,8 @@ describe("ParticipantPanel, the score column", () => {
         total={1}
         locale="en"
         scoring="points"
-        ended={false}        dict={dict}
+        ended={false}
+        dict={dict}
       />,
     );
 
@@ -73,7 +79,8 @@ describe("ParticipantPanel, the score column", () => {
         total={1}
         locale="en"
         scoring="icpc"
-        ended={false}        dict={dict}
+        ended={false}
+        dict={dict}
       />,
     );
 
@@ -96,7 +103,8 @@ describe("ParticipantPanel, an address outside the site's domain", () => {
         scoring="points"
         trustedDomain={trustedDomain}
         trustedDomainOnly={trustedDomainOnly}
-        ended={false}        dict={dict}
+        ended={false}
+        dict={dict}
       />,
     );
 
@@ -143,7 +151,8 @@ describe("the people tables on a phone", () => {
         total={1}
         locale="en"
         scoring="points"
-        ended={false}        dict={dict}
+        ended={false}
+        dict={dict}
       />,
     );
 
@@ -171,7 +180,8 @@ describe("ParticipantPanel, disqualifying", () => {
       total={1}
       locale="en"
       scoring="points"
-      ended={false}      dict={dict}
+      ended={false}
+      dict={dict}
     />
   );
   const name = () => dict.workspace.people.participants.disqualify;
@@ -210,7 +220,6 @@ describe("ParticipantPanel, removing a registered participant", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await vi.waitFor(() => expect(removeParticipantAction).toHaveBeenCalledOnce());
-    removeParticipantAction.mockClear();
   });
 
   test("asks first once the contest has ended, naming the participant, and sends nothing on cancel", async () => {
@@ -219,11 +228,32 @@ describe("ParticipantPanel, removing a registered participant", () => {
     await userEvent.click(screen.getByRole("button", { name: name() }));
 
     const dialog = await screen.findByRole("dialog", {
-      name: fill(dict.workspace.people.participants.confirmRemoveEnded, { name: "Q$&A Popescu" }),
+      name: fill(dict.workspace.people.participants.confirmRemoveEnded, { name: isolate("Q$&A Popescu") }),
     });
     expect(dialog).toHaveTextContent(dict.workspace.people.participants.confirmRemoveEndedBody);
     await userEvent.click(screen.getAllByRole("button", { name: dict.chrome.cancel })[0]);
     expect(removeParticipantAction).not.toHaveBeenCalled();
+  });
+
+  // A self-chosen name with a direction override must not reorder the question.
+  test("sets the participant's name apart from the question's words", async () => {
+    render(
+      <ParticipantPanel
+        contestId="c1"
+        participants={[participant({ status: "registered", startedAt: undefined, fullName: "Ana\u2069\u202Eesrever" })]}
+        total={1}
+        locale="en"
+        scoring="points"
+        ended
+        dict={dict}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: name() }));
+
+    const title = (await screen.findByRole("dialog")).querySelector("[data-slot=dialog-title]")!.textContent!;
+    expect(title).toContain("\u2068Anaesrever\u2069");
+    expect(title).not.toMatch(/[\u202A-\u202E\u2066\u2067]/);
   });
 
   test("removes once the question is answered", async () => {
@@ -233,6 +263,5 @@ describe("ParticipantPanel, removing a registered participant", () => {
     await answerYes(name());
 
     await vi.waitFor(() => expect(removeParticipantAction).toHaveBeenCalledOnce());
-    removeParticipantAction.mockClear();
   });
 });

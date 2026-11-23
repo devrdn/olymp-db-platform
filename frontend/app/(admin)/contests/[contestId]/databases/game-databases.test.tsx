@@ -2,12 +2,12 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import en from "@/lib/i18n/dictionaries/en";
-import { fill } from "@/lib/i18n/fill";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
+import en from "@/lib/i18n/dictionaries/en";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 import { GameDatabases } from "./game-databases";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 type State = { ok?: true; code?: string };
 
@@ -134,7 +134,7 @@ describe("the contest's databases", () => {
 
     await userEvent.click(screen.getByRole("button", { name: t.drop }));
 
-    expect(await screen.findByRole("dialog", { name: fill(t.confirm, { who: "Ivan Petrov" }) })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: fill(t.confirm, { who: isolate("Ivan Petrov") }) })).toBeInTheDocument();
     expect(dropGameInstanceAction).not.toHaveBeenCalled();
   });
 

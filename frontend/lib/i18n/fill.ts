@@ -13,3 +13,15 @@ export function fill(template: string, values: Record<string, string | number>):
     return placeholder;
   });
 }
+
+/** Every character that sets or ends a text direction: embeddings, overrides, isolates and marks. */
+const DIRECTION_CONTROLS = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/g;
+
+/**
+ * A name a user chose, set apart from the sentence around it: stripped of
+ * every direction control of its own, which could close the isolate or
+ * reorder the words outside it, then set inside first-strong isolates.
+ */
+export function isolate(name: string): string {
+  return `\u2068${name.replace(DIRECTION_CONTROLS, "")}\u2069`;
+}

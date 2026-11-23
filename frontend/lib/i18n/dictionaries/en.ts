@@ -923,7 +923,7 @@ const en = {
       formerParticipant: "the account was deleted",
       drop: "Drop",
       confirm:
-        "Drop the database of {who}? Any query they are running right now is lost, and a fresh copy is made the next time they act. Their answers, their score and their clock are not touched.",
+        "Drop the database of “{who}”? Any query they are running right now is lost, and a fresh copy is made the next time they act. Their answers, their score and their clock are not touched.",
       sizeUnknown: "unknown",
       truncated: "There are more databases than this list shows.",
       columns: {
@@ -1206,7 +1206,7 @@ const en = {
         remove: "Remove",
         disqualify: "Disqualify",
         confirmDisqualify: "Disqualify this participant? Everything they have done stays on the record.",
-        confirmRemoveEnded: "Remove {name} from a contest that is over?",
+        confirmRemoveEnded: "Remove “{name}” from a contest that is over?",
         confirmRemoveEndedBody: "They never started, but their registration will disappear from the contest's record.",
         empty: {
           title: "Nobody is enrolled yet",

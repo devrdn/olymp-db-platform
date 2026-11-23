@@ -817,7 +817,7 @@ const ro = {
       formerParticipant: "contul a fost șters",
       drop: "Șterge",
       confirm:
-        "Ștergeți baza participantului {who}? Interogarea care rulează chiar acum se pierde, iar o copie nouă apare la următoarea lor acțiune. Răspunsurile, punctajul și ceasul nu sunt atinse.",
+        "Ștergeți baza participantului „{who}”? Interogarea care rulează chiar acum se pierde, iar o copie nouă apare la următoarea lor acțiune. Răspunsurile, punctajul și ceasul nu sunt atinse.",
       sizeUnknown: "necunoscut",
       truncated: "Există mai multe baze decât arată această listă.",
       columns: {
@@ -1097,7 +1097,7 @@ const ro = {
         remove: "Eliminați",
         disqualify: "Descalificați",
         confirmDisqualify: "Descalificați acest participant? Tot ce a făcut rămâne în evidență.",
-        confirmRemoveEnded: "Eliminați participantul {name} dintr-o olimpiadă încheiată?",
+        confirmRemoveEnded: "Eliminați participantul „{name}” dintr-o olimpiadă încheiată?",
         confirmRemoveEndedBody: "Nu a început lucrul, dar înscrierea va dispărea din evidența olimpiadei.",
         empty: {
           title: "Nu este încă nimeni înscris",
