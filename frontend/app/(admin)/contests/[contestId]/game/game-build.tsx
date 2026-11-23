@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -10,7 +11,6 @@ import { cn } from "@/lib/utils";
 
 import { requestGameBuildAction } from "./actions";
 import { useGamePoll } from "./game-poll";
-import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * Rebuild control for a builder-sourced game, whose rows can only be typed
@@ -67,9 +67,6 @@ export function GameBuild({
   const builder = game.source === "builder";
   if (!editable || !builder || (!game.needsBuild && !failed && !building)) return null;
 
-  function message(code: string): string {
-    return messageForCode(code, errors);
-  }
 
   function requestBuild() {
     setRefusalCode(null);
@@ -97,9 +94,7 @@ export function GameBuild({
         {t.action}
       </button>
       {refusalCode ? (
-        <p role="alert" className="text-small text-bad">
-          {message(refusalCode)}
-        </p>
+        <FailureAlert code={refusalCode} errors={errors} />
       ) : null}
     </div>
   );

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { browserRequest } from "@/lib/api/browser";
 import { ApiError, isAbortError } from "@/lib/api/client";
@@ -21,7 +22,7 @@ import {
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
-import { knownMessage, messageForCode } from "@/lib/i18n/errors";
+import { knownMessage } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -352,9 +353,6 @@ export function GameBuilderTable({
     await runLoop(file, id, sentBytes, limits.chunkBytes);
   }
 
-  function message(code: string): string {
-    return messageForCode(code, errors);
-  }
 
   function updateRowValue(index: number, value: string) {
     setRowValues((prev) => prev.map((v, i) => (i === index ? value : v)));
@@ -540,9 +538,7 @@ export function GameBuilderTable({
             </div>
             {addErrorCode ? (
               <div className="flex flex-col gap-1">
-                <p role="alert" className="text-small text-bad">
-                  {message(addErrorCode)}
-                </p>
+                <FailureAlert code={addErrorCode} errors={errors} />
                 {addErrorDetail ? (
                   <>
                     <p className="text-label text-ink-3">{tb.detailLabel}</p>
@@ -641,9 +637,7 @@ export function GameBuilderTable({
 
             {phase === "error" && errorCode ? (
               <div className="flex flex-col gap-2 border-l-2 border-bad pl-4">
-                <p role="alert" className="max-w-body text-small text-bad">
-                  {message(errorCode)}
-                </p>
+                <FailureAlert code={errorCode} errors={errors} />
                 {errorDetail ? (
                   <div className="flex flex-col gap-1">
                     <p className="text-label text-ink-3">{tb.detailLabel}</p>

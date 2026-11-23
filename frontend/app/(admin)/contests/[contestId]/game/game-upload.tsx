@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { browserRequest } from "@/lib/api/browser";
@@ -21,7 +22,7 @@ import {
   gameUploadWindowAction,
 } from "./actions";
 import { useGamePoll } from "./game-poll";
-import { knownMessage, messageForCode } from "@/lib/i18n/errors";
+import { knownMessage } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -364,9 +365,6 @@ export function GameUpload({
     await runLoop(file, id, offset, (fresh?.uploadLimits ?? uploadLimits).chunkBytes);
   }
 
-  function message(code: string): string {
-    return messageForCode(code, errors);
-  }
 
   if (!editable) {
     return (
@@ -493,9 +491,7 @@ export function GameUpload({
 
       {phase === "error" && errorCode ? (
         <div className="flex flex-col gap-2 border-l-2 border-bad pl-4">
-          <p role="alert" className="max-w-body text-small text-bad">
-            {message(errorCode)}
-          </p>
+          <FailureAlert code={errorCode} errors={errors} />
           <div className="flex flex-wrap items-center gap-3">
             {hasFile && uploadId ? (
               <button
