@@ -21,8 +21,9 @@ async function otherQuestions(contestId: string) {
 
 /**
  * One question. The API checks the question belongs to this contest (its
- * middleware checks only the contest in the URL) and answers 404, not 403, so
- * the question's existence is not revealed.
+ * middleware checks only the contest in the URL) and answers
+ * `question_not_found`, not `forbidden`, so the question's existence is not
+ * revealed.
  */
 export default async function QuestionPage(
   props: PageProps<"/contests/[contestId]/questions/[questionId]">,
@@ -32,13 +33,11 @@ export default async function QuestionPage(
 
   const [contest, question, list] = await Promise.all([
     loadContest(contestId),
-    loadContestResource(contestId, `/questions/${questionId}`, (payload) =>
-      questionSchema.parse(payload),
-    ),
+    loadContestResource(contestId, `/questions/${questionId}`, (payload) => questionSchema.parse(payload), {
+      missing: ["question_not_found"],
+    }),
     otherQuestions(contestId),
   ]);
-
-  if (!question) notFound();
 
   const otherVisible = list?.filter((q) => q.id !== question.id && q.isVisible);
   const otherVisibleFinals = otherVisible?.filter((q) => q.kind === "final").length;
