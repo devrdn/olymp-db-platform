@@ -82,9 +82,14 @@ describe("the monitoring tab", () => {
     loadContest.mockResolvedValue({ ...contest, mayMonitor: true });
     await renderLayout();
 
-    expect(loadContestResource).not.toHaveBeenCalledWith(CONTEST_ID, "/managers", expect.anything());
+    expect(askedPaths()).not.toContain("/managers");
   });
 });
+
+/** Every path the layout read beneath the contest, whatever policy each read declared. */
+function askedPaths(): unknown[] {
+  return loadContestResource.mock.calls.map(([, path]) => path);
+}
 
 /** The questions to the organisers follow the API's `may_clarify`, and say how many wait. */
 describe("the participant questions tab", () => {
@@ -100,7 +105,12 @@ describe("the participant questions tab", () => {
     const link = screen.getByRole("link", { name: label });
     expect(link).toHaveAttribute("href", `/contests/${CONTEST_ID}/clarifications`);
     expect(link).toHaveTextContent("3");
-    expect(loadContestResource).toHaveBeenCalledWith(CONTEST_ID, "/clarifications?state=open&limit=1", expect.anything());
+    expect(loadContestResource).toHaveBeenCalledWith(
+      CONTEST_ID,
+      "/clarifications?state=open&limit=1",
+      expect.anything(),
+      { bestEffort: true },
+    );
   });
 
   test("carries no count when nothing waits, and asks for none once the contest is over", async () => {
@@ -108,7 +118,7 @@ describe("the participant questions tab", () => {
     await renderLayout();
 
     expect(screen.getByRole("link", { name: "Participant questions" })).toBeInTheDocument();
-    expect(loadContestResource).not.toHaveBeenCalledWith(CONTEST_ID, expect.stringContaining("/clarifications"), expect.anything());
+    expect(askedPaths()).not.toContainEqual(expect.stringContaining("/clarifications"));
   });
 
   test("is not offered otherwise", async () => {

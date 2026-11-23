@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 
 import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { fetchIdentity } from "@/lib/auth/session";
 
 import { ApiError } from "./client";
 import { outcome } from "./outcome";
@@ -109,11 +110,18 @@ function answer(error: unknown, policy: ReadPolicy): null | Refusal {
 }
 
 /**
- * A read the page or layout renders without, for a call that is not one API
- * path (who is signed in): its value, or null with the failure logged under
- * `report`. Next's own control flow still passes.
+ * A read the caller works without, for a call that is not one API path: its
+ * value, or null with the failure logged under `report`. Next's own control
+ * flow still passes.
  */
 export async function bestEffort<T>(call: () => Promise<T>, report: string): Promise<T | null> {
   const result = await outcome(call, { report });
   return result.ok ? result.value : null;
 }
+
+/**
+ * Who is signed in, for what only decorates or picks a default: null when
+ * nobody is, and also when the API could not say. Once per render, so an
+ * outage is one log line however many parts of the screen ask.
+ */
+export const readIdentity = cache(() => bestEffort(fetchIdentity, "/auth/me"));

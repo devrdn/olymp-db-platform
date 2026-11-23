@@ -16,7 +16,7 @@ import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
 import { workspaceSchema, type WorkspaceSnapshot } from "@/lib/api/workspace";
-import { fetchIdentity } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
@@ -298,11 +298,10 @@ async function PlayPanels({
       : { question, index: index + 1, body: <QuestionBody markdown={question.bodyMd} /> },
   );
 
-  // The print copy's byline: who is printing, and when. `fetchIdentity` is
-  // wrapped in React's `cache()`, so this shares `ParticipantLayout`'s
-  // request. A failed read only drops the name; `PrintView` then prints the
-  // date alone.
-  const identity = await fetchIdentity().catch(() => null);
+  // The print copy's byline: who is printing, and when. This shares
+  // `ParticipantLayout`'s read of the identity. A failed read only drops the
+  // name; `PrintView` then prints the date alone.
+  const identity = await readIdentity();
   const participantName = identity ? identity.fullName || identity.login : "";
   const printedOn = formatDay(new Date().toISOString(), { locale });
 

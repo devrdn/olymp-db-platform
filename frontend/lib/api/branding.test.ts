@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
@@ -11,10 +12,13 @@ beforeEach(() => {
   forgetBranding();
   serverRequest.mockReset();
   vi.useFakeTimers();
+  // A failed read is logged; the line itself is `outcome.test.ts`'s business.
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("branding", () => {
@@ -56,6 +60,12 @@ describe("branding", () => {
 
     expect((await branding()).name).toBe("");
     expect((await branding()).name).toBe("USM");
+  });
+
+  test("lets Next's own control flow through, as a prerender's bail-out on the request headers", async () => {
+    serverRequest.mockImplementation(async () => redirect("/elsewhere"));
+
+    await expect(branding()).rejects.toMatchObject({ digest: expect.stringContaining("NEXT_REDIRECT") });
   });
 
   test("reads the archive as off when the API cannot be reached", async () => {

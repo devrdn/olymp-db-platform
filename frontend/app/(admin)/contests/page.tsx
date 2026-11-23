@@ -2,7 +2,7 @@ import { Band } from "@/components/layout/band";
 import { ContestRegister } from "./contest-register";
 import { contestListSchema } from "@/lib/api/contests";
 import { readPage } from "@/lib/api/page-read";
-import { fetchIdentity } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 export async function generateMetadata() {
@@ -18,7 +18,7 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
     activeDictionary(),
     // Tolerated: the link is decoration, since the API refuses a creation by
     // anyone without `contest.create` whatever the page showed.
-    fetchIdentity().catch(() => null),
+    readIdentity(),
   ]);
 
   const query = typeof params.q === "string" ? params.q : "";

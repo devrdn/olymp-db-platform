@@ -1,6 +1,6 @@
 import { ProductShell } from "@/components/layout/product-shell";
 import { participantDestinations } from "@/components/layout/destinations";
-import { fetchIdentity } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
 import { ParticipantDictionaryProvider } from "@/lib/i18n/client";
@@ -25,7 +25,7 @@ export default async function ParticipantLayout({ children }: { children: React.
     // unreachable server costs only the account chip. Screens that decide
     // where somebody may go let the failure through, since "unknown" must not
     // read as "signed out".
-    fetchIdentity().catch(() => null),
+    readIdentity(),
   ]);
 
   return (

@@ -1,4 +1,4 @@
-import { fetchIdentity } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
 
 import { SelectionProvider } from "./selection";
 
@@ -14,6 +14,6 @@ import { SelectionProvider } from "./selection";
  * `null`. Also wraps `/users/[userId]`, which reads no selection.
  */
 export default async function UsersLayout({ children }: { children: React.ReactNode }) {
-  const identity = await fetchIdentity().catch(() => null);
+  const identity = await readIdentity();
   return <SelectionProvider owner={identity?.id ?? null}>{children}</SelectionProvider>;
 }

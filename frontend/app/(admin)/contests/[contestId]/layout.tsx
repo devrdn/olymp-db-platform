@@ -37,9 +37,9 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
   // shares this one through `readPage`'s memo.
   const [contest, check] = await Promise.all([
     loadContest(contestId),
-    loadContestResource(contestId, "/publish-check", (payload) =>
-      publishCheckSchema.parse(payload),
-    ).catch(() => null),
+    loadContestResource(contestId, "/publish-check", (payload) => publishCheckSchema.parse(payload), {
+      bestEffort: true,
+    }),
   ]);
   const t = dict.workspace;
   const base = `/contests/${contest.id}`;
@@ -183,9 +183,12 @@ async function navigation(
 
 /** How many participants' questions wait for an answer, or nothing when none do. */
 async function waitingNoteFor(contestId: string): Promise<string | undefined> {
-  const queue = await loadContestResource(contestId, "/clarifications?state=open&limit=1", (payload) =>
-    clarificationQueueSchema.parse(payload),
-  ).catch(() => null);
+  const queue = await loadContestResource(
+    contestId,
+    "/clarifications?state=open&limit=1",
+    (payload) => clarificationQueueSchema.parse(payload),
+    { bestEffort: true },
+  );
   const open = queue?.counts.open ?? 0;
   return open > 0 ? `${open}` : undefined;
 }
@@ -212,9 +215,9 @@ async function questionNoteFor(
   contestId: string,
   languages: string[],
 ): Promise<string | undefined> {
-  const list = await loadContestResource(contestId, "/questions", (payload) =>
-    questionListSchema.parse(payload),
-  ).catch(() => null);
+  const list = await loadContestResource(contestId, "/questions", (payload) => questionListSchema.parse(payload), {
+    bestEffort: true,
+  });
 
   if (!list) return undefined;
 

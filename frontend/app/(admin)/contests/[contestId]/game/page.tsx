@@ -8,7 +8,7 @@ import {
   type TableData,
 } from "@/lib/api/game";
 import { contentEditable } from "@/lib/api/contests";
-import { serverRequest } from "@/lib/api/server";
+import { pathSegment } from "@/lib/api/ids";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
@@ -19,30 +19,31 @@ import { GameUpload } from "./game-upload";
 
 /**
  * Whether a table holds data, so the builder can disable locked edits before
- * the server would refuse them. Best-effort, not `loadContestResource`: up to
- * fifty small reads must not 404 the page. `max_rows=1` is all it needs.
+ * the server would refuse them. Best-effort: up to fifty small reads must not
+ * take the page down. `max_rows=1` is all it needs.
  */
 async function tableRowCount(contestId: string, table: string): Promise<number> {
-  try {
-    const payload = await serverRequest(
-      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/window?max_rows=1`,
-    );
-    return tableRowWindowSchema.parse(payload).totalRows;
-  } catch {
-    return 0;
-  }
+  const segment = pathSegment(table);
+  if (segment === null) return 0;
+  const window = await loadContestResource(
+    contestId,
+    `/game/tables/${segment}/data/window?max_rows=1`,
+    (payload) => tableRowWindowSchema.parse(payload),
+    { bestEffort: true },
+  );
+  return window?.totalRows ?? 0;
 }
 
 /** A table's upload still receiving, for resuming after a reload. Best-effort. */
 async function tableCurrentUpload(contestId: string, table: string): Promise<TableData | null> {
-  try {
-    const payload = await serverRequest(
-      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/current`,
-    );
-    return tableDataSchema.parse(payload);
-  } catch {
-    return null;
-  }
+  const segment = pathSegment(table);
+  if (segment === null) return null;
+  return loadContestResource(
+    contestId,
+    `/game/tables/${segment}/data/current`,
+    (payload) => tableDataSchema.parse(payload),
+    { bestEffort: true },
+  );
 }
 
 /**
@@ -64,24 +65,23 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
     }),
   ]);
 
-  // Best-effort: the endpoint answers 404 without an upload volume, and
-  // `game.uploadLimits.enabled` already says so. Skipped when the game could
-  // not be read.
+  // Best-effort, and skipped when the game could not be read. No upload is
+  // the answer `absent`, not a refusal.
   const initialUpload =
     game === null
       ? null
-      : await loadContestResource(contestId, "/game/uploads/current", (payload) =>
-          uploadSchema.parse(payload),
-        ).catch(() => null);
+      : await loadContestResource(contestId, "/game/uploads/current", (payload) => uploadSchema.parse(payload), {
+          bestEffort: true,
+        });
 
   // `/game/definition` always answers 200; a missing game cluster is already
   // `game === null`.
   const definition =
     game === null
       ? null
-      : await loadContestResource(contestId, "/game/definition", (payload) =>
-          definitionSchema.parse(payload),
-        ).catch(() => null);
+      : await loadContestResource(contestId, "/game/definition", (payload) => definitionSchema.parse(payload), {
+          bestEffort: true,
+        });
 
   // Skipped without a table-data volume or tables. Each table's two reads are
   // paired so the page waits for the slowest table, not two sequential

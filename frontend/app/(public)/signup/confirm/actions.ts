@@ -3,11 +3,12 @@
 import { redirect } from "next/navigation";
 
 import { outcome } from "@/lib/api/outcome";
+import { readIdentity } from "@/lib/api/page-read";
 import type { ActionDone, ActionRefused, ActionState } from "@/lib/api/server";
 import { confirmSignup, resendSignup, signupAnswerCode, signupCookieName } from "@/lib/api/signup";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { browserRelay } from "@/lib/auth/relay";
-import { fetchIdentity, sessionCookie } from "@/lib/auth/session";
+import { sessionCookie } from "@/lib/auth/session";
 import { forgetSignupEmail, rememberSignupEmail, signupEmail } from "@/lib/auth/signup-email";
 import { isSignupCode, normalizeCode } from "@/lib/auth/signup-rules";
 import { activeLocale } from "@/lib/i18n/server";
@@ -45,7 +46,7 @@ export async function confirmSignupAction(_previous: ConfirmState, form: FormDat
 
   // As after sign-in: the session exists either way, so a failed read lands
   // on the screen every account can open.
-  const identity = await fetchIdentity().catch(() => null);
+  const identity = await readIdentity();
   redirect(
     destinationAfterLogin({
       mustChangePassword: confirmed.value.mustChangePassword,

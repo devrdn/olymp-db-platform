@@ -1,6 +1,6 @@
 import { staffDestinations } from "@/components/layout/destinations";
 import { ProductShell } from "@/components/layout/product-shell";
-import { fetchIdentity } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
 import { AdminDictionaryProvider } from "@/lib/i18n/client";
@@ -22,7 +22,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     // Tolerated here only: this layout decorates and never redirects, so a
     // failure costs the audit link and account door. Screens that gate access
     // let the error propagate, since "unknown" must not mean "signed out".
-    fetchIdentity().catch(() => null),
+    readIdentity(),
   ]);
 
   const destinations = staffDestinations(dict, identity?.permissions ?? [], brand.archive);

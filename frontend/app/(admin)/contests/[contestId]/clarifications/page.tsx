@@ -21,7 +21,7 @@ export default async function ClarificationsPage(props: PageProps<"/contests/[co
       clarificationQueueSchema.parse(payload),
     ),
     // Only names the questions; the desk works without them.
-    loadContestResource(contestId, "/questions", (payload) => questionListSchema.parse(payload)).catch(() => null),
+    loadContestResource(contestId, "/questions", (payload) => questionListSchema.parse(payload), { bestEffort: true }),
     loadContestResource(contestId, `/announcements?limit=${CLARIFICATION_PAGE_SIZE}`, (payload) =>
       announcementListSchema.parse(payload),
     ),

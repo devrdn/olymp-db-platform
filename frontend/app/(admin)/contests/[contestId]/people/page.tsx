@@ -7,7 +7,8 @@ import { ManagerPanel, ParticipantPanel } from "./people-panels";
 
 /**
  * Staff and participants on one screen. Each list has its own permission, so a
- * forbidden one is shown as absent rather than failing the screen.
+ * forbidden one is shown as absent rather than failing the screen, and so is
+ * a list that could not be read.
  */
 export default async function PeoplePage(props: PageProps<"/contests/[contestId]/people">) {
   const [{ contestId }, locale, dict] = await Promise.all([
@@ -18,12 +19,14 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
 
   const [contest, managers, participants, methods] = await Promise.all([
     loadContest(contestId),
-    loadContestResource(contestId, "/managers", (payload) =>
-      managerListSchema.parse(payload),
-    ).catch(() => null),
-    loadContestResource(contestId, "/participants", (payload) =>
-      participantListSchema.parse(payload),
-    ).catch(() => null),
+    loadContestResource(contestId, "/managers", (payload) => managerListSchema.parse(payload), {
+      absent: ["forbidden"],
+      bestEffort: true,
+    }),
+    loadContestResource(contestId, "/participants", (payload) => participantListSchema.parse(payload), {
+      absent: ["forbidden"],
+      bestEffort: true,
+    }),
     // Names the domain in the mark for an address outside it; never throws.
     fetchAuthMethods(),
   ]);

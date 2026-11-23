@@ -10,7 +10,10 @@ const { serverRequest, fetchIdentity } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 vi.mock("@/lib/auth/session", () => ({ fetchIdentity }));
-vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect: vi.fn(),
+}));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");
   return { activeLocale: async () => "en", activeDictionary: async () => getDictionary("en") };

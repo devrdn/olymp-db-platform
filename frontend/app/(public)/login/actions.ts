@@ -8,7 +8,8 @@ import { browserCookieOptions } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { DEVICE_COOKIE, signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
-import { fetchIdentity, sessionCookie } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
+import { sessionCookie } from "@/lib/auth/session";
 export type SignInState = { code?: string };
 
 /**
@@ -50,7 +51,7 @@ export async function signInAction(
 
   // The session exists either way; if permissions cannot be read, land on the
   // participant's screen, which every account can open.
-  const identity = await fetchIdentity().catch(() => null);
+  const identity = await readIdentity();
 
   // redirect() throws, so it stays outside any try/catch.
   redirect(

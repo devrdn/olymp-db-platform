@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { Band } from "@/components/layout/band";
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import { destinationAfterLogin } from "@/lib/auth/destination";
-import { fetchIdentity } from "@/lib/auth/session";
+import { readIdentity } from "@/lib/api/page-read";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { externalSignInError, signInErrors } from "./codes";
@@ -43,7 +43,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
    * still on its one-time password is sent to `/password` by the API.
    */
   if (params.error === undefined) {
-    const identity = await fetchIdentity().catch(() => null);
+    const identity = await readIdentity();
     // redirect() throws, so it stays outside any try/catch.
     if (identity) {
       redirect(destinationAfterLogin(

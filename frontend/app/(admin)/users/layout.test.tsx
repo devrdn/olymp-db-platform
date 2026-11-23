@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { redirect } from "next/navigation";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { CurrentIdentity } from "@/lib/auth/session";
@@ -152,6 +153,23 @@ describe("UsersLayout", () => {
         ),
       }),
     );
+
+    expect(screen.getByTestId("ids")).toHaveTextContent("");
+  });
+
+  test("lets Next's own control flow through rather than rendering the screen as nobody's", async () => {
+    fetchIdentity.mockImplementation(async () => redirect("/elsewhere"));
+
+    await expect(UsersLayout({ children: null })).rejects.toMatchObject({
+      digest: expect.stringContaining("NEXT_REDIRECT"),
+    });
+  });
+
+  test("scopes the selection to nobody when the API could not say who is signed in", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchIdentity.mockRejectedValue(new Error("/auth/me could not be reached (status 502)"));
+
+    render(await UsersLayout({ children: <Reader /> }));
 
     expect(screen.getByTestId("ids")).toHaveTextContent("");
   });
