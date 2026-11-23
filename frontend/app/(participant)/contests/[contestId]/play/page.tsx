@@ -6,17 +6,9 @@ import { Band } from "@/components/layout/band";
 import { FeedbackLink } from "@/components/product/feedback-link";
 import { StoryText } from "@/components/product/story-text";
 import { branding } from "@/lib/api/branding";
-import { ApiError } from "@/lib/api/client";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
-import { readPage } from "@/lib/api/page-read";
-import { playQuestionListSchema, playStorySchema } from "@/lib/api/play";
-import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
-import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
-import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
-import { serverRequest } from "@/lib/api/server";
-import { workspaceSchema, type WorkspaceSnapshot } from "@/lib/api/workspace";
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity, readPage } from "@/lib/api/page-read";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
@@ -30,7 +22,8 @@ import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
 import { QuestionBody } from "./question-body";
-import { isReadRateLimit, refusalKind } from "./refusals";
+import { readPlay } from "./play-reads";
+import { isReadRateLimit } from "./refusals";
 import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
@@ -40,29 +33,6 @@ import { Workspace } from "./workspace";
 export async function generateMetadata() {
   const dict = await activeDictionary();
   return { title: dict.participant.console.heading };
-}
-
-/**
- * Whether a refusal means this participant may not use the screen at all
- * right now, whichever request surfaces it. Such refusals come from the
- * admission the `/play/*` reads share (the read budget, then the gate): a
- * passed deadline, a disallowed address, removal from the roster, or the
- * rate limit. `question_not_found` is listed too, though none of the reads
- * below answers with it. `story_not_found` does not take the screen: it
- * concerns the story alone and is handled below.
- */
-function takesTheScreen(code: string): boolean {
-  const kind = refusalKind(code);
-  // The read rate limit is named rather than matched by kind: it is the only
-  // self-lifting refusal these reads meet.
-  return (
-    kind === "closed" ||
-    kind === "dormant" ||
-    kind === "excluded" ||
-    kind === "elsewhere" ||
-    isReadRateLimit(code) ||
-    code === "question_not_found"
-  );
 }
 
 /**
@@ -76,7 +46,7 @@ function takesTheScreen(code: string): boolean {
  * with no connection, since it will never become `running` while the screen
  * is open.
  *
- * A running contest can still refuse this participant (see takesTheScreen);
+ * A running contest can still refuse this participant (see `readPlay`);
  * that is shown as unavailable, not as a failed load.
  */
 export default async function PlayPage({ params }: PageProps<"/contests/[contestId]/play">) {
@@ -206,86 +176,14 @@ async function PlayPanels({
 }) {
   const errors = dict.errors as Record<string, string>;
 
-  // `allSettled`, not `all`: a refusal about the story alone must not lose the
-  // questions, the log or the console. A refusal from the shared admission
-  // gate means the same whichever request carries it (takesTheScreen).
-  //
-  // Under individual timing the first successful read of the story, the
-  // questions or the schema starts the participant's clock (the server starts
-  // it once); the workspace read never does. `lang` on the workspace read
-  // names the first SQL tab the server creates.
-  const [storyResult, questionsResult, logResult, schemaResult, workspaceResult] = await Promise.allSettled([
-    serverRequest(`/contests/${contestId}/play/story?lang=${locale}`),
-    serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`),
-    serverRequest(`/contests/${contestId}/play/log?limit=${QUERY_LOG_PAGE_SIZE}&offset=0`),
-    serverRequest(`/contests/${contestId}/play/schema`),
-    serverRequest(`/contests/${contestId}/play/workspace?lang=${locale}`),
-  ]);
-
-  if (questionsResult.status === "rejected") {
-    const error = questionsResult.reason;
-    if (error instanceof ApiError && takesTheScreen(error.code)) {
-      return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
-    }
-    throw error;
+  const read = await readPlay(contestId, locale);
+  if (read.kind === "unavailable") {
+    return <ScreenUnavailable body={errors[read.code]} code={read.code} dict={dict} />;
   }
-  const questions = playQuestionListSchema.parse(questionsResult.value).items;
-
-  // The story, or a shown reason on `story_not_found`. A screen-taking refusal
-  // here is answered as for the questions.
-  let storyBody: string | null = null;
-  let schemaNotes: string | null = null;
-  let storyUnavailable: string | null = null;
-  if (storyResult.status === "fulfilled") {
-    const story = playStorySchema.parse(storyResult.value);
-    storyBody = story.bodyMd;
-    schemaNotes = story.schemaNotesMd;
-  } else {
-    const error = storyResult.reason;
-    if (error instanceof ApiError && takesTheScreen(error.code)) {
-      return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
-    }
-    if (error instanceof ApiError && error.code === "story_not_found") {
-      storyUnavailable = errors.story_not_found;
-    } else {
-      throw error;
-    }
-  }
-
-  // The log degrades to an empty page on any failure that does not take the
-  // screen: it is a record, not something the console needs, and
-  // QueryLogPanel retries on the client. `failed` tells an unread log from an
-  // empty one, which would otherwise render as "no queries yet" with no retry.
-  let initialLog: { items: QueryLogEntry[]; total: number; failed: boolean } = {
-    items: [],
-    total: 0,
-    failed: false,
-  };
-  if (logResult.status === "fulfilled") {
-    initialLog = { ...queryLogResponseSchema.parse(logResult.value), failed: false };
-  } else {
-    const error = logResult.reason;
-    if (error instanceof ApiError && takesTheScreen(error.code)) {
-      return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
-    }
-    // Degrade rather than crash, but say so.
-    initialLog = { items: [], total: 0, failed: true };
-  }
-
-  // Absent on every refusal, including `schema_hidden`, where discovering the
-  // shape is the puzzle. No refusal of this read takes the screen down.
-  let schema: GameSchema | null = null;
-  if (schemaResult.status === "fulfilled") {
-    schema = gameSchemaSchema.parse(schemaResult.value);
-  }
-
-  // Neither a refusal nor an unparseable answer takes the screen down: the
-  // notes say they could not be loaded.
-  let workspace: WorkspaceSnapshot | null = null;
-  if (workspaceResult.status === "fulfilled") {
-    const parsed = workspaceSchema.safeParse(workspaceResult.value);
-    workspace = parsed.success ? parsed.data : null;
-  }
+  const { questions, story, log: initialLog, schema, workspace } = read;
+  const storyBody = story?.bodyMd ?? null;
+  const schemaNotes = story?.schemaNotesMd ?? null;
+  const storyUnavailable = story === null ? errors.story_not_found : null;
 
   // The questions, the story with its table descriptions, and the print copy
   // are rendered here, on the server, so the browser does not ship the
