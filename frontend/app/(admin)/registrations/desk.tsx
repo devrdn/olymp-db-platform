@@ -3,13 +3,13 @@
 import { Check } from "lucide-react";
 import { useDeferredValue, useState } from "react";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { displayCode, matchesRegistration, type Registration } from "@/lib/api/registrations-terms";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
@@ -96,9 +96,7 @@ export function RegistrationDesk({
       </Field>
 
       {code ? (
-        <p role="alert" className="text-small text-bad">
-          {messageForCode(code, errors)}
-        </p>
+        <FailureAlert code={code} errors={errors} />
       ) : null}
 
       {rows.length === 0 ? (

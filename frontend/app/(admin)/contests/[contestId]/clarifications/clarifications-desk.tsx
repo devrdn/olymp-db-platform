@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { StoryText } from "@/components/product/story-text";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -23,7 +24,6 @@ import {
 } from "@/lib/api/clarifications";
 import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
@@ -463,9 +463,7 @@ function AnswerForm({
         ) : null}
       </div>
       {error !== null ? (
-        <p role="alert" className="text-small text-bad">
-          {messageForCode(error, dict.errors)}
-        </p>
+        <FailureAlert code={error} errors={dict.errors} />
       ) : null}
     </form>
   );
@@ -568,9 +566,7 @@ function Announcements({
             {pending ? t.posting : t.post}
           </Button>
           {error !== null ? (
-            <p role="alert" className="text-small text-bad">
-              {messageForCode(error, dict.errors)}
-            </p>
+            <FailureAlert code={error} errors={dict.errors} />
           ) : null}
           <p role="status" className={posted ? "text-small text-good" : "sr-only"}>
             {posted ? t.posted : ""}
