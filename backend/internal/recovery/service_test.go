@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth/authtest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery/recoverytest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -584,11 +585,14 @@ type countingBudget struct {
 	spent  int
 }
 
-func (b *countingBudget) Spend(context.Context) (bool, error) {
+func (b *countingBudget) Spend(context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spent++
-	return !b.closed, nil
+	if b.closed {
+		return mailing.ErrBudgetSpent
+	}
+	return nil
 }
 
 func (b *countingBudget) count() int {
@@ -674,8 +678,12 @@ func TestOneAddressTakesAtMostItsShareOfRecovery(t *testing.T) {
 		}
 	}
 
-	if _, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "one-more", Sender: "hall"}); !errors.Is(err, recovery.ErrTooManyLinks) {
+	_, err := f.Service.Submit(t.Context(), recovery.RequestCommand{LoginOrEmail: "one-more", Sender: "hall"})
+	if !errors.Is(err, recovery.ErrTooManyLinks) {
 		t.Errorf("past the address's share = %v, want ErrTooManyLinks", err)
+	}
+	if wait, ok := retry.Delay(err); !ok || wait != time.Minute {
+		t.Errorf("the refusal waits %s (%v), want the whole minute", wait, ok)
 	}
 	if budget.count() != recovery.MailsPerAddressPerMinute {
 		t.Errorf("the installation's budget spent %d, want only the admitted requests", budget.count())

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
@@ -299,14 +298,21 @@ func (h *ParticipantHandler) decodeWorkspaceBody(w http.ResponseWriter, r *http.
 	return false
 }
 
+// workspaceTooOften is the workspace's spent write budget, a row like the
+// signals' and the clarifications' so it says when to retry the same way.
+var workspaceTooOften = errorTable{
+	{err: workspace.ErrTooOften, status: http.StatusTooManyRequests, code: codeWorkspaceTooOften,
+		message:    "Too many workspace saves this minute; wait before saving again",
+		retryAfter: workspace.RetryAfter()},
+}
+
 // failWorkspace maps a workspace refusal to a response, and anything else as
 // every participant route does (CLAUDE.md rule 1).
 func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Request, err error) {
+	if workspaceTooOften.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, workspace.ErrTooOften):
-		w.Header().Set("Retry-After", strconv.Itoa(int(workspace.RetryAfter()/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeWorkspaceTooOften,
-			"Too many workspace saves this minute; wait before saving again")
 	case errors.Is(err, workspace.ErrTooManyTabs):
 		httpx.Error(w, r, http.StatusConflict, codeWorkspaceTabLimit, err.Error())
 	case errors.Is(err, workspace.ErrLastTab):

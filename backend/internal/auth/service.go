@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/google/uuid"
 )
@@ -302,15 +303,15 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	}
 
 	if !trusted {
-		refused, err := s.spendAccount(ctx, cmd, gen)
+		refusal, err := s.spendAccount(ctx, cmd, gen)
 		if err != nil {
 			return LoginResult{}, err
 		}
-		if refused {
+		if refusal != nil {
 			// Record after releasing the slot.
 			slot.Release()
 			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
-			return LoginResult{}, ErrTooManyAttempts
+			return LoginResult{}, refusal
 		}
 	}
 
@@ -573,7 +574,8 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 }
 
 func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
-	allowed, first, err := s.limiter.Spend(ctx, "ip:"+httpx.AddressSubject(cmd.IP), s.maxPerAddress, loginAttemptWindow)
+	subject := "ip:" + httpx.AddressSubject(cmd.IP)
+	allowed, first, err := s.limiter.Spend(ctx, subject, s.maxPerAddress, loginAttemptWindow)
 	if err != nil {
 		return err
 	}
@@ -585,7 +587,7 @@ func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 		if first {
 			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
 		}
-		return ErrTooManyAttempts
+		return lockedOut
 	}
 
 	// An over-long login would mint a key of its own size; an over-long
@@ -617,9 +619,9 @@ func (s *Service) joinQueue(cmd LoginCommand) (leave func(), ok bool) {
 }
 
 // spendAccount spends the guessing limit and then the ceiling under
-// generation gen, and reports whether either refused. The caller records the
-// refusal after releasing its slot.
-func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string) (bool, error) {
+// generation gen, and returns the refusal when either refused. The caller
+// records it after releasing its slot.
+func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string) (refusal, err error) {
 	for _, window := range []struct {
 		subject string
 		limit   int
@@ -629,14 +631,20 @@ func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string
 	} {
 		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if !allowed {
-			return true, nil
+			return lockedOut, nil
 		}
 	}
-	return false, nil
+	return nil, nil
 }
+
+// lockedOut refuses an attempt a window shared with other callers spent: a
+// login's, which anyone may type, or an address's, which a hall behind one NAT
+// shares. It waits the whole window, since the exact rest of one would tell
+// the caller when somebody else first tried.
+var lockedOut = retry.After(ErrTooManyAttempts, loginAttemptWindow)
 
 // AllowPasswordChange counts one attempt to change the account's own password
 // and reports ErrTooManyAttempts once a window is spent (CLAUDE.md rule 4).
@@ -652,16 +660,22 @@ func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID, add
 	for _, window := range []struct {
 		subject string
 		limit   int
+		// own is a window only the signed-in account spends, whose exact rest
+		// tells it nothing about anybody else.
+		own bool
 	}{
-		{passwordChangeSubject(userID), maxPasswordChangeAttempts},
-		{"pwchange-from:" + address, s.maxPerAddress},
+		{passwordChangeSubject(userID), maxPasswordChangeAttempts, true},
+		{"pwchange-from:" + address, s.maxPerAddress, false},
 	} {
 		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
 		if err != nil {
 			return err
 		}
+		if !allowed && window.own {
+			return retry.After(ErrTooManyAttempts, s.limiter.Remaining(ctx, window.subject, loginAttemptWindow))
+		}
 		if !allowed {
-			return ErrTooManyAttempts
+			return lockedOut
 		}
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +86,17 @@ func assertRetryAfter(t *testing.T, rec *httptest.ResponseRecorder, want string)
 	t.Helper()
 	if got := rec.Header().Get("Retry-After"); got != want {
 		t.Errorf("Retry-After = %q, want %q", got, want)
+	}
+}
+
+// assertRetryAfterWithin fails t unless a refusal says to wait more than over
+// and at most within: the rest of the window that refused it, which has
+// already begun to run.
+func assertRetryAfterWithin(t *testing.T, rec *httptest.ResponseRecorder, over, within time.Duration) {
+	t.Helper()
+	seconds, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil || time.Duration(seconds)*time.Second <= over || time.Duration(seconds)*time.Second > within {
+		t.Errorf("Retry-After = %q, want more than %s and at most %s", rec.Header().Get("Retry-After"), over, within)
 	}
 }
 

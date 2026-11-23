@@ -128,6 +128,16 @@ func (m *Memory) Incr(_ context.Context, key string, ttl time.Duration) (int64, 
 	return 1, nil
 }
 
+func (m *Memory) TTL(_ context.Context, key string) (time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	el, ok := m.entries[key]
+	if !ok {
+		return 0, nil
+	}
+	return max(time.Until(el.Value.(*entry).expiresAt), 0), nil
+}
+
 // reclaimScan bounds how many entries one reclaim examines. The walk runs
 // under the lock every session read and rate-limit check takes, so a walk of
 // the whole store would turn one caller's flood into everybody's stall. The

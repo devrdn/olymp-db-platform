@@ -131,6 +131,19 @@ func (r *Redis) Incr(ctx context.Context, key string, ttl time.Duration) (int64,
 	return incr.Val(), nil
 }
 
+func (r *Redis) TTL(ctx context.Context, key string) (time.Duration, error) {
+	return classifyTTL(r.client.PTTL(ctx, key).Result())
+}
+
+// classifyTTL turns PTTL's reply into TTL's: its negative answers for a
+// missing key and one with no expiry are both 0.
+func classifyTTL(ttl time.Duration, err error) (time.Duration, error) {
+	if err != nil {
+		return 0, fmt.Errorf("cache ttl: %w", err)
+	}
+	return max(ttl, 0), nil
+}
+
 func (r *Redis) Ping(ctx context.Context) error {
 	return r.client.Ping(ctx).Err()
 }

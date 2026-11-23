@@ -12,6 +12,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	retryafter "github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 )
 
 func newBudget(t *testing.T, name string, limits mailing.Limits, c *cache.Memory, logs *bytes.Buffer) *mailing.Budget {
@@ -31,12 +32,17 @@ func TestABudgetAdmitsItsMinuteThenRefuses(t *testing.T) {
 	b := newBudget(t, "signup", mailing.Limits{PerMinute: 2, PerDay: 100}, memoryCache(t), &logs)
 
 	for i := range 2 {
-		if ok, err := b.Spend(t.Context()); !ok || err != nil {
-			t.Fatalf("spend %d = %v, %v, want admitted", i, ok, err)
+		if err := b.Spend(t.Context()); err != nil {
+			t.Fatalf("spend %d = %v, want admitted", i, err)
 		}
 	}
-	if ok, err := b.Spend(t.Context()); ok || err != nil {
-		t.Errorf("past the minute = %v, %v, want refused", ok, err)
+	err := b.Spend(t.Context())
+	if !errors.Is(err, mailing.ErrBudgetSpent) {
+		t.Fatalf("past the minute = %v, want ErrBudgetSpent", err)
+	}
+	// The minute's window, not the day's.
+	if wait, ok := retryafter.Delay(err); !ok || wait != time.Minute {
+		t.Errorf("the refusal says to wait %s (%v), want the minute", wait, ok)
 	}
 }
 
@@ -44,11 +50,15 @@ func TestABudgetHasADailyCeiling(t *testing.T) {
 	var logs bytes.Buffer
 	b := newBudget(t, "signup", mailing.Limits{PerMinute: 100, PerDay: 1}, memoryCache(t), &logs)
 
-	if ok, _ := b.Spend(t.Context()); !ok {
-		t.Fatal("the first message was refused")
+	if err := b.Spend(t.Context()); err != nil {
+		t.Fatalf("the first message was refused: %v", err)
 	}
-	if ok, err := b.Spend(t.Context()); ok || err != nil {
-		t.Errorf("past the day = %v, %v, want refused", ok, err)
+	err := b.Spend(t.Context())
+	if !errors.Is(err, mailing.ErrBudgetSpent) {
+		t.Fatalf("past the day = %v, want ErrBudgetSpent", err)
+	}
+	if wait, ok := retryafter.Delay(err); !ok || wait != 24*time.Hour {
+		t.Errorf("the refusal says to wait %s (%v), want the day", wait, ok)
 	}
 }
 
@@ -59,7 +69,7 @@ func TestABudgetLogsTheFirstRefusalOfAWindowOnly(t *testing.T) {
 	b := newBudget(t, "recovery", mailing.Limits{PerMinute: 1, PerDay: 100}, memoryCache(t), &logs)
 
 	for range 5 {
-		_, _ = b.Spend(t.Context())
+		_ = b.Spend(t.Context())
 	}
 
 	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
@@ -79,11 +89,11 @@ func TestBudgetsOfTwoKindsCountApart(t *testing.T) {
 	resets := newBudget(t, "recovery", mailing.Limits{PerMinute: 1, PerDay: 100}, c, &logs)
 
 	for range 3 {
-		_, _ = signups.Spend(t.Context())
+		_ = signups.Spend(t.Context())
 	}
 
-	if ok, err := resets.Spend(t.Context()); !ok || err != nil {
-		t.Errorf("recovery after a sign-up flood = %v, %v, want admitted", ok, err)
+	if err := resets.Spend(t.Context()); err != nil {
+		t.Errorf("recovery after a sign-up flood = %v, want admitted", err)
 	}
 }
 
@@ -97,7 +107,7 @@ func TestABudgetThatCannotCountRefuses(t *testing.T) {
 	var logs bytes.Buffer
 	b := mailing.NewBudget("signup", mailing.Limits{PerMinute: 1, PerDay: 1}, brokenLimiter{}, slog.New(slog.NewTextHandler(&logs, nil)))
 
-	if ok, err := b.Spend(t.Context()); ok || err == nil {
-		t.Errorf("without a counter = %v, %v, want refused with the error", ok, err)
+	if err := b.Spend(t.Context()); err == nil || errors.Is(err, mailing.ErrBudgetSpent) {
+		t.Errorf("without a counter = %v, want the counter's error, not a spent budget", err)
 	}
 }

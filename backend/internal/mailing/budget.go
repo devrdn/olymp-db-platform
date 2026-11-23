@@ -2,9 +2,17 @@ package mailing
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 )
+
+// ErrBudgetSpent is a message a Budget refused. It comes with the window that
+// refused it, the longest the caller may have to wait (retry.Delay).
+var ErrBudgetSpent = errors.New("the installation's mail budget is spent")
 
 // BudgetLimiter is the slice of auth.Limiter a Budget needs.
 type BudgetLimiter interface {
@@ -37,11 +45,12 @@ func NewBudget(name string, limits Limits, limiter BudgetLimiter, log *slog.Logg
 }
 
 // Spend counts one message against the minute's window, then the day's, and
-// reports whether both admit it. A refusal counts too, so a flood does not
-// outlast the window. The first refusal of each window is logged at warn,
-// and only that one, so the operator learns the budget ran out without a
-// line per refused message. A limiter that cannot count is (false, err).
-func (b *Budget) Spend(ctx context.Context) (bool, error) {
+// is nil when both admit it, ErrBudgetSpent when one does not. A refusal
+// counts too, so a flood does not outlast the window. The first refusal of
+// each window is logged at warn, and only that one, so the operator learns
+// the budget ran out without a line per refused message. A limiter that
+// cannot count refuses with its own error.
+func (b *Budget) Spend(ctx context.Context) error {
 	for _, window := range []struct {
 		name   string
 		limit  int
@@ -52,15 +61,17 @@ func (b *Budget) Spend(ctx context.Context) (bool, error) {
 	} {
 		allowed, firstRefused, err := b.limiter.Spend(ctx, "mail_budget:"+b.name+":"+window.name, window.limit, window.length)
 		if err != nil {
-			return false, err
+			return fmt.Errorf("spend the %s mail budget: %w", b.name, err)
 		}
 		if firstRefused {
 			b.log.WarnContext(ctx, "the installation's mail budget is spent; such mail is refused until the window passes",
 				"budget", b.name, "window", window.length, "limit", window.limit)
 		}
 		if !allowed {
-			return false, nil
+			// The whole window: the budget is everybody's, and its exact rest
+			// would tell a caller when others used it.
+			return retry.After(ErrBudgetSpent, window.length)
 		}
 	}
-	return true, nil
+	return nil
 }

@@ -208,17 +208,17 @@ func TestASignUpFloodLeavesRecoveryItsMailBudget(t *testing.T) {
 	signups, recoveries := selfServiceMail(auth.NewLimiter(c), logging.New("error", io.Discard))
 
 	for range signup.MailsPerMinute {
-		if ok, err := signups.Spend(t.Context()); !ok || err != nil {
-			t.Fatalf("sign-up mail = %v, %v, want admitted", ok, err)
+		if err := signups.Spend(t.Context()); err != nil {
+			t.Fatalf("sign-up mail = %v, want admitted", err)
 		}
 	}
-	if ok, _ := signups.Spend(t.Context()); ok {
+	if err := signups.Spend(t.Context()); err == nil {
 		t.Fatal("sign-up mail past its minute was admitted")
 	}
 
 	for i := range recovery.MailsPerMinute {
-		if ok, err := recoveries.Spend(t.Context()); !ok || err != nil {
-			t.Fatalf("reset link %d after the flood = %v, %v, want admitted", i, ok, err)
+		if err := recoveries.Spend(t.Context()); err != nil {
+			t.Fatalf("reset link %d after the flood = %v, want admitted", i, err)
 		}
 	}
 }

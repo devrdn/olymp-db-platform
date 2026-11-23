@@ -585,6 +585,7 @@ func TestAStartsEmailBudgetCountsOnlyTheCodesMailedWhateverTheCase(t *testing.T)
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("= %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
+	assertRetryAfter(t, rec, "3600")
 	if rec := f.start("192.0.2.100", "ion@example.edu", "ion"); rec.Code != http.StatusAccepted {
 		t.Errorf("another email from the same address = %d, want 202", rec.Code)
 	}
@@ -661,6 +662,7 @@ func TestTheInstallationsMailBudgetRefusesAStartFromAFreshAddress(t *testing.T) 
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("past the budget = %d %q, want 429 too_many_attempts", rec.Code, errorCode(t, rec))
 	}
+	assertRetryAfter(t, rec, "60")
 	if got := len(f.Outbox.Queued()); got != queued {
 		t.Errorf("queued %d messages, want %d", got, queued)
 	}
@@ -678,9 +680,11 @@ func TestTheMailBudgetIsSharedByStartAndResendButNotConfirm(t *testing.T) {
 	}
 	f.Clock.Advance(signup.ResendCooldown)
 
-	if rec := f.resend("192.0.2.3", "ana@example.edu", cookie); rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+	rec := f.resend("192.0.2.3", "ana@example.edu", cookie)
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("resend past the budget = %d, want 429 too_many_attempts", rec.Code)
 	}
+	assertRetryAfter(t, rec, "60")
 	if rec := f.confirm("192.0.2.1", "ana@example.edu", code, cookie); rec.Code != http.StatusOK {
 		t.Errorf("confirm = %d, want 200: it queues no mail (%s)", rec.Code, rec.Body.String())
 	}
@@ -692,9 +696,12 @@ func TestTheMailBudgetHasADailyCeiling(t *testing.T) {
 		t.Fatalf("first start = %d, want 202", rec.Code)
 	}
 
-	if rec := f.start("192.0.2.2", "ion@example.edu", "ion"); rec.Code != http.StatusTooManyRequests {
+	rec := f.start("192.0.2.2", "ion@example.edu", "ion")
+	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("past the day's ceiling = %d, want 429", rec.Code)
 	}
+	// The day's window, not the minute's: waiting a minute would not help.
+	assertRetryAfter(t, rec, "86400")
 }
 
 // A request that ends without mail spends none of the installation's budget,

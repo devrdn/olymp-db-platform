@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/covers"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 )
 
@@ -180,7 +181,7 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	case h.decoding <- struct{}{}:
 		defer func() { <-h.decoding }()
 	default:
-		w.Header().Set("Retry-After", strconv.Itoa(int(coverBusyRetry/time.Second)))
+		w.Header().Set("Retry-After", strconv.Itoa(retry.Seconds(coverBusyRetry)))
 		httpx.Error(w, r, http.StatusServiceUnavailable, codeCoverBusy,
 			"As many covers are being processed at once as this installation allows; try again in a moment")
 		return

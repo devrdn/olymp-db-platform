@@ -111,6 +111,7 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 			"This account is blocked. Contact the organizers.")
 		return
 	case errors.Is(err, auth.ErrTooManyAttempts):
+		sayRetryAfter(w, err, 0)
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many attempts. Try again in a few minutes.")
 		return
@@ -231,6 +232,7 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	switch err := h.service.AllowPasswordChange(r.Context(), identity.UserID, httpx.ClientSubject(r)); {
 	case err == nil:
 	case errors.Is(err, auth.ErrTooManyAttempts):
+		sayRetryAfter(w, err, 0)
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many attempts. Try again in a few minutes.")
 		return

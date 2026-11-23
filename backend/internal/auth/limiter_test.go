@@ -113,6 +113,36 @@ func (brokenCache) Incr(context.Context, string, time.Duration) (int64, error) {
 	return 0, context.DeadlineExceeded
 }
 
+func (brokenCache) TTL(context.Context, string) (time.Duration, error) {
+	return 0, context.DeadlineExceeded
+}
+
+// A fixed window does not move when it refuses, so the wait is what is left
+// of it, not the whole window again.
+func TestARefusedSubjectWaitsForTheRestOfItsWindow(t *testing.T) {
+	limiter := newTestLimiter(t)
+	ctx := context.Background()
+	_, _ = limiter.Allow(ctx, "login:ivanov", 1, time.Minute)
+	time.Sleep(20 * time.Millisecond)
+	_, _ = limiter.Allow(ctx, "login:ivanov", 1, time.Minute)
+
+	if wait := limiter.Remaining(ctx, "login:ivanov", time.Minute); wait <= 0 || wait > time.Minute-20*time.Millisecond {
+		t.Errorf("Remaining() = %s, want the rest of the minute", wait)
+	}
+}
+
+// Unknown is answered with the longest it can be, never with "now".
+func TestAWindowThatCannotBeReadWaitsTheWholeWindow(t *testing.T) {
+	for name, limiter := range map[string]*Limiter{
+		"unreadable": NewLimiter(brokenCache{}),
+		"gone":       newTestLimiter(t),
+	} {
+		if wait := limiter.Remaining(context.Background(), "login:ivanov", time.Minute); wait != time.Minute {
+			t.Errorf("%s: Remaining() = %s, want the whole minute", name, wait)
+		}
+	}
+}
+
 func TestANewGenerationAbandonsEveryCounterDerivedFromTheOldOne(t *testing.T) {
 	limiter := newTestLimiter(t)
 	ctx := context.Background()

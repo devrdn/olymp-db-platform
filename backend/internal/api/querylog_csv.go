@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 )
 
@@ -84,7 +85,7 @@ const exportDeadline = time.Minute
 // retryAfterDownload tells a refused download to wait exportDeadline, the
 // longest the download in its way can still run.
 func retryAfterDownload(w http.ResponseWriter) {
-	w.Header().Set("Retry-After", strconv.Itoa(int(exportDeadline/time.Second)))
+	w.Header().Set("Retry-After", strconv.Itoa(retry.Seconds(exportDeadline)))
 }
 
 // queryLogCSVExport streams one registration's query log to a response.

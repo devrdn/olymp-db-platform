@@ -20,6 +20,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 	"github.com/google/uuid"
@@ -330,6 +331,22 @@ func TestRepeatedFailuresAreBlocked(t *testing.T) {
 	}
 }
 
+// A login's counters are shared by whoever types it or shares the address, so
+// the exact rest of a window would tell a caller when somebody else first
+// tried: the refusal waits the whole window instead.
+func TestALoginRefusalWaitsTheWholeWindow(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	var lastErr error
+	for range maxLoginAttemptsPerAccountAddress + 1 {
+		_, lastErr = f.service.Login(ctx, loginCmd("wrong password"))
+	}
+
+	if wait, ok := retry.Delay(lastErr); !ok || wait != loginAttemptWindow {
+		t.Errorf("the refusal waits %s (%v), want the whole %s", wait, ok, loginAttemptWindow)
+	}
+}
+
 func TestThrottlingSurvivesTheCorrectPassword(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -569,8 +586,14 @@ func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
 			t.Fatalf("AllowPasswordChange() refused within the limit: %v", err)
 		}
 	}
-	if err := f.service.AllowPasswordChange(ctx, f.user.ID, "10.0.0.2"); !errors.Is(err, ErrTooManyAttempts) {
+	err := f.service.AllowPasswordChange(ctx, f.user.ID, "10.0.0.2")
+	if !errors.Is(err, ErrTooManyAttempts) {
 		t.Errorf("err = %v, want ErrTooManyAttempts once the window is spent", err)
+	}
+	// The window is the signed-in account's own, so its exact rest tells the
+	// caller nothing about anybody else.
+	if wait, ok := retry.Delay(err); !ok || wait <= 0 || wait >= loginAttemptWindow {
+		t.Errorf("the refusal waits %s (%v), want what is left of the account's window", wait, ok)
 	}
 
 	f.service.ClearPasswordChangeThrottle(ctx, f.user.ID)
@@ -588,8 +611,13 @@ func TestPasswordChangesFromOneAddressAreThrottledAcrossAccounts(t *testing.T) {
 			t.Fatalf("account %d's change within the address window = %v, want nil", i+1, err)
 		}
 	}
-	if err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.1"); !errors.Is(err, ErrTooManyAttempts) {
+	err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.1")
+	if !errors.Is(err, ErrTooManyAttempts) {
 		t.Errorf("a fourth account's change from the same address = %v, want ErrTooManyAttempts", err)
+	}
+	// An address is shared by a hall behind one NAT.
+	if wait, ok := retry.Delay(err); !ok || wait != loginAttemptWindow {
+		t.Errorf("the refusal waits %s (%v), want the whole %s", wait, ok, loginAttemptWindow)
 	}
 	if err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.2"); err != nil {
 		t.Errorf("a change from another address = %v, want nil", err)

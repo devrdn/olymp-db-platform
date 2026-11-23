@@ -21,6 +21,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
 	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
@@ -40,7 +41,9 @@ type errorRow struct {
 	message string
 	// logAs, when set, logs the error at Error level under this message, for
 	// answers an operator must hear about.
-	logAs      string
+	logAs string
+	// retryAfter is the Retry-After of an error that does not carry its own
+	// wait (sayRetryAfter).
 	retryAfter time.Duration
 }
 
@@ -67,9 +70,7 @@ func (t errorTable) answer(w http.ResponseWriter, r *http.Request, log *slog.Log
 		if row.logAs != "" {
 			log.ErrorContext(r.Context(), row.logAs, "error", err)
 		}
-		if row.retryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int(row.retryAfter/time.Second)))
-		}
+		sayRetryAfter(w, err, row.retryAfter)
 		message := row.message
 		if message == "" {
 			message = err.Error()
@@ -78,6 +79,21 @@ func (t errorTable) answer(w http.ResponseWriter, r *http.Request, log *slog.Log
 		return true
 	}
 	return false
+}
+
+// sayRetryAfter sets Retry-After to err's own wait when it carries one
+// (retry.Delay), and to fallback otherwise; to nothing when neither says.
+// The refusing code decides that wait: the rest of the window for a window
+// only the caller spends, such as its own password changes, and the whole
+// window for one shared with others, so its rest cannot time their attempts.
+func sayRetryAfter(w http.ResponseWriter, err error, fallback time.Duration) {
+	wait, ok := retry.Delay(err)
+	if !ok {
+		wait = fallback
+	}
+	if wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retry.Seconds(wait)))
+	}
 }
 
 // joined concatenates tables, so rows shared by several packages
@@ -391,9 +407,16 @@ var signupErrors = errorTable{
 	{err: signup.ErrTooSoon, status: http.StatusTooManyRequests, code: codeSignupTooSoon,
 		retryAfter: signup.ResendCooldown},
 	{err: signup.ErrFull, status: http.StatusServiceUnavailable, code: codeSignupFull},
-	{err: signup.ErrMailBudget, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
-	{err: signup.ErrTooManyCodes, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
+	{err: signup.ErrMailBudget, status: http.StatusTooManyRequests, code: codeTooManyAttempts,
+		retryAfter: mailWindowCeiling},
+	{err: signup.ErrTooManyCodes, status: http.StatusTooManyRequests, code: codeTooManyAttempts,
+		retryAfter: mailWindowCeiling},
 }
+
+// mailWindowCeiling is the longest window behind the self-service mail
+// refusals, a day. The services say which window refused (retry.After); a
+// sentinel that arrives without it waits the longest it could.
+const mailWindowCeiling = 24 * time.Hour
 
 // signupExpiredMessage is written out because a spent sign-up whose address
 // an account took since is answered with it too (signupAnswers).
@@ -403,8 +426,10 @@ const signupExpiredMessage = "The code has expired or was tried too often; sign 
 // TestEveryRecoveryErrorHasItsAnswer).
 var recoveryErrors = errorTable{
 	{err: recovery.ErrInvalidLink, status: http.StatusGone, code: codeResetLinkInvalid},
-	{err: recovery.ErrTooManyLinks, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
-	{err: recovery.ErrMailBudget, status: http.StatusTooManyRequests, code: codeTooManyAttempts},
+	{err: recovery.ErrTooManyLinks, status: http.StatusTooManyRequests, code: codeTooManyAttempts,
+		retryAfter: mailWindowCeiling},
+	{err: recovery.ErrMailBudget, status: http.StatusTooManyRequests, code: codeTooManyAttempts,
+		retryAfter: mailWindowCeiling},
 }
 
 // externalSignInRedirects answers what a sign-in through a provider meets:

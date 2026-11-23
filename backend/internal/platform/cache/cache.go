@@ -23,6 +23,9 @@ type Cache interface {
 	// Incr increments a counter and returns its new value, setting the TTL on
 	// first use.
 	Incr(ctx context.Context, key string, ttl time.Duration) (int64, error)
+	// TTL is how long key has left to live, 0 when it is missing or never
+	// expires; for a counter, what is left of its window.
+	TTL(ctx context.Context, key string) (time.Duration, error)
 	Ping(ctx context.Context) error
 	Close() error
 }

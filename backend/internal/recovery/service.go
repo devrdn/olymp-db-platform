@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/settings"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -79,8 +80,9 @@ type Settings interface {
 // MailBudget is the installation's budget of reset links (mailing.Budget,
 // sized by MailsPerMinute and MailsPerDay).
 type MailBudget interface {
-	// Spend counts one message and reports whether the budget admits it.
-	Spend(ctx context.Context) (bool, error)
+	// Spend counts one message: nil when the budget admits it,
+	// mailing.ErrBudgetSpent when it does not.
+	Spend(ctx context.Context) error
 }
 
 // Limiter counts attempts per subject in a fixed window (auth.Limiter).
@@ -198,15 +200,15 @@ func (s *Service) admit(ctx context.Context, sender string) error {
 			return err
 		}
 		if !allowed {
-			return ErrTooManyLinks
+			// The whole window: the address is a hall's, shared.
+			return retry.After(ErrTooManyLinks, window.length)
 		}
 	}
-	allowed, err := s.cfg.MailBudget.Spend(ctx)
-	if err != nil {
-		return fmt.Errorf("spend the recovery mail budget: %w", err)
-	}
-	if !allowed {
-		return ErrMailBudget
+	if err := s.cfg.MailBudget.Spend(ctx); err != nil {
+		if errors.Is(err, mailing.ErrBudgetSpent) {
+			return retry.Carry(err, ErrMailBudget)
+		}
+		return err
 	}
 	return nil
 }

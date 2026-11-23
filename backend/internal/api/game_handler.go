@@ -12,6 +12,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 	"github.com/go-chi/chi/v5"
@@ -1429,7 +1430,7 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, provisioning.ErrTableDataBusy):
 		// 503, as for cover_busy: the limit is the installation's memory,
 		// shared by every organiser, not a rate this caller exceeded.
-		w.Header().Set("Retry-After", strconv.Itoa(int(tableDataBusyRetry/time.Second)))
+		w.Header().Set("Retry-After", strconv.Itoa(retry.Seconds(tableDataBusyRetry)))
 		httpx.Error(w, r, http.StatusServiceUnavailable, codeGameTableDataBusy,
 			"Too many chunks of table data are being received at once; send this chunk again in a moment")
 	case errors.Is(err, provisioning.ErrTableDataDamaged):

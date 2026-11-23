@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth/authtest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/signup"
 	"github.com/devrdn/olymp-db-platform/backend/internal/signup/signuptest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -863,12 +864,12 @@ type switchedBudget struct {
 	admitted int
 }
 
-func (b *switchedBudget) Spend(context.Context) (bool, error) {
+func (b *switchedBudget) Spend(context.Context) error {
 	if b.closed {
-		return false, nil
+		return mailing.ErrBudgetSpent
 	}
 	b.admitted++
-	return true, nil
+	return nil
 }
 
 func withBudget(b *switchedBudget) func(*signup.Config) {
@@ -973,8 +974,14 @@ func TestOneAddressTakesAtMostItsShareOfTheMail(t *testing.T) {
 
 	again := start("one.more@example.edu", "one-more")
 	again.Sender = hall
-	if err := startErr(t, f, again); !errors.Is(err, signup.ErrTooManyCodes) {
+	err := startErr(t, f, again)
+	if !errors.Is(err, signup.ErrTooManyCodes) {
 		t.Errorf("Start() past the address's share = %v, want ErrTooManyCodes", err)
+	}
+	// The address is a hall's, shared: the whole window, not when the first of
+	// it was spent.
+	if wait, ok := retry.Delay(err); !ok || wait != time.Minute {
+		t.Errorf("the refusal waits %s (%v), want the whole minute", wait, ok)
 	}
 	resend := first.resend()
 	resend.Sender = hall

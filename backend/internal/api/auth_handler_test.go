@@ -226,6 +226,8 @@ func TestLoginReportsThrottlingWith429(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want 429 after repeated failures", rec.Code)
 	}
+	// The whole fifteen-minute window: the counters are shared.
+	assertRetryAfter(t, rec, "900")
 }
 
 func TestLoginTellsTheClientAPasswordChangeIsDue(t *testing.T) {
@@ -534,6 +536,8 @@ func TestPasswordChangeReportsThrottlingWith429(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want 429 after repeated wrong current passwords", rec.Code)
 	}
+	// The account's own window: what is left of it.
+	assertRetryAfterWithin(t, rec, 14*time.Minute, 15*time.Minute)
 }
 
 func (f *handlerFixture) holdEveryHashingSlot(t *testing.T) {

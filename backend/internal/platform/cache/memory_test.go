@@ -96,6 +96,33 @@ func TestMemoryIncrRestartsAfterWindowExpires(t *testing.T) {
 	}
 }
 
+// A counter's TTL is what is left of its window, which Incr does not extend.
+func TestMemoryTTLIsWhatIsLeftOfACountersWindow(t *testing.T) {
+	c := NewMemory(10)
+	ctx := context.Background()
+	_, _ = c.Incr(ctx, "rate:user-1", time.Minute)
+	time.Sleep(20 * time.Millisecond)
+	_, _ = c.Incr(ctx, "rate:user-1", time.Minute)
+
+	ttl, err := c.TTL(ctx, "rate:user-1")
+	if err != nil || ttl <= 0 || ttl > time.Minute-20*time.Millisecond {
+		t.Errorf("TTL() = %s, %v, want the rest of the first window", ttl, err)
+	}
+}
+
+func TestMemoryTTLOfAMissingOrExpiredKeyIsZero(t *testing.T) {
+	c := NewMemory(10)
+	ctx := context.Background()
+	_, _ = c.Incr(ctx, "rate:gone", 10*time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+
+	for _, key := range []string{"rate:never", "rate:gone"} {
+		if ttl, err := c.TTL(ctx, key); ttl != 0 || err != nil {
+			t.Errorf("TTL(%q) = %s, %v, want 0", key, ttl, err)
+		}
+	}
+}
+
 func TestMemoryEvictsOldestWhenOverCapacity(t *testing.T) {
 	c := NewMemory(3)
 	ctx := context.Background()

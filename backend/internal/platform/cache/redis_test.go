@@ -49,6 +49,22 @@ func TestRedisHitIsReturned(t *testing.T) {
 	}
 }
 
+// PTTL answers -2 for a missing key and -1 for one with no expiry; neither
+// is a window that will end.
+func TestRedisTTLWithoutAnExpiryIsZero(t *testing.T) {
+	for _, reply := range []time.Duration{-2 * time.Millisecond, -1 * time.Millisecond, -2, -1} {
+		if ttl, err := classifyTTL(reply, nil); ttl != 0 || err != nil {
+			t.Errorf("classifyTTL(%d) = %s, %v, want 0", reply, ttl, err)
+		}
+	}
+	if ttl, err := classifyTTL(42*time.Second, nil); ttl != 42*time.Second || err != nil {
+		t.Errorf("classifyTTL(42s) = %s, %v, want 42s", ttl, err)
+	}
+	if _, err := classifyTTL(0, errors.New("connection reset")); err == nil {
+		t.Error("a backend failure was not reported")
+	}
+}
+
 func TestOptionsRejectsMalformedAddress(t *testing.T) {
 	_, err := Options("redis://[::1]:namedport/0")
 

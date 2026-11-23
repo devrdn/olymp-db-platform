@@ -430,11 +430,11 @@ type countedRecoveryBudget struct {
 	spent int
 }
 
-func (b *countedRecoveryBudget) Spend(context.Context) (bool, error) {
+func (b *countedRecoveryBudget) Spend(context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spent++
-	return true, nil
+	return nil
 }
 
 func (b *countedRecoveryBudget) count() int {
@@ -507,6 +507,23 @@ func TestTheRecoveryBudgetTellsAProbeNothingAboutAnAddress(t *testing.T) {
 	}
 }
 
+// Past the installation's minute every address is refused, and told how much
+// of that minute is left.
+func TestForgotPastTheInstallationsBudgetSaysWhenItLifts(t *testing.T) {
+	f := mountRecovery(t, recoverytest.NewFixture(t, nil))
+	for i := range recovery.MailsPerMinute {
+		if rec := f.forgot(fmt.Sprintf("198.51.100.%d", i+1), fmt.Sprintf("nobody%d", i)); rec.Code != http.StatusAccepted {
+			t.Fatalf("forgot %d = %d, want 202", i, rec.Code)
+		}
+	}
+
+	rec := f.forgot("203.0.113.1", "one-more")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+		t.Fatalf("past the installation's budget = %d %s, want 429 too_many_attempts", rec.Code, rec.Body.String())
+	}
+	assertRetryAfter(t, rec, "60")
+}
+
 // One address holds two requests a minute, so a single machine cannot hold
 // recovery's minute at zero for everybody.
 func TestOneAddressTakesAtMostItsShareOfRecovery(t *testing.T) {
@@ -517,9 +534,11 @@ func TestOneAddressTakesAtMostItsShareOfRecovery(t *testing.T) {
 		}
 	}
 
-	if rec := f.forgot("192.0.2.1", "one-more"); rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
+	rec := f.forgot("192.0.2.1", "one-more")
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "too_many_attempts" {
 		t.Errorf("past the address's share = %d %s, want 429 too_many_attempts", rec.Code, rec.Body.String())
 	}
+	assertRetryAfter(t, rec, "60")
 	if rec := f.forgot("192.0.2.2", "one-more"); rec.Code != http.StatusAccepted {
 		t.Errorf("from another address = %d, want 202", rec.Code)
 	}

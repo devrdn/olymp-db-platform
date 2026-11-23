@@ -25,6 +25,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
@@ -729,9 +730,9 @@ func TestEverySignupErrorHasItsAnswer(t *testing.T) {
 		signup.ErrFull: {status: http.StatusServiceUnavailable, code: "signup_full",
 			message: "too many sign-ups are waiting for their code; try later"},
 		signup.ErrMailBudget: {status: http.StatusTooManyRequests, code: "too_many_attempts",
-			message: "this site is sending too many messages just now; wait a few minutes before trying again"},
+			message: "this site is sending too many messages just now; wait a few minutes before trying again", retryAfter: "86400"},
 		signup.ErrTooManyCodes: {status: http.StatusTooManyRequests, code: "too_many_attempts",
-			message: "too many codes were asked for from this address or for this email; wait before trying again"},
+			message: "too many codes were asked for from this address or for this email; wait before trying again", retryAfter: "86400"},
 	}
 
 	declared := map[string]bool{}
@@ -769,9 +770,9 @@ func TestEveryRecoveryErrorHasItsAnswer(t *testing.T) {
 		recovery.ErrInvalidLink: {status: http.StatusGone, code: "reset_link_invalid",
 			message: "the reset link is unknown, used or expired"},
 		recovery.ErrTooManyLinks: {status: http.StatusTooManyRequests, code: "too_many_attempts",
-			message: "too many password reset links were asked for from this address; wait before trying again"},
+			message: "too many password reset links were asked for from this address; wait before trying again", retryAfter: "86400"},
 		recovery.ErrMailBudget: {status: http.StatusTooManyRequests, code: "too_many_attempts",
-			message: "this site is sending too many messages just now; wait a few minutes before trying again"},
+			message: "this site is sending too many messages just now; wait a few minutes before trying again", retryAfter: "86400"},
 	}
 
 	declared := map[string]bool{}
@@ -844,6 +845,17 @@ func TestEveryBudgetErrorHasItsAnswer(t *testing.T) {
 	}
 	if _, ok := answerBy(t, answerBudgetError, errors.New("something else")); ok {
 		t.Error("an error that is not a budget's was answered as one")
+	}
+}
+
+// A domain refusal that knows when its window ends says so, rounded up, even
+// where its row has no wait of its own.
+func TestARefusalThatCarriesItsWaitSaysIt(t *testing.T) {
+	got, ok := answer(t, signupErrors, retry.After(signup.ErrTooManyCodes, 90*time.Second+time.Millisecond))
+	want := answered{status: http.StatusTooManyRequests, code: "too_many_attempts",
+		message: signup.ErrTooManyCodes.Error(), retryAfter: "91"}
+	if !ok || got != want {
+		t.Errorf("answered %+v (matched %v), want %+v", got, ok, want)
 	}
 }
 

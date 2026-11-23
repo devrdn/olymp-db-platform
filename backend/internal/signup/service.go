@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/settings"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -92,8 +93,9 @@ type Limiter interface {
 // MailBudget is the installation's budget of sign-up mail (mailing.Budget,
 // sized by MailsPerMinute and MailsPerDay).
 type MailBudget interface {
-	// Spend counts one message and reports whether the budget admits it.
-	Spend(ctx context.Context) (bool, error)
+	// Spend counts one message: nil when the budget admits it,
+	// mailing.ErrBudgetSpent when it does not.
+	Spend(ctx context.Context) error
 }
 
 type Config struct {
@@ -485,27 +487,30 @@ func (s *Service) admitMail(ctx context.Context, endpoint, sender, email string)
 		{"signup_mail:ip:" + sender, MailsPerAddress, time.Minute},
 		{"signup_mail:ip:" + sender + ":day", MailsPerAddressPerDay, 24 * time.Hour},
 	} {
-		allowed, _, err := s.cfg.Limiter.Spend(ctx, window.subject, window.limit, window.length)
-		if err != nil {
+		if err := s.spend(ctx, window.subject, window.limit, window.length); err != nil {
 			return err
 		}
-		if !allowed {
-			return ErrTooManyCodes
+	}
+	if err := s.cfg.MailBudget.Spend(ctx); err != nil {
+		if errors.Is(err, mailing.ErrBudgetSpent) {
+			return retry.Carry(err, ErrMailBudget)
 		}
+		return err
 	}
-	allowed, err := s.cfg.MailBudget.Spend(ctx)
-	if err != nil {
-		return fmt.Errorf("spend the sign-up mail budget: %w", err)
-	}
-	if !allowed {
-		return ErrMailBudget
-	}
-	allowed, _, err = s.cfg.Limiter.Spend(ctx, endpoint+":email:"+email, MailsPerEmail, time.Hour)
+	return s.spend(ctx, endpoint+":email:"+email, MailsPerEmail, time.Hour)
+}
+
+// spend counts one attempt on subject and refuses past limit with
+// ErrTooManyCodes, waiting the whole window: an address and an email are
+// shared with other callers, and the exact rest of the window would tell one
+// when another first used it.
+func (s *Service) spend(ctx context.Context, subject string, limit int, window time.Duration) error {
+	allowed, _, err := s.cfg.Limiter.Spend(ctx, subject, limit, window)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return ErrTooManyCodes
+		return retry.After(ErrTooManyCodes, window)
 	}
 	return nil
 }

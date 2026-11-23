@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -193,7 +194,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	participant, contest := admission.Participant, admission.Contest
 
 	if !h.limiter.acquire(participant.ID) {
-		w.Header().Set("Retry-After", strconv.Itoa(int(h.staleSlotRelease()/time.Second)))
+		w.Header().Set("Retry-After", strconv.Itoa(retry.Seconds(h.staleSlotRelease())))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyConnections,
 			"This participant already holds as many live event channels as this installation allows")
 		return

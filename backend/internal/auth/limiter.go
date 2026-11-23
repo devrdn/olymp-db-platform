@@ -41,6 +41,17 @@ func (l *Limiter) Spend(ctx context.Context, subject string, limit int, window t
 	return count <= int64(limit), count == int64(limit)+1, nil
 }
 
+// Remaining is how long a caller subject's window refused must wait: what is
+// left of the window, which a refusal does not extend. When the counter cannot
+// say, it is the whole window, the longest the wait can be.
+func (l *Limiter) Remaining(ctx context.Context, subject string, window time.Duration) time.Duration {
+	left, err := l.cache.TTL(ctx, limiterKeyPrefix+subject)
+	if err != nil || left <= 0 || left > window {
+		return window
+	}
+	return left
+}
+
 const generationKeyPrefix = "rlgen:"
 
 // Generation returns a family's current generation, which callers fold into
