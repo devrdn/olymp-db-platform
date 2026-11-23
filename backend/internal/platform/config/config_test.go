@@ -808,6 +808,22 @@ func TestGameUploadDirWithAZeroLimitIsRejectedAtStartup(t *testing.T) {
 	}
 }
 
+// The table store holds a few chunks in memory at once, so the chunk size is
+// a memory setting and has a ceiling.
+func TestAGameUploadChunkOverTheCeilingIsRejectedAtStartup(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
+
+	t.Setenv("GAME_UPLOAD_CHUNK_BYTES", strconv.FormatInt(MaxGameUploadChunkBytes, 10))
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() refused a chunk size at the ceiling: %v", err)
+	}
+	t.Setenv("GAME_UPLOAD_CHUNK_BYTES", strconv.FormatInt(MaxGameUploadChunkBytes+1, 10))
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a chunk size over the ceiling, want error")
+	}
+}
+
 func TestGameUploadDirWithAZeroTableLimitIsRejectedAtStartup(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")

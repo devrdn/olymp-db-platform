@@ -206,6 +206,13 @@ func newMailOutbox(log *slog.Logger, sender *mail.Sender, store mailStore, perMi
 	return outbox, []task{deliverMail(dispatcher.Drain, outbox.C())}
 }
 
+// tableChunksInMemory is how many chunks of table CSVs the API holds in memory
+// at once, across every contest, in buffers it keeps: with
+// GAME_UPLOAD_CHUNK_BYTES that is 32 MiB by default and 256 MiB at the
+// setting's ceiling. A fifth concurrent chunk is answered
+// game_table_data_busy.
+const tableChunksInMemory = 4
+
 // New builds the service, failing fast on any unusable dependency or setting
 // before a request is accepted.
 func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
@@ -349,8 +356,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		}, tender))
 		gameDatabases = databases
 
-		gameAuthoring = provisioning.NewGames(games, cluster, games).
-			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
+		gameAuthoring = provisioning.NewGames(games, cluster, games, postgres.NewContests(pool), storage.NewUnitOfWork(pool)).
+			WithAudit(auditRecorder)
 		// The build timeout also decides when an unfinished build is dead.
 		a.tasks = append(a.tasks, buildGames(log, gameAuthoring.Build, cfg.GameBuildTimeout))
 
@@ -373,11 +380,18 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			// the mounted volume. File and chunk limits are the dump's; the
 			// directory budget is its own, so the two stores together do not
 			// double what the operator sized.
+			//
+			// This store buffers its chunks and the dump's streams them. A
+			// typed row is written to a table's file from inside a database
+			// transaction that holds the contest's row, so a client sending a
+			// chunk slowly must not hold that file's lock. Nothing waits on a
+			// dump's lock but that dump's own requests.
 			tableDir := filepath.Join(cfg.GameUploadDir, "tables")
 			tableLimits := gamefile.Limits{
-				MaxFileBytes:  cfg.GameUploadMaxFileBytes,
-				MaxDirBytes:   cfg.GameUploadTableMaxDirBytes,
-				MaxChunkBytes: cfg.GameUploadChunkBytes,
+				MaxFileBytes:   cfg.GameUploadMaxFileBytes,
+				MaxDirBytes:    cfg.GameUploadTableMaxDirBytes,
+				MaxChunkBytes:  cfg.GameUploadChunkBytes,
+				BufferedChunks: tableChunksInMemory,
 			}
 			tableFiles, err := gamefile.NewStore(tableDir, tableLimits)
 			if err != nil {

@@ -2703,21 +2703,85 @@ minute ago, and what they need to hear is "look again", not "that is not
 allowed".
 
 **Every write of the contest row is conditional on the row it was decided
-against.** `Transition`, `Update`, `ExtendGrace`, `SetPrizePlaces` and
-`SetArchiveSettings` read the row inside their unit of work, decide every rule
-in `internal/contests` against it, and write only while `contests.version` is
-still the one they read; the scheduler's start does the same with the row
-`DueToStart` returned. A trigger moves the version on every `UPDATE` of the
-row, so a status change moves it as surely as a settings save. A decision
-taken against a row that has since moved is refused with `ErrContestChanged` →
-409 `contest_changed`: an edit decided against a published contest cannot land
-on the running one the scheduler made of it, and of two organisers saving at
-once the second reloads instead of silently overwriting the first. The
-repository decides only that refusal and `ErrNotFound`; the rules (the
-running-contest locks, an archived contest's prize places, the
-self-registration visibility) are the domain's alone. `updated_at` cannot
-serve as the version: the reclaim sweep measures a finished contest's grace
-from it, and the display-only writes leave it where it was.
+against.** `Transition`, `Update`, `ExtendGrace`, `SetPrizePlaces`,
+`SetArchiveSettings` and the leaderboard's reveal read the row inside their
+unit of work, decide every rule against it, and write only while
+`contests.version` is still the one they read; the scheduler's start does the
+same with the row `DueToStart` returned. A trigger moves the version on every
+`UPDATE` of the row, so a status change moves it as surely as a settings save.
+A decision taken against a row that has since moved is refused with
+`ErrContestChanged` → 409 `contest_changed`: an edit decided against a
+published contest cannot land on the running one the scheduler made of it, and
+of two organisers saving at once the second reloads instead of silently
+overwriting the first. The repository decides only that refusal and
+`ErrNotFound`; the rules (the running-contest locks, an archived contest's
+prize places, the self-registration visibility) are the domain's alone.
+`updated_at` cannot serve as the version: the reclaim sweep measures a
+finished contest's grace from it, and the display-only writes leave it where
+it was.
+
+The publish gate reads more than the row: the story, the questions, the
+languages and titles, and whether the game is built. Every edit of a contest's
+content, the SQL policy, a game replacement, a build request and a table's
+data included, begins with `contests.BeginContentEdit` in its own transaction:
+it locks the contest row, refuses a contest whose content is frozen, and moves
+the version. Two edits of one contest therefore take turns rather than refuse
+each other, an edit that waited on a start sees the running contest and is
+refused as not editable, and a publish or start whose gate counted a question
+deleted since, or saw a game built that has since been replaced, is refused.
+`internal/provisioning` calls it on its own `ContestRows`, a required argument
+of `NewGames` with the unit of work, and answers its refusals in its own
+terms. A cover change needs no such step: an upload always carries its credit
+line and a removal needs none, so neither can turn a passing gate into a
+failing one. The one gate check outside the version is a staff member
+registered as a participant, which turns on account permissions rather than on
+anything the contest holds.
+
+A table builder's rows live in a file on the API host, outside any
+transaction, so the same edit decides what the file means. The table's
+`game_table_data` row is the record: its `received_bytes` and `line_count` say
+how much of the file exists, and the organiser's window, the row count and the
+build's `COPY` read that much and no more. A row typed into the form is
+recorded by an `UPDATE` conditional on the length the form read, and its bytes
+are written at that length and synced, inside the same transaction and after
+the `UPDATE`. Two forms that read the same end take turns, on the contest's
+lock or failing that on the table's row, and the second one's `UPDATE` then
+matches nothing: it writes nothing and answers `game_table_data_changed`, so
+the row is added again from the form. A row whose transaction did not commit (a
+failed commit, a crash) stays in the file as a tail nobody reads, and the next
+row is written over it.
+
+A chunked upload keeps the opposite rule for a covered offset, where the same
+bytes sent twice are a retry and not a second writer (`gamefile.Store.Append`
+against `ReplaceTail`). Its progress is recorded only while the upload is
+still `receiving` and only forwards, for a dump as for a table, so a chunk
+that finishes arriving after the upload completed answers
+`game_table_data_already_complete` and leaves the record alone.
+
+The two stores take a chunk differently. A dump's chunk streams to disk under
+its file's lock, which nothing but that dump's own requests waits on. A
+table's file is also written by a typed row, from inside a transaction that
+holds the contest's row, so a client holding a chunk's body back must not hold
+that lock: the table store reads each chunk into memory before taking it, in
+one of four buffers it keeps and reuses (`tableChunksInMemory`, 32 MiB at the
+default `GAME_UPLOAD_CHUNK_BYTES`, which is capped at 64 MiB). A chunk takes
+one buffer per contest, per sending account and per contest owner, so the
+contests one organiser owns share a buffer whoever uploads to them. A chunk
+beyond any of these bounds is refused unread with 503 `game_table_data_busy`
+and a `Retry-After`: 503 and not 429, because the limit is the installation's
+memory, shared by every organiser, and not a rate one caller exceeded. A
+chunk at a wrong offset, to a finished or to a missing upload is refused
+before its body is read. A manager who holds a chunk back keeps CSV chunks
+refused for every contest the appointing owner created, the owner's own
+uploads included, until the read deadline passes. That is accepted: the owner
+appointed the manager and can revoke them, and a manager could already
+overwrite the game.
+
+Every write is synced before its length is recorded, and a new file's
+directory entry before its row is. A file found missing or shorter than its
+record therefore means the volume lost stored bytes; it is logged, answered
+`game_table_data_damaged` (a build says the same in its failure text), and put
+right by uploading the table's data again.
 
 `SetStatus` keeps its compare-and-set on the status and adds the version: a
 moved status still answers `status_changed`, and a contest saved in any other
@@ -2731,12 +2795,13 @@ against the committed row.
 `INSERT ... (SELECT MAX(ord)+1)` reads the same number for two simultaneous
 authors, and the unique index on `(contest_id, ord)` rejects the second — a
 500 where a person should simply have got the next number. Before the insert,
-`SELECT id FROM contests WHERE id = $1 FOR UPDATE` is taken. As a separate
-statement, and that matters: under READ COMMITTED each statement takes its own
-snapshot, so the INSERT is the first thing able to see rows another
-transaction committed while we waited. A `MAX` folded into the same statement
-would read from the snapshot taken before the lock, and the lock would buy
-nothing.
+`SELECT id FROM contests WHERE id = $1 FOR NO KEY UPDATE` is taken, the lock a
+content edit already holds (`BeginContentEdit`), so it neither upgrades it nor
+waits on a foreign-key insert's key-share. As a separate statement, and that
+matters: under READ COMMITTED each statement takes its own snapshot, so the
+INSERT is the first thing able to see rows another transaction committed while
+we waited. A `MAX` folded into the same statement would read from the snapshot
+taken before the lock, and the lock would buy nothing.
 
 ## 8. The contest clock
 

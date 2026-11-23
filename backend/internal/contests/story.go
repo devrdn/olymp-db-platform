@@ -50,20 +50,19 @@ func (s *Service) Story(ctx context.Context, contestID uuid.UUID) (Story, error)
 // SetStory replaces the story's whole language set, which the publish gate
 // checks as a unit.
 func (s *Service) SetStory(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (Story, error) {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return Story{}, err
-	}
-	for _, body := range bodies {
-		if utf8.RuneCountInString(body) > maxStoryRunes {
-			return Story{}, fmt.Errorf("%w: a story is at most %d characters", ErrInvalidContest, maxStoryRunes)
-		}
-	}
-	if err := s.checkLanguageCodes(ctx, langCodes(bodies)); err != nil {
-		return Story{}, err
-	}
-
 	var saved Story
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+			return err
+		}
+		for _, body := range bodies {
+			if utf8.RuneCountInString(body) > maxStoryRunes {
+				return fmt.Errorf("%w: a story is at most %d characters", ErrInvalidContest, maxStoryRunes)
+			}
+		}
+		if err := s.checkLanguageCodes(ctx, langCodes(bodies)); err != nil {
+			return err
+		}
 		var err error
 		if saved, err = s.stories.Save(ctx, contestID, bodies); err != nil {
 			return err

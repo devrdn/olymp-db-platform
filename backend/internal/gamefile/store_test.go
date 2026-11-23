@@ -101,7 +101,7 @@ func TestBeginThenReceivedIsZero(t *testing.T) {
 	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	n, err := s.Received(id)
+	n, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestBeginIsIdempotentAndDoesNotTruncate(t *testing.T) {
 	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("second Begin: %v", err)
 	}
-	n, err := s.Received(id)
+	n, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestBeginRefusesAnUploadLargerThanWhatIsLeftBeforeAnythingIsSent(t *testing
 	if err := s.Begin(tooBig, 50); !errors.Is(err, ErrStoreFull) {
 		t.Fatalf("Begin(50 bytes with 10 left) = %v, want ErrStoreFull", err)
 	}
-	if _, err := s.Received(tooBig); !errors.Is(err, ErrNotFound) {
+	if _, err := storedBytes(s, tooBig); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the refused upload left a file behind: Received = %v", err)
 	}
 
@@ -348,7 +348,7 @@ func TestAppendChunkTooLarge(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("Append too-large chunk returned length %d, want 0 (rolled back)", n)
 	}
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestAppendChunkTooLarge(t *testing.T) {
 }
 
 // infiniteReader never returns io.EOF, so the test hangs if Append ever
-// reads a whole chunk before deciding it is too large.
+// reads a body without a bound.
 type infiniteReader struct{}
 
 func (infiniteReader) Read(p []byte) (int, error) {
@@ -423,7 +423,7 @@ func TestAppendRefusesAChunkWhoseReaderFailsAtExactlyTheCap(t *testing.T) {
 		t.Fatalf("Append error = %v, want ErrChunkIncomplete", err)
 	}
 
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestAppendNamesAChunkThatStoppedArrivingMidBody(t *testing.T) {
 	if n != 12 {
 		t.Fatalf("Append returned length %d, want 12 (rolled back to the offset it started at)", n)
 	}
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -514,19 +514,12 @@ func TestAppendFileOneByteOverLimitFails(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("Append over MaxFileBytes returned length %d, want 0 (rolled back)", n)
 	}
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
 	if got != 0 {
 		t.Fatalf("Received after a rejected chunk = %d, want 0", got)
-	}
-}
-
-func TestReceivedUnknownID(t *testing.T) {
-	s := newTestStore(t, permissiveLimits())
-	if _, err := s.Received("bbbbbbbb-1111-0000-0000-000000000000"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Received on unknown id = %v, want ErrNotFound", err)
 	}
 }
 
@@ -544,7 +537,7 @@ func TestAbortMidUpload(t *testing.T) {
 		t.Fatalf("Abort: %v", err)
 	}
 
-	if _, err := s.Received(id); !errors.Is(err, ErrNotFound) {
+	if _, err := storedBytes(s, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Received after Abort = %v, want ErrNotFound", err)
 	}
 	if entries, err := os.ReadDir(s.dir); err != nil {
@@ -663,7 +656,7 @@ func TestAppendConcurrentChunksForSameUploadDoNotCorrupt(t *testing.T) {
 		t.Fatalf("the two calls disagree about the resulting length: A=%d B=%d", nA, nB)
 	}
 
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -726,7 +719,7 @@ func TestAppendRefusesWhenSecondUploadWouldExceedDirBudget(t *testing.T) {
 		t.Fatalf("Append(id2) returned length %d, want 0 (rolled back, nothing written)", n)
 	}
 
-	got, err := s.Received(id2)
+	got, err := storedBytes(s, id2)
 	if err != nil {
 		t.Fatalf("Received(id2): %v", err)
 	}
@@ -816,7 +809,7 @@ func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
 	if gotN != 0 {
 		t.Fatalf("Append length = %d, want 0", gotN)
 	}
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -825,7 +818,7 @@ func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
 	}
 }
 
-// An Append after Complete is refused with ErrUploadSealed, and Received
+// An Append after Complete is refused with ErrUploadSealed, and the file
 // and Window keep answering for what Complete computed.
 func TestAppendAfterCompleteIsRefused(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
@@ -841,7 +834,7 @@ func TestAppendAfterCompleteIsRefused(t *testing.T) {
 		t.Fatalf("Append after Complete returned length %d, want %d (unchanged)", n, sum.Bytes)
 	}
 
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -1072,7 +1065,7 @@ func TestAppendMeasuresForRealOnceTheDirectoryBudgetCouldBind(t *testing.T) {
 	if _, err := s.Append(id, 0, bytes.NewReader(bytes.Repeat([]byte("x"), 150))); err != nil {
 		t.Fatalf("Append: %v — the refusal was decided on a remembered figure", err)
 	}
-	got, err := s.Received(id)
+	got, err := storedBytes(s, id)
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -1256,4 +1249,312 @@ func TestCompletePersistsAnIndexUsableAcrossOpens(t *testing.T) {
 	if off != 0 {
 		t.Errorf("markOffset(0) = %d, want 0", off)
 	}
+}
+
+// appendAll begins id and appends each part in turn, returning the length
+// after each.
+func appendAll(t *testing.T, s *Store, id string, parts ...string) []int64 {
+	t.Helper()
+	if err := s.Begin(id, 1<<10); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	var ends []int64
+	var offset int64
+	for _, p := range parts {
+		end, err := s.Append(id, offset, strings.NewReader(p))
+		if err != nil {
+			t.Fatalf("Append(%q): %v", p, err)
+		}
+		ends, offset = append(ends, end), end
+	}
+	return ends
+}
+
+func TestReplaceTailWritesAtTheEndOfAFileWithNoTail(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "a1"
+	ends := appendAll(t, s, id, "header\n")
+
+	end, err := s.ReplaceTail(id, ends[0], strings.NewReader("row\n"))
+
+	if err != nil || end != ends[0]+4 {
+		t.Fatalf("ReplaceTail = %d, %v, want %d", end, err, ends[0]+4)
+	}
+	if got := readAll(t, s, id); got != "header\nrow\n" {
+		t.Errorf("the file holds %q, want the row after the header", got)
+	}
+}
+
+// Append takes bytes at a covered offset for a retry and writes nothing;
+// ReplaceTail's caller knows they were never recorded.
+func TestReplaceTailDiscardsWhatLiesBeyondTheOffset(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "a2"
+	ends := appendAll(t, s, id, "header\n", "a long unrecorded row\n", "and another\n")
+
+	end, err := s.ReplaceTail(id, ends[0], strings.NewReader("row\n"))
+
+	if err != nil || end != ends[0]+4 {
+		t.Fatalf("ReplaceTail = %d, %v, want %d", end, err, ends[0]+4)
+	}
+	if got := readAll(t, s, id); got != "header\nrow\n" {
+		t.Errorf("the file holds %q, want only the header and the new row", got)
+	}
+}
+
+func TestReplaceTailRefusesAFileShorterThanTheOffset(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "a3"
+	ends := appendAll(t, s, id, "header\n")
+
+	if _, err := s.ReplaceTail(id, ends[0]+1, strings.NewReader("row\n")); !errors.Is(err, ErrShorterThanRecorded) {
+		t.Fatalf("ReplaceTail = %v, want ErrShorterThanRecorded", err)
+	}
+	if got := readAll(t, s, id); got != "header\n" {
+		t.Errorf("the file holds %q, want it untouched", got)
+	}
+}
+
+func TestReplaceTailLeavesASealedFileAlone(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "a4"
+	ends := appendAll(t, s, id, "header\n", "row\n")
+	if _, err := s.Complete(id, ends[1]); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if _, err := s.ReplaceTail(id, ends[0], strings.NewReader("other\n")); !errors.Is(err, ErrUploadSealed) {
+		t.Fatalf("ReplaceTail = %v, want ErrUploadSealed", err)
+	}
+	if got := readAll(t, s, id); got != "header\nrow\n" {
+		t.Errorf("the file holds %q, want it untouched", got)
+	}
+}
+
+// The file's budget is measured from the offset, not from the tail about to
+// be discarded.
+func TestReplaceTailRefusesARowPastTheFileBudgetAndLeavesTheFileAtTheOffset(t *testing.T) {
+	limits := permissiveLimits()
+	limits.MaxFileBytes = 1 << 10
+	s := newTestStore(t, limits)
+	const id = "a5"
+	ends := appendAll(t, s, id, "header\n", "tail\n")
+
+	if _, err := s.ReplaceTail(id, ends[0], strings.NewReader(strings.Repeat("x", 1<<10))); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("ReplaceTail = %v, want ErrFileTooLarge", err)
+	}
+	if got := readAll(t, s, id); got != "header\n" {
+		t.Errorf("the file holds %q, want it cut back to the offset", got)
+	}
+	if end, err := s.ReplaceTail(id, ends[0], strings.NewReader("fits\n")); err != nil || end != ends[0]+5 {
+		t.Fatalf("ReplaceTail of a row that fits = %d, %v, want %d", end, err, ends[0]+5)
+	}
+}
+
+// withheld is a chunk body that reports each Read it is asked for and yields
+// nothing until released.
+type withheld struct {
+	asked   chan struct{}
+	release chan struct{}
+	body    io.Reader
+	once    sync.Once
+}
+
+func (w *withheld) Read(p []byte) (int, error) {
+	w.once.Do(func() { close(w.asked) })
+	<-w.release
+	return w.body.Read(p)
+}
+
+// A client can hold a chunk's body back for as long as the transport lets it.
+// In a Store that buffers, the file's lock is not held meanwhile: a row is
+// written inside a database transaction, which would wait as long.
+func TestAChunkWhoseBodyIsWithheldDoesNotHoldTheFile(t *testing.T) {
+	s := newTestStore(t, bufferingLimits(2))
+	const id = "a6"
+	ends := appendAll(t, s, id, "header\n")
+	slow := &withheld{asked: make(chan struct{}), release: make(chan struct{}), body: strings.NewReader("chunk\n")}
+	chunk := make(chan error, 1)
+	go func() {
+		_, err := s.Append(id, ends[0], slow)
+		chunk <- err
+	}()
+	<-slow.asked
+
+	row := make(chan error, 1)
+	go func() {
+		_, err := s.ReplaceTail(id, ends[0], strings.NewReader("row\n"))
+		row <- err
+	}()
+	select {
+	case err := <-row:
+		if err != nil {
+			t.Fatalf("ReplaceTail = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(slow.release)
+		t.Fatal("ReplaceTail waited on a chunk whose body had not arrived")
+	}
+
+	close(slow.release)
+	if err := <-chunk; err != nil {
+		t.Fatalf("the withheld chunk = %v, want it taken for a retry of the offset the row now covers", err)
+	}
+	if got := readAll(t, s, id); got != "header\nrow\n" {
+		t.Errorf("the file holds %q, want the row and nothing of the late chunk", got)
+	}
+}
+
+// bufferingLimits is permissiveLimits for a Store that reads each chunk into
+// one of chunks buffers before taking its file's lock.
+func bufferingLimits(chunks int) Limits {
+	limits := permissiveLimits()
+	limits.BufferedChunks = chunks
+	return limits
+}
+
+// unread is a chunk body that must not be asked for a byte.
+type unread struct{ t *testing.T }
+
+func (u unread) Read([]byte) (int, error) {
+	u.t.Error("the chunk's body was read")
+	return 0, io.EOF
+}
+
+// A chunk that cannot be written is refused on what the file already says, in
+// either kind of Store: reading its body first would spend a buffer, or the
+// client's upload, on nothing.
+func TestAChunkThatCannotBeWrittenIsRefusedWithoutReadingItsBody(t *testing.T) {
+	for name, limits := range map[string]Limits{"streaming": permissiveLimits(), "buffering": bufferingLimits(1)} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestStore(t, limits)
+			ends := appendAll(t, s, "a1", "header\n", "row\n")
+			appendAll(t, s, "a2", "header\n")
+			if _, err := s.Complete("a2", 7); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			if n, err := s.Append("a1", ends[0], unread{t}); err != nil || n != ends[1] {
+				t.Errorf("a covered offset = %d, %v, want the length %d and no error", n, err, ends[1])
+			}
+			if _, err := s.Append("a1", ends[1]+1, unread{t}); !errors.Is(err, ErrChunkOutOfOrder) {
+				t.Errorf("an offset past the end = %v, want ErrChunkOutOfOrder", err)
+			}
+			if _, err := s.Append("a2", 7, unread{t}); !errors.Is(err, ErrUploadSealed) {
+				t.Errorf("a sealed upload = %v, want ErrUploadSealed", err)
+			}
+			if _, err := s.Append("a3", 0, unread{t}); !errors.Is(err, ErrNotFound) {
+				t.Errorf("a missing upload = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+// failingBody yields nothing until released and then fails, as the body of a
+// request does when its client goes away.
+type failingBody struct {
+	asked   chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (f *failingBody) Read([]byte) (int, error) {
+	f.once.Do(func() { close(f.asked) })
+	<-f.release
+	return 0, errors.New("the client went away")
+}
+
+// The bodies in memory are what the Store bounds, across every upload. A
+// chunk beyond the bound is refused unread rather than queued, and a body
+// that fails gives its buffer back.
+func TestABufferingStoreRefusesAChunkBeyondItsBuffersUntilOneIsFree(t *testing.T) {
+	s := newTestStore(t, bufferingLimits(1))
+	appendAll(t, s, "a1")
+	appendAll(t, s, "a2")
+	stalled := &failingBody{asked: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(stalled.release) })
+	t.Cleanup(release)
+	first := make(chan error, 1)
+	go func() {
+		_, err := s.Append("a1", 0, stalled)
+		first <- err
+	}()
+	<-stalled.asked
+
+	if _, err := s.Append("a2", 0, unread{t}); !errors.Is(err, ErrTooManyChunks) {
+		t.Fatalf("a chunk beyond the Store's buffers = %v, want ErrTooManyChunks", err)
+	}
+
+	release()
+	if err := <-first; !errors.Is(err, ErrChunkIncomplete) {
+		t.Fatalf("the chunk whose client went away = %v, want ErrChunkIncomplete", err)
+	}
+	if n, err := s.Append("a2", 0, strings.NewReader("header\n")); err != nil || n != 7 {
+		t.Fatalf("a chunk after the buffer was given back = %d, %v, want 7", n, err)
+	}
+	if got := readAll(t, s, "a1"); got != "" {
+		t.Errorf("the failed chunk left %q in its file", got)
+	}
+}
+
+// The Store reuses its buffers, so a chunk shorter than the one before it
+// must not carry that one's bytes.
+func TestABufferingStoreWritesOnlyTheChunkItWasGiven(t *testing.T) {
+	s := newTestStore(t, bufferingLimits(1))
+	appendAll(t, s, "a1")
+
+	end, err := s.Append("a1", 0, strings.NewReader("a long first chunk\n"))
+	if err != nil {
+		t.Fatalf("the first chunk: %v", err)
+	}
+	if _, err := s.Append("a1", end, strings.NewReader("ab\n")); err != nil {
+		t.Fatalf("the second chunk: %v", err)
+	}
+
+	if got := readAll(t, s, "a1"); got != "a long first chunk\nab\n" {
+		t.Errorf("the file holds %q, want the two chunks and nothing more", got)
+	}
+}
+
+// A buffered body meets the same budgets a streamed one does.
+func TestABufferingStoreRefusesAChunkOverMaxChunkBytesAndWritesNothing(t *testing.T) {
+	limits := bufferingLimits(1)
+	limits.MaxChunkBytes = 8
+	s := newTestStore(t, limits)
+	appendAll(t, s, "a1")
+
+	if _, err := s.Append("a1", 0, strings.NewReader("nine byte")); !errors.Is(err, ErrChunkTooLarge) {
+		t.Fatalf("Append = %v, want ErrChunkTooLarge", err)
+	}
+	if n, err := s.Append("a1", 0, strings.NewReader("eight by")); err != nil || n != 8 {
+		t.Fatalf("a chunk of exactly MaxChunkBytes = %d, %v, want 8", n, err)
+	}
+}
+
+func readAll(t *testing.T, s *Store, id string) string {
+	t.Helper()
+	f, err := s.Open(id)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	body, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("read the upload: %v", err)
+	}
+	return string(body)
+}
+
+// storedBytes is the length of an upload's file on disk.
+func storedBytes(s *Store, id string) (int64, error) {
+	f, err := s.Open(id)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }

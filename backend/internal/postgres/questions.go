@@ -201,12 +201,14 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 
 // lockContest locks the contest row to serialise position allocation within
 // one contest, and reports contests.ErrNotFound when there is no row. It must
-// run inside a transaction, or the lock is gone before the INSERT.
+// run inside a transaction, or the lock is gone before the INSERT. FOR NO KEY
+// UPDATE, the lock contests.BeginContentEdit already holds, so it neither
+// upgrades that lock nor waits on a foreign-key insert's key-share.
 func lockContest(ctx context.Context, q storage.Querier, contestID uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("adding a question must run inside a transaction")
 	}
-	tag, err := q.Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR UPDATE`, contestID)
+	tag, err := q.Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR NO KEY UPDATE`, contestID)
 	if err != nil {
 		return fmt.Errorf("lock contest for a new question: %w", err)
 	}

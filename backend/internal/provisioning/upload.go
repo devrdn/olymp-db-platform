@@ -240,6 +240,9 @@ func (g *Games) AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, 
 		return received, nil
 	}
 	if err := g.repo.UpdateReceived(ctx, uploadID, received); err != nil {
+		if errors.Is(err, ErrUploadAlreadyComplete) {
+			return received, ErrUploadAlreadyComplete
+		}
 		return received, fmt.Errorf("record the upload's progress: %w", err)
 	}
 	return received, nil

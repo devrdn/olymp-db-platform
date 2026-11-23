@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
@@ -938,36 +940,73 @@ func TestICPCStandingsNameEachQuestionsEarliestSolveOverTheWholeContest(t *testi
 	})
 }
 
-func TestMarkRevealedWritesOnceAndLeavesUpdatedAtAlone(t *testing.T) {
+func TestMarkRevealedWritesTheMomentAndLeavesUpdatedAtAlone(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newBoardFixture(t, ctx)
-		var before time.Time
-		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT updated_at FROM contests WHERE id = $1`, f.contest).Scan(&before); err != nil {
-			t.Fatal(err)
+		read, err := NewContests(testPool).ByID(ctx, f.contest)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
 		}
 
-		repo := NewLeaderboard(testPool)
-		first, newly, err := repo.MarkRevealed(ctx, f.contest, boardAt(200))
-		if err != nil || !newly || !first.Equal(boardAt(200)) {
-			t.Fatalf("first MarkRevealed() = %v, %v, %v", first, newly, err)
-		}
-		second, newly, err := repo.MarkRevealed(ctx, f.contest, boardAt(300))
-		if err != nil || newly || !second.Equal(boardAt(200)) {
-			t.Fatalf("second MarkRevealed() = %v, %v, %v, want the first moment and not newly", second, newly, err)
+		at, err := NewLeaderboard(testPool).MarkRevealed(ctx, read, boardAt(200))
+		if err != nil || !at.Equal(boardAt(200)) {
+			t.Fatalf("MarkRevealed() = %v, %v, want %v", at, err, boardAt(200))
 		}
 
-		var after time.Time
-		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT updated_at FROM contests WHERE id = $1`, f.contest).Scan(&after); err != nil {
-			t.Fatal(err)
+		got, err := NewContests(testPool).ByID(ctx, f.contest)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
 		}
-		if !after.Equal(before) {
-			t.Errorf("updated_at moved from %v to %v", before, after)
+		if got.LeaderboardRevealedAt == nil || !got.LeaderboardRevealedAt.Equal(boardAt(200)) {
+			t.Errorf("LeaderboardRevealedAt = %v, want %v", got.LeaderboardRevealedAt, boardAt(200))
 		}
-
-		if _, _, err := repo.MarkRevealed(ctx, uuid.New(), boardAt(1)); err != contests.ErrNotFound {
-			t.Errorf("MarkRevealed(missing) = %v, want contests.ErrNotFound", err)
+		if !got.UpdatedAt.Equal(read.UpdatedAt) {
+			t.Errorf("updated_at moved from %v to %v", read.UpdatedAt, got.UpdatedAt)
 		}
 	})
+}
+
+// A reveal decided against a row an organiser has since saved is refused, as
+// every other write of the contest row is.
+func TestARevealDecidedBeforeAnEditIsRefused(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE contests SET status = 'finished', starts_at = now() - interval '3 hours',
+		       ends_at = now() - interval '1 hour', leaderboard_freeze_min = 30
+		WHERE id = $1`, id); err != nil {
+		t.Fatalf("finish the contest = %v", err)
+	}
+	repo := NewContests(testPool)
+	organiser := func(id uuid.UUID) error {
+		saved, err := repo.ByID(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		saved.PrizePlaces = contests.PrizePlaces{First: 1}
+		_, err = repo.SetPrizePlaces(context.Background(), saved)
+		return err
+	}
+	service := leaderboard.NewService(leaderboard.Config{
+		Contests:   &afterFirstRead{Contests: repo, other: organiser, t: t},
+		Standings:  NewLeaderboard(testPool),
+		Audit:      audit.New(NewAuditSink(testPool)),
+		UnitOfWork: storage.NewUnitOfWork(testPool),
+	})
+
+	read, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+
+	_, err = service.Reveal(ctx, read.CreatedBy, id)
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("Reveal() = %v, want ErrContestChanged", err)
+	}
+	if got, err := repo.ByID(ctx, id); err != nil || got.LeaderboardRevealedAt != nil {
+		t.Errorf("revealed at %v (%v), want no reveal from a stale decision", got.LeaderboardRevealedAt, err)
+	}
 }
 
 func TestEmailsAreReadOnlyForTheContestsOwnRegistrations(t *testing.T) {

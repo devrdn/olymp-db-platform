@@ -52,7 +52,7 @@ type Games interface {
 	// CurrentTableData finds a table's chunked upload still in progress, for a
 	// reloaded page.
 	CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error)
-	AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error)
+	AppendTableChunk(ctx context.Context, actorID, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error)
 	CompleteTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error)
 	AbortTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error)
 	TableDataWindow(ctx context.Context, contestID uuid.UUID, table string, fromRow int64, maxRows int, maxBytes int64) (provisioning.TableRowWindow, error)
@@ -362,8 +362,11 @@ func (h *GameHandler) gameView(ctx context.Context, template provisioning.Templa
 		BuilderLimits: h.builderLimitsView(),
 		NeedsBuild:    template.NeedsBuild(),
 	}
-	if template.TooLarge() {
+	switch {
+	case template.TooLarge():
 		resp.BuildErrorCode = codeGameTemplateTooLarge.String()
+	case template.TableDataDamaged():
+		resp.BuildErrorCode = codeGameTableDataDamaged.String()
 	}
 	if template.Source == provisioning.SourceFile && template.UploadID != nil {
 		upload, err := h.games.Upload(ctx, template.ContestID, *template.UploadID)
@@ -722,6 +725,10 @@ func (h *GameHandler) chunkReadTimeout() time.Duration {
 func (h *GameHandler) tableChunkReadTimeout() time.Duration {
 	return chunkTimeoutFor(h.maxTableChunkBody)
 }
+
+// tableDataBusyRetry is the Retry-After of game_table_data_busy: a chunk in
+// memory is written within moments of its last byte arriving.
+const tableDataBusyRetry = 2 * time.Second
 
 func chunkTimeoutFor(maxBody int64) time.Duration {
 	d := time.Duration(maxBody/minChunkUploadBytesPerSecond) * time.Second
@@ -1133,8 +1140,10 @@ func (h *GameHandler) currentTableData(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, h.tableDataView(data))
 }
 
-// appendTableChunk streams one chunk of a table's CSV upload like appendChunk,
-// under the table store's own body ceiling and read deadline.
+// appendTableChunk hands one chunk of a table's CSV upload on like appendChunk,
+// under the table store's own body ceiling and read deadline. The table store
+// reads the chunk into memory, a bounded number at a time, and answers
+// ErrTableDataBusy beyond that.
 func (h *GameHandler) appendTableChunk(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := h.contestID(w, r)
 	if !ok {
@@ -1155,7 +1164,8 @@ func (h *GameHandler) appendTableChunk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := http.MaxBytesReader(w, r.Body, h.maxTableChunkBody)
-	received, err := h.games.AppendTableChunk(r.Context(), contestID, dataID, offset, body)
+	identity, _ := auth.IdentityFrom(r.Context())
+	received, err := h.games.AppendTableChunk(r.Context(), identity.UserID, contestID, dataID, offset, body)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -1452,6 +1462,18 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// 409: another row reached the end of the file first; this one has to
 		// be added again over the current state.
 		httpx.Error(w, r, http.StatusConflict, codeGameTableDataChanged, err.Error())
+	case errors.Is(err, provisioning.ErrTableDataBusy):
+		// 503, as for cover_busy: the limit is the installation's memory,
+		// shared by every organiser, not a rate this caller exceeded.
+		w.Header().Set("Retry-After", strconv.Itoa(int(tableDataBusyRetry/time.Second)))
+		httpx.Error(w, r, http.StatusServiceUnavailable, codeGameTableDataBusy,
+			"Too many chunks of table data are being received at once; send this chunk again in a moment")
+	case errors.Is(err, provisioning.ErrTableDataDamaged):
+		// The installation's fault, so a 500 and a line in the log, but under
+		// its own code: the organiser's way out is to upload the data again.
+		h.log.ErrorContext(r.Context(), "a table's file is shorter than its record", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, codeGameTableDataDamaged,
+			"This table's stored data is damaged; upload its data again")
 	case errors.Is(err, provisioning.ErrTableRowNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeGameTableRowNotFound, err.Error())
 	case errors.Is(err, provisioning.ErrTableRowAlreadyDeleted):

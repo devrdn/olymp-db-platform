@@ -1,6 +1,7 @@
 package provisioning_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
@@ -189,7 +191,7 @@ func TestSavingADefinitionIsRecordedUnderItsOwnAction(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)
 	trail := &sink{}
-	service = service.WithAudit(audit.New(trail), directly{})
+	service = service.WithAudit(audit.New(trail))
 	contest, actor := uuid.New(), uuid.New()
 
 	saved, err := service.SetDefinition(t.Context(), actor, contest, aDefinition())
@@ -594,7 +596,7 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 	t.Parallel()
 	service, store, cluster := games(true)
 	trail := &sink{}
-	service = service.WithAudit(audit.New(trail), directly{})
+	service = service.WithAudit(audit.New(trail))
 	cluster.fail = errors.New(connectFailureText)
 	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
@@ -656,7 +658,7 @@ func TestAScriptRefusalIsBoundedAndFitToStoreBeforeItIsStored(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
 	trail := &sink{}
-	service = service.WithAudit(audit.New(trail), directly{})
+	service = service.WithAudit(audit.New(trail))
 	cluster.fail = scriptRefusal{says: "line 1: \xff\xfe\x00 " + strings.Repeat("q", 4<<20)}
 
 	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
@@ -1074,7 +1076,7 @@ func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScri
 func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
 	// Read as "no game", the export would ship an incomplete package.
 	store := &templateStore{templateErr: errors.New("the database is away")}
-	service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true})
+	service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true}, noContest{}, directly{})
 
 	if _, _, _, err := service.Script(t.Context(), uuid.New()); err == nil {
 		t.Fatal("Script() swallowed a storage failure")
@@ -1369,7 +1371,7 @@ func TestABuildRequestIsRecordedWithWhetherItRecoversALostTemplate(t *testing.T)
 			t.Parallel()
 			service, store, cluster := gamesOf(c.author)
 			trail := &sink{}
-			service = service.WithAudit(audit.New(trail), directly{})
+			service = service.WithAudit(audit.New(trail))
 			contest := storeAGame(store, provisioning.TemplateReady)
 			cluster.missing = map[string]bool{"game_x": true}
 
@@ -1413,5 +1415,109 @@ func TestRequestBuildWithoutAGameSaysSo(t *testing.T) {
 
 	if _, err := service.RequestBuild(t.Context(), uuid.New(), uuid.New()); !errors.Is(err, provisioning.ErrNoGame) {
 		t.Fatalf("RequestBuild = %v, want ErrNoGame", err)
+	}
+}
+
+// contestRows is contests.ContentRows over one contest in status, or none
+// when missing; it records the contests whose version an edit moved.
+type contestRows struct {
+	status  string
+	missing bool
+	moved   []uuid.UUID
+}
+
+func (r *contestRows) LockContest(context.Context, uuid.UUID) error {
+	if r.missing {
+		return contests.ErrNotFound
+	}
+	return nil
+}
+
+func (r *contestRows) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
+	return contests.Contest{ID: id, Status: r.status}, nil
+}
+
+func (r *contestRows) MarkContentChanged(_ context.Context, read contests.Contest) (contests.Contest, error) {
+	r.moved = append(r.moved, read.ID)
+	read.Version++
+	return read, nil
+}
+
+// The publish gate checks that the game is built, so replacing it must refuse
+// a publish or start decided before the replacement.
+func TestReplacingAGameMovesTheContestVersion(t *testing.T) {
+	t.Parallel()
+	rows := &contestRows{status: contests.StatusPublished}
+	service := provisioning.NewGames(&templateStore{policy: sqlpolicy.ReadOnly()}, &buildCluster{},
+		authoring{editable: true}, rows, directly{})
+	contest := uuid.New()
+
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, "CREATE TABLE suspects (name text);"); err != nil {
+		t.Fatalf("SetScript() = %v", err)
+	}
+
+	if len(rows.moved) != 1 || rows.moved[0] != contest {
+		t.Errorf("moved the version of %v, want only %s", rows.moved, contest)
+	}
+}
+
+// The contest's row is read under its lock, so a contest that started or was
+// deleted since the first check is refused in the terms every game route
+// uses, and nothing is saved or recorded.
+func TestAGameReplacementOnAContestThatMovedSavesNothing(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		rows *contestRows
+		want error
+	}{
+		"started": {&contestRows{status: contests.StatusRunning}, provisioning.ErrGameNotEditable},
+		"deleted": {&contestRows{missing: true}, provisioning.ErrNoGame},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, trail := &templateStore{policy: sqlpolicy.ReadOnly()}, &sink{}
+			service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true}, tc.rows, directly{}).
+				WithAudit(audit.New(trail))
+
+			_, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), "CREATE TABLE suspects (name text);")
+
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("SetScript() = %v, want %v", err, tc.want)
+			}
+			if store.present || len(trail.entries) != 0 {
+				t.Errorf("saved = %v with %d audit entries, want nothing saved or recorded", store.present, len(trail.entries))
+			}
+		})
+	}
+}
+
+// Asking for a build takes a built game away from the publish gate just as a
+// replacement does; a recovery build is of a running contest, past any gate.
+func TestRequestingABuildMovesTheContestVersionUnlessItIsARecovery(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		author  authoring
+		status  string
+		missing bool
+		moves   bool
+	}{
+		"an editable contest":         {authoring{editable: true}, contests.StatusPublished, false, true},
+		"a recovery of a running one": {authoring{running: true}, contests.StatusRunning, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, cluster, rows := &templateStore{policy: sqlpolicy.ReadOnly()}, &buildCluster{}, &contestRows{status: tc.status}
+			service := provisioning.NewGames(store, cluster, tc.author, rows, directly{})
+			contest := storeAGame(store, provisioning.TemplateReady)
+			if tc.missing {
+				cluster.missing = map[string]bool{"game_x": true}
+			}
+
+			if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); err != nil {
+				t.Fatalf("RequestBuild: %v", err)
+			}
+
+			if moved := len(rows.moved) == 1 && rows.moved[0] == contest; moved != tc.moves {
+				t.Errorf("moved the version of %v, want moved = %v", rows.moved, tc.moves)
+			}
+		})
 	}
 }

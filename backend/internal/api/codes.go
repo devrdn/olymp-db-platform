@@ -172,6 +172,10 @@ var (
 		"What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again.")
 	codeGameTableDataChanged = httpx.NewCode("game_table_data_changed",
 		"Another row was added to this table between reading it and writing this one, so this row was not stored — two forms cannot both write at the end of the same file. Read the table's rows again and add it once more.")
+	codeGameTableDataBusy = httpx.NewCode("game_table_data_busy",
+		"As many chunks of table data are being received at once as this installation holds in memory, across every contest, or another chunk is still arriving for the same contest, from the same account or for another contest of the same owner, and this one was not read: nothing of it was stored. A statement about the service's load rather than about the chunk; `Retry-After` says how long to wait before sending the same chunk again.")
+	codeGameTableDataDamaged = httpx.NewCode("game_table_data_damaged",
+		"The file holding this table's data is shorter than the platform's record of it: the server lost bytes it had stored. The table cannot be read, built or added to until its data is uploaded again. Also carried in a failed game's `build_error_code`, when a build was what found it.")
 	codeGameTableRowNotFound = httpx.NewCode("game_table_row_not_found",
 		"No such row of this table's current data.")
 	codeGameTableRowAlreadyDeleted = httpx.NewCode("game_table_row_already_deleted",

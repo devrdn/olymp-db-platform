@@ -146,6 +146,12 @@ func maxExportsForPool(poolMax int) int { return poolMax * 2 / 5 }
 // file.
 const DefaultGameTemplateMaxBytes = 8 << 30
 
+// MaxGameUploadChunkBytes is the most GAME_UPLOAD_CHUNK_BYTES may be: 64 MiB.
+// The table builder's store reads a few chunks into memory at a time
+// (gamefile.Limits.BufferedChunks), so the chunk size multiplies into the
+// API's memory.
+const MaxGameUploadChunkBytes = 64 << 20
+
 // GAME_TEMPLATE_MAX_BYTES's bounds. An empty database alone is about 8 MB, so
 // below 64 MiB hardly a game fits; 64 GiB is the whole cluster's default
 // budget (GAME_CLUSTER_MAX_BYTES), past which one build could fill the disk.
@@ -324,7 +330,8 @@ type Config struct {
 	// separate directory on the same volume. It is sized on its own so the
 	// two stores together do not silently double GameUploadMaxDirBytes.
 	GameUploadTableMaxDirBytes int64
-	// GameUploadChunkBytes bounds one Append call (CLAUDE.md rule 12).
+	// GameUploadChunkBytes bounds one Append call (CLAUDE.md rule 12), and is
+	// itself at most MaxGameUploadChunkBytes.
 	GameUploadChunkBytes int64
 	// GameUploadAbandonedAfter is how long an upload may sit idle before the
 	// janitor aborts it and frees the disk.
@@ -627,6 +634,10 @@ func Load() (Config, error) {
 	}
 	if cfg.GameUploadAbandonedAfter < 0 {
 		return Config{}, fmt.Errorf("GAME_UPLOAD_ABANDONED_AFTER cannot be negative, got %s", cfg.GameUploadAbandonedAfter)
+	}
+	if cfg.GameUploadChunkBytes > MaxGameUploadChunkBytes {
+		return Config{}, fmt.Errorf("GAME_UPLOAD_CHUNK_BYTES cannot exceed %d (%d MiB), got %d",
+			MaxGameUploadChunkBytes, MaxGameUploadChunkBytes>>20, cfg.GameUploadChunkBytes)
 	}
 	if cfg.GameUploadDir != "" {
 		if cfg.GameUploadMaxFileBytes <= 0 || cfg.GameUploadMaxDirBytes <= 0 || cfg.GameUploadChunkBytes <= 0 ||

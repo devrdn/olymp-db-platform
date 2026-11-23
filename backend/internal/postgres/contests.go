@@ -276,7 +276,7 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) (contests.Con
 	if err != nil {
 		return contests.Contest{}, fmt.Errorf("encode contest settings: %w", err)
 	}
-	return r.writeIfUnchanged(ctx, c, `
+	return writeIfUnchanged(ctx, r.querier(ctx), c, `
 		enrollment = $3, question_mode = $4, progression = $5, scoring = $6, timing = $7, duration_min = $8,
 		starts_at = $9, ends_at = $10, allowed_cidrs = $11, settings = $12,
 		leaderboard_freeze_min = $13, leaderboard_names = $14, icpc_penalty_min = $15,
@@ -290,13 +290,18 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) (contests.Con
 // SetPrizePlaces leaves updated_at alone: the reclaim sweep measures a
 // finished contest's grace from it.
 func (r *Contests) SetPrizePlaces(ctx context.Context, c contests.Contest) (contests.Contest, error) {
-	return r.writeIfUnchanged(ctx, c, `prize_first = $3, prize_second = $4, prize_third = $5`,
+	return writeIfUnchanged(ctx, r.querier(ctx), c, `prize_first = $3, prize_second = $4, prize_third = $5`,
 		c.PrizePlaces.First, c.PrizePlaces.Second, c.PrizePlaces.Third)
 }
 
 // SetArchiveSettings leaves updated_at alone, as SetPrizePlaces does.
 func (r *Contests) SetArchiveSettings(ctx context.Context, c contests.Contest) (contests.Contest, error) {
-	return r.writeIfUnchanged(ctx, c, `visibility = $3, archive_tasks = $4`, c.Visibility, c.ArchiveTasks)
+	return writeIfUnchanged(ctx, r.querier(ctx), c, `visibility = $3, archive_tasks = $4`, c.Visibility, c.ArchiveTasks)
+}
+
+// MarkContentChanged leaves updated_at alone, as SetPrizePlaces does.
+func (r *Contests) MarkContentChanged(ctx context.Context, read contests.Contest) (contests.Contest, error) {
+	return writeIfUnchanged(ctx, r.querier(ctx), read, `version = version + 1`)
 }
 
 // writeIfUnchanged runs UPDATE contests SET set on c's row while it is still
@@ -304,8 +309,8 @@ func (r *Contests) SetArchiveSettings(ctx context.Context, c contests.Contest) (
 // PostgreSQL re-evaluates the version against the committed row once a
 // concurrent writer's lock is released, so of two writes decided against the
 // same read only the first lands.
-func (r *Contests) writeIfUnchanged(ctx context.Context, c contests.Contest, set string, args ...any) (contests.Contest, error) {
-	written, err := scanContest(r.querier(ctx).QueryRow(ctx, `
+func writeIfUnchanged(ctx context.Context, q storage.Querier, c contests.Contest, set string, args ...any) (contests.Contest, error) {
+	written, err := scanContest(q.QueryRow(ctx, `
 		WITH written AS (
 			UPDATE contests SET `+set+`
 			WHERE id = $1 AND version = $2
@@ -321,7 +326,8 @@ func (r *Contests) writeIfUnchanged(ctx context.Context, c contests.Contest, set
 	}
 	// Nothing matched: a second read tells a missing contest from a changed
 	// one.
-	if _, err := r.ByID(ctx, c.ID); err != nil {
+	if _, err := scanContest(q.QueryRow(ctx,
+		`SELECT `+contestColumns+` FROM contests c WHERE c.id = $1`, c.ID)); err != nil {
 		return contests.Contest{}, err
 	}
 	return contests.Contest{}, contests.ErrContestChanged

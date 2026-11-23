@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
@@ -523,6 +524,8 @@ type templateStore struct {
 	describeErr error
 	uploads     map[uuid.UUID]provisioning.Upload
 	tableData   map[uuid.UUID]provisioning.TableData
+	// ownerOfAll, when set, is the account every contest belongs to.
+	ownerOfAll uuid.UUID
 	// deleteRowErr, when set, is what DeleteTableDataRow answers. The fake
 	// does not reimplement the database's CHECK on deleted_rows; the postgres
 	// tests prove that one.
@@ -754,10 +757,10 @@ func (s *templateStore) UpdateReceived(_ context.Context, id uuid.UUID, received
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.uploads[id]
-	if !ok {
-		return provisioning.ErrUploadNotFound
+	if !ok || u.Status != provisioning.UploadReceiving {
+		return provisioning.ErrUploadAlreadyComplete
 	}
-	u.ReceivedBytes = receivedBytes
+	u.ReceivedBytes = max(u.ReceivedBytes, receivedBytes)
 	s.uploads[id] = u
 	return nil
 }
@@ -872,6 +875,19 @@ func (s *templateStore) TableDataByID(_ context.Context, id uuid.UUID) (provisio
 	return d, nil
 }
 
+// TableDataWithOwner answers ownerOfAll when set; otherwise each contest is
+// its own owner, so no two of them share one.
+func (s *templateStore) TableDataWithOwner(ctx context.Context, id uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
+	d, err := s.TableDataByID(ctx, id)
+	if err != nil {
+		return provisioning.TableData{}, uuid.Nil, err
+	}
+	if s.ownerOfAll != uuid.Nil {
+		return d, s.ownerOfAll, nil
+	}
+	return d, d.ContestID, nil
+}
+
 func (s *templateStore) CurrentTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -907,10 +923,10 @@ func (s *templateStore) UpdateTableDataReceived(_ context.Context, id uuid.UUID,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.tableData[id]
-	if !ok {
-		return provisioning.ErrTableDataNotFound
+	if !ok || d.Status != provisioning.TableDataReceiving {
+		return provisioning.ErrTableDataAlreadyComplete
 	}
-	d.ReceivedBytes = receivedBytes
+	d.ReceivedBytes = max(d.ReceivedBytes, receivedBytes)
 	s.tableData[id] = d
 	return nil
 }
@@ -956,15 +972,14 @@ func (s *templateStore) CreateReadyTableData(
 	return d, nil
 }
 
-func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
+func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.tableData[id]
-	if !ok || d.Status != provisioning.TableDataComplete {
+	if !ok || d.Status != provisioning.TableDataComplete || d.ReceivedBytes != at {
 		return provisioning.TableData{}, provisioning.ErrTableDataChanged
 	}
-	// GREATEST, as in the real statement: neither figure goes backwards.
-	d.ReceivedBytes, d.Lines = max(d.ReceivedBytes, receivedBytes), max(d.Lines, lines)
+	d.ReceivedBytes, d.Lines = d.ReceivedBytes+rowBytes, d.Lines+1
 	s.tableData[id] = d
 	return d, nil
 }
@@ -1166,7 +1181,7 @@ func games(editable bool) (*provisioning.Games, *templateStore, *buildCluster) {
 func gamesOf(author authoring) (*provisioning.Games, *templateStore, *buildCluster) {
 	store := &templateStore{policy: sqlpolicy.ReadOnly()}
 	cluster := &buildCluster{}
-	return provisioning.NewGames(store, cluster, author), store, cluster
+	return provisioning.NewGames(store, cluster, author, noContest{}, directly{}), store, cluster
 }
 
 // ownGame is the real repository with ClaimBuild kept to one contest's game.
@@ -1228,7 +1243,7 @@ func TestABuildInTheseTestsTakesItsOwnGameEvenWhenAnotherPackagesGameIsOlder(t *
 		t.Fatalf("age the other package's game: %v", err)
 	}
 
-	games := provisioning.NewGames(ownBuilds(contest.ID), &buildCluster{}, editableContest{})
+	games := provisioning.NewGames(ownBuilds(contest.ID), &buildCluster{}, editableContest{}, noContest{}, directly{})
 	if _, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `SELECT 1`); err != nil {
 		t.Fatalf("save this test's game: %v", err)
 	}
@@ -1248,4 +1263,18 @@ func TestABuildInTheseTestsTakesItsOwnGameEvenWhenAnotherPackagesGameIsOlder(t *
 	if status != string(provisioning.TemplatePending) {
 		t.Fatalf("the other package's game is %q, want it left pending for its owner", status)
 	}
+}
+
+// noContest is contests.ContentRows for a game whose contest has no row
+// here: every edit finds a draft. The real one is tested in internal/postgres.
+type noContest struct{}
+
+func (noContest) LockContest(context.Context, uuid.UUID) error { return nil }
+
+func (noContest) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
+	return contests.Contest{ID: id, Status: contests.StatusDraft}, nil
+}
+
+func (noContest) MarkContentChanged(_ context.Context, read contests.Contest) (contests.Contest, error) {
+	return read, nil
 }

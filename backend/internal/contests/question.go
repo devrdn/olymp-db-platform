@@ -327,45 +327,44 @@ func (s *Service) questionOf(ctx context.Context, contestID, questionID uuid.UUI
 
 // AddQuestion appends a question to a contest.
 func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Question, error) {
-	c, err := s.editableContest(ctx, cmd.ContestID)
-	if err != nil {
-		return Question{}, err
-	}
-
-	q := Question{
-		ContestID:   c.ID,
-		Kind:        orDefault(cmd.Kind, KindText),
-		Points:      cmd.Points,
-		MaxAttempts: cmd.MaxAttempts,
-		IsVisible:   cmd.IsVisible == nil || *cmd.IsVisible,
-		ChoiceIDs:   cmd.ChoiceIDs,
-	}
-	if cmd.PenaltyPct != nil {
-		q.PenaltyPct = *cmd.PenaltyPct
-	}
-	if cmd.IsBonus != nil {
-		q.IsBonus = *cmd.IsBonus
-	}
-	if err := q.Validate(); err != nil {
-		return Question{}, err
-	}
-	if err := checkBonus(c, q); err != nil {
-		return Question{}, err
-	}
-	if err := s.checkTexts(ctx, cmd.Texts); err != nil {
-		return Question{}, err
-	}
-	existing, err := s.questions.List(ctx, c.ID)
-	if err != nil {
-		return Question{}, err
-	}
-	if len(existing) >= MaxPackageQuestions {
-		return Question{}, fmt.Errorf("%w: at most %d questions", ErrInvalidQuestion, MaxPackageQuestions)
-	}
-
 	var created Question
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		var err error
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		c, err := BeginContentEdit(ctx, s.contests, cmd.ContestID)
+		if err != nil {
+			return err
+		}
+
+		q := Question{
+			ContestID:   c.ID,
+			Kind:        orDefault(cmd.Kind, KindText),
+			Points:      cmd.Points,
+			MaxAttempts: cmd.MaxAttempts,
+			IsVisible:   cmd.IsVisible == nil || *cmd.IsVisible,
+			ChoiceIDs:   cmd.ChoiceIDs,
+		}
+		if cmd.PenaltyPct != nil {
+			q.PenaltyPct = *cmd.PenaltyPct
+		}
+		if cmd.IsBonus != nil {
+			q.IsBonus = *cmd.IsBonus
+		}
+		if err := q.Validate(); err != nil {
+			return err
+		}
+		if err := checkBonus(c, q); err != nil {
+			return err
+		}
+		if err := s.checkTexts(ctx, cmd.Texts); err != nil {
+			return err
+		}
+		existing, err := s.questions.List(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+		if len(existing) >= MaxPackageQuestions {
+			return fmt.Errorf("%w: at most %d questions", ErrInvalidQuestion, MaxPackageQuestions)
+		}
+
 		if created, err = s.questions.Create(ctx, q); err != nil {
 			return err
 		}
@@ -410,52 +409,52 @@ type SaveQuestionCommand struct {
 // change that touches both, such as turning a text question into a choice
 // one, check the new answers against the new question.
 func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Question, error) {
-	c, err := s.editableContest(ctx, cmd.ContestID)
-	if err != nil {
-		return Question{}, err
-	}
-	current, err := s.questionOf(ctx, cmd.ContestID, cmd.QuestionID)
-	if err != nil {
-		return Question{}, err
-	}
+	var updated Question
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		c, err := BeginContentEdit(ctx, s.contests, cmd.ContestID)
+		if err != nil {
+			return err
+		}
+		current, err := s.questionOf(ctx, cmd.ContestID, cmd.QuestionID)
+		if err != nil {
+			return err
+		}
 
-	updated := current
-	updated.Kind = orDefault(cmd.Kind, current.Kind)
-	updated.Points = cmd.Points
-	updated.MaxAttempts = cmd.MaxAttempts
-	if cmd.PenaltyPct != nil {
-		updated.PenaltyPct = *cmd.PenaltyPct
-	}
-	updated.ChoiceIDs = cmd.ChoiceIDs
-	if cmd.IsVisible != nil {
-		updated.IsVisible = *cmd.IsVisible
-	}
-	if cmd.IsBonus != nil {
-		updated.IsBonus = *cmd.IsBonus
-	}
+		updated = current
+		updated.Kind = orDefault(cmd.Kind, current.Kind)
+		updated.Points = cmd.Points
+		updated.MaxAttempts = cmd.MaxAttempts
+		if cmd.PenaltyPct != nil {
+			updated.PenaltyPct = *cmd.PenaltyPct
+		}
+		updated.ChoiceIDs = cmd.ChoiceIDs
+		if cmd.IsVisible != nil {
+			updated.IsVisible = *cmd.IsVisible
+		}
+		if cmd.IsBonus != nil {
+			updated.IsBonus = *cmd.IsBonus
+		}
 
-	if err := updated.Validate(); err != nil {
-		return Question{}, err
-	}
-	if err := checkBonus(c, updated); err != nil {
-		return Question{}, err
-	}
-	if err := validateAnswersFor(updated, cmd.Answers); err != nil {
-		return Question{}, err
-	}
-	if err := s.checkTexts(ctx, cmd.Texts); err != nil {
-		return Question{}, err
-	}
+		if err := updated.Validate(); err != nil {
+			return err
+		}
+		if err := checkBonus(c, updated); err != nil {
+			return err
+		}
+		if err := validateAnswersFor(updated, cmd.Answers); err != nil {
+			return err
+		}
+		if err := s.checkTexts(ctx, cmd.Texts); err != nil {
+			return err
+		}
 
-	payload := audit.Between(current.auditFields(), updated.auditFields()).Payload()
-	payload["question_id"] = updated.ID.String()
-	if len(cmd.Texts) > 0 {
-		payload["languages"] = textLanguages(cmd.Texts)
-	}
+		payload := audit.Between(current.auditFields(), updated.auditFields()).Payload()
+		payload["question_id"] = updated.ID.String()
+		if len(cmd.Texts) > 0 {
+			payload["languages"] = textLanguages(cmd.Texts)
+		}
+		answersMoved := !sameAnswers(current.Answers, cmd.Answers)
 
-	answersMoved := !sameAnswers(current.Answers, cmd.Answers)
-
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.questions.Update(ctx, updated); err != nil {
 			return err
 		}
@@ -508,14 +507,13 @@ func sameAnswers(before, after []Answer) bool {
 
 // DeleteQuestion removes a question from a contest.
 func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID, questionID uuid.UUID) error {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return err
-	}
-	if _, err := s.questionOf(ctx, contestID, questionID); err != nil {
-		return err
-	}
-
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+			return err
+		}
+		if _, err := s.questionOf(ctx, contestID, questionID); err != nil {
+			return err
+		}
 		if err := s.questions.Delete(ctx, questionID); err != nil {
 			return err
 		}
@@ -528,18 +526,17 @@ func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID, questi
 // ReorderQuestions sets the display order. The list must name every question
 // exactly once, or positions would be duplicated or missing.
 func (s *Service) ReorderQuestions(ctx context.Context, actorID, contestID uuid.UUID, ordered []uuid.UUID) error {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return err
-	}
-	existing, err := s.questions.List(ctx, contestID)
-	if err != nil {
-		return err
-	}
-	if err := checkCompleteOrder(existing, ordered); err != nil {
-		return err
-	}
-
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+			return err
+		}
+		existing, err := s.questions.List(ctx, contestID)
+		if err != nil {
+			return err
+		}
+		if err := checkCompleteOrder(existing, ordered); err != nil {
+			return err
+		}
 		if err := s.questions.Reorder(ctx, contestID, ordered); err != nil {
 			return err
 		}

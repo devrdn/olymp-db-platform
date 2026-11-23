@@ -23,11 +23,14 @@ const tableDataColumns = `id, contest_id, table_name, declared_bytes, received_b
 // that identifier.
 const tableDataCheckViolation = "23514"
 
-func scanTableData(row pgx.Row) (provisioning.TableData, error) {
+// scanTableData scans tableDataColumns, then whatever columns follow them
+// into more.
+func scanTableData(row pgx.Row, more ...any) (provisioning.TableData, error) {
 	var d provisioning.TableData
 	var status string
-	err := row.Scan(&d.ID, &d.ContestID, &d.Table, &d.DeclaredBytes, &d.ReceivedBytes,
-		&d.Lines, &d.DeletedRows, &status, &d.CreatedAt, &d.UpdatedAt)
+	dest := append([]any{&d.ID, &d.ContestID, &d.Table, &d.DeclaredBytes, &d.ReceivedBytes,
+		&d.Lines, &d.DeletedRows, &status, &d.CreatedAt, &d.UpdatedAt}, more...)
+	err := row.Scan(dest...)
 	d.Status = provisioning.TableDataStatus(status)
 	return d, err
 }
@@ -66,6 +69,29 @@ func (r *GameInstances) TableDataByID(ctx context.Context, id uuid.UUID) (provis
 	return data, nil
 }
 
+// TableDataWithOwner is TableDataByID with the account that created the
+// row's contest, in one statement: a chunk needs both and arrives hundreds of
+// times per upload.
+func (r *GameInstances) TableDataWithOwner(ctx context.Context, id uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
+	var owner uuid.UUID
+	// The contest is joined under names of its own, so tableDataColumns stays
+	// unambiguous, and joined rather than looked up, so a row without its
+	// contest is no row.
+	data, err := scanTableData(r.querier(ctx).QueryRow(ctx, `
+		SELECT `+tableDataColumns+`, c.owner
+		FROM game_table_data
+		JOIN (SELECT id AS owned_contest, created_by AS owner FROM contests) c
+		  ON c.owned_contest = game_table_data.contest_id
+		WHERE game_table_data.id = $1`, id), &owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return provisioning.TableData{}, uuid.Nil, provisioning.ErrTableDataNotFound
+	}
+	if err != nil {
+		return provisioning.TableData{}, uuid.Nil, fmt.Errorf("read the table upload and its contest's owner: %w", err)
+	}
+	return data, owner, nil
+}
+
 // CurrentTableData reads a table's one 'receiving' upload, or
 // ErrTableDataNotFound. game_table_data_one_receiving_idx guarantees at most
 // one.
@@ -98,12 +124,21 @@ func (r *GameInstances) ReadyTableData(ctx context.Context, contestID uuid.UUID,
 	return data, nil
 }
 
-// UpdateTableDataReceived records how many bytes Store.Append actually wrote.
+// UpdateTableDataReceived records how far a 'receiving' upload has got. It
+// never lowers the length, and it does not touch a file that is no longer
+// 'receiving' (ErrTableDataAlreadyComplete): a chunk admitted before its
+// upload completed can finish after, and a 'complete' file's length is what
+// every reader and the next appended row go by.
 func (r *GameInstances) UpdateTableDataReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_table_data SET received_bytes = $2, updated_at = now() WHERE id = $1`,
-		id, receivedBytes); err != nil {
+	tag, err := r.querier(ctx).Exec(ctx, `
+		UPDATE game_table_data
+		SET received_bytes = GREATEST(received_bytes, $2), updated_at = now()
+		WHERE id = $1 AND status = 'receiving'`, id, receivedBytes)
+	if err != nil {
 		return fmt.Errorf("record the table upload's progress: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return provisioning.ErrTableDataAlreadyComplete
 	}
 	return nil
 }
@@ -167,24 +202,24 @@ func (r *GameInstances) MarkTableDataChanged(ctx context.Context, contestID uuid
 	return nil
 }
 
-// AppendTableDataRow records one more row appended to an already-'complete'
-// file, writing its byte length and row count in one statement.
+// AppendTableDataRow records one more row of rowBytes at the end of a
+// 'complete' file, only while the file is still recorded as at bytes long,
+// and so holds the row until the transaction ends.
 //
-// GREATEST keeps both figures moving forward: with two concurrent appends to
-// one table, the last UPDATE to run need not be the one that read last, and
-// it must not overwrite a newer pair with a smaller one. coalesce covers a
-// null line_count.
+// The condition decides two forms that read the same end. Whichever lock
+// makes them take turns, the contest's or this row's, the second statement
+// runs against the first one's committed length and matches nothing.
 //
-// No row matched means the row is gone or no longer 'complete' (a concurrent
-// game replacement discards table data), answered as ErrTableDataChanged.
-func (r *GameInstances) AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
+// No row matched also covers a row that is gone or no longer 'complete' (a
+// game replacement discards table data); both are ErrTableDataChanged.
+func (r *GameInstances) AppendTableDataRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx, `
 		UPDATE game_table_data
-		SET received_bytes = GREATEST(received_bytes, $2),
-		    line_count     = GREATEST(coalesce(line_count, 0), $3),
+		SET received_bytes = received_bytes + $3,
+		    line_count     = coalesce(line_count, 0) + 1,
 		    updated_at     = now()
-		WHERE id = $1 AND status = 'complete'
-		RETURNING `+tableDataColumns, id, receivedBytes, lines))
+		WHERE id = $1 AND status = 'complete' AND received_bytes = $2
+		RETURNING `+tableDataColumns, id, at, rowBytes))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return provisioning.TableData{}, provisioning.ErrTableDataChanged
 	}

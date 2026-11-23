@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
@@ -317,32 +316,15 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 	return entries, grid, nil
 }
 
-// MarkRevealed sets leaderboard_revealed_at once and reports the moment in
-// force. The update is conditional, so concurrent reveals cannot overwrite
-// each other. It leaves updated_at alone: the reclaim sweep measures its
-// grace period from it (reclaimDeadline), and a reveal must not extend it.
-func (r *Leaderboard) MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error) {
-	var (
-		revealedAt time.Time
-		newly      bool
-	)
-	err := r.querier(ctx).QueryRow(ctx, `
-		WITH updated AS (
-			UPDATE contests SET leaderboard_revealed_at = $2
-			WHERE id = $1 AND leaderboard_revealed_at IS NULL
-			RETURNING leaderboard_revealed_at
-		)
-		SELECT COALESCE((SELECT leaderboard_revealed_at FROM updated), c.leaderboard_revealed_at),
-		       EXISTS (SELECT 1 FROM updated)
-		FROM contests c WHERE c.id = $1`,
-		contestID, at).Scan(&revealedAt, &newly)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return time.Time{}, false, contests.ErrNotFound
-	}
+// MarkRevealed writes the reveal moment through writeIfUnchanged. It leaves
+// updated_at alone: the reclaim sweep measures its grace period from it
+// (reclaimDeadline), and a reveal must not extend it.
+func (r *Leaderboard) MarkRevealed(ctx context.Context, read contests.Contest, at time.Time) (time.Time, error) {
+	written, err := writeIfUnchanged(ctx, r.querier(ctx), read, `leaderboard_revealed_at = $3`, at)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("mark the leaderboard revealed: %w", err)
+		return time.Time{}, err
 	}
-	return revealedAt, newly, nil
+	return *written.LeaderboardRevealedAt, nil
 }
 
 // PointsBreakdown reads, for every registration created before the cutoff

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -889,27 +892,127 @@ func archivedAtKeptThrough(t *testing.T, ctx context.Context, id uuid.UUID, edit
 	return kept
 }
 
-// startsAfterRead is the contest repository with the scheduler starting the
-// contest, on its own connection, right after the first read.
-type startsAfterRead struct {
+// afterFirstRead is the contest repository with another writer acting, on its
+// own connection, right after the first read: the interleaving a race needs,
+// made certain.
+type afterFirstRead struct {
 	*Contests
-	start sync.Once
+	once  sync.Once
+	other func(id uuid.UUID) error
 	t     *testing.T
 }
 
-func (r *startsAfterRead) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
+func (r *afterFirstRead) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
 	c, err := r.Contests.ByID(ctx, id)
-	r.start.Do(func() {
-		due, err := r.Contests.ByID(context.Background(), id)
-		if err != nil {
-			r.t.Errorf("the scheduler's read = %v", err)
-			return
-		}
-		if _, err := r.Contests.SetStatus(context.Background(), due, contests.StatusRunning); err != nil {
-			r.t.Errorf("the scheduler's SetStatus() = %v", err)
+	r.once.Do(func() {
+		if err := r.other(id); err != nil {
+			r.t.Errorf("the other writer = %v", err)
 		}
 	})
 	return c, err
+}
+
+// gameReadiness is the publish gate's question about the game.
+type gameReadiness interface {
+	GameReady(ctx context.Context, contestID uuid.UUID) (bool, error)
+}
+
+// readyThen is the game store with another writer acting, on its own
+// connection, right after the gate asked whether the game is built.
+type readyThen struct {
+	*GameInstances
+	once  sync.Once
+	other func() error
+	t     *testing.T
+}
+
+func (r *readyThen) GameReady(ctx context.Context, contestID uuid.UUID) (bool, error) {
+	ready, err := r.GameInstances.GameReady(ctx, contestID)
+	r.once.Do(func() {
+		if err := r.other(); err != nil {
+			r.t.Errorf("the other writer = %v", err)
+		}
+	})
+	return ready, err
+}
+
+// listedThen is the question store with another writer acting, on its own
+// connection, right after the first listing, which is the publish gate's.
+type listedThen struct {
+	*Questions
+	once  sync.Once
+	other func() error
+	t     *testing.T
+}
+
+func (r *listedThen) List(ctx context.Context, contestID uuid.UUID) ([]contests.Question, error) {
+	qs, err := r.Questions.List(ctx, contestID)
+	r.once.Do(func() {
+		if err := r.other(); err != nil {
+			r.t.Errorf("the other writer = %v", err)
+		}
+	})
+	return qs, err
+}
+
+// raceService is the contest service over PostgreSQL with repo and
+// questions as its stores. The game cluster is not a race test's business,
+// so its readiness is the in-memory games.
+func raceService(repo contests.Repository, questions contests.QuestionRepository, games gameReadiness) *contests.Service {
+	return contests.NewService(contests.ServiceConfig{
+		Contests:      repo,
+		Stories:       NewStories(testPool),
+		Questions:     questions,
+		Registrations: NewRegistrations(testPool),
+		Policies:      NewSQLPolicies(testPool),
+		Audit:         audit.New(NewAuditSink(testPool)),
+		UnitOfWork:    storage.NewUnitOfWork(testPool),
+		Gate:          contests.NewGate(0),
+		GameReadiness: games,
+		Covers:        NewCovers(testPool),
+		Appointees:    NewUsers(testPool),
+	})
+}
+
+// publishableRow commits a draft that passes the publish gate, with the
+// games that call it built, and returns it with its one question.
+func publishableRow(t *testing.T, ctx context.Context) (id, question uuid.UUID, games *conteststest.Games) {
+	t.Helper()
+	id = contestRow(t, ctx)
+	repo := NewContests(testPool)
+	if _, err := testPool.Exec(ctx,
+		`UPDATE contests SET starts_at = now() + interval '1 day', ends_at = now() + interval '2 days' WHERE id = $1`,
+		id); err != nil {
+		t.Fatalf("schedule = %v", err)
+	}
+	if err := repo.ReplaceLanguages(ctx, id, []contests.ContestLanguage{{Code: "en", IsDefault: true}}); err != nil {
+		t.Fatalf("ReplaceLanguages() = %v", err)
+	}
+	if err := repo.ReplaceTranslations(ctx, id, []contests.Translation{{Lang: "en", Title: "The Library Murder"}}); err != nil {
+		t.Fatalf("ReplaceTranslations() = %v", err)
+	}
+	if _, err := NewStories(testPool).Save(ctx, id, map[string]string{"en": "A body in the stacks."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	questions := NewQuestions(testPool)
+	if err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+		q, err := questions.Create(ctx, contests.Question{
+			ContestID: id, Ord: 1, Kind: contests.KindFinal, Points: 10, IsVisible: true,
+		})
+		if err != nil {
+			return err
+		}
+		question = q.ID
+		if err := questions.ReplaceTexts(ctx, q.ID, map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}}); err != nil {
+			return err
+		}
+		return questions.ReplaceAnswers(ctx, q.ID, []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}})
+	}); err != nil {
+		t.Fatalf("add the question = %v", err)
+	}
+	games = conteststest.NewGames()
+	games.Built(id)
+	return id, question, games
 }
 
 // An organiser's edit decided against a published contest must not land once
@@ -922,17 +1025,15 @@ func TestAnUpdateDecidedBeforeTheStartIsRefusedOnceTheContestRuns(t *testing.T) 
 		t.Fatalf("publish = %v", err)
 	}
 	repo := NewContests(testPool)
-	service := contests.NewService(contests.ServiceConfig{
-		Contests:      &startsAfterRead{Contests: repo, t: t},
-		Questions:     NewQuestions(testPool),
-		Registrations: NewRegistrations(testPool),
-		Audit:         audit.New(NewAuditSink(testPool)),
-		UnitOfWork:    storage.NewUnitOfWork(testPool),
-		Gate:          contests.NewGate(0),
-		GameReadiness: NewGameInstances(testPool),
-		Covers:        NewCovers(testPool),
-		Appointees:    NewUsers(testPool),
-	})
+	scheduler := func(id uuid.UUID) error {
+		due, err := repo.ByID(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		_, err = repo.SetStatus(context.Background(), due, contests.StatusRunning)
+		return err
+	}
+	service := raceService(&afterFirstRead{Contests: repo, other: scheduler, t: t}, NewQuestions(testPool), conteststest.NewGames())
 
 	_, err := service.Update(ctx, contests.UpdateCommand{ContestID: id, QuestionMode: contests.QuestionModeSingle})
 
@@ -949,83 +1050,23 @@ func TestAnUpdateDecidedBeforeTheStartIsRefusedOnceTheContestRuns(t *testing.T) 
 	}
 }
 
-// editedAfterRead is the contest repository with an organiser saving the
-// contest without its end date, on their own connection, right after the
-// first read.
-type editedAfterRead struct {
-	*Contests
-	edit sync.Once
-	t    *testing.T
-}
-
-func (r *editedAfterRead) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
-	c, err := r.Contests.ByID(ctx, id)
-	r.edit.Do(func() {
-		saved, err := r.Contests.ByID(context.Background(), id)
-		if err != nil {
-			r.t.Errorf("the organiser's ByID() = %v", err)
-			return
-		}
-		saved.EndsAt = nil
-		if _, err := r.Contests.Update(context.Background(), saved); err != nil {
-			r.t.Errorf("the organiser's Update() = %v", err)
-		}
-	})
-	return c, err
-}
-
 // A publish whose gate passed against a row an organiser has since saved
 // must not land: here the save took the end date away, and the gate refuses
 // a contest with no schedule.
 func TestAPublishDecidedBeforeAnEditIsRefused(t *testing.T) {
 	ctx := context.Background()
-	id := contestRow(t, ctx)
+	id, _, games := publishableRow(t, ctx)
 	repo := NewContests(testPool)
-	if _, err := testPool.Exec(ctx,
-		`UPDATE contests SET starts_at = now() + interval '1 day', ends_at = now() + interval '2 days' WHERE id = $1`,
-		id); err != nil {
-		t.Fatalf("schedule = %v", err)
-	}
-	if err := repo.ReplaceLanguages(ctx, id, []contests.ContestLanguage{{Code: "en", IsDefault: true}}); err != nil {
-		t.Fatalf("ReplaceLanguages() = %v", err)
-	}
-	if err := repo.ReplaceTranslations(ctx, id, []contests.Translation{{Lang: "en", Title: "The Library Murder"}}); err != nil {
-		t.Fatalf("ReplaceTranslations() = %v", err)
-	}
-	stories, questions := NewStories(testPool), NewQuestions(testPool)
-	if _, err := stories.Save(ctx, id, map[string]string{"en": "A body in the stacks."}); err != nil {
-		t.Fatalf("Save() = %v", err)
-	}
-	if err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
-		q, err := questions.Create(ctx, contests.Question{
-			ContestID: id, Ord: 1, Kind: contests.KindFinal, Points: 10, IsVisible: true,
-		})
+	organiser := func(id uuid.UUID) error {
+		saved, err := repo.ByID(context.Background(), id)
 		if err != nil {
 			return err
 		}
-		if err := questions.ReplaceTexts(ctx, q.ID, map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}}); err != nil {
-			return err
-		}
-		return questions.ReplaceAnswers(ctx, q.ID, []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}})
-	}); err != nil {
-		t.Fatalf("add the question = %v", err)
+		saved.EndsAt = nil
+		_, err = repo.Update(context.Background(), saved)
+		return err
 	}
-	// The game cluster is not this test's business: only the contest row's
-	// race is.
-	games := conteststest.NewGames()
-	games.Built(id)
-	service := contests.NewService(contests.ServiceConfig{
-		Contests:      &editedAfterRead{Contests: repo, t: t},
-		Stories:       stories,
-		Questions:     questions,
-		Registrations: NewRegistrations(testPool),
-		Audit:         audit.New(NewAuditSink(testPool)),
-		UnitOfWork:    storage.NewUnitOfWork(testPool),
-		Gate:          contests.NewGate(0),
-		GameReadiness: games,
-		Covers:        NewCovers(testPool),
-		Appointees:    NewUsers(testPool),
-	})
+	service := raceService(&afterFirstRead{Contests: repo, other: organiser, t: t}, NewQuestions(testPool), games)
 
 	err := service.Transition(ctx, uuid.Nil, id, contests.StatusPublished)
 
@@ -1039,6 +1080,269 @@ func TestAPublishDecidedBeforeAnEditIsRefused(t *testing.T) {
 	if got.Status != contests.StatusDraft || got.EndsAt != nil {
 		t.Errorf("status = %s with ends_at %v, want a draft without one: the publish landed past the gate",
 			got.Status, got.EndsAt)
+	}
+}
+
+// The gate reads the content as well as the row: a question deleted after the
+// gate counted it must refuse the publish, or the contest goes out with none.
+func TestAPublishDecidedBeforeAQuestionIsDeletedIsRefused(t *testing.T) {
+	ctx := context.Background()
+	id, question, games := publishableRow(t, ctx)
+	repo := NewContests(testPool)
+	organiser := raceService(repo, NewQuestions(testPool), games)
+	deletes := func() error {
+		return organiser.DeleteQuestion(context.Background(), uuid.Nil, id, question)
+	}
+	service := raceService(repo, &listedThen{Questions: NewQuestions(testPool), other: deletes, t: t}, games)
+
+	err := service.Transition(ctx, uuid.Nil, id, contests.StatusPublished)
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("Transition() = %v, want ErrContestChanged", err)
+	}
+	if got, err := repo.ByID(ctx, id); err != nil || got.Status != contests.StatusDraft {
+		t.Errorf("ByID() = %s, %v, want a draft: the publish landed past the gate", got.Status, err)
+	}
+}
+
+// A game replaced after the gate saw it built leaves the contest with a game
+// still to build: the publish decided against the built one must not land.
+func TestAPublishDecidedBeforeTheGameIsReplacedIsRefused(t *testing.T) {
+	ctx := context.Background()
+	id, _, _ := publishableRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO game_templates (contest_id, template_db, init_script, status)
+		VALUES ($1, $2, 'CREATE TABLE suspects (name text);', 'ready')`,
+		id, "race_"+strings.ReplaceAll(id.String(), "-", "")[:16]); err != nil {
+		t.Fatalf("build the game = %v", err)
+	}
+	repo, templates := NewContests(testPool), NewGameInstances(testPool)
+	author, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	games := provisioning.NewGames(templates, nil, templates, repo, storage.NewUnitOfWork(testPool)).
+		WithAudit(audit.New(NewAuditSink(testPool)))
+	replaces := func() error {
+		_, err := games.SetScript(context.Background(), author.CreatedBy, id, "CREATE TABLE witnesses (name text);")
+		return err
+	}
+	service := raceService(repo, NewQuestions(testPool), &readyThen{GameInstances: templates, other: replaces, t: t})
+
+	err = service.Transition(ctx, uuid.Nil, id, contests.StatusPublished)
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("Transition() = %v, want ErrContestChanged", err)
+	}
+	if got, err := repo.ByID(ctx, id); err != nil || got.Status != contests.StatusDraft {
+		t.Errorf("ByID() = %s, %v, want a draft: the publish landed with the game unbuilt", got.Status, err)
+	}
+}
+
+// meanwhileThen is the contest repository with another writer starting, on
+// its own connection, right after the first read. The read returns once that
+// writer finishes or has waited a while, so a writer that blocks on a lock the
+// caller holds is left to finish after the caller commits.
+type meanwhileThen struct {
+	*Contests
+	once  sync.Once
+	other func() error
+	done  chan error
+}
+
+func (r *meanwhileThen) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
+	c, err := r.Contests.ByID(ctx, id)
+	r.once.Do(func() {
+		go func() { r.done <- r.other() }()
+		select {
+		case err := <-r.done:
+			r.done <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+	return c, err
+}
+
+// Two authors adding a question at the same moment both succeed, the second
+// with the next number: content edits serialise on the contest, they do not
+// refuse each other.
+func TestTwoQuestionsAddedAtOnceBothLandInOrder(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	repo := NewContests(testPool)
+	other := raceService(repo, NewQuestions(testPool), conteststest.NewGames())
+	adds := func() error {
+		_, err := other.AddQuestion(context.Background(), contests.QuestionCommand{ContestID: id, Points: 1})
+		return err
+	}
+	meanwhile := &meanwhileThen{Contests: repo, other: adds, done: make(chan error, 1)}
+	service := raceService(meanwhile, NewQuestions(testPool), conteststest.NewGames())
+
+	_, err := service.AddQuestion(ctx, contests.QuestionCommand{ContestID: id, Points: 2})
+
+	if err != nil {
+		t.Errorf("the first AddQuestion() = %v, want it to land", err)
+	}
+	select {
+	case err := <-meanwhile.done:
+		if err != nil {
+			t.Errorf("the second AddQuestion() = %v, want it to land", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second AddQuestion() never returned")
+	}
+	questions, err := NewQuestions(testPool).List(ctx, id)
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	var ords []int
+	for _, q := range questions {
+		ords = append(ords, q.Ord)
+	}
+	slices.Sort(ords)
+	if !slices.Equal(ords, []int{1, 2}) {
+		t.Errorf("question numbers = %v, want 1 and 2", ords)
+	}
+}
+
+// A policy save decided on a published contest must not land on the running
+// one: the template's grants are built from the policy, and would stop
+// matching what the validator enforces.
+func TestAPolicyDecidedBeforeTheStartDoesNotLandOnTheRunningContest(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, id); err != nil {
+		t.Fatalf("publish = %v", err)
+	}
+	if err := NewSQLPolicies(testPool).Save(ctx, contests.DefaultSQLPolicy(id)); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	repo := NewContests(testPool)
+	start := func() error {
+		due, err := repo.ByID(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		_, err = repo.SetStatus(context.Background(), due, contests.StatusRunning)
+		return err
+	}
+	meanwhile := &meanwhileThen{Contests: repo, other: start, done: make(chan error, 1)}
+	service := raceService(meanwhile, NewQuestions(testPool), conteststest.NewGames())
+	author, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	policy := contests.DefaultSQLPolicy(id)
+	policy.Mode = contests.ModeReadWrite
+
+	saveErr := service.SetPolicy(ctx, author.CreatedBy, id, policy)
+
+	select {
+	case <-meanwhile.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the start never returned")
+	}
+	got, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if got.Status == contests.StatusRunning && got.SQLMode == contests.ModeReadWrite {
+		t.Errorf("the contest runs under the policy saved for it while published (SetPolicy() = %v)", saveErr)
+	}
+}
+
+// editableUntilRead is the game store reporting the game editable, then
+// starting the contest on its own connection, as a start committed between a
+// replacement's check and its write would.
+type editableUntilRead struct {
+	*GameInstances
+	once  sync.Once
+	start func() error
+	t     *testing.T
+}
+
+func (r *editableUntilRead) GameEditable(ctx context.Context, contestID uuid.UUID) (bool, error) {
+	editable, err := r.GameInstances.GameEditable(ctx, contestID)
+	r.once.Do(func() {
+		if err := r.start(); err != nil {
+			r.t.Errorf("the start = %v", err)
+		}
+	})
+	return editable, err
+}
+
+// A game replacement decided while the contest was published must not land
+// once it runs: every participant's copy would go stale mid-contest.
+func TestAGameReplacementDecidedBeforeTheStartIsRefused(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, id); err != nil {
+		t.Fatalf("publish = %v", err)
+	}
+	repo, templates := NewContests(testPool), NewGameInstances(testPool)
+	author, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	start := func() error {
+		due, err := repo.ByID(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		_, err = repo.SetStatus(context.Background(), due, contests.StatusRunning)
+		return err
+	}
+	games := provisioning.NewGames(templates, nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
+		repo, storage.NewUnitOfWork(testPool)).WithAudit(audit.New(NewAuditSink(testPool)))
+
+	_, err = games.SetScript(ctx, author.CreatedBy, id, "CREATE TABLE suspects (name text);")
+
+	if !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Errorf("SetScript() = %v, want ErrGameNotEditable", err)
+	}
+	if _, err := templates.TemplateStatus(ctx, id); !errors.Is(err, provisioning.ErrNoGame) {
+		t.Errorf("TemplateStatus() = %v, want no game stored on the running contest", err)
+	}
+}
+
+// A build request decided while the contest was published must not land once
+// it runs, for the same reason a replacement must not. The real RequestBuild
+// and contest row share one transaction (CLAUDE.md rule 10).
+func TestABuildRequestDecidedBeforeTheStartIsRefused(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, id); err != nil {
+		t.Fatalf("publish = %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO game_templates (contest_id, template_db, init_script, status)
+		VALUES ($1, $2, 'CREATE TABLE suspects (name text);', 'ready')`,
+		id, "race_"+strings.ReplaceAll(id.String(), "-", "")[:16]); err != nil {
+		t.Fatalf("build the game = %v", err)
+	}
+	repo, templates := NewContests(testPool), NewGameInstances(testPool)
+	author, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	start := func() error {
+		due, err := repo.ByID(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		_, err = repo.SetStatus(context.Background(), due, contests.StatusRunning)
+		return err
+	}
+	games := provisioning.NewGames(templates, nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
+		repo, storage.NewUnitOfWork(testPool)).WithAudit(audit.New(NewAuditSink(testPool)))
+
+	_, err = games.RequestBuild(ctx, author.CreatedBy, id)
+
+	if !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Errorf("RequestBuild() = %v, want ErrGameNotEditable", err)
+	}
+	if got, err := templates.TemplateStatus(ctx, id); err != nil || got.Status != provisioning.TemplateReady {
+		t.Errorf("TemplateStatus() = %s, %v, want the running contest's game left ready", got.Status, err)
 	}
 }
 

@@ -89,17 +89,8 @@ func (s *standings) cut(q leaderboard.Query) []leaderboard.Entry {
 	return out
 }
 
-func (s *standings) MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error) {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if c.LeaderboardRevealedAt != nil {
-		return *c.LeaderboardRevealedAt, false, nil
-	}
-	c.LeaderboardRevealedAt = &at
-	s.contests.Put(c)
-	return at, true, nil
+func (s *standings) MarkRevealed(ctx context.Context, read contests.Contest, at time.Time) (time.Time, error) {
+	return s.contests.MarkRevealed(ctx, read, at)
 }
 
 type rig struct {

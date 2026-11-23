@@ -67,9 +67,9 @@ type Repository interface {
 	// same statement as the entries, so both describe one moment even while
 	// a question's visibility changes.
 	ICPCStandings(ctx context.Context, q Query) ([]Entry, Grid, error)
-	// MarkRevealed records the reveal once, returning the moment in force
-	// and whether this call set it.
-	MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error)
+	// MarkRevealed records the reveal at at on the row read, a conditional
+	// write like contests.Repository's, and returns the moment as stored.
+	MarkRevealed(ctx context.Context, read contests.Contest, at time.Time) (time.Time, error)
 }
 
 type Config struct {
@@ -303,30 +303,29 @@ func (s *Service) computeLive(ctx context.Context, contestID uuid.UUID, now time
 // their generation is still current, which closes both holes. Other changes
 // (moving the freeze) are not hooked; the short TTLs pick them up.
 func (s *Service) Reveal(ctx context.Context, actorID, contestID uuid.UUID) (time.Time, error) {
-	c, err := s.contests.ByID(ctx, contestID)
-	if errors.Is(err, contests.ErrNotFound) {
-		return time.Time{}, ErrNotFound
-	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("look up the contest: %w", err)
-	}
-	if !c.Ended() {
-		return time.Time{}, fmt.Errorf("%w: the contest is %s", ErrNotRevealable, c.Status)
-	}
-	freezeAt, frozen := c.FreezeAt()
-	if !frozen {
-		return time.Time{}, fmt.Errorf("%w: the contest was never frozen", ErrNotRevealable)
-	}
-
 	var revealedAt time.Time
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		at, newly, err := s.standings.MarkRevealed(ctx, contestID, s.now())
-		if err != nil {
-			return err
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		c, err := s.contests.ByID(ctx, contestID)
+		if errors.Is(err, contests.ErrNotFound) {
+			return ErrNotFound
 		}
-		revealedAt = at
-		if !newly {
+		if err != nil {
+			return fmt.Errorf("look up the contest: %w", err)
+		}
+		if !c.Ended() {
+			return fmt.Errorf("%w: the contest is %s", ErrNotRevealable, c.Status)
+		}
+		freezeAt, frozen := c.FreezeAt()
+		if !frozen {
+			return fmt.Errorf("%w: the contest was never frozen", ErrNotRevealable)
+		}
+		if c.LeaderboardRevealedAt != nil {
+			revealedAt = *c.LeaderboardRevealedAt
 			return nil
+		}
+
+		if revealedAt, err = s.standings.MarkRevealed(ctx, c, s.now()); err != nil {
+			return err
 		}
 		actor := actorID
 		return s.audit.Record(ctx, audit.Entry{

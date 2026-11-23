@@ -77,13 +77,20 @@ func (r *GameInstances) CurrentUpload(ctx context.Context, contestID uuid.UUID) 
 	return upload, nil
 }
 
-// UpdateReceived records how many bytes Store.Append actually wrote, so a
-// resumed browser can be told where to continue from.
+// UpdateReceived records how far a 'receiving' upload has got, so a resumed
+// browser can be told where to continue from. It never lowers the length, and
+// an upload no longer 'receiving' is ErrUploadAlreadyComplete and left alone:
+// a chunk's write can arrive after a later chunk's or after completion.
 func (r *GameInstances) UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_uploads SET received_bytes = $2, updated_at = now() WHERE id = $1`,
-		id, receivedBytes); err != nil {
+	tag, err := r.querier(ctx).Exec(ctx, `
+		UPDATE game_uploads
+		SET received_bytes = GREATEST(received_bytes, $2), updated_at = now()
+		WHERE id = $1 AND status = 'receiving'`, id, receivedBytes)
+	if err != nil {
 		return fmt.Errorf("record the upload's progress: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return provisioning.ErrUploadAlreadyComplete
 	}
 	return nil
 }

@@ -567,7 +567,8 @@ services:
       #             bounded by QUERY_CONCURRENT plus the results still being
       #             written to slow clients: estimated at 40 of up to
       #             QUERY_MAX_BYTES = 5 MiB, decoded and re-encoded) and
-      #             8 MiB upload chunks                               = 1024 MiB
+      #             four GAME_UPLOAD_CHUNK_BYTES buffers for table CSV
+      #             chunks, kept once used (32 MiB at 8 MiB)         = 1024 MiB
       #   GOMEMLIMIT                                                   = 1280 MiB
       # The target covers the base and password hashing. Two cover decodes at
       # once (api.CoverDecodeSlots, about 560 MiB each for a 40-megapixel

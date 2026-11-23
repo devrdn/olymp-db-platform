@@ -650,6 +650,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		{"Update", contests.Repository.Update, func(c *contests.Contest) { c.QuestionMode = contests.QuestionModeMulti }},
 		{"SetPrizePlaces", contests.Repository.SetPrizePlaces, func(c *contests.Contest) { c.PrizePlaces = contests.PrizePlaces{First: 9} }},
 		{"SetArchiveSettings", contests.Repository.SetArchiveSettings, func(c *contests.Contest) { c.ArchiveTasks = false }},
+		{"MarkContentChanged", contests.Repository.MarkContentChanged, func(*contests.Contest) {}},
 	}
 	for _, w := range conditional {
 		t.Run(w.name+" refuses a row written since it was read, and changes nothing", func(t *testing.T) {
@@ -725,6 +726,28 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			})
 		})
 	}
+
+	t.Run("MarkContentChanged writes nothing but the version, updated_at included", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			created := create(t, ctx, target, full(target.NewUser()))
+			handed := other(created.CreatedBy)
+			handed.ID, handed.Version = created.ID, created.Version
+
+			written, err := target.Repo.MarkContentChanged(ctx, handed)
+			if err != nil {
+				t.Fatalf("MarkContentChanged() = %v", err)
+			}
+
+			got := byID(t, ctx, target, created.ID)
+			wantFields(t, got, created)
+			if written.Version != got.Version || written.Version == created.Version {
+				t.Errorf("returned version %d, stored %d; want the stored one, moved from %d", written.Version, got.Version, created.Version)
+			}
+			if !got.UpdatedAt.Equal(created.UpdatedAt) {
+				t.Errorf("UpdatedAt = %v, want %v left alone", got.UpdatedAt, created.UpdatedAt)
+			}
+		})
+	})
 
 	t.Run("SetStatus moves the version", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {

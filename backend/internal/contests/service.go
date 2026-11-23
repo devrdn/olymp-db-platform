@@ -590,19 +590,19 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Contest, int, error) {
 
 // SetLanguages sets the languages a contest is offered in.
 func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID, langs []ContestLanguage) error {
-	// A language added to a running contest would have nothing authored in it.
-	c, err := s.editableContest(ctx, contestID)
-	if err != nil {
-		return err
-	}
-	if err := validateLanguages(langs); err != nil {
-		return err
-	}
-	if err := s.checkLanguages(ctx, langs); err != nil {
-		return err
-	}
-
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		// A language added to a running contest would have nothing authored
+		// in it.
+		c, err := BeginContentEdit(ctx, s.contests, contestID)
+		if err != nil {
+			return err
+		}
+		if err := validateLanguages(langs); err != nil {
+			return err
+		}
+		if err := s.checkLanguages(ctx, langs); err != nil {
+			return err
+		}
 		if err := s.contests.ReplaceLanguages(ctx, contestID, langs); err != nil {
 			return err
 		}
@@ -615,22 +615,21 @@ func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID
 
 // SetTranslations replaces a contest's authored titles.
 func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.UUID, translations []Translation) error {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return err
-	}
-	if err := s.checkTranslationLanguages(ctx, translations); err != nil {
-		return err
-	}
-
-	// The trail records which languages were written, not the text: it is
-	// not a version history (§9.2).
-	written := make([]string, 0, len(translations))
-	for _, t := range translations {
-		written = append(written, t.Lang)
-	}
-	slices.Sort(written)
-
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+			return err
+		}
+		if err := s.checkTranslationLanguages(ctx, translations); err != nil {
+			return err
+		}
+		// The trail records which languages were written, not the text: it
+		// is not a version history (§9.2).
+		written := make([]string, 0, len(translations))
+		for _, t := range translations {
+			written = append(written, t.Lang)
+		}
+		slices.Sort(written)
+
 		if err := s.contests.ReplaceTranslations(ctx, contestID, translations); err != nil {
 			return err
 		}
@@ -738,33 +737,27 @@ func (s *Service) Policy(ctx context.Context, contestID uuid.UUID) (SQLPolicy, e
 // running: the template grants are built from this row and would stop
 // matching what the validator enforces.
 func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p SQLPolicy) error {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return err
-	}
-	if !c.ContentEditable() {
-		return fmt.Errorf("%w: the SQL policy cannot change once the contest is %s", ErrNotEditable, c.Status)
-	}
-
-	current, err := s.policies.ByContest(ctx, contestID)
-	if err != nil {
-		return err
-	}
-
-	p.ContestID = contestID
-	if err := p.Validate(); err != nil {
-		return err
-	}
-	actor := actorID
-	p.UpdatedBy = &actor
-	p.UpdatedAt = s.now()
-
-	changes := audit.Between(current.auditFields(), p.auditFields())
-
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+			return err
+		}
+		current, err := s.policies.ByContest(ctx, contestID)
+		if err != nil {
+			return err
+		}
+
+		p.ContestID = contestID
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		actor := actorID
+		p.UpdatedBy = &actor
+		p.UpdatedAt = s.now()
+
 		if err := s.policies.Save(ctx, p); err != nil {
 			return err
 		}
+		changes := audit.Between(current.auditFields(), p.auditFields())
 		return s.record(ctx, actorID, audit.ActionContestPolicyChange, contestID, changes.Payload())
 	})
 }
@@ -860,16 +853,34 @@ func translationMap(translations []Translation) map[string]Translation {
 	return out
 }
 
-// editableContest loads a contest and refuses if its content is frozen.
-func (s *Service) editableContest(ctx context.Context, contestID uuid.UUID) (Contest, error) {
-	c, err := s.contests.ByID(ctx, contestID)
+// ContentRows is the part of Repository BeginContentEdit uses, for every
+// package whose edits are a contest's content (internal/provisioning's game).
+type ContentRows interface {
+	LockContest(ctx context.Context, id uuid.UUID) error
+	ByID(ctx context.Context, id uuid.UUID) (Contest, error)
+	MarkContentChanged(ctx context.Context, read Contest) (Contest, error)
+}
+
+// BeginContentEdit is the first step of every edit of a contest's content
+// (its story, schema notes, questions, languages, titles, SQL policy and
+// game), inside the edit's unit of work. It locks the row, so two edits of one
+// contest take turns instead of refusing each other; refuses a contest whose
+// content is frozen with ErrNotEditable; and moves the version, so a publish
+// or start whose gate read the content before the edit is refused
+// (docs/ARCHITECTURE.md section 7.3). It returns the row at its new version,
+// for the edit's own decisions and any write it conditions on the row.
+func BeginContentEdit(ctx context.Context, rows ContentRows, contestID uuid.UUID) (Contest, error) {
+	if err := rows.LockContest(ctx, contestID); err != nil {
+		return Contest{}, err
+	}
+	c, err := rows.ByID(ctx, contestID)
 	if err != nil {
 		return Contest{}, err
 	}
 	if !c.ContentEditable() {
 		return Contest{}, fmt.Errorf("%w: it is %s", ErrNotEditable, c.Status)
 	}
-	return c, nil
+	return rows.MarkContentChanged(ctx, c)
 }
 
 // checkLanguageCodes rejects codes the installation does not offer.

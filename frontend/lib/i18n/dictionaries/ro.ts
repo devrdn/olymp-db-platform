@@ -2516,6 +2516,10 @@ const ro = {
       "Acest tabel are deja o încărcare în curs. Finalizați-o sau anulați-o înainte de a începe alta sau de a adăuga un rând manual.",
     game_table_data_changed:
       "Cineva a adăugat alt rând în acest tabel cât timp completați formularul, așa că al dumneavoastră nu a fost salvat — două formulare nu pot scrie simultan la sfârșitul aceluiași fișier. Reîncărcați rândurile și adăugați-l din nou.",
+    game_table_data_busy:
+      "Serverul primește deja atâtea date de tabel simultan câte poate păstra. Această parte nu a fost salvată; reîncercați peste câteva secunde și încărcarea va continua.",
+    game_table_data_damaged:
+      "Serverul a pierdut o parte din datele salvate ale acestui tabel, așa că tabelul nu poate fi afișat, construit sau completat. Încărcați din nou datele tabelului.",
     game_table_data_already_complete:
       "Această încărcare este deja finalizată sau anulată, nu i se mai poate trimite nimic.",
     game_table_data_not_found:

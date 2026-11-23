@@ -317,6 +317,23 @@ func (r *Contests) SetArchiveSettings(_ context.Context, c contests.Contest) (co
 	})
 }
 
+// MarkContentChanged moves the version alone, as the real repository does.
+func (r *Contests) MarkContentChanged(_ context.Context, read contests.Contest) (contests.Contest, error) {
+	return r.writeIfUnchanged(read, func(*contests.Contest) {})
+}
+
+// MarkRevealed is the reveal postgres.Leaderboard writes on the contest row,
+// for the leaderboard's fakes: the same conditional write as the others.
+func (r *Contests) MarkRevealed(_ context.Context, read contests.Contest, at time.Time) (time.Time, error) {
+	written, err := r.writeIfUnchanged(read, func(stored *contests.Contest) {
+		stored.LeaderboardRevealedAt = &at
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return *written.LeaderboardRevealedAt, nil
+}
+
 // writeIfUnchanged is every conditional write: set copies the written fields
 // onto the stored row only while that row is still at c.Version.
 func (r *Contests) writeIfUnchanged(c contests.Contest, set func(stored *contests.Contest)) (contests.Contest, error) {

@@ -224,6 +224,12 @@ func (h *LeaderboardHandler) live(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, out)
 }
 
+// revealErrors is leaderboardErrors for the one route that writes the
+// contest row, which a row saved since it was read refuses.
+var revealErrors = leaderboardErrors.with(
+	errorRow{err: contests.ErrContestChanged, status: http.StatusConflict, code: codeContestChanged},
+)
+
 type revealResponse struct {
 	RevealedAt string `json:"revealed_at"`
 }
@@ -237,7 +243,9 @@ func (h *LeaderboardHandler) reveal(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	at, err := h.service.Reveal(r.Context(), identity.UserID, id)
 	if err != nil {
-		h.fail(w, r, err)
+		if !revealErrors.answer(w, r, h.log, err) {
+			h.fail(w, r, err)
+		}
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, revealResponse{RevealedAt: at.UTC().Format(timeLayout)})

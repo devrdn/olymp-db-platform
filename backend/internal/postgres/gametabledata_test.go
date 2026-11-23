@@ -115,7 +115,71 @@ func TestCreateReadyTableDataBootstrapsAndTheCompleteIndexRefusesASecondOne(t *t
 	})
 }
 
-func TestAppendTableDataRowUpdatesBytesAndLinesTogether(t *testing.T) {
+func TestTableDataWithOwnerReadsTheRowAndTheContestsOwnerTogether(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		owner := makeUser(t, ctx, "owner-"+uuid.NewString()[:8])
+		contest := makeContest(t, ctx, owner.ID)
+		repo := NewGameInstances(testPool)
+		id := uuid.New()
+		if _, err := repo.BeginTableData(ctx, id, contest, "suspects", 40); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+
+		data, gotOwner, err := repo.TableDataWithOwner(ctx, id)
+
+		if err != nil {
+			t.Fatalf("TableDataWithOwner() = %v", err)
+		}
+		if data.ID != id || data.ContestID != contest || data.Status != provisioning.TableDataReceiving || data.DeclaredBytes != 40 {
+			t.Errorf("data = %+v, want the row begun", data)
+		}
+		if gotOwner != owner.ID {
+			t.Errorf("owner = %s, want the contest's creator %s", gotOwner, owner.ID)
+		}
+		if _, _, err := repo.TableDataWithOwner(ctx, uuid.New()); !errors.Is(err, provisioning.ErrTableDataNotFound) {
+			t.Errorf("an unknown id = %v, want ErrTableDataNotFound", err)
+		}
+	})
+}
+
+// A chunk can still be arriving when its upload completes. Once the file is
+// 'complete' its recorded length is what every reader trusts, so a chunk's
+// progress may no longer move it.
+func TestUpdateTableDataReceivedLeavesACompletedFilesLengthAlone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		id := uuid.New()
+		if _, err := repo.BeginTableData(ctx, id, contest, "suspects", 40); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := repo.UpdateTableDataReceived(ctx, id, 40); err != nil {
+			t.Fatalf("record progress: %v", err)
+		}
+		// A delayed write of an earlier chunk must not move the length back.
+		if err := repo.UpdateTableDataReceived(ctx, id, 25); err != nil {
+			t.Fatalf("record an earlier chunk's progress: %v", err)
+		}
+		if current, err := repo.TableDataByID(ctx, id); err != nil || current.ReceivedBytes != 40 {
+			t.Fatalf("received = %d (%v), want the 40 already recorded", current.ReceivedBytes, err)
+		}
+		if _, err := repo.CompleteTableData(ctx, contest, "suspects", id, 40, 2, nil); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+
+		for _, late := range []int64{55, 25} {
+			if err := repo.UpdateTableDataReceived(ctx, id, late); !errors.Is(err, provisioning.ErrTableDataAlreadyComplete) {
+				t.Fatalf("progress of %d after completion = %v, want ErrTableDataAlreadyComplete", late, err)
+			}
+		}
+		if current, err := repo.TableDataByID(ctx, id); err != nil || current.ReceivedBytes != 40 {
+			t.Fatalf("received = %d (%v), want the 40 the upload completed with", current.ReceivedBytes, err)
+		}
+	})
+}
+
+func TestAppendTableDataRowCountsTheRowFromTheLengthItWasReadAt(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
@@ -125,7 +189,7 @@ func TestAppendTableDataRowUpdatesBytesAndLinesTogether(t *testing.T) {
 			t.Fatalf("create ready: %v", err)
 		}
 
-		updated, err := repo.AppendTableDataRow(ctx, id, 25, 2)
+		updated, err := repo.AppendTableDataRow(ctx, id, 10, 15)
 		if err != nil {
 			t.Fatalf("append row: %v", err)
 		}
@@ -135,10 +199,9 @@ func TestAppendTableDataRowUpdatesBytesAndLinesTogether(t *testing.T) {
 	})
 }
 
-// TestAppendTableDataRowNeverMovesTheFileBackwards: a caller with an older
-// snapshot that runs last must not write a smaller length and row count over
-// the newer ones. GREATEST in the SQL is the guarantee (CLAUDE.md rule 10).
-func TestAppendTableDataRowNeverMovesTheFileBackwards(t *testing.T) {
+// A form that read the file before another form's row was recorded would
+// write its own row over that one; the recorded length is what refuses it.
+func TestAppendTableDataRowRefusesALengthThatIsNoLongerTheRecord(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
@@ -147,24 +210,26 @@ func TestAppendTableDataRowNeverMovesTheFileBackwards(t *testing.T) {
 		if _, err := repo.CreateReadyTableData(ctx, id, contest, "suspects", 10, 1); err != nil {
 			t.Fatalf("create ready: %v", err)
 		}
-		if _, err := repo.AppendTableDataRow(ctx, id, 40, 3); err != nil {
+		if _, err := repo.AppendTableDataRow(ctx, id, 10, 15); err != nil {
 			t.Fatalf("append row: %v", err)
 		}
 
-		// The caller that read before that one, arriving after it.
-		stale, err := repo.AppendTableDataRow(ctx, id, 25, 2)
-		if err != nil {
-			t.Fatalf("append row from an older snapshot: %v", err)
+		if _, err := repo.AppendTableDataRow(ctx, id, 10, 15); !errors.Is(err, provisioning.ErrTableDataChanged) {
+			t.Fatalf("a second row from the same length = %v, want ErrTableDataChanged", err)
 		}
-		if stale.ReceivedBytes != 40 || stale.Lines != 3 {
-			t.Fatalf("data = %+v, want the file still described as 40 bytes and 3 rows", stale)
+		current, err := repo.TableDataByID(ctx, id)
+		if err != nil {
+			t.Fatalf("read the row: %v", err)
+		}
+		if current.ReceivedBytes != 25 || current.Lines != 2 {
+			t.Fatalf("data = %+v, want the file still described as 25 bytes and 2 rows", current)
 		}
 
 		// A row no longer current (the game was replaced) is refused.
 		if err := repo.AbortTableData(ctx, id); err != nil {
 			t.Fatalf("abort: %v", err)
 		}
-		if _, err := repo.AppendTableDataRow(ctx, id, 60, 4); !errors.Is(err, provisioning.ErrTableDataChanged) {
+		if _, err := repo.AppendTableDataRow(ctx, id, 25, 15); !errors.Is(err, provisioning.ErrTableDataChanged) {
 			t.Fatalf("error = %v, want ErrTableDataChanged", err)
 		}
 	})

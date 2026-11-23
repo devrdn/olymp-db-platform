@@ -2749,6 +2749,10 @@ const en = {
       "This table already has an upload in progress. Finish or cancel it before starting another, or before adding a row by hand.",
     game_table_data_changed:
       "Somebody added another row to this table while you were typing, so yours was not stored — two forms cannot both write at the end of the same file. Reload the rows and add it again.",
+    game_table_data_busy:
+      "The server is receiving as much table data at once as it can hold. Nothing of this part was stored; the upload will continue if you try again in a moment.",
+    game_table_data_damaged:
+      "The server lost part of this table's stored data, so the table cannot be shown, built or added to. Upload the table's data again.",
     game_table_data_already_complete:
       "This upload is already finished or cancelled, so nothing more can be sent to it.",
     game_table_data_not_found:

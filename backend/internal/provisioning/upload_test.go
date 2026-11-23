@@ -12,6 +12,7 @@ import (
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile/gamefiletest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
@@ -26,6 +27,14 @@ var uploadLimits = gamefile.Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 4 << 20, 
 // orphan files are properties of the real schema and disk.
 func gamesWithUploads(t *testing.T, editable bool) (*provisioning.Games, string) {
 	t.Helper()
+	return gamesWithUploadsIn(t, editable, directly{})
+}
+
+// gamesWithUploadsIn is gamesWithUploads running its writes in uow.
+func gamesWithUploadsIn(t *testing.T, editable bool, uow interface {
+	Do(ctx context.Context, fn func(context.Context) error) error
+}) (*provisioning.Games, string) {
+	t.Helper()
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
 	}
@@ -34,16 +43,19 @@ func gamesWithUploads(t *testing.T, editable bool) (*provisioning.Games, string)
 	if err != nil {
 		t.Fatalf("open the upload store: %v", err)
 	}
-	games := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}).
+	games := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}, noContest{}, uow).
 		WithUploads(store, uploadLimits)
 	return games, dir
 }
 
 func gamesWithUploadsAndAudit(t *testing.T) (*provisioning.Games, *sink) {
 	t.Helper()
-	games, _ := gamesWithUploads(t, true)
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	games, _ := gamesWithUploadsIn(t, true, storage.NewUnitOfWork(testPool))
 	s := &sink{}
-	games = games.WithAudit(audit.New(s), storage.NewUnitOfWork(testPool))
+	games = games.WithAudit(audit.New(s))
 	return games, s
 }
 
@@ -55,7 +67,7 @@ func onDisk(t *testing.T, dir string, id uuid.UUID) bool {
 	if err != nil {
 		t.Fatalf("open the upload store: %v", err)
 	}
-	_, err = store.Received(id.String())
+	_, err = gamefiletest.StoredBytes(store, id.String())
 	if err == nil {
 		return true
 	}
@@ -577,7 +589,7 @@ func TestAReplacementRefusedInsideItsTransactionLeavesTheDisplacedFileAlone(t *t
 	}
 	second := beginWithContent(t, games, contest.ID, "second.sql", "B;\n")
 
-	racing := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, &editableUntil{left: 1}).
+	racing := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, &editableUntil{left: 1}, noContest{}, directly{}).
 		WithUploads(storeOn(t, dir), uploadLimits)
 
 	if _, err := racing.CompleteUpload(t.Context(), actor, contest.ID, second.ID); !errors.Is(err, provisioning.ErrGameNotEditable) {

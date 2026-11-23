@@ -56,31 +56,29 @@ func (s *Service) SchemaNotes(ctx context.Context, contestID uuid.UUID) (SchemaN
 // text is dropped rather than stored, so a language is either written or
 // absent and the participant's tab never opens on nothing.
 func (s *Service) SetSchemaNotes(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (SchemaNotes, error) {
-	if _, err := s.editableContest(ctx, contestID); err != nil {
-		return SchemaNotes{}, err
-	}
-	written := make(map[string]string, len(bodies))
-	for lang, body := range bodies {
-		if utf8.RuneCountInString(body) > maxSchemaNotesRunes {
-			return SchemaNotes{}, fmt.Errorf("%w: table descriptions are at most %d characters", ErrInvalidContest, maxSchemaNotesRunes)
-		}
-		if strings.TrimSpace(body) != "" {
-			written[lang] = body
-		}
-	}
-	if err := s.checkLanguageCodes(ctx, langCodes(bodies)); err != nil {
-		return SchemaNotes{}, err
-	}
-	langs := langCodes(written)
-
 	var saved SchemaNotes
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+			return err
+		}
+		written := make(map[string]string, len(bodies))
+		for lang, body := range bodies {
+			if utf8.RuneCountInString(body) > maxSchemaNotesRunes {
+				return fmt.Errorf("%w: table descriptions are at most %d characters", ErrInvalidContest, maxSchemaNotesRunes)
+			}
+			if strings.TrimSpace(body) != "" {
+				written[lang] = body
+			}
+		}
+		if err := s.checkLanguageCodes(ctx, langCodes(bodies)); err != nil {
+			return err
+		}
 		var err error
 		if saved, err = s.schemaNotes.Save(ctx, contestID, written); err != nil {
 			return err
 		}
 		return s.record(ctx, actorID, audit.ActionContestSchemaNotesChange, contestID, map[string]any{
-			"languages": langs,
+			"languages": langCodes(written),
 		})
 	})
 	if err != nil {

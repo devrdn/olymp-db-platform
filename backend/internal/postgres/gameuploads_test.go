@@ -90,6 +90,40 @@ func TestCurrentUploadReadsTheOneReceivingRowAndNoneWhenThereIsNone(t *testing.T
 	})
 }
 
+// A chunk's progress write can arrive late: after a later chunk's, or after
+// the upload was completed or cancelled. It never lowers the length and never
+// touches an upload that is no longer receiving.
+func TestUpdateReceivedNeverLowersTheLengthNorTouchesAFinishedUpload(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+		id := uuid.New()
+		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 4096); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := repo.UpdateReceived(ctx, id, 2048); err != nil {
+			t.Fatalf("update received: %v", err)
+		}
+
+		if err := repo.UpdateReceived(ctx, id, 1024); err != nil {
+			t.Fatalf("an earlier chunk's progress: %v", err)
+		}
+		if upload, err := repo.Upload(ctx, id); err != nil || upload.ReceivedBytes != 2048 {
+			t.Fatalf("received_bytes = %d (%v), want the 2048 already recorded", upload.ReceivedBytes, err)
+		}
+
+		if err := repo.AbortUpload(ctx, id); err != nil {
+			t.Fatalf("abort: %v", err)
+		}
+		if err := repo.UpdateReceived(ctx, id, 4096); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+			t.Fatalf("progress after the upload was cancelled = %v, want ErrUploadAlreadyComplete", err)
+		}
+		if upload, err := repo.Upload(ctx, id); err != nil || upload.ReceivedBytes != 2048 {
+			t.Fatalf("received_bytes = %d (%v), want the 2048 the upload ended with", upload.ReceivedBytes, err)
+		}
+	})
+}
+
 func TestUpdateReceivedRecordsProgress(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)

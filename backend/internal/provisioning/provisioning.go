@@ -5,6 +5,10 @@
 //
 // It does not run participants' SQL (internal/queryrunner, internal/sqlpolicy)
 // or connect to the game cluster itself (internal/gamedb, behind Cluster).
+//
+// A game is part of its contest's content, so a game edit begins as every
+// content edit does, with contests.BeginContentEdit; internal/contests must
+// therefore never import this package.
 package provisioning
 
 import (

@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile/gamefiletest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
@@ -111,6 +112,7 @@ type fakeGames struct {
 
 	appendTableErr          error
 	appendTableResult       int64
+	gotAppendTableActor     uuid.UUID
 	gotAppendTableContest   uuid.UUID
 	gotAppendTableDataID    uuid.UUID
 	gotAppendTableOffset    int64
@@ -201,13 +203,14 @@ func (g *fakeGames) BeginTableUpload(_ context.Context, contestID uuid.UUID, tab
 	return g.beginTableResult, nil
 }
 
-func (g *fakeGames) AppendTableChunk(_ context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
+func (g *fakeGames) AppendTableChunk(_ context.Context, actorID, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
+	g.gotAppendTableActor = actorID
 	g.gotAppendTableContest, g.gotAppendTableDataID, g.gotAppendTableOffset = contestID, id, offset
 	if g.tableBodyMeter != nil {
 		g.gotAppendTableBodyReadOnEntry = g.tableBodyMeter.read
 	}
 	if g.tableData != nil {
-		return g.tableData.AppendTableChunk(context.Background(), contestID, id, offset, r)
+		return g.tableData.AppendTableChunk(context.Background(), actorID, contestID, id, offset, r)
 	}
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -337,18 +340,19 @@ func realUploadService(t *testing.T, contestID, uploadID uuid.UUID, limits gamef
 	repo := &chunkRepo{upload: provisioning.Upload{
 		ID: uploadID, ContestID: contestID, Status: provisioning.UploadReceiving, DeclaredBytes: 1 << 16,
 	}}
-	return provisioning.NewGames(repo, nil, nil).WithUploads(store, limits), store
+	return provisioning.NewGames(repo, nil, nil, noContest{}, &conteststest.UnitOfWork{}).WithUploads(store, limits), store
 }
 
 // realTableDataService is realUploadService for a table's chunked CSV, over the
 // table builder's store.
 func realTableDataService(t *testing.T, contestID, dataID uuid.UUID, table string, limits gamefile.Limits) (*provisioning.Games, *gamefile.Store) {
 	t.Helper()
+	limits.BufferedChunks = 2 // the table store buffers, as the deployed one does
 	store := beginOn(t, dataID, limits)
 	repo := &chunkRepo{data: provisioning.TableData{
 		ID: dataID, ContestID: contestID, Table: table, Status: provisioning.TableDataReceiving, DeclaredBytes: 1 << 16,
 	}}
-	return provisioning.NewGames(repo, nil, nil).WithTableData(store, limits), store
+	return provisioning.NewGames(repo, nil, nil, noContest{}, &conteststest.UnitOfWork{}).WithTableData(store, limits), store
 }
 
 // chunkRepo is provisioning.TemplateRepository cut down to what AppendChunk and
@@ -368,6 +372,10 @@ func (c *chunkRepo) UpdateReceived(context.Context, uuid.UUID, int64) error { re
 
 func (c *chunkRepo) TableDataByID(context.Context, uuid.UUID) (provisioning.TableData, error) {
 	return c.data, nil
+}
+
+func (c *chunkRepo) TableDataWithOwner(context.Context, uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
+	return c.data, c.data.ContestID, nil
 }
 
 func (c *chunkRepo) UpdateTableDataReceived(context.Context, uuid.UUID, int64) error { return nil }
@@ -585,6 +593,20 @@ func TestStoringAScriptIsAcceptedAndComesBackPending(t *testing.T) {
 	}
 	if got := decode(t, rec)["status"]; got != "pending" {
 		t.Fatalf("answered %v, want pending", got)
+	}
+}
+
+// A contest deleted while its game was being replaced is the missing contest
+// every game route already answers, not a server failure.
+func TestStoringAScriptForAContestDeletedMeanwhileIsNotFound(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.setErr = provisioning.ErrNoGame
+
+	rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+"/game/script",
+		`{"script":"CREATE TABLE guests (id int);"}`)
+
+	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "no_game_to_build" {
+		t.Fatalf("status %d (%s), want 404 no_game_to_build", rec.Code, rec.Body)
 	}
 }
 
@@ -1216,7 +1238,7 @@ func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	if code := errorCode(t, rec); code != "game_upload_chunk_too_large" {
 		t.Fatalf("code %q, want game_upload_chunk_too_large", code)
 	}
-	received, err := store.Received(upload.String())
+	received, err := gamefiletest.StoredBytes(store, upload.String())
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -1660,11 +1682,53 @@ func TestAppendingATableChunkStreamsTheBodyToTheService(t *testing.T) {
 	if string(f.games.gotAppendTableBodyBytes) != payload {
 		t.Fatalf("the service received %q", f.games.gotAppendTableBodyBytes)
 	}
+	if f.games.gotAppendTableActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service")
+	}
 	if f.games.gotAppendTableContest.String() != contest || f.games.gotAppendTableDataID.String() != dataID {
 		t.Fatalf("scoped to %v/%v, want %v/%v", f.games.gotAppendTableContest, f.games.gotAppendTableDataID, contest, dataID)
 	}
 	if decode(t, rec)["received_bytes"] != float64(24) {
 		t.Fatalf("received_bytes came back %v", decode(t, rec)["received_bytes"])
+	}
+}
+
+// Only the chunk route can find the table store busy, and its answer says
+// when to send the chunk again.
+func TestATableChunkTheStoreHasNoRoomForIsToldWhenToComeBack(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.appendTableErr = provisioning.ErrTableDataBusy
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+uuid.NewString()+"/chunk?offset=0", "x")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_data_busy" {
+		t.Fatalf("code %q, want game_table_data_busy", code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After = %q, want 2", got)
+	}
+}
+
+// A failed build whose cause is a damaged table carries the code the page
+// has a sentence for in every locale.
+func TestAGameWhoseBuildFoundATableDamagedCarriesItsCode(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.template = provisioning.Template{
+		Status: provisioning.TemplateFailed, Source: provisioning.SourceBuilder,
+		BuildError: provisioning.BuildTableDataDamaged,
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if got := decode(t, rec)["build_error_code"]; got != "game_table_data_damaged" {
+		t.Fatalf("build_error_code = %v, want game_table_data_damaged", got)
 	}
 }
 
@@ -1686,7 +1750,7 @@ func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	if code := errorCode(t, rec); code != "game_table_data_chunk_too_large" {
 		t.Fatalf("code %q, want game_table_data_chunk_too_large", code)
 	}
-	received, err := store.Received(dataID.String())
+	received, err := gamefiletest.StoredBytes(store, dataID.String())
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -1975,6 +2039,7 @@ func TestEveryTableDataRefusalHasItsOwnCode(t *testing.T) {
 		{"the table data volume is full", provisioning.ErrTableDataStoreFull, http.StatusConflict, "game_table_data_store_full"},
 		{"received bytes short of the declared length", provisioning.ErrTableDataLengthMismatch, http.StatusConflict, "game_table_data_length_mismatch"},
 		{"another form's row landed first", provisioning.ErrTableDataChanged, http.StatusConflict, "game_table_data_changed"},
+		{"a file shorter than its record", provisioning.ErrTableDataDamaged, http.StatusInternalServerError, "game_table_data_damaged"},
 		{"a header that does not match the table", provisioning.ErrTableHeaderMismatch, http.StatusBadRequest, "game_table_header_mismatch"},
 		{"a row whose field count is wrong", provisioning.ErrTableRowFieldCount, http.StatusBadRequest, "game_table_row_field_count"},
 		{"a value that does not match its column's type", provisioning.ErrTableValueInvalid, http.StatusBadRequest, "game_table_value_invalid"},
@@ -2252,4 +2317,18 @@ func TestAskingForABuildIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testin
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
 	}
+}
+
+// noContest is contests.ContentRows for a chunk test, which never edits
+// the game.
+type noContest struct{}
+
+func (noContest) LockContest(context.Context, uuid.UUID) error { return nil }
+
+func (noContest) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
+	return contests.Contest{ID: id, Status: contests.StatusDraft}, nil
+}
+
+func (noContest) MarkContentChanged(_ context.Context, read contests.Contest) (contests.Contest, error) {
+	return read, nil
 }

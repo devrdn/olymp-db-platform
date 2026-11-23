@@ -65,17 +65,8 @@ func (s *boardStandings) Standings(_ context.Context, q leaderboard.Query) ([]le
 	return out, nil
 }
 
-func (s *boardStandings) MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error) {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if c.LeaderboardRevealedAt != nil {
-		return *c.LeaderboardRevealedAt, false, nil
-	}
-	c.LeaderboardRevealedAt = &at
-	s.contests.Put(c)
-	return at, true, nil
+func (s *boardStandings) MarkRevealed(ctx context.Context, read contests.Contest, at time.Time) (time.Time, error) {
+	return s.contests.MarkRevealed(ctx, read, at)
 }
 
 // icpcBoard computes rows and a grid from raw ICPC answers the way the real
@@ -497,6 +488,25 @@ func TestRevealIsRefusedBeforeTheFinishAndRecordedAfterIt(t *testing.T) {
 	}
 	if len(f.sink.Entries) != 1 || f.sink.Entries[0].Action != audit.ActionContestLeaderboardReveal {
 		t.Errorf("audit = %+v, want one reveal", f.sink.Entries)
+	}
+}
+
+// A reveal decided against a row saved since is the organiser's to retry, not
+// a failure of the server.
+func TestARevealRacedByAnEditIsAConflict(t *testing.T) {
+	f := newBoardFixture(t)
+	freeze := 30
+	finished, _ := f.contest(t, contests.StatusFinished, &freeze)
+	organizer := f.organizer.ID
+	f.standings.contests.RacesAnEdit()
+
+	rec := f.request(http.MethodPost, "/contests/"+finished.ID.String()+"/leaderboard/reveal", &organizer, "")
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_changed" {
+		t.Fatalf("status = %d (%s), want 409 contest_changed", rec.Code, rec.Body.String())
+	}
+	if len(f.sink.Entries) != 0 {
+		t.Errorf("audit = %+v, want nothing for a refused reveal", f.sink.Entries)
 	}
 }
 

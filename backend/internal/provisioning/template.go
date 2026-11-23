@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
 	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -65,6 +66,10 @@ const BuildFailedInternally = "The game could not be built. The failure was not 
 // Template.TooLarge can recognise it and an interface can show its own
 // translation instead.
 const BuildTemplateTooLarge = "The game's database grew past the size one game may take on this installation. Make the data smaller, or ask an administrator to raise the limit."
+
+// BuildTableDataDamaged is what a build records when a table's file is
+// missing or shorter than its record (ErrTableDataDamaged).
+const BuildTableDataDamaged = "The server lost part of a table's stored data, so the game could not be built. Upload that table's data again, then build the game."
 
 // MaxBuildErrorBytes bounds the stored text of a failed build (CLAUDE.md
 // rule 2). A script refusal quotes the organiser's file back, and both sinks
@@ -178,6 +183,12 @@ type Template struct {
 // polls on.
 func (t Template) Building() bool { return t.Status == TemplateBuilding || t.Status == TemplatePending }
 
+// TableDataDamaged reports a build that failed on a table whose stored data
+// the server lost.
+func (t Template) TableDataDamaged() bool {
+	return t.Status == TemplateFailed && t.BuildError == BuildTableDataDamaged
+}
+
 // NeedsBuild reports a ready game whose database no longer holds the data
 // since put into it. A pending or running build will pick the data up anyway,
 // and a failed build's error is what should be shown.
@@ -254,8 +265,9 @@ type TemplateRepository interface {
 	// CurrentUpload reads a contest's one 'receiving' upload, or
 	// ErrUploadNotFound.
 	CurrentUpload(ctx context.Context, contestID uuid.UUID) (Upload, error)
-	// UpdateReceived records how many bytes Store.Append wrote, so a resumed
-	// browser knows where to continue.
+	// UpdateReceived records how far a 'receiving' upload has got, never
+	// lowering it, so a resumed browser knows where to continue.
+	// ErrUploadAlreadyComplete when the upload is no longer 'receiving'.
 	UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error
 	// CompleteUpload marks id 'complete', retires previous (nil unless another
 	// upload is displaced), and replaces the contest's game the same way
@@ -278,13 +290,18 @@ type TemplateRepository interface {
 	BeginTableData(ctx context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (TableData, error)
 	// TableDataByID reads one table-data row by id, or ErrTableDataNotFound.
 	TableDataByID(ctx context.Context, id uuid.UUID) (TableData, error)
+	// TableDataWithOwner is TableDataByID with the account that created the
+	// row's contest.
+	TableDataWithOwner(ctx context.Context, id uuid.UUID) (TableData, uuid.UUID, error)
 	// CurrentTableData reads a table's one 'receiving' upload, or
 	// ErrTableDataNotFound.
 	CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
 	// ReadyTableData reads a table's one 'complete' file, or
 	// ErrTableDataNotFound when the table has none yet.
 	ReadyTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
-	// UpdateTableDataReceived is UpdateReceived for a table's file.
+	// UpdateTableDataReceived records how far a 'receiving' upload has got,
+	// never lowering it. ErrTableDataAlreadyComplete when the upload is no
+	// longer 'receiving'; its length is then left alone.
 	UpdateTableDataReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error
 	// CompleteTableData marks id 'complete' with what validation measured, and
 	// retires previous (nil unless another upload for the table is displaced).
@@ -292,14 +309,11 @@ type TemplateRepository interface {
 	// CreateReadyTableData records a table's first row as a file that starts
 	// 'complete'.
 	CreateReadyTableData(ctx context.Context, id, contestID uuid.UUID, table string, bytes, lines int64) (TableData, error)
-	// AppendTableDataRow records the new byte length and row count of a
-	// 'complete' file after one row was appended, together.
-	//
-	// Both are floors, never lowered: two concurrent appends may reach storage
-	// in a different order than they read, and the older one must not
-	// overwrite the newer pair. ErrTableDataChanged when there is no longer a
-	// 'complete' row, for example because the game was replaced.
-	AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (TableData, error)
+	// AppendTableDataRow records one more row of rowBytes at the end of a
+	// 'complete' file, only while the file is still recorded as at bytes
+	// long. Otherwise ErrTableDataChanged: another row was recorded first, or
+	// the file is no longer the table's.
+	AppendTableDataRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (TableData, error)
 	// AbortTableData marks one table-data upload 'aborted'.
 	AbortTableData(ctx context.Context, id uuid.UUID) error
 	// DiscardTableData retires every table-data row of a contest and returns
@@ -329,6 +343,20 @@ type Authoring interface {
 	ContestRunning(ctx context.Context, contestID uuid.UUID) (bool, error)
 }
 
+// beginGameEdit is contests.BeginContentEdit for the game, answered in this
+// package's terms: a frozen contest is ErrGameNotEditable and a missing one
+// ErrNoGame, as every game route already says.
+func (g *Games) beginGameEdit(ctx context.Context, contestID uuid.UUID) error {
+	_, err := contests.BeginContentEdit(ctx, g.contests, contestID)
+	switch {
+	case errors.Is(err, contests.ErrNotEditable):
+		return fmt.Errorf("%w: %w", ErrGameNotEditable, err)
+	case errors.Is(err, contests.ErrNotFound):
+		return ErrNoGame
+	}
+	return err
+}
+
 // requireEditable returns ErrGameNotEditable once the contest has started.
 func (g *Games) requireEditable(ctx context.Context, contestID uuid.UUID) error {
 	editable, err := g.editable(ctx, contestID)
@@ -355,12 +383,13 @@ func (g *Games) editable(ctx context.Context, contestID uuid.UUID) (bool, error)
 // template database built from it. Service owns the copies made from that
 // template.
 type Games struct {
-	repo    TemplateRepository
-	cluster TemplateCluster
-	author  Authoring
-	audit   *audit.Recorder
-	uow     unitOfWork
-	now     func() time.Time
+	repo     TemplateRepository
+	cluster  TemplateCluster
+	author   Authoring
+	audit    *audit.Recorder
+	uow      unitOfWork
+	now      func() time.Time
+	contests contests.ContentRows
 	// files and limits are set by WithUploads. files is nil when no upload
 	// volume is configured, and every upload method then returns
 	// ErrUploadsDisabled.
@@ -373,6 +402,8 @@ type Games struct {
 	// rowMarks caches where every five-hundredth row of a table's file
 	// begins, so paging does not rescan the file (tableRowIndex).
 	rowMarks tableRowIndex
+	// tableChunks holds who has a table chunk arriving (AppendTableChunk).
+	tableChunks chunksInFlight
 }
 
 // TemplateCluster is the one thing building a game asks of the cluster.
@@ -400,24 +431,25 @@ type unitOfWork interface {
 	Do(ctx context.Context, fn func(context.Context) error) error
 }
 
-// NewGames assembles the game half.
-func NewGames(repo TemplateRepository, cluster TemplateCluster, author Authoring) *Games {
-	return &Games{repo: repo, cluster: cluster, author: author, now: time.Now}
+// NewGames assembles the game half. Every edit of the game begins with the
+// contest's row (beginGameEdit) inside uow, so neither may be nil.
+func NewGames(repo TemplateRepository, cluster TemplateCluster, author Authoring, rows contests.ContentRows, uow unitOfWork) *Games {
+	if rows == nil || uow == nil {
+		panic("provisioning: NewGames needs the contest rows a game edit begins with, and the unit of work it runs in")
+	}
+	return &Games{repo: repo, cluster: cluster, author: author, contests: rows, uow: uow, now: time.Now}
 }
 
 // WithAudit records who replaced a game and when. Without it nothing is
 // recorded.
-func (g *Games) WithAudit(recorder *audit.Recorder, uow unitOfWork) *Games {
-	g.audit, g.uow = recorder, uow
+func (g *Games) WithAudit(recorder *audit.Recorder) *Games {
+	g.audit = recorder
 	return g
 }
 
-// atomically runs fn inside the unit of work WithAudit supplied, so a write
-// and its audit entry commit together, or runs it directly when there is none.
+// atomically runs fn inside the unit of work, so a write and its audit entry
+// commit together.
 func (g *Games) atomically(ctx context.Context, fn func(context.Context) error) error {
-	if g.uow == nil {
-		return fn(ctx)
-	}
 	return g.uow.Do(ctx, fn)
 }
 
@@ -579,6 +611,13 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 
 	var asked Template
 	run := func(ctx context.Context) error {
+		// A recovery build is of a running contest, which no gate is still
+		// deciding on.
+		if !recovery {
+			if err := g.beginGameEdit(ctx, contestID); err != nil {
+				return err
+			}
+		}
 		var err error
 		// Against the version checked, so a rebuild that finished in
 		// between (its template back on the cluster) is not followed by
@@ -649,6 +688,9 @@ func (g *Games) replaceGame(
 	var saved Template
 	var discardedTableFiles []uuid.UUID
 	run := func(ctx context.Context) error {
+		if err := g.beginGameEdit(ctx, contestID); err != nil {
+			return err
+		}
 		var err error
 		saved, err = save(ctx)
 		if err != nil {
@@ -834,6 +876,10 @@ func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Te
 func buildFailure(err error, step string) (buildErr string, cause error) {
 	if errors.Is(err, ErrTemplateTooLarge) {
 		return BuildTemplateTooLarge, nil
+	}
+	if errors.Is(err, ErrTableDataDamaged) {
+		// The organiser can put it right, and the log still needs the file.
+		return BuildTableDataDamaged, fmt.Errorf("%s: %w", step, err)
 	}
 	var refused ScriptFailure
 	if errors.As(err, &refused) {

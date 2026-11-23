@@ -517,11 +517,12 @@ func (f Filter) Normalize() Filter {
 // Repository stores contests, their languages and their titles. Languages and
 // translations are replaced as a whole because the set must be consistent.
 //
-// Update, SetPrizePlaces, SetArchiveSettings and SetStatus are conditional:
-// the service decides the write against a row it read, and it lands only
-// while the stored row is still at that row's Version. Their refusals besides
-// ErrNotFound are ErrContestChanged, and ErrStatusChanged for SetStatus;
-// every rule about what may be written is the service's.
+// Update, SetPrizePlaces, SetArchiveSettings, MarkContentChanged and
+// SetStatus are conditional: the service decides the write against a row it
+// read, and it lands only while the stored row is still at that row's
+// Version. Their refusals besides ErrNotFound are ErrContestChanged, and
+// ErrStatusChanged for SetStatus; every rule about what may be written is the
+// service's.
 type Repository interface {
 	Create(ctx context.Context, c Contest) (Contest, error)
 	// ByID returns a contest with its languages and translations, or
@@ -538,6 +539,9 @@ type Repository interface {
 	// SetArchiveSettings saves c.Visibility and c.ArchiveTasks alone, leaving
 	// updated_at as it was.
 	SetArchiveSettings(ctx context.Context, c Contest) (Contest, error)
+	// MarkContentChanged moves read's version and nothing else, updated_at
+	// included, and returns the row as written; see BeginContentEdit.
+	MarkContentChanged(ctx context.Context, read Contest) (Contest, error)
 	// SetStatus moves the contest from read's status to status to; a status
 	// moved since the read is ErrStatusChanged. A move to finished finishes
 	// every active registration of the contest in the same write, so no

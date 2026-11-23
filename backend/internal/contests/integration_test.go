@@ -321,3 +321,58 @@ func TestARefusedConditionalWriteRecordsNothing(t *testing.T) {
 		})
 	}
 }
+
+// Every change to what the publish gate reads beside the contest row moves
+// the row's version, so a publish or start decided before it is refused.
+func TestEveryContentEditTheGateReadsMovesTheContestVersion(t *testing.T) {
+	ctx := context.Background()
+	actor := uuid.New()
+	for name, edit := range map[string]func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error{
+		"SetLanguages": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
+			return f.Service.SetLanguages(ctx, actor, c.ID, []contests.ContestLanguage{{Code: "en", IsDefault: true}})
+		},
+		"SetTranslations": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
+			return f.Service.SetTranslations(ctx, actor, c.ID, []contests.Translation{{Lang: "en", Title: "Renamed"}})
+		},
+		"SetStory": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
+			_, err := f.Service.SetStory(ctx, actor, c.ID, map[string]string{"en": "Another body."})
+			return err
+		},
+		"AddQuestion": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
+			_, err := f.Service.AddQuestion(ctx, contests.QuestionCommand{ActorID: actor, ContestID: c.ID, Points: 5})
+			return err
+		},
+		"SaveQuestion": func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error {
+			_, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
+				ActorID: actor, ContestID: c.ID, QuestionID: q.ID, Kind: q.Kind, Points: q.Points + 1,
+				Texts: q.Texts, Answers: q.Answers,
+			})
+			return err
+		},
+		"DeleteQuestion": func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error {
+			return f.Service.DeleteQuestion(ctx, actor, c.ID, q.ID)
+		},
+		"ReorderQuestions": func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error {
+			return f.Service.ReorderQuestions(ctx, actor, c.ID, []uuid.UUID{q.ID})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := f.SeedPublishableContest()
+			questions, err := f.Questions.List(ctx, c.ID)
+			if err != nil || len(questions) != 1 {
+				t.Fatalf("List() = %d questions, %v, want the seeded one", len(questions), err)
+			}
+
+			before, _ := f.Contests.ByID(ctx, c.ID)
+
+			if err := edit(f, c, questions[0]); err != nil {
+				t.Fatalf("%s() = %v", name, err)
+			}
+
+			if got, _ := f.Contests.ByID(ctx, c.ID); got.Version == before.Version {
+				t.Errorf("Version = %d after %s(), want it moved", got.Version, name)
+			}
+		})
+	}
+}

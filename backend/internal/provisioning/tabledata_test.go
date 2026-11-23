@@ -4,16 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
+	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile/gamefiletest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 
@@ -42,7 +52,7 @@ func tableDataGames(t testing.TB, editable bool) (*provisioning.Games, *template
 
 // tableDataLimits is shared so a second handle (tableStoreOn) agrees with the
 // service's store.
-var tableDataLimits = gamefile.Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 32 << 20, MaxChunkBytes: 4 << 20}
+var tableDataLimits = gamefile.Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 32 << 20, MaxChunkBytes: 4 << 20, BufferedChunks: 4}
 
 // tableDataGamesOnDisk also returns the directory, so janitor tests can age
 // files with os.Chtimes.
@@ -59,9 +69,8 @@ func tableDataGamesOnDisk(t testing.TB, editable bool) (*provisioning.Games, *te
 }
 
 // tableDataGamesOnRepo assembles Games against the real core database, for
-// rules only PostgreSQL holds: the one-receiving and one-complete indexes, the
-// GREATEST floors in AppendTableDataRow, and the source/definition CHECK
-// (CLAUDE.md rule 10).
+// rules only PostgreSQL holds: the one-receiving and one-complete indexes and
+// the source/definition CHECK (CLAUDE.md rule 10).
 func tableDataGamesOnRepo(t *testing.T, editable bool) (*provisioning.Games, *gamefile.Store) {
 	t.Helper()
 	if testPool == nil {
@@ -71,7 +80,7 @@ func tableDataGamesOnRepo(t *testing.T, editable bool) (*provisioning.Games, *ga
 	if err != nil {
 		t.Fatalf("open the table data store: %v", err)
 	}
-	service := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}).
+	service := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}, noContest{}, directly{}).
 		WithTableData(files, tableDataLimits)
 	return service, files
 }
@@ -107,7 +116,7 @@ func beginTableUploadWithContent(t testing.TB, service *provisioning.Games, cont
 	if err != nil {
 		t.Fatalf("begin table upload: %v", err)
 	}
-	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("append table chunk: %v", err)
 	}
 	return data
@@ -209,7 +218,7 @@ func TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	_, err = service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content))
+	_, err = service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content))
 	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
 		t.Fatalf("AppendTableChunk error = %v, want ErrTableHeaderMismatch on the first chunk itself", err)
 	}
@@ -230,10 +239,10 @@ func TestAppendTableChunkAcceptsAHeaderSplitAcrossChunksWithoutRefusing(t *testi
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(first)); err != nil {
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(first)); err != nil {
 		t.Fatalf("first chunk (no newline yet) was refused: %v", err)
 	}
-	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, int64(len(first)), strings.NewReader(second)); err != nil {
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, int64(len(first)), strings.NewReader(second)); err != nil {
 		t.Fatalf("second chunk: %v", err)
 	}
 
@@ -255,10 +264,10 @@ func TestAppendTableChunkDoesNotRecheckAResentFirstChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
-	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("resend of the same first chunk was refused: %v", err)
 	}
 
@@ -283,6 +292,27 @@ func TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived(t *te
 	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); !errors.Is(err, provisioning.ErrTableDataLengthMismatch) {
 		t.Fatalf("error = %v, want ErrTableDataLengthMismatch", err)
 	}
+}
+
+// Bytes on disk past what the upload's row records were never acknowledged to
+// the client, so completing the upload neither validates nor counts them.
+func TestCompleteTableUploadCountsOnlyTheBytesItsRecordHolds(t *testing.T) {
+	t.Parallel()
+	service, _, _, files := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	const content = "id,name,nickname\n1,Margot,\n"
+	upload := beginTableUploadWithContent(t, service, contest, "suspects", content)
+	if _, err := files.Append(upload.ID.String(), int64(len(content)), strings.NewReader("2,Unrecorded,\n")); err != nil {
+		t.Fatalf("write past the record: %v", err)
+	}
+
+	completed, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, upload.ID)
+
+	if err != nil || completed.Lines != 1 {
+		t.Fatalf("CompleteTableUpload() = %d row(s), %v, want the 1 its record holds", completed.Lines, err)
+	}
+	assertWindowShows(t, service, contest, "1,Margot,")
 }
 
 // With no upload, the first row creates the file and the second appends to it.
@@ -470,8 +500,8 @@ func TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable(t *testing.T) {
 			t.Fatalf("a concurrent append failed with %v, want either success or ErrTableDataChanged", err)
 		}
 	}
-	if accepted == 0 {
-		t.Fatal("neither concurrent append was accepted; one of them was writing at the file's end")
+	if accepted != 1 {
+		t.Fatalf("%d concurrent appends were accepted, want the one whose row was recorded first", accepted)
 	}
 
 	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
@@ -490,44 +520,6 @@ func TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable(t *testing.T) {
 	// The table is not wedged.
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"9", "C", ""}); err != nil {
 		t.Fatalf("the table stopped taking rows after the race: %v", err)
-	}
-}
-
-// The bytes reached the file but the transaction recording them rolled back,
-// so the bookkeeping's offset is behind the file.
-func TestAppendTableRowReconcilesBookkeepingThatLagsTheFile(t *testing.T) {
-	t.Parallel()
-	service, store, _, _ := tableDataGames(t, true)
-	contest := uuid.New()
-	withSuspects(t, service, contest)
-
-	data, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""})
-	if err != nil {
-		t.Fatalf("row 1: %v", err)
-	}
-	// Roll the bookkeeping back to the header alone; the file keeps Margot.
-	store.mu.Lock()
-	rolledBack := store.tableData[data.ID]
-	rolledBack.ReceivedBytes, rolledBack.Lines = int64(len("id,name,nickname\n")), 0
-	store.tableData[data.ID] = rolledBack
-	store.mu.Unlock()
-
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"2", "Someone", "Sparrow"}); err != nil {
-		t.Fatalf("append after a rolled-back transaction: %v", err)
-	}
-
-	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
-	if err != nil {
-		t.Fatalf("window: %v", err)
-	}
-	if len(window.Rows) != 2 {
-		t.Fatalf("window returned %d row(s), want both: %+v", len(window.Rows), window.Rows)
-	}
-	if window.Rows[1].Fields[1] != "Someone" {
-		t.Fatalf("the appended row is not in the file: %+v", window.Rows)
-	}
-	if int64(len(window.Rows)) != window.TotalRows {
-		t.Fatalf("the file holds %d row(s), the bookkeeping says %d", len(window.Rows), window.TotalRows)
 	}
 }
 
@@ -600,7 +592,7 @@ func TestAbortTableUploadRemovesTheFileAndMarksTheRowAborted(t *testing.T) {
 	if aborted.Status != provisioning.TableDataAborted {
 		t.Fatalf("status = %q, want aborted", aborted.Status)
 	}
-	if _, err := files.Received(begun.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+	if _, err := gamefiletest.StoredBytes(files, begun.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
 		t.Fatalf("the aborted upload's file is still on disk: %v", err)
 	}
 	store.mu.Lock()
@@ -649,10 +641,10 @@ func TestSweepUploadsAbandonsAStaleTableUploadAndRemovesATableFileWithNoRow(t *t
 	if result.OrphanFiles != 1 {
 		t.Fatalf("orphan files = %d, want 1", result.OrphanFiles)
 	}
-	if _, err := files.Received(stale.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+	if _, err := gamefiletest.StoredBytes(files, stale.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
 		t.Fatalf("the abandoned table upload's file is still on disk: %v", err)
 	}
-	if _, err := files.Received(orphanID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+	if _, err := gamefiletest.StoredBytes(files, orphanID.String()); !errors.Is(err, gamefile.ErrNotFound) {
 		t.Fatalf("the orphan table file — no row ever named it — is still on disk: %v", err)
 	}
 
@@ -692,10 +684,10 @@ func TestSweepUploadsLeavesARecentTableUploadAndAYoungTableFileAlone(t *testing.
 	if result.OrphanFiles != 0 {
 		t.Fatalf("orphan files = %d, want 0 for a file reserved moments ago", result.OrphanFiles)
 	}
-	if _, err := files.Received(fresh.ID.String()); err != nil {
+	if _, err := gamefiletest.StoredBytes(files, fresh.ID.String()); err != nil {
 		t.Fatalf("a fresh table upload's file was removed by the sweep: %v", err)
 	}
-	if _, err := files.Received(youngOrphan.String()); err != nil {
+	if _, err := gamefiletest.StoredBytes(files, youngOrphan.String()); err != nil {
 		t.Fatalf("a file younger than orphanFileGrace was removed by the sweep: %v", err)
 	}
 }
@@ -719,13 +711,13 @@ func TestGamefileRefusalsReachTheCallerAsTableDataSentinels(t *testing.T) {
 	}
 
 	// ErrChunkOutOfOrder: an offset that does not continue the file.
-	if _, err := service.AppendTableChunk(t.Context(), contest, begun.ID, 9,
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, begun.ID, 9,
 		strings.NewReader("id,name,nickname\n")); !errors.Is(err, provisioning.ErrTableDataChunkOutOfOrder) {
 		t.Fatalf("an out-of-order chunk = %v, want ErrTableDataChunkOutOfOrder", err)
 	}
 
 	// ErrLengthMismatch: completing with fewer bytes than were declared.
-	if _, err := service.AppendTableChunk(t.Context(), contest, begun.ID, 0,
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, begun.ID, 0,
 		strings.NewReader("id,name,nickname\n1,A,\n")); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -743,7 +735,7 @@ func TestGamefileRefusalsReachTheCallerAsTableDataSentinels(t *testing.T) {
 	if err := files.Abort(missing.ID.String()); err != nil {
 		t.Fatalf("remove the file behind the row: %v", err)
 	}
-	if _, err := service.AppendTableChunk(t.Context(), contest, missing.ID, 0,
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), contest, missing.ID, 0,
 		strings.NewReader("x")); !errors.Is(err, provisioning.ErrTableDataNotFound) {
 		t.Fatalf("appending to a file the volume lost = %v, want ErrTableDataNotFound", err)
 	}
@@ -773,7 +765,7 @@ func TestEveryTableDataChangeIsRecordedInTheAuditTrail(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	trail := &sink{}
-	service = service.WithAudit(audit.New(trail), directly{})
+	service = service.WithAudit(audit.New(trail))
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 	actor := uuid.New()
@@ -839,7 +831,7 @@ func TestTheJanitorsOwnTableUploadAbortIsRecordedWithNoActor(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
 	trail := &sink{}
-	service = service.WithAudit(audit.New(trail), directly{})
+	service = service.WithAudit(audit.New(trail))
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
@@ -875,7 +867,7 @@ func TestDeleteTableRowTombstonesWithoutTouchingTheFile(t *testing.T) {
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"2", "B", ""}); err != nil {
 		t.Fatalf("row 2: %v", err)
 	}
-	before, err := files.Received(data.ID.String())
+	before, err := gamefiletest.StoredBytes(files, data.ID.String())
 	if err != nil {
 		t.Fatalf("stat the file: %v", err)
 	}
@@ -884,7 +876,7 @@ func TestDeleteTableRowTombstonesWithoutTouchingTheFile(t *testing.T) {
 		t.Fatalf("delete row 1: %v", err)
 	}
 
-	after, err := files.Received(data.ID.String())
+	after, err := gamefiletest.StoredBytes(files, data.ID.String())
 	if err != nil {
 		t.Fatalf("stat the file: %v", err)
 	}
@@ -1137,7 +1129,7 @@ func TestASecondUploadForTheSameTableIsRejectedByTheDatabaseNotByGoCode(t *testi
 	if _, err := service.BeginTableUpload(t.Context(), contest.ID, "suspects", 1024); !errors.Is(err, provisioning.ErrTableDataInProgress) {
 		t.Fatalf("a second upload for the same table = %v, want ErrTableDataInProgress", err)
 	}
-	if _, err := files.Received(first.ID.String()); err != nil {
+	if _, err := gamefiletest.StoredBytes(files, first.ID.String()); err != nil {
 		t.Fatalf("the first, still-receiving upload's file disappeared: %v", err)
 	}
 
@@ -1172,7 +1164,7 @@ func TestCompletingASecondUploadForATableRetiresTheFirstAndFreesItsBytes(t *test
 	}
 
 	// The displaced file is removed now, not left for the janitor.
-	if _, err := files.Received(first.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+	if _, err := gamefiletest.StoredBytes(files, first.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
 		t.Fatalf("the displaced upload's file is still on the volume: %v", err)
 	}
 	window, err := service.TableDataWindow(t.Context(), contest.ID, "suspects", 1, 10, 1<<20)
@@ -1200,7 +1192,7 @@ func TestTwoFormsBootstrappingTheSameTableAtOnceLeaveOneCurrentFileNotTwo(t *tes
 		TemplateRepository: postgres.NewGameInstances(testPool),
 		gate:               &arrivalGate{remaining: 2, open: make(chan struct{})},
 	}
-	service := provisioning.NewGames(repo, &buildCluster{}, authoring{editable: true}).
+	service := provisioning.NewGames(repo, &buildCluster{}, authoring{editable: true}, noContest{}, directly{}).
 		WithTableData(files, tableDataLimits)
 
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -1258,97 +1250,6 @@ func (h *heldReady) ReadyTableData(ctx context.Context, contestID uuid.UUID, tab
 	data, err := h.TemplateRepository.ReadyTableData(ctx, contestID, table)
 	h.gate.arrive()
 	return data, err
-}
-
-// The GREATEST floors in AppendTableDataRow: two forms record their counts in
-// the opposite order to their writes. heldAppend holds the first caller
-// between writing its bytes and recording them.
-func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile(t *testing.T) {
-	if testPool == nil {
-		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
-	}
-	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
-	if err != nil {
-		t.Fatalf("open the table data store: %v", err)
-	}
-	held := &heldAppend{
-		TemplateRepository: postgres.NewGameInstances(testPool),
-		arrived:            make(chan struct{}),
-		release:            make(chan struct{}),
-	}
-	service := provisioning.NewGames(held, &buildCluster{}, authoring{editable: true}).
-		WithTableData(files, tableDataLimits)
-
-	contest, _ := contestFor(t, t.Context(), 0)
-	withTwoTables(t, service, contest.ID)
-
-	// Row 1 bootstraps the file, so rows 2 and 3 are the appends under test.
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"1", "Margot", ""}); err != nil {
-		t.Fatalf("row 1: %v", err)
-	}
-
-	slow := make(chan error, 1)
-	go func() {
-		_, err := service.AppendTableRow(context.Background(), uuid.New(), contest.ID, "suspects", []string{"2", "Sparrow", ""})
-		slow <- err
-	}()
-	<-held.arrived // row 2's bytes are on disk; its count is not recorded yet
-
-	// Row 3 reads the file (tableFileState), appends after row 2 and records
-	// three rows.
-	third, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"3", "Someone", ""})
-	if err != nil {
-		t.Fatalf("row 3: %v", err)
-	}
-	if third.Lines != 3 {
-		t.Fatalf("row 3 recorded %d line(s), want 3", third.Lines)
-	}
-
-	close(held.release) // row 2 now records its smaller pair
-	if err := <-slow; err != nil {
-		t.Fatalf("row 2: %v", err)
-	}
-
-	current, err := postgres.NewGameInstances(testPool).ReadyTableData(t.Context(), contest.ID, "suspects")
-	if err != nil {
-		t.Fatalf("read the table's current data: %v", err)
-	}
-	onVolume, err := files.Received(current.ID.String())
-	if err != nil {
-		t.Fatalf("stat the file: %v", err)
-	}
-	if current.Lines != 3 || current.ReceivedBytes != onVolume {
-		t.Fatalf("the bookkeeping says %d row(s) / %d bytes, the file holds 3 rows / %d bytes",
-			current.Lines, current.ReceivedBytes, onVolume)
-	}
-
-	// The table still takes rows.
-	fourth, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"4", "Later", ""})
-	if err != nil {
-		t.Fatalf("row 4: %v", err)
-	}
-	if fourth.Lines != 4 {
-		t.Fatalf("row 4 recorded %d line(s), want 4 — the table was wedged", fourth.Lines)
-	}
-}
-
-// heldAppend is the real repository whose first AppendTableDataRow closes
-// arrived and then waits on release.
-type heldAppend struct {
-	provisioning.TemplateRepository
-	once    sync.Once
-	arrived chan struct{}
-	release chan struct{}
-}
-
-func (h *heldAppend) AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
-	first := false
-	h.once.Do(func() { first = true })
-	if first {
-		close(h.arrived)
-		<-h.release
-	}
-	return h.TemplateRepository.AppendTableDataRow(ctx, id, receivedBytes, lines)
 }
 
 // The source/definition CHECK: only 'builder' carries a definition. It catches
@@ -1580,4 +1481,968 @@ func TestBeginningATableUploadDoesNotMarkTheGameOutOfDate(t *testing.T) {
 	if after.NeedsBuild() {
 		t.Fatal("a reserved upload that has changed no row marked the game out of date")
 	}
+}
+
+// A table's data is the game's content: once the contest has started, under
+// the contest row's lock, every write to it is refused, whatever an earlier
+// check outside the transaction said.
+func TestTableDataWritesAreRefusedOnceTheContestHasStarted(t *testing.T) {
+	t.Parallel()
+	rows := &contestRows{status: contests.StatusPublished}
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	service := provisioning.NewGames(&templateStore{policy: sqlpolicy.ReadOnly()}, &buildCluster{},
+		authoring{editable: true}, rows, directly{}).WithTableData(files, tableDataLimits)
+	contest, actor := uuid.New(), uuid.New()
+	withSuspects(t, service, contest)
+	if _, err := service.AppendTableRow(t.Context(), actor, contest, "suspects", []string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("the first row: %v", err)
+	}
+	rows.status = contests.StatusRunning
+
+	if _, err := service.AppendTableRow(t.Context(), actor, contest, "suspects", []string{"2", "Sparrow", ""}); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Errorf("AppendTableRow() = %v, want ErrGameNotEditable", err)
+	}
+	if err := service.DeleteTableRow(t.Context(), actor, contest, "suspects", 1); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Errorf("DeleteTableRow() = %v, want ErrGameNotEditable", err)
+	}
+	upload := beginTableUploadWithContent(t, service, contest, "suspects", "id,name,nickname\n9,Uploaded,\n")
+	if _, err := service.CompleteTableUpload(t.Context(), actor, contest, upload.ID); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Errorf("CompleteTableUpload() = %v, want ErrGameNotEditable", err)
+	}
+}
+
+// transaction is the unit of work NewGames takes.
+type transaction interface {
+	Do(ctx context.Context, fn func(context.Context) error) error
+}
+
+var errCommit = errors.New("commit: connection reset")
+
+// commitLost answers a failed commit for a transaction that did commit.
+type commitLost struct{ inner transaction }
+
+func (c commitLost) Do(ctx context.Context, fn func(context.Context) error) error {
+	if err := c.inner.Do(ctx, fn); err != nil {
+		return err
+	}
+	return errCommit
+}
+
+// commitFailed rolls back a transaction that ran to its end.
+type commitFailed struct{ inner transaction }
+
+func (c commitFailed) Do(ctx context.Context, fn func(context.Context) error) error {
+	return c.inner.Do(ctx, func(ctx context.Context) error {
+		if err := fn(ctx); err != nil {
+			return err
+		}
+		return errCommit
+	})
+}
+
+// undoing is a unit of work over the fake repository that puts its table data
+// back when fn fails, as a rolled-back transaction does.
+type undoing struct{ store *templateStore }
+
+func (u undoing) Do(ctx context.Context, fn func(context.Context) error) error {
+	u.store.mu.Lock()
+	saved := maps.Clone(u.store.tableData)
+	u.store.mu.Unlock()
+
+	err := fn(ctx)
+	if err != nil {
+		u.store.mu.Lock()
+		u.store.tableData = saved
+		u.store.mu.Unlock()
+	}
+	return err
+}
+
+// staleReads answers ReadyTableData with the pinned row while one is set: the
+// table as a form read it before another form's row was recorded. Calls made
+// one after another then decide exactly as forms submitted at once do.
+type staleReads struct {
+	provisioning.TemplateRepository
+	pinned *provisioning.TableData
+}
+
+func (s *staleReads) ReadyTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	if s.pinned != nil {
+		return *s.pinned, nil
+	}
+	return s.TemplateRepository.ReadyTableData(ctx, contestID, table)
+}
+
+// refusingFirst is contests.ContentRows for a contest the first edit
+// finds running and every later one finds published.
+type refusingFirst struct{ edits int }
+
+func (r *refusingFirst) LockContest(context.Context, uuid.UUID) error { return nil }
+
+func (r *refusingFirst) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
+	r.edits++
+	if r.edits == 1 {
+		return contests.Contest{ID: id, Status: contests.StatusRunning}, nil
+	}
+	return contests.Contest{ID: id, Status: contests.StatusPublished}, nil
+}
+
+func (r *refusingFirst) MarkContentChanged(_ context.Context, read contests.Contest) (contests.Contest, error) {
+	return read, nil
+}
+
+// suspectsOnDisk is a suspects table holding Margot, over the fake repository
+// and a real file store.
+type suspectsOnDisk struct {
+	store   *templateStore
+	repo    *staleReads
+	cluster *buildCluster
+	files   *gamefile.Store
+	contest uuid.UUID
+	first   provisioning.TableData
+}
+
+func newSuspectsOnDisk(t *testing.T) *suspectsOnDisk {
+	t.Helper()
+	store := &templateStore{policy: sqlpolicy.ReadOnly()}
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	s := &suspectsOnDisk{
+		store: store, repo: &staleReads{TemplateRepository: store}, cluster: &buildCluster{},
+		files: files, contest: uuid.New(),
+	}
+	service := s.games(noContest{}, undoing{store})
+	withSuspects(t, service, s.contest)
+	s.first, err = service.AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"1", "Margot", ""})
+	if err != nil {
+		t.Fatalf("the first row: %v", err)
+	}
+	return s
+}
+
+func (s *suspectsOnDisk) games(rows contests.ContentRows, uow transaction) *provisioning.Games {
+	return provisioning.NewGames(s.repo, s.cluster, authoring{editable: true}, rows, uow).
+		WithTableData(s.files, tableDataLimits)
+}
+
+func (s *suspectsOnDisk) add(t *testing.T, service *provisioning.Games, name string) error {
+	t.Helper()
+	_, err := service.AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"2", name, ""})
+	return err
+}
+
+// assertEveryReaderSees checks the organiser's window and the build's load
+// against the rows given as CSV lines, in order. The game must be waiting to
+// be built.
+func assertEveryReaderSees(t *testing.T, service *provisioning.Games, cluster *buildCluster, contest uuid.UUID, rows ...string) {
+	t.Helper()
+	assertWindowShows(t, service, contest, rows...)
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil || built.Status != provisioning.TemplateReady {
+		t.Fatalf("Build() = %q (%s), %v", built.Status, built.BuildError, err)
+	}
+	want := strings.Join(rows, "\n") + "\n"
+	cluster.mu.Lock()
+	loaded := cluster.tableData[built.Database+".suspects"]
+	cluster.mu.Unlock()
+	if loaded != want {
+		t.Errorf("the build loaded %q, want %q", loaded, want)
+	}
+}
+
+func assertWindowShows(t *testing.T, service *provisioning.Games, contest uuid.UUID, rows ...string) {
+	t.Helper()
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 100, 1<<20)
+	if err != nil {
+		t.Fatalf("TableDataWindow() = %v", err)
+	}
+	var seen []string
+	for _, row := range window.Rows {
+		seen = append(seen, strings.Join(row.Fields, ","))
+	}
+	if !slices.Equal(seen, rows) || window.TotalRows != int64(len(rows)) {
+		t.Errorf("the window shows %q of %d row(s), want %q", seen, window.TotalRows, rows)
+	}
+}
+
+// assertNoTail checks the file is exactly as long as its record.
+func assertNoTail(t *testing.T, files *gamefile.Store, data provisioning.TableData) {
+	t.Helper()
+	if onDisk, err := gamefiletest.StoredBytes(files, data.ID.String()); err != nil || onDisk != data.ReceivedBytes {
+		t.Errorf("the file holds %d bytes (%v), its record counts %d", onDisk, err, data.ReceivedBytes)
+	}
+}
+
+// A row whose transaction did not commit stays in the file as a tail the
+// record does not count. No reader may show it.
+func TestARowWhoseTransactionRolledBackIsReadByNothing(t *testing.T) {
+	t.Parallel()
+	s := newSuspectsOnDisk(t)
+
+	err := s.add(t, s.games(noContest{}, commitFailed{undoing{s.store}}), "Sparrow")
+
+	if !errors.Is(err, errCommit) {
+		t.Fatalf("AppendTableRow() = %v, want the commit's failure", err)
+	}
+	assertEveryReaderSees(t, s.games(noContest{}, undoing{s.store}), s.cluster, s.contest, "1,Margot,")
+}
+
+// The next row is written where the record ends, over whatever an uncommitted
+// row left there.
+func TestTheNextRowIsWrittenOverAnUncommittedTail(t *testing.T) {
+	t.Parallel()
+	s := newSuspectsOnDisk(t)
+	if err := s.add(t, s.games(noContest{}, commitFailed{undoing{s.store}}), "A much longer name than the next"); !errors.Is(err, errCommit) {
+		t.Fatalf("the uncommitted row = %v, want the commit's failure", err)
+	}
+	service := s.games(noContest{}, undoing{s.store})
+
+	if err := s.add(t, service, "Sparrow"); err != nil {
+		t.Fatalf("AppendTableRow() = %v", err)
+	}
+
+	current, err := s.store.ReadyTableData(t.Context(), s.contest, "suspects")
+	if err != nil {
+		t.Fatalf("ReadyTableData() = %v", err)
+	}
+	if current.Lines != 2 || current.ReceivedBytes != s.first.ReceivedBytes+int64(len("2,Sparrow,\n")) {
+		t.Errorf("the record counts %d row(s) in %d bytes, want 2 in %d",
+			current.Lines, current.ReceivedBytes, s.first.ReceivedBytes+int64(len("2,Sparrow,\n")))
+	}
+	assertNoTail(t, s.files, current)
+	assertEveryReaderSees(t, service, s.cluster, s.contest, "1,Margot,", "2,Sparrow,")
+}
+
+// Forms submitted at once all read the same end of the table. One row is
+// recorded; every other form is told the table changed and writes nothing.
+// The later forms carry other bytes, so a write that came before the refusal
+// would show in the file.
+func TestOfRowsSubmittedAtOnceOneIsRecordedAndTheRestAreToldTheTableChanged(t *testing.T) {
+	t.Parallel()
+	for _, forms := range []int{2, 3} {
+		t.Run(strconv.Itoa(forms), func(t *testing.T) {
+			t.Parallel()
+			s := newSuspectsOnDisk(t)
+			service := s.games(noContest{}, undoing{s.store})
+			s.repo.pinned = &s.first
+
+			if err := s.add(t, service, "Sparrow"); err != nil {
+				t.Fatalf("the first form = %v, want its row recorded", err)
+			}
+			for range forms - 1 {
+				if err := s.add(t, service, "Someone else"); !errors.Is(err, provisioning.ErrTableDataChanged) {
+					t.Fatalf("a later form = %v, want ErrTableDataChanged", err)
+				}
+			}
+
+			s.repo.pinned = nil
+			current, err := s.store.ReadyTableData(t.Context(), s.contest, "suspects")
+			if err != nil {
+				t.Fatalf("ReadyTableData() = %v", err)
+			}
+			assertNoTail(t, s.files, current)
+			assertEveryReaderSees(t, service, s.cluster, s.contest, "1,Margot,", "2,Sparrow,")
+		})
+	}
+}
+
+// Two forms submit at once and the first is not recorded: refused because the
+// contest started, or rolled back. The second form's row is recorded, and
+// nothing of the first one's is read.
+func TestARowSubmittedBesideOneThatWasNotRecordedIsRecordedOnce(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		rows    func() contests.ContentRows
+		first   func(*templateStore) transaction
+		wantErr error
+	}{
+		"refused": {
+			rows:    func() contests.ContentRows { return &refusingFirst{} },
+			first:   func(store *templateStore) transaction { return undoing{store} },
+			wantErr: provisioning.ErrGameNotEditable,
+		},
+		"rolled back": {
+			rows:    func() contests.ContentRows { return noContest{} },
+			first:   func(store *templateStore) transaction { return commitFailed{undoing{store}} },
+			wantErr: errCommit,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSuspectsOnDisk(t)
+			rows := tt.rows()
+			s.repo.pinned = &s.first
+
+			if err := s.add(t, s.games(rows, tt.first(s.store)), "Never recorded"); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("the first form = %v, want %v", err, tt.wantErr)
+			}
+			service := s.games(rows, undoing{s.store})
+			if err := s.add(t, service, "Sparrow"); err != nil {
+				t.Fatalf("the second form = %v, want its row recorded", err)
+			}
+
+			s.repo.pinned = nil
+			current, err := s.store.ReadyTableData(t.Context(), s.contest, "suspects")
+			if err != nil {
+				t.Fatalf("ReadyTableData() = %v", err)
+			}
+			if current.Lines != 2 {
+				t.Errorf("the record counts %d row(s), want 2", current.Lines)
+			}
+			assertNoTail(t, s.files, current)
+			assertEveryReaderSees(t, service, s.cluster, s.contest, "1,Margot,", "2,Sparrow,")
+		})
+	}
+}
+
+// suspectsOnPostgres is a suspects table holding Margot in a draft contest,
+// over the real repository, contest rows and file store (CLAUDE.md rule 10).
+type suspectsOnPostgres struct {
+	repo    provisioning.TemplateRepository
+	cluster *buildCluster
+	files   *gamefile.Store
+	contest uuid.UUID
+	first   provisioning.TableData
+}
+
+func newSuspectsOnPostgres(t *testing.T) *suspectsOnPostgres {
+	t.Helper()
+	contest, _ := contestFor(t, t.Context(), 0)
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	s := &suspectsOnPostgres{repo: ownBuilds(contest.ID), cluster: &buildCluster{}, files: files, contest: contest.ID}
+	service := s.games(storage.NewUnitOfWork(testPool))
+	withSuspects(t, service, s.contest)
+	s.first, err = service.AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"1", "Margot", ""})
+	if err != nil {
+		t.Fatalf("the first row: %v", err)
+	}
+	return s
+}
+
+func (s *suspectsOnPostgres) games(uow transaction) *provisioning.Games {
+	return provisioning.NewGames(s.repo, s.cluster, authoring{editable: true}, postgres.NewContests(testPool), uow).
+		WithTableData(s.files, tableDataLimits)
+}
+
+func (s *suspectsOnPostgres) record(t *testing.T) provisioning.TableData {
+	t.Helper()
+	current, err := s.repo.ReadyTableData(t.Context(), s.contest, "suspects")
+	if err != nil {
+		t.Fatalf("ReadyTableData() = %v", err)
+	}
+	return current
+}
+
+// A row decided before the contest started and refused inside its
+// transaction is in nothing a reader sees, the build included.
+func TestARowRefusedBecauseTheContestStartedIsReadByNothing(t *testing.T) {
+	s := newSuspectsOnPostgres(t)
+	service := s.games(storage.NewUnitOfWork(testPool))
+	if _, err := testPool.Exec(t.Context(), `UPDATE contests SET status = 'running' WHERE id = $1`, s.contest); err != nil {
+		t.Fatalf("start the contest = %v", err)
+	}
+
+	_, err := service.AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"2", "Sparrow", ""})
+
+	if !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("AppendTableRow() = %v, want ErrGameNotEditable", err)
+	}
+	if current := s.record(t); current.ReceivedBytes != s.first.ReceivedBytes || current.Lines != 1 {
+		t.Errorf("the record counts %d row(s) in %d bytes, want 1 in %d", current.Lines, current.ReceivedBytes, s.first.ReceivedBytes)
+	}
+	assertEveryReaderSees(t, service, s.cluster, s.contest, "1,Margot,")
+}
+
+// A commit that fails says nothing of whether it landed. Landed, the row is
+// counted and read; not landed, nothing reads it and the next row is written
+// over it.
+func TestARowWhoseCommitFailedIsEitherCountedOrDiscarded(t *testing.T) {
+	rowBytes := int64(len("2,Sparrow,\n"))
+
+	t.Run("the commit landed", func(t *testing.T) {
+		s := newSuspectsOnPostgres(t)
+		real := storage.NewUnitOfWork(testPool)
+
+		_, err := s.games(commitLost{real}).AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"2", "Sparrow", ""})
+
+		if !errors.Is(err, errCommit) {
+			t.Fatalf("AppendTableRow() = %v, want the commit's failure", err)
+		}
+		current := s.record(t)
+		if current.Lines != 2 || current.ReceivedBytes != s.first.ReceivedBytes+rowBytes {
+			t.Errorf("the record counts %d row(s) in %d bytes, want 2 in %d", current.Lines, current.ReceivedBytes, s.first.ReceivedBytes+rowBytes)
+		}
+		assertNoTail(t, s.files, current)
+		assertEveryReaderSees(t, s.games(real), s.cluster, s.contest, "1,Margot,", "2,Sparrow,")
+	})
+
+	t.Run("the commit did not land", func(t *testing.T) {
+		s := newSuspectsOnPostgres(t)
+		real := storage.NewUnitOfWork(testPool)
+
+		_, err := s.games(commitFailed{real}).AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"2", "Sparrow", ""})
+
+		if !errors.Is(err, errCommit) {
+			t.Fatalf("AppendTableRow() = %v, want the commit's failure", err)
+		}
+		if current := s.record(t); current.Lines != 1 || current.ReceivedBytes != s.first.ReceivedBytes {
+			t.Errorf("the record counts %d row(s) in %d bytes, want 1 in %d", current.Lines, current.ReceivedBytes, s.first.ReceivedBytes)
+		}
+		if onDisk, _ := gamefiletest.StoredBytes(s.files, s.first.ID.String()); onDisk != s.first.ReceivedBytes+rowBytes {
+			t.Fatalf("the file holds %d bytes, want the uncommitted row as its tail (%d)", onDisk, s.first.ReceivedBytes+rowBytes)
+		}
+		service := s.games(real)
+		assertEveryReaderSees(t, service, s.cluster, s.contest, "1,Margot,")
+
+		if _, err := service.AppendTableRow(t.Context(), uuid.New(), s.contest, "suspects", []string{"2", "Later", ""}); err != nil {
+			t.Fatalf("the next row = %v", err)
+		}
+		current := s.record(t)
+		if current.Lines != 2 {
+			t.Errorf("the record counts %d row(s) after the next row, want 2", current.Lines)
+		}
+		assertNoTail(t, s.files, current)
+		assertWindowShows(t, service, s.contest, "1,Margot,", "2,Later,")
+	})
+}
+
+// completingReader is a chunk body that completes its own upload before it
+// yields a byte: a chunk admitted while the upload was 'receiving' whose body
+// arrives after the upload completed.
+type completingReader struct {
+	complete func()
+	body     io.Reader
+	once     sync.Once
+}
+
+func (c *completingReader) Read(p []byte) (int, error) {
+	c.once.Do(c.complete)
+	return c.body.Read(p)
+}
+
+// A chunk that lands after its upload completed is refused, and nothing it
+// carried is recorded or read, however valid it looks.
+func TestAChunkThatLandsAfterItsUploadCompletedIsReadByNothing(t *testing.T) {
+	contest, _ := contestFor(t, t.Context(), 0)
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	cluster := &buildCluster{}
+	service := provisioning.NewGames(ownBuilds(contest.ID), cluster, authoring{editable: true},
+		postgres.NewContests(testPool), storage.NewUnitOfWork(testPool)).WithTableData(files, tableDataLimits)
+	withSuspects(t, service, contest.ID)
+	const content = "id,name,nickname\n1,Margot,\n"
+	upload := beginTableUploadWithContent(t, service, contest.ID, "suspects", content)
+	late := &completingReader{
+		body: strings.NewReader("2,Unvalidated,\n"),
+		complete: func() {
+			if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
+				t.Errorf("CompleteTableUpload() = %v", err)
+			}
+		},
+	}
+
+	_, err = service.AppendTableChunk(t.Context(), uuid.New(), contest.ID, upload.ID, int64(len(content)), late)
+
+	if !errors.Is(err, provisioning.ErrTableDataAlreadyComplete) {
+		t.Fatalf("AppendTableChunk() = %v, want ErrTableDataAlreadyComplete", err)
+	}
+	current, err := postgres.NewGameInstances(testPool).ReadyTableData(t.Context(), contest.ID, "suspects")
+	if err != nil {
+		t.Fatalf("ReadyTableData() = %v", err)
+	}
+	if current.ReceivedBytes != int64(len(content)) || current.Lines != 1 {
+		t.Errorf("the record counts %d row(s) in %d bytes, want 1 in %d", current.Lines, current.ReceivedBytes, len(content))
+	}
+	assertEveryReaderSees(t, service, cluster, contest.ID, "1,Margot,")
+}
+
+// heldRecord is the repository whose first AppendTableDataRow, once it has
+// run and so holds the table's row, closes recorded and waits for release.
+type heldRecord struct {
+	provisioning.TemplateRepository
+	records  atomic.Int32
+	recorded chan struct{}
+	release  chan struct{}
+}
+
+func (h *heldRecord) AppendTableDataRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
+	data, err := h.TemplateRepository.AppendTableDataRow(ctx, id, at, rowBytes)
+	if h.records.Add(1) == 1 {
+		close(h.recorded)
+		<-h.release
+	}
+	return data, err
+}
+
+// waitForABlockedTableDataWrite returns once a session of this database is
+// waiting on a lock to update a table-data row.
+func waitForABlockedTableDataWrite(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := testPool.QueryRow(t.Context(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			  AND query LIKE '%UPDATE game_table_data%'`).Scan(&waiting); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no session came to wait on the table's row")
+}
+
+// Without the contest's lock, the table's row is what two forms race for. The
+// second waits on it, finds the length it read no longer the record, and
+// writes nothing.
+func TestARowRecordedWhileAnotherFormWaitsOnTheTableIsNotOverwritten(t *testing.T) {
+	s := newSuspectsOnPostgres(t)
+	held := &heldRecord{TemplateRepository: s.repo, recorded: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(held.release) })
+	t.Cleanup(release) // a failed wait must not leave the first form parked in its transaction
+	service := provisioning.NewGames(held, s.cluster, authoring{editable: true}, noContest{}, storage.NewUnitOfWork(testPool)).
+		WithTableData(s.files, tableDataLimits)
+
+	winner := make(chan error, 1)
+	go func() {
+		_, err := service.AppendTableRow(context.Background(), uuid.New(), s.contest, "suspects", []string{"2", "Sparrow", ""})
+		winner <- err
+	}()
+	<-held.recorded
+	loser := make(chan error, 1)
+	go func() {
+		_, err := service.AppendTableRow(context.Background(), uuid.New(), s.contest, "suspects", []string{"2", "Someone else", ""})
+		loser <- err
+	}()
+	waitForABlockedTableDataWrite(t)
+	release()
+
+	if err := <-winner; err != nil {
+		t.Fatalf("the first form = %v, want its row recorded", err)
+	}
+	if err := <-loser; !errors.Is(err, provisioning.ErrTableDataChanged) {
+		t.Fatalf("the second form = %v, want ErrTableDataChanged", err)
+	}
+	assertNoTail(t, s.files, s.record(t))
+	assertEveryReaderSees(t, service, s.cluster, s.contest, "1,Margot,", "2,Sparrow,")
+}
+
+// The same guard when the chunk's progress and the completion run at once:
+// the progress write waits on the row the completion holds, and then finds
+// the upload no longer receiving.
+func TestAChunksProgressThatWaitedOnTheCompletionLeavesTheRecordAlone(t *testing.T) {
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+	id := uuid.New()
+	if _, err := repo.BeginTableData(t.Context(), id, contest.ID, "suspects", 40); err != nil {
+		t.Fatalf("BeginTableData() = %v", err)
+	}
+	if err := repo.UpdateTableDataReceived(t.Context(), id, 40); err != nil {
+		t.Fatalf("UpdateTableDataReceived() = %v", err)
+	}
+	completed, commit := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(commit) })
+	t.Cleanup(release)
+	completion := make(chan error, 1)
+	go func() {
+		completion <- storage.NewUnitOfWork(testPool).Do(context.Background(), func(ctx context.Context) error {
+			_, err := repo.CompleteTableData(ctx, contest.ID, "suspects", id, 40, 2, nil)
+			close(completed)
+			<-commit
+			return err
+		})
+	}()
+	<-completed
+
+	late := make(chan error, 1)
+	go func() { late <- repo.UpdateTableDataReceived(context.Background(), id, 55) }()
+	waitForABlockedTableDataWrite(t)
+	release()
+
+	if err := <-completion; err != nil {
+		t.Fatalf("the completion = %v", err)
+	}
+	if err := <-late; !errors.Is(err, provisioning.ErrTableDataAlreadyComplete) {
+		t.Fatalf("the chunk's progress = %v, want ErrTableDataAlreadyComplete", err)
+	}
+	if current, err := repo.TableDataByID(t.Context(), id); err != nil || current.ReceivedBytes != 40 {
+		t.Fatalf("the record counts %d bytes (%v), want the 40 the upload completed with", current.ReceivedBytes, err)
+	}
+}
+
+// stalledChunk is a chunk body that yields nothing until released.
+type stalledChunk struct {
+	asked   chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *stalledChunk) Read([]byte) (int, error) {
+	s.once.Do(func() { close(s.asked) })
+	<-s.release
+	return 0, io.EOF
+}
+
+// stallAChunk begins an upload for table in contest and has actor send it a
+// chunk whose body never arrives until the test ends.
+func stallAChunk(t *testing.T, service *provisioning.Games, actor, contest uuid.UUID, table string) {
+	t.Helper()
+	upload, err := service.BeginTableUpload(t.Context(), contest, table, 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	stalled := &stalledChunk{asked: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = service.AppendTableChunk(context.Background(), actor, contest, upload.ID, 0, stalled)
+	}()
+	t.Cleanup(func() {
+		close(stalled.release)
+		<-done
+	})
+	<-stalled.asked
+}
+
+// tableUploadsOf is the service over a table store holding chunks buffers,
+// with a two-table game in each of contests.
+func tableUploadsOf(t *testing.T, chunks int, contests ...uuid.UUID) *provisioning.Games {
+	t.Helper()
+	limits := tableDataLimits
+	limits.BufferedChunks = chunks
+	files, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	service, _, _ := games(true)
+	service.WithTableData(files, limits)
+	for _, contest := range contests {
+		withTwoTables(t, service, contest)
+	}
+	return service
+}
+
+// The table store holds a bounded number of chunks in memory, and one more is
+// told the store is busy rather than made to wait.
+func TestAChunkBeyondWhatTheTableStoreHoldsInMemoryIsToldItIsBusy(t *testing.T) {
+	t.Parallel()
+	slow, other := uuid.New(), uuid.New()
+	service := tableUploadsOf(t, 1, slow, other)
+	stallAChunk(t, service, uuid.New(), slow, "suspects")
+	upload, err := service.BeginTableUpload(t.Context(), other, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, err = service.AppendTableChunk(t.Context(), uuid.New(), other, upload.ID, 0, strings.NewReader("x"))
+
+	if !errors.Is(err, provisioning.ErrTableDataBusy) {
+		t.Fatalf("AppendTableChunk() = %v, want ErrTableDataBusy", err)
+	}
+}
+
+// unreadableRows is the repository whose TableDataByID fails, as in an outage.
+type unreadableRows struct {
+	provisioning.TemplateRepository
+}
+
+func (unreadableRows) TableDataByID(context.Context, uuid.UUID) (provisioning.TableData, error) {
+	return provisioning.TableData{}, errors.New("connection refused")
+}
+
+// A missing file is judged by reading the table's row again. When that read
+// fails, the answer is the failure: neither damage nor a missing upload.
+func TestAMissingFileWhoseRowCannotBeReadAgainIsAnOutage(t *testing.T) {
+	t.Parallel()
+	store := &templateStore{policy: sqlpolicy.ReadOnly()}
+	dir := t.TempDir()
+	files, err := gamefile.NewStore(dir, tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	games := func(repo provisioning.TemplateRepository) *provisioning.Games {
+		return provisioning.NewGames(repo, &buildCluster{}, authoring{editable: true}, noContest{}, directly{}).
+			WithTableData(files, tableDataLimits)
+	}
+	contest := uuid.New()
+	withSuspects(t, games(store), contest)
+	first, err := games(store).AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""})
+	if err != nil {
+		t.Fatalf("the first row: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, first.ID.String()+".data")); err != nil {
+		t.Fatalf("remove the file: %v", err)
+	}
+
+	_, err = games(unreadableRows{store}).TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
+
+	if err == nil || errors.Is(err, provisioning.ErrTableDataDamaged) || errors.Is(err, provisioning.ErrTableDataNotFound) {
+		t.Fatalf("TableDataWindow() = %v, want the read's own failure", err)
+	}
+}
+
+// One contest takes one of the installation's buffers at a time, however many
+// of its tables are uploading, so one organiser cannot hold them all.
+func TestAContestHasOneChunkInMemoryAtATime(t *testing.T) {
+	t.Parallel()
+	slow, other := uuid.New(), uuid.New()
+	service := tableUploadsOf(t, 4, slow, other)
+	stallAChunk(t, service, uuid.New(), slow, "suspects")
+	sameContest, err := service.BeginTableUpload(t.Context(), slow, "sightings", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	otherContest, err := service.BeginTableUpload(t.Context(), other, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), slow, sameContest.ID, 0, strings.NewReader("x")); !errors.Is(err, provisioning.ErrTableDataBusy) {
+		t.Errorf("a second chunk of the same contest = %v, want ErrTableDataBusy", err)
+	}
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), other, otherContest.ID, 0, strings.NewReader("id,name,nickname\n")); err != nil {
+		t.Errorf("another contest's chunk = %v, want it written", err)
+	}
+}
+
+// One account takes one buffer at a time too, however many contests it
+// edits, and another account is not held up by it.
+func TestAnAccountHasOneChunkInMemoryAtATime(t *testing.T) {
+	t.Parallel()
+	slow, other := uuid.New(), uuid.New()
+	service := tableUploadsOf(t, 4, slow, other)
+	organiser := uuid.New()
+	stallAChunk(t, service, organiser, slow, "suspects")
+	upload, err := service.BeginTableUpload(t.Context(), other, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	if _, err := service.AppendTableChunk(t.Context(), organiser, other, upload.ID, 0, strings.NewReader("x")); !errors.Is(err, provisioning.ErrTableDataBusy) {
+		t.Errorf("the same account's chunk for another contest = %v, want ErrTableDataBusy", err)
+	}
+	if _, err := service.AppendTableChunk(t.Context(), uuid.New(), other, upload.ID, 0, strings.NewReader("id,name,nickname\n")); err != nil {
+		t.Errorf("another account's chunk = %v, want it written", err)
+	}
+}
+
+// A chunk is charged to the contest's owner as well as to its sender, so the
+// contests one organiser owns share one buffer whoever uploads to them: the
+// managers an owner appoints do not multiply the owner's share.
+func TestTheContestsOfOneOwnerHaveOneChunkInMemoryAtATime(t *testing.T) {
+	t.Parallel()
+	limits := tableDataLimits
+	files, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	owner := uuid.New()
+	service := provisioning.NewGames(&templateStore{policy: sqlpolicy.ReadOnly(), ownerOfAll: owner}, &buildCluster{},
+		authoring{editable: true}, noContest{}, directly{}).WithTableData(files, limits)
+	first, second := uuid.New(), uuid.New()
+	withTwoTables(t, service, first)
+	withTwoTables(t, service, second)
+	stallAChunk(t, service, uuid.New(), first, "suspects") // a manager of the first contest
+	upload, err := service.BeginTableUpload(t.Context(), second, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	for who, actor := range map[string]uuid.UUID{"another manager": uuid.New(), "the owner": owner} {
+		if _, err := service.AppendTableChunk(t.Context(), actor, second, upload.ID, 0, strings.NewReader("x")); !errors.Is(err, provisioning.ErrTableDataBusy) {
+			t.Errorf("%s's chunk for the owner's other contest = %v, want ErrTableDataBusy", who, err)
+		}
+	}
+}
+
+// ownerUnreadable is the repository whose read of an upload and its contest's
+// owner fails, as in an outage.
+type ownerUnreadable struct {
+	provisioning.TemplateRepository
+}
+
+func (ownerUnreadable) TableDataWithOwner(context.Context, uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
+	return provisioning.TableData{}, uuid.Nil, errors.New("connection refused")
+}
+
+// neverRead is a chunk body that must not be asked for a byte.
+type neverRead struct{ t *testing.T }
+
+func (n neverRead) Read([]byte) (int, error) {
+	n.t.Error("the chunk's body was read")
+	return 0, io.EOF
+}
+
+// Without the upload's row and its owner there is nobody to charge the chunk
+// to, so it is refused as the failure it is, before its body is read.
+func TestAChunkWhoseOwnerCannotBeReadIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	service := provisioning.NewGames(ownerUnreadable{&templateStore{policy: sqlpolicy.ReadOnly()}}, &buildCluster{},
+		authoring{editable: true}, noContest{}, directly{}).WithTableData(files, tableDataLimits)
+
+	_, err = service.AppendTableChunk(t.Context(), uuid.New(), uuid.New(), uuid.New(), 0, neverRead{t})
+
+	if err == nil || errors.Is(err, provisioning.ErrTableDataNotFound) || errors.Is(err, provisioning.ErrTableDataBusy) {
+		t.Fatalf("AppendTableChunk() = %v, want the read's own failure", err)
+	}
+}
+
+// An upload is addressed through its contest's route, which is what the
+// caller's permission was checked on. Naming another contest's upload reads
+// as a missing one, so its existence does not leak, and its body is not read.
+func TestAChunkForAnotherContestsUploadIsNotFoundAndUnread(t *testing.T) {
+	t.Parallel()
+	mine, theirs := uuid.New(), uuid.New()
+	service := tableUploadsOf(t, 4, mine, theirs)
+	upload, err := service.BeginTableUpload(t.Context(), theirs, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, err = service.AppendTableChunk(t.Context(), uuid.New(), mine, upload.ID, 0, neverRead{t})
+
+	if !errors.Is(err, provisioning.ErrTableDataNotFound) {
+		t.Fatalf("AppendTableChunk() = %v, want ErrTableDataNotFound", err)
+	}
+}
+
+// panicking is a chunk body whose Read panics.
+type panicking struct{}
+
+func (panicking) Read([]byte) (int, error) { panic("the body reader failed") }
+
+// A chunk that ends in a panic, which the HTTP server recovers from, must
+// not leave its contest and its account refused for the life of the process.
+func TestAChunkThatPanicsLeavesItsContestAndAccountFree(t *testing.T) {
+	t.Parallel()
+	contest, organiser := uuid.New(), uuid.New()
+	service := tableUploadsOf(t, 4, contest)
+	upload, err := service.BeginTableUpload(t.Context(), contest, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the chunk did not panic")
+			}
+		}()
+		_, _ = service.AppendTableChunk(t.Context(), organiser, contest, upload.ID, 0, panicking{})
+	}()
+
+	if _, err := service.AppendTableChunk(t.Context(), organiser, contest, upload.ID, 0, strings.NewReader("id,name,nickname\n")); err != nil {
+		t.Fatalf("the next chunk of the same contest and account = %v, want it written", err)
+	}
+}
+
+// A table's file is written from inside a transaction, so its store must be
+// one that buffers chunks; a streaming store is a wiring mistake.
+func TestTableDataRefusesAStoreThatStreamsItsChunks(t *testing.T) {
+	t.Parallel()
+	limits := tableDataLimits
+	limits.BufferedChunks = 0
+	files, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	service, _, _ := games(true)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("WithTableData accepted a store that streams its chunks")
+		}
+	}()
+
+	service.WithTableData(files, limits)
+}
+
+// A file that lost bytes its record counts is told apart from every other
+// failure, on each path that reads or extends it, and uploading the table's
+// data again puts the table right.
+func TestATableWhoseFileLostRecordedBytesIsDamagedUntilItIsUploadedAgain(t *testing.T) {
+	t.Parallel()
+	service, _, _, _, dir := tableDataGamesOnDisk(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	first, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""})
+	if err != nil {
+		t.Fatalf("the first row: %v", err)
+	}
+	if err := os.Truncate(filepath.Join(dir, first.ID.String()+".data"), first.ReceivedBytes-3); err != nil {
+		t.Fatalf("cut the file short: %v", err)
+	}
+
+	if _, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20); !errors.Is(err, provisioning.ErrTableDataDamaged) {
+		t.Errorf("TableDataWindow() = %v, want ErrTableDataDamaged", err)
+	}
+	_, err = service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"2", "Sparrow", ""})
+	if !errors.Is(err, provisioning.ErrTableDataDamaged) {
+		t.Fatalf("AppendTableRow() = %v, want ErrTableDataDamaged", err)
+	}
+	if !strings.Contains(err.Error(), first.ID.String()) {
+		t.Errorf("the error %q does not name the file, so the log cannot either", err)
+	}
+
+	// The build tells the organiser what to do and hands the cause to the log.
+	built, err := service.Build(t.Context(), time.Minute)
+	if !errors.Is(err, provisioning.ErrTableDataDamaged) || built.Status != provisioning.TemplateFailed ||
+		built.BuildError != provisioning.BuildTableDataDamaged {
+		t.Errorf("Build() = %q (%q), %v, want it failed telling the organiser to upload the data again", built.Status, built.BuildError, err)
+	}
+
+	// The file gone altogether is the same damage, not a missing upload.
+	if err := os.Remove(filepath.Join(dir, first.ID.String()+".data")); err != nil {
+		t.Fatalf("remove the file: %v", err)
+	}
+	if _, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20); !errors.Is(err, provisioning.ErrTableDataDamaged) {
+		t.Errorf("TableDataWindow() with no file = %v, want ErrTableDataDamaged", err)
+	}
+
+	upload := beginTableUploadWithContent(t, service, contest, "suspects", "id,name,nickname\n9,Uploaded,\n")
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, upload.ID); err != nil {
+		t.Fatalf("upload the table's data again: %v", err)
+	}
+	assertWindowShows(t, service, contest, "9,Uploaded,")
+}
+
+// A table's first row whose commit failed may have been recorded, so its file
+// stays: removing it would leave a record with nothing behind it.
+func TestAFirstRowWhoseCommitFailedKeepsItsFile(t *testing.T) {
+	t.Parallel()
+	store := &templateStore{policy: sqlpolicy.ReadOnly()}
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	games := func(uow transaction) *provisioning.Games {
+		return provisioning.NewGames(store, &buildCluster{}, authoring{editable: true}, noContest{}, uow).
+			WithTableData(files, tableDataLimits)
+	}
+	contest := uuid.New()
+	withSuspects(t, games(directly{}), contest)
+
+	_, err = games(commitLost{directly{}}).AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""})
+
+	if !errors.Is(err, errCommit) {
+		t.Fatalf("AppendTableRow() = %v, want the commit's failure", err)
+	}
+	assertWindowShows(t, games(directly{}), contest, "1,Margot,")
 }

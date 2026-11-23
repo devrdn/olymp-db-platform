@@ -1729,3 +1729,30 @@ func TestUpdateToInviteOnlyKeepsTheArchiveSettings(t *testing.T) {
 			stored.Enrollment, stored.Visibility, stored.ArchiveTasks)
 	}
 }
+
+// The edit is handed the row as it now stands, so a write it conditions on
+// that row lands instead of refusing the edit's own version move.
+func TestBeginContentEditHandsBackTheRowAtItsNewVersion(t *testing.T) {
+	f := conteststest.NewFixture()
+	seeded := f.SeedContest(contests.StatusDraft)
+
+	var begun contests.Contest
+	if err := f.UnitOfWork.Do(t.Context(), func(ctx context.Context) error {
+		var err error
+		begun, err = contests.BeginContentEdit(ctx, f.Contests, seeded.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("BeginContentEdit() = %v", err)
+	}
+
+	stored, err := f.Contests.ByID(t.Context(), seeded.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if begun.Version != stored.Version || begun.Version == seeded.Version {
+		t.Errorf("handed version %d, stored %d, seeded %d; want the stored one, moved", begun.Version, stored.Version, seeded.Version)
+	}
+	if _, err := f.Contests.SetPrizePlaces(t.Context(), begun); err != nil {
+		t.Errorf("a write conditioned on the handed row = %v, want it to land", err)
+	}
+}

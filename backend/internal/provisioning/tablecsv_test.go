@@ -192,7 +192,7 @@ func TestSplitCSVLineStopsOneFieldPastTheWidestTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin table upload: %v", err)
 	}
-	_, err = service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content))
+	_, err = service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content))
 	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
 		t.Fatalf("a header wider than any table = %v, want ErrTableHeaderMismatch", err)
 	}

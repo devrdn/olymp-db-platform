@@ -1,6 +1,7 @@
 package gamefile
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,8 +13,8 @@ import (
 	"time"
 )
 
-// copyBufferSize is the fixed buffer Append copies a chunk through, whatever
-// the chunk's size (CLAUDE.md rule 12).
+// copyBufferSize is the fixed buffer a chunk is copied to disk through,
+// whatever the chunk's size (CLAUDE.md rule 12).
 const copyBufferSize = 64 * 1024
 
 // maxUploadIDLen bounds the id before it becomes part of a filename
@@ -33,6 +34,11 @@ type Store struct {
 	limits Limits
 	locks  *idLocks
 
+	// buffers holds the Limits.BufferedChunks buffers chunk bodies are read
+	// into, each nil until first used and then kept, and is nil for a Store
+	// that streams.
+	buffers chan []byte
+
 	// mu guards reserved: upload id to the total size Begin was told it would
 	// reach (committedBytes).
 	mu       sync.Mutex
@@ -48,8 +54,8 @@ type Store struct {
 // dirBytesMaxAge is how long a measurement of the directory may stand before
 // Append measures again.
 //
-// Walking the directory costs 3.3 ms at five hundred files against 2.7 ms for
-// a whole 8 MiB Append, so it is not done per chunk. Every change this process
+// Walking the directory costs 3.3 ms at five hundred files, so it is not done
+// per chunk. Every change this process
 // makes updates or clears the figure; the age only bounds how long bytes left
 // by an operator or a crash go unnoticed.
 const dirBytesMaxAge = 30 * time.Second
@@ -61,15 +67,22 @@ func NewStore(dir string, limits Limits) (*Store, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("gamefile: directory is required")
 	}
-	if limits.MaxFileBytes <= 0 || limits.MaxDirBytes <= 0 || limits.MaxChunkBytes <= 0 {
-		return nil, fmt.Errorf("gamefile: limits must all be positive, got %+v", limits)
+	if limits.MaxFileBytes <= 0 || limits.MaxDirBytes <= 0 || limits.MaxChunkBytes <= 0 || limits.BufferedChunks < 0 {
+		return nil, fmt.Errorf("gamefile: the byte limits must be positive and BufferedChunks not negative, got %+v", limits)
 	}
 	// The directory holds unpublished contest dumps on the host contestants
 	// reach: no access for "other", read for the service group (gosec G301).
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("gamefile: create upload directory: %w", err)
 	}
-	return &Store{dir: dir, limits: limits, locks: newIDLocks(), reserved: map[string]int64{}}, nil
+	s := &Store{dir: dir, limits: limits, locks: newIDLocks(), reserved: map[string]int64{}}
+	if limits.BufferedChunks > 0 {
+		s.buffers = make(chan []byte, limits.BufferedChunks)
+		for range limits.BufferedChunks {
+			s.buffers <- nil
+		}
+	}
+	return s, nil
 }
 
 // validateUploadID is the gate every exported method sends id through before
@@ -145,7 +158,24 @@ func (s *Store) Begin(id string, declaredBytes int64) error {
 		return fmt.Errorf("gamefile: reserve upload: %w", err)
 	}
 	s.reserve(id, declaredBytes)
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("gamefile: reserve upload: %w", err)
+	}
+	// A caller records the file's existence next, and a host crash must not
+	// leave that record naming a file the directory never kept.
+	return s.syncDir()
+}
+
+func (s *Store) syncDir() error {
+	d, err := os.Open(s.dir)
+	if err != nil {
+		return fmt.Errorf("gamefile: open upload directory: %w", err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("gamefile: sync upload directory: %w", err)
+	}
+	return nil
 }
 
 // reserve and release record what an upload still owes the directory.
@@ -256,38 +286,82 @@ func (s *Store) usage() (map[string]int64, int64, error) {
 // Append writes r at offset, which must equal the bytes received so far, and
 // returns the new length. A chunk already on disk (offset below the length) is
 // a no-op, so a client unsure whether its last chunk landed can resend it.
+// Neither that, a wrong offset, a sealed upload nor a missing one reads r.
 //
 // Each call opens its own handle: an upload may span process restarts.
 func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	if err := validateUploadID(id); err != nil {
 		return 0, err
 	}
+	if s.buffers == nil {
+		unlock := s.locks.lock(id)
+		defer unlock()
+		return s.appendLocked(id, offset, r)
+	}
+
+	// Decided once without the body, so a chunk that will be refused costs no
+	// buffer, and again under the lock the write takes.
+	received, settled, err := s.admit(id, offset)
+	if settled {
+		return received, err
+	}
+
+	var buf []byte
+	select {
+	case buf = <-s.buffers:
+	default:
+		return received, ErrTooManyChunks
+	}
+	if buf == nil {
+		// One byte past MaxChunkBytes is how a body over it shows.
+		buf = make([]byte, s.limits.MaxChunkBytes+1)
+	}
+	defer func() { s.buffers <- buf }()
+	n, readErr := io.ReadFull(r, buf)
+	var body io.Reader = bytes.NewReader(buf[:n])
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		body = io.MultiReader(body, failing{readErr})
+	}
 
 	unlock := s.locks.lock(id)
 	defer unlock()
+	return s.appendLocked(id, offset, body)
+}
 
-	f, err := os.OpenFile(s.dataPath(id), os.O_RDWR, 0o600)
+// failing is a reader that ends a buffered body with the error its source
+// stopped on.
+type failing struct{ err error }
+
+func (f failing) Read([]byte) (int, error) { return 0, f.err }
+
+// admit takes id's lock for long enough to decide whether a chunk at offset
+// can be written at all. settled means the answer is already final.
+func (s *Store) admit(id string, offset int64) (received int64, settled bool, err error) {
+	unlock := s.locks.lock(id)
+	defer unlock()
+
+	f, received, err := s.openUnsealed(id)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, ErrNotFound
-		}
-		return 0, fmt.Errorf("gamefile: open upload: %w", err)
+		return received, true, err
 	}
 	defer f.Close()
 
-	info, err := f.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("gamefile: stat upload: %w", err)
+	switch {
+	case offset < received:
+		return received, true, nil // a retry of a chunk already on disk
+	case offset > received:
+		return received, true, ErrChunkOutOfOrder
 	}
-	received := info.Size()
+	return received, false, nil
+}
 
-	// The index is Complete's seal. Complete holds the same lock, so it has
-	// either finished or not started.
-	if _, err := os.Stat(s.indexPath(id)); err == nil {
-		return received, ErrUploadSealed
-	} else if !os.IsNotExist(err) {
-		return received, fmt.Errorf("gamefile: check upload seal: %w", err)
+// appendLocked is Append under id's lock.
+func (s *Store) appendLocked(id string, offset int64, r io.Reader) (int64, error) {
+	f, received, err := s.openUnsealed(id)
+	if err != nil {
+		return received, err
 	}
+	defer f.Close()
 
 	switch {
 	case offset < received:
@@ -295,14 +369,84 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	case offset > received:
 		return received, ErrChunkOutOfOrder
 	}
+	return s.writeAt(f, offset, r)
+}
 
+// ReplaceTail cuts the file back to from and writes r there, returning the
+// new length. It is for a caller that keeps the file's length in a record of
+// its own and writes while holding that record: whatever lies beyond from was
+// never recorded, so it is discarded rather than taken for a retry, as Append
+// would take it. r is read under the file's lock, so it must already be in
+// memory. A file shorter than from is ErrShorterThanRecorded.
+func (s *Store) ReplaceTail(id string, from int64, r io.Reader) (int64, error) {
+	if err := validateUploadID(id); err != nil {
+		return 0, err
+	}
+
+	unlock := s.locks.lock(id)
+	defer unlock()
+
+	f, received, err := s.openUnsealed(id)
+	if err != nil {
+		return received, err
+	}
+	defer f.Close()
+
+	switch {
+	case from < 0 || from > received:
+		return received, fmt.Errorf("%w: upload %s holds %d bytes of %d", ErrShorterThanRecorded, id, received, from)
+	case from < received:
+		if err := f.Truncate(from); err != nil {
+			return received, fmt.Errorf("gamefile: discard unrecorded tail: %w", err)
+		}
+		s.dirBytesChanged()
+	}
+	return s.writeAt(f, from, r)
+}
+
+// openUnsealed opens id's data for writing and reports its length. The caller
+// holds id's lock. A sealed upload is ErrUploadSealed, with the length.
+func (s *Store) openUnsealed(id string) (*os.File, int64, error) {
+	f, err := os.OpenFile(s.dataPath(id), os.O_RDWR, 0o600)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, ErrNotFound
+		}
+		return nil, 0, fmt.Errorf("gamefile: open upload: %w", err)
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("gamefile: stat upload: %w", err)
+	}
+	received := info.Size()
+
+	// The index is Complete's seal. Complete holds the same lock, so it has
+	// either finished or not started.
+	if _, err := os.Stat(s.indexPath(id)); err == nil {
+		_ = f.Close()
+		return nil, received, ErrUploadSealed
+	} else if !os.IsNotExist(err) {
+		_ = f.Close()
+		return nil, received, fmt.Errorf("gamefile: check upload seal: %w", err)
+	}
+	return f, received, nil
+}
+
+// writeAt writes r at offset, the file's end, within the chunk, file and
+// directory budgets, and returns the new length. The bytes are synced before
+// it returns: the caller is about to record the length, and a host crash must
+// not leave the file shorter than that record. A write that fails or is
+// refused leaves the file ending at offset.
+func (s *Store) writeAt(f *os.File, offset int64, r io.Reader) (int64, error) {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return received, fmt.Errorf("gamefile: seek upload: %w", err)
+		return offset, fmt.Errorf("gamefile: seek upload: %w", err)
 	}
 
 	// The reader is bounded by the tightest of the chunk, file and directory
 	// budgets before any byte is written (CLAUDE.md rule 12).
-	fileRemaining := s.limits.MaxFileBytes - received
+	fileRemaining := s.limits.MaxFileBytes - offset
 
 	writeCap := s.limits.MaxChunkBytes
 	reason := ErrChunkTooLarge
@@ -315,11 +459,11 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	// budget could bound this chunk, it is measured fresh.
 	used, err := s.dirBytes()
 	if err != nil {
-		return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
+		return offset, fmt.Errorf("gamefile: measure directory usage: %w", err)
 	}
 	if s.limits.MaxDirBytes-used <= writeCap {
 		if used, err = s.usedBytes(); err != nil {
-			return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
+			return offset, fmt.Errorf("gamefile: measure directory usage: %w", err)
 		}
 	}
 	if dirRemaining := s.limits.MaxDirBytes - used; dirRemaining <= writeCap {
@@ -360,6 +504,11 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 			_ = f.Truncate(offset)
 			return offset, fmt.Errorf("%w: %w", ErrChunkIncomplete, probeErr)
 		}
+	}
+
+	if err := f.Sync(); err != nil {
+		_ = f.Truncate(offset)
+		return offset, fmt.Errorf("gamefile: sync chunk: %w", err)
 	}
 
 	s.dirBytesGrew(written)
@@ -467,21 +616,10 @@ func (s *Store) Abort(id string) error {
 	return nil
 }
 
-// Received reports how many bytes of id have landed on disk so far.
-func (s *Store) Received(id string) (int64, error) {
-	if err := validateUploadID(id); err != nil {
-		return 0, err
-	}
-
-	info, err := os.Stat(s.dataPath(id))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, ErrNotFound
-		}
-		return 0, fmt.Errorf("gamefile: stat upload: %w", err)
-	}
-	return info.Size(), nil
-}
+// BuffersChunks reports whether Append reads a chunk into memory before
+// taking its file's lock (Limits.BufferedChunks), which a caller that writes
+// with ReplaceTail from inside a transaction requires.
+func (s *Store) BuffersChunks() bool { return s.buffers != nil }
 
 // UploadIDs lists the id of every upload the Store holds, in progress or
 // completed, in no order, so a janitor can reconcile the volume without

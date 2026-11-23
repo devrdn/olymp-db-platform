@@ -4,7 +4,8 @@
 // database rows and template builds belong to its callers.
 //
 // Memory is bounded where the bytes arrive (CLAUDE.md rule 12): no upload is
-// ever held in memory whole.
+// ever held in memory whole. A chunk is streamed to disk, or, in a Store with
+// Limits.BufferedChunks, held in one of that many buffers.
 package gamefile
 
 import "errors"
@@ -18,6 +19,17 @@ type Limits struct {
 	MaxDirBytes int64
 	// MaxChunkBytes bounds one Append.
 	MaxChunkBytes int64
+	// BufferedChunks is how many chunk bodies Append may hold in memory at
+	// once, each read whole before its file's lock is taken. The Store keeps
+	// that many buffers of MaxChunkBytes + 1 bytes, allocated on first use
+	// and reused, so they are all the memory chunks ever take. A chunk
+	// arriving while every buffer is in use is ErrTooManyChunks.
+	//
+	// Zero streams each chunk to disk under its file's lock instead. That
+	// costs no memory, but a client sending slowly holds the lock while it
+	// does, so it is only for files nothing else waits on. A file extended
+	// with ReplaceTail from inside a database transaction is not one.
+	BufferedChunks int
 }
 
 // Summary is what Complete hands back once an upload is sealed.
@@ -90,6 +102,16 @@ var (
 	// have no length limit, so the walk from a mark is bounded instead
 	// (CLAUDE.md rule 12).
 	ErrWindowUnreachable = errors.New("the requested line is too far past the nearest index mark to reach")
+
+	// ErrTooManyChunks is an Append to a Store whose Limits.BufferedChunks
+	// bodies are all in memory already. It says the Store is busy, not that
+	// the chunk is wrong: the same chunk can be sent again shortly.
+	ErrTooManyChunks = errors.New("too many chunks are being received at once")
+
+	// ErrShorterThanRecorded is a ReplaceTail whose file holds fewer bytes
+	// than the caller's record of it: the volume lost bytes that were
+	// promised. It is the installation's fault, never the client's.
+	ErrShorterThanRecorded = errors.New("upload holds fewer bytes than were recorded")
 
 	// ErrUploadSealed is an Append after Complete. Complete's checksum and
 	// line index describe the file as it was, so a later write would make
