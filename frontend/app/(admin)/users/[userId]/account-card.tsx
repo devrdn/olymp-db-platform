@@ -1,16 +1,8 @@
 "use client";
 
-import { startTransition, useActionState, useState } from "react";
+import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ActionButton, ActionFooter, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,12 +20,9 @@ import {
   unblockAction,
   unlockSignInAction,
   updateProfileAction,
-  type AccountState,
-  type ResetState,
 } from "./actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "../email-delivery";
 import { offeredActions } from "./offered";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 /**
@@ -67,37 +56,6 @@ function Panel({
       {children}
     </section>
   );
-}
-
-function Outcome({
-  state,
-  dict,
-  doneLabel,
-}: {
-  state: AccountState;
-  dict: Dictionary;
-  /** Success text, when "Saved" does not fit. */
-  doneLabel?: string;
-}) {
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
-  if (failure) {
-    return (
-      <p role="alert" className="max-w-body text-small text-bad">
-        {failure}
-      </p>
-    );
-  }
-  if (state.ok) {
-    return (
-      <p role="status" className="text-small text-good">
-        {doneLabel ?? dict.accounts.card.saved}
-      </p>
-    );
-  }
-  return null;
 }
 
 /**
@@ -135,49 +93,27 @@ function ReasonField({
 
 /**
  * Clears a sign-in lockout after a confirmation naming the login: it cannot
- * tell the owner from whoever was guessing. Dispatched from the confirm button,
- * since a form inside the dialog unmounts on close.
+ * tell the owner from whoever was guessing.
  */
 function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary }) {
   const t = dict.accounts.card;
-  const [open, setOpen] = useState(false);
-  const [state, run, pending] = useActionState<AccountState, FormData>(unlockSignInAction, {});
 
   return (
-    <div className="flex flex-col gap-2.5">
+    <ActionForm
+      action={unlockSignInAction}
+      fields={{ userId: account.id }}
+      confirm={fill(t.confirmUnlockSignIn, { login: account.login })}
+      errors={dict.errors}
+      className="flex flex-col gap-2.5"
+    >
       <p className="max-w-body text-small text-ink-2">{t.unlockSignInNote}</p>
       <div className="flex flex-wrap items-center gap-4">
-        <Button type="button" variant="secondary" disabled={pending} onClick={() => setOpen(true)}>
-          {pending ? t.saving : t.unlockSignIn}
-        </Button>
-        <Outcome state={state} dict={dict} doneLabel={t.unlocked} />
+        <ActionButton variant="secondary" pendingLabel={t.saving}>
+          {t.unlockSignIn}
+        </ActionButton>
+        <ActionOutcome saved={t.unlocked} />
       </div>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent closeLabel={dict.accounts.selection.bulk.close}>
-          <DialogHeader>
-            <DialogTitle>{fill(t.unlockSignInConfirmTitle, { login: account.login })}</DialogTitle>
-            <DialogDescription>{t.unlockSignInConfirmBody}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
-              {t.unlockSignInCancel}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                const form = new FormData();
-                form.set("userId", account.id);
-                setOpen(false);
-                startTransition(() => run(form));
-              }}
-            >
-              {t.unlockSignInConfirm}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+    </ActionForm>
   );
 }
 
@@ -203,25 +139,6 @@ export function AccountCard({
 }) {
   const t = dict.accounts.card;
   const offered = offeredActions(account, viewerId);
-
-  const [profile, saveProfile, savingProfile] = useActionState(updateProfileAction, {});
-  const [roleState, saveRoles, savingRoles] = useActionState(replaceRolesAction, {});
-  const [access, changeAccess, changingAccess] = useActionState<AccountState, FormData>(
-    account.status === "active" ? blockAction : unblockAction,
-    {},
-  );
-  const [deleteState, runDelete, deleting] = useActionState<AccountState, FormData>(
-    deleteAction,
-    {},
-  );
-  const [restoreState, runRestore, restoring] = useActionState<AccountState, FormData>(
-    restoreAction,
-    {},
-  );
-  const [reset, resetPassword, resetting] = useActionState<ResetState, FormData>(
-    resetPasswordAction,
-    {},
-  );
 
   const [blockReasonMissing, setBlockReasonMissing] = useState(false);
   const [deleteReasonMissing, setDeleteReasonMissing] = useState(false);
@@ -253,10 +170,14 @@ export function AccountCard({
 
       {offered.profile ? (
         <Panel title={t.profile}>
-          {/* Keyed on the server's values, so a save replaces the draft. */}
-          <form key={account.fullName + account.email} action={saveProfile} className="flex flex-col gap-5">
-            <input type="hidden" name="userId" value={account.id} />
-
+          {/* The server's values, so a save replaces the draft. */}
+          <ActionForm
+            action={updateProfileAction}
+            fields={{ userId: account.id }}
+            errors={dict.errors}
+            revision={account.fullName + account.email}
+            className="flex flex-col gap-5"
+          >
             <Field id="full_name" label={t.fullName}>
               <Input name="full_name" defaultValue={account.fullName} required />
             </Field>
@@ -265,21 +186,20 @@ export function AccountCard({
               <Input name="email" type="email" defaultValue={account.email ?? ""} />
             </Field>
 
-            <div className="flex flex-wrap items-center gap-4">
-              <Button type="submit" disabled={savingProfile}>
-                {savingProfile ? t.saving : t.save}
-              </Button>
-              <Outcome state={profile} dict={dict} />
-            </div>
-          </form>
+            <ActionFooter labels={t} />
+          </ActionForm>
         </Panel>
       ) : null}
 
       {offered.roles ? (
         <Panel title={t.roles} hint={t.rolesHint} help={t.rolesHelp} helpLabel={dict.chrome.helpLabel}>
-          <form key={account.roles.join(",")} action={saveRoles} className="flex flex-col gap-5">
-            <input type="hidden" name="userId" value={account.id} />
-
+          <ActionForm
+            action={replaceRolesAction}
+            fields={{ userId: account.id }}
+            errors={dict.errors}
+            revision={account.roles.join(",")}
+            className="flex flex-col gap-5"
+          >
             <div className="flex flex-col gap-2.5">
               {roles.map((role) => (
                 <label key={role.code} className="flex items-center gap-2.5 text-control text-ink">
@@ -296,13 +216,8 @@ export function AccountCard({
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-4">
-              <Button type="submit" disabled={savingRoles}>
-                {savingRoles ? t.saving : t.save}
-              </Button>
-              <Outcome state={roleState} dict={dict} />
-            </div>
-          </form>
+            <ActionFooter labels={t} />
+          </ActionForm>
         </Panel>
       ) : null}
 
@@ -310,8 +225,10 @@ export function AccountCard({
         <Panel title={t.danger}>
           <div className="flex flex-col gap-6">
             {offered.block || offered.unblock ? (
-              <form
-                action={changeAccess}
+              <ActionForm
+                action={account.status === "active" ? blockAction : unblockAction}
+                fields={{ userId: account.id }}
+                errors={dict.errors}
                 onSubmit={(event) => {
                   // Only a block needs a reason.
                   if (!offered.block) return;
@@ -326,7 +243,6 @@ export function AccountCard({
                 className="flex flex-col gap-2.5"
                 noValidate
               >
-                <input type="hidden" name="userId" value={account.id} />
                 <p className="max-w-body text-small text-ink-2">{t.blockNote}</p>
 
                 {offered.block ? (
@@ -341,23 +257,17 @@ export function AccountCard({
                 ) : null}
 
                 <div className="flex flex-wrap items-center gap-4">
-                  <Button type="submit" variant="danger" disabled={changingAccess}>
-                    {offered.block ? t.block : t.unblock}
-                  </Button>
-                  {blockReasonMissing ? (
-                    <p role="alert" className="text-small text-bad">
-                      {dict.errors.reason_required}
-                    </p>
-                  ) : (
-                    <Outcome state={access} dict={dict} />
-                  )}
+                  <ActionButton variant="danger">{offered.block ? t.block : t.unblock}</ActionButton>
+                  <ActionOutcome saved={t.saved} refusal={blockReasonMissing ? "reason_required" : undefined} />
                 </div>
-              </form>
+              </ActionForm>
             ) : null}
 
             {offered.delete ? (
-              <form
-                action={runDelete}
+              <ActionForm
+                action={deleteAction}
+                fields={{ userId: account.id }}
+                errors={dict.errors}
                 onSubmit={(event) => {
                   const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
                   if (reason === "") {
@@ -370,7 +280,6 @@ export function AccountCard({
                 className="flex flex-col gap-2.5"
                 noValidate
               >
-                <input type="hidden" name="userId" value={account.id} />
                 <p className="max-w-body text-small text-ink-2">{t.deleteNote}</p>
 
                 <ReasonField
@@ -383,75 +292,82 @@ export function AccountCard({
                 />
 
                 <div className="flex flex-wrap items-center gap-4">
-                  <Button type="submit" variant="danger" disabled={deleting}>
-                    {deleting ? t.saving : t.delete}
-                  </Button>
-                  {deleteReasonMissing ? (
-                    <p role="alert" className="text-small text-bad">
-                      {dict.errors.reason_required}
-                    </p>
-                  ) : (
-                    <Outcome state={deleteState} dict={dict} />
-                  )}
+                  <ActionButton variant="danger" pendingLabel={t.saving}>
+                    {t.delete}
+                  </ActionButton>
+                  <ActionOutcome saved={t.saved} refusal={deleteReasonMissing ? "reason_required" : undefined} />
                 </div>
-              </form>
+              </ActionForm>
             ) : null}
 
             {offered.restore ? (
-              <form action={runRestore} className="flex flex-col gap-2.5">
-                <input type="hidden" name="userId" value={account.id} />
+              <ActionForm
+                action={restoreAction}
+                fields={{ userId: account.id }}
+                errors={dict.errors}
+                className="flex flex-col gap-2.5"
+              >
                 <p className="max-w-body text-small text-ink-2">{t.restoreNote}</p>
                 <div className="flex flex-wrap items-center gap-4">
-                  <Button type="submit" variant="secondary" disabled={restoring}>
-                    {restoring ? t.saving : t.restore}
-                  </Button>
-                  <Outcome state={restoreState} dict={dict} />
+                  <ActionButton variant="secondary" pendingLabel={t.saving}>
+                    {t.restore}
+                  </ActionButton>
+                  <ActionOutcome saved={t.saved} />
                 </div>
-              </form>
+              </ActionForm>
             ) : null}
 
             {offered.unlockSignIn ? <UnlockSignIn account={account} dict={dict} /> : null}
 
             {offered.resetPassword ? (
-              <form action={resetPassword} className="flex flex-col gap-2.5">
-                <input type="hidden" name="userId" value={account.id} />
-                <p className="max-w-body text-small text-ink-2">{t.resetNote}</p>
-                {/* Only an active account with an address can be emailed; the
-                   server would skip any other. */}
-                {account.status === "active" && account.email ? (
-                  <SendByEmailOption mail={mail} dict={dict} />
-                ) : null}
-                <div className="flex flex-wrap items-center gap-4">
-                  <Button type="submit" variant="secondary" disabled={resetting}>
-                    {resetting ? t.saving : t.resetPassword}
-                  </Button>
-                  <Outcome state={reset.ok ? {} : reset} dict={dict} />
-                </div>
-
-                {/* Shown until the page is left: it arrives once and cannot be retrieved. */}
-                {reset.oneTimePassword ? (
-                  <div className="mt-2 flex max-w-body flex-col gap-3">
-                    <div className="flex flex-col gap-2 border border-warn bg-warn-wash p-4">
-                      <p className="text-small text-ink-2">{t.handover}</p>
-                      <code className="font-mono text-row text-ink select-all">
-                        {reset.oneTimePassword}
-                      </code>
+              <ActionForm
+                action={resetPasswordAction}
+                fields={{ userId: account.id }}
+                errors={dict.errors}
+                className="flex flex-col gap-2.5"
+              >
+                {(reset) => (
+                  <>
+                    <p className="max-w-body text-small text-ink-2">{t.resetNote}</p>
+                    {/* Only an active account with an address can be emailed; the
+                       server would skip any other. */}
+                    {account.status === "active" && account.email ? (
+                      <SendByEmailOption mail={mail} dict={dict} />
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-4">
+                      <ActionButton variant="secondary" pendingLabel={t.saving}>
+                        {t.resetPassword}
+                      </ActionButton>
+                      {/* No "saved": the password below is the answer. */}
+                      <ActionOutcome />
                     </div>
-                    <EmailSummary
-                      rows={[
-                        {
-                          login: account.login,
-                          emailed: reset.emailed,
-                          reason: reset.emailSkippedReason,
-                        },
-                      ]}
-                      perMinute={sendingRate(mail)}
-                      dict={dict}
-                      locale={locale}
-                    />
-                  </div>
-                ) : null}
-              </form>
+
+                    {/* Shown until the page is left: it arrives once and cannot be retrieved. */}
+                    {reset.oneTimePassword ? (
+                      <div className="mt-2 flex max-w-body flex-col gap-3">
+                        <div className="flex flex-col gap-2 border border-warn bg-warn-wash p-4">
+                          <p className="text-small text-ink-2">{t.handover}</p>
+                          <code className="font-mono text-row text-ink select-all">
+                            {reset.oneTimePassword}
+                          </code>
+                        </div>
+                        <EmailSummary
+                          rows={[
+                            {
+                              login: account.login,
+                              emailed: reset.emailed,
+                              reason: reset.emailSkippedReason,
+                            },
+                          ]}
+                          perMinute={sendingRate(mail)}
+                          dict={dict}
+                          locale={locale}
+                        />
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </ActionForm>
             ) : null}
           </div>
         </Panel>

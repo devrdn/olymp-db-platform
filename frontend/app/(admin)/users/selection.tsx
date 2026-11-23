@@ -2,7 +2,6 @@
 
 import {
   createContext,
-  useActionState,
   useContext,
   useEffect,
   useState,
@@ -11,6 +10,7 @@ import {
 
 import { X } from "lucide-react";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -34,11 +34,9 @@ import {
   bulkReplaceRolesAction,
   bulkResetPasswordAction,
   bulkUnblockAction,
-  type BulkPasswordState,
   type BulkState,
 } from "./bulk-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 export type SelectedAccount = { id: string; display: string };
@@ -232,16 +230,6 @@ export function SelectAllCheckbox({
   );
 }
 
-function HiddenIds({ ids }: { ids: readonly string[] }) {
-  return (
-    <>
-      {ids.map((id) => (
-        <input key={id} type="hidden" name="ids" value={id} />
-      ))}
-    </>
-  );
-}
-
 /**
  * Accounts a bulk operation declined, by login with the reason. Never hidden,
  * since each was selected deliberately. An unknown reason from a newer server
@@ -417,6 +405,22 @@ function ActionDialog({
   );
 }
 
+/** Tells the dialog whether it may be dismissed: not while pending or holding a result. */
+function ReportDismissible({
+  pending,
+  done,
+  report,
+}: {
+  pending: boolean;
+  done: boolean;
+  report: (value: boolean) => void;
+}) {
+  useEffect(() => {
+    report(!pending && !done);
+  }, [pending, done, report]);
+  return null;
+}
+
 /**
  * Block, unblock and delete: one status change. Block and delete require a
  * reason, checked here before the request leaves (the server refuses an empty
@@ -449,47 +453,13 @@ function StatusForm({
   // screen must not change under it.
   const [frozenIds] = useState(ids);
   const title = fill(titleTemplate, { n: frozenIds.length });
-  const [state, formAction, pending] = useActionState<BulkState, FormData>(action, {});
   const [reasonMissing, setReasonMissing] = useState(false);
 
-  // While pending or showing a result, only "Done" may close the dialog.
-  useEffect(() => {
-    reportDismissible(!pending && !state.result);
-  }, [pending, state.result, reportDismissible]);
-
-  if (state.result) {
-    const changedCount = state.result.changed.length;
-
-    return (
-      <>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
-        <ChangedSkipped changedCount={changedCount} skipped={state.result.skipped} dict={dict} />
-        <DialogFooter>
-          <Button
-            type="button"
-            onClick={() => {
-              // Kept when nothing changed, so a mistaken pick can be fixed and
-              // retried.
-              if (changedCount > 0) store.clear();
-              onClose();
-            }}
-          >
-            {t.done}
-          </Button>
-        </DialogFooter>
-      </>
-    );
-  }
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
   return (
-    <form
-      action={formAction}
+    <ActionForm
+      action={action}
+      fields={{ ids: frozenIds }}
+      errors={dict.errors}
       onSubmit={(event) => {
         if (!requireReason) return;
         const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
@@ -504,73 +474,81 @@ function StatusForm({
       className="flex flex-col gap-5"
       noValidate
     >
-      <HiddenIds ids={frozenIds} />
+      {(state, pending) => (
+        <>
+          <ReportDismissible pending={pending} done={state.result !== undefined} report={reportDismissible} />
+          {state.result ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{title}</DialogTitle>
+              </DialogHeader>
+              <ChangedSkipped changedCount={state.result.changed.length} skipped={state.result.skipped} dict={dict} />
+              <DialogFooter>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    // Kept when nothing changed, so a mistaken pick can be fixed
+                    // and retried.
+                    if (state.result && state.result.changed.length > 0) store.clear();
+                    onClose();
+                  }}
+                >
+                  {t.done}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>{title}</DialogTitle>
+                <DialogDescription>{description}</DialogDescription>
+              </DialogHeader>
 
-      <DialogHeader>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
+              {requireReason ? (
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="bulk-reason" className="font-mono text-label text-ink-3 uppercase">
+                    {t.reasonLabel}
+                  </label>
+                  {/* `required` for ARIA only: the form is `noValidate`, so the
+                     browser's unlocalised bubble never fires. */}
+                  <Textarea
+                    id="bulk-reason"
+                    name="reason"
+                    required
+                    aria-invalid={reasonMissing || undefined}
+                    className="min-h-24 font-sans text-body"
+                    onChange={(event) => {
+                      // Clear the error as soon as it is corrected.
+                      if (reasonMissing && event.currentTarget.value.trim() !== "") {
+                        setReasonMissing(false);
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
 
-      {requireReason ? (
-        <div className="flex flex-col gap-2">
-          <label htmlFor="bulk-reason" className="font-mono text-label text-ink-3 uppercase">
-            {t.reasonLabel}
-          </label>
-          {/* `required` for ARIA only: the form is `noValidate`, so the
-             browser's unlocalised bubble never fires. */}
-          <Textarea
-            id="bulk-reason"
-            name="reason"
-            required
-            aria-invalid={reasonMissing || undefined}
-            className="min-h-24 font-sans text-body"
-            onChange={(event) => {
-              // Clear the error as soon as it is corrected.
-              if (reasonMissing && event.currentTarget.value.trim() !== "") {
-                setReasonMissing(false);
-              }
-            }}
-          />
-        </div>
-      ) : null}
+              <ActionOutcome refusal={reasonMissing ? "reason_required" : undefined} />
 
-      {reasonMissing ? (
-        <p role="alert" className="text-small text-bad">
-          {dict.errors.reason_required}
-        </p>
-      ) : failure ? (
-        <p role="alert" className="text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-
-      <DialogFooter>
-        <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
-          {t.cancel}
-        </Button>
-        <Button type="submit" variant={danger ? "danger" : "primary"} disabled={pending}>
-          {pending ? t.submitting : t.confirm}
-        </Button>
-      </DialogFooter>
-    </form>
+              <DialogFooter>
+                <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
+                  {t.cancel}
+                </Button>
+                <ActionButton variant={danger ? "danger" : "primary"} pendingLabel={t.submitting}>
+                  {t.confirm}
+                </ActionButton>
+              </DialogFooter>
+            </>
+          )}
+        </>
+      )}
+    </ActionForm>
   );
 }
 
 /**
- * How long the "remove all roles" button stays disabled after appearing. The
- * confirmation is shorter than the form, so the second click of a fast
- * double-click can land on its button.
- */
-export const CONFIRM_EMPTY_ARM_MS = 400;
-
-/**
  * Replaces the role set on every selected account. An empty set is legitimate
- * but must not be the silent default: an empty submit is intercepted and
- * replaced by an explicit confirmation naming the count.
- *
- * That confirmation's submit is armed only after `CONFIRM_EMPTY_ARM_MS` on
- * screen, disarmed whenever it leaves, and re-checks emptiness from the form
- * data at submit.
+ * but must not be the silent default, so an empty submit asks first, naming
+ * the count.
  */
 function RolesForm({
   ids,
@@ -589,150 +567,68 @@ function RolesForm({
   const store = useSelectionStore();
   const [frozenIds] = useState(ids);
   const title = fill(t.rolesDialog.title, { n: frozenIds.length });
-  const [state, formAction, pending] = useActionState<BulkState, FormData>(
-    bulkReplaceRolesAction,
-    {},
-  );
-  // Set once an empty submit is intercepted.
-  const [confirmingEmpty, setConfirmingEmpty] = useState(false);
-  // False the instant the confirmation stops showing, so reopening never
-  // inherits an earlier arm.
-  const [confirmArmed, setConfirmArmed] = useState(false);
-
-  useEffect(() => {
-    reportDismissible(!pending && !state.result);
-  }, [pending, state.result, reportDismissible]);
-
-  // The handlers that flip `confirmingEmpty` reset `confirmArmed` themselves; a
-  // synchronous `setState` in an effect would cascade renders.
-  useEffect(() => {
-    if (!confirmingEmpty) return;
-    const timer = setTimeout(() => setConfirmArmed(true), CONFIRM_EMPTY_ARM_MS);
-    return () => clearTimeout(timer);
-  }, [confirmingEmpty]);
-
-  if (state.result) {
-    const changedCount = state.result.changed.length;
-
-    return (
-      <>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
-        <ChangedSkipped changedCount={changedCount} skipped={state.result.skipped} dict={dict} />
-        <DialogFooter>
-          <Button
-            type="button"
-            onClick={() => {
-              if (changedCount > 0) store.clear();
-              onClose();
-            }}
-          >
-            {t.done}
-          </Button>
-        </DialogFooter>
-      </>
-    );
-  }
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
-  if (confirmingEmpty) {
-    return (
-      <form
-        action={formAction}
-        onSubmit={(event) => {
-          // Re-checked at submit rather than trusted from the click that raised
-          // this screen; `confirmArmed` stops a stray double-click.
-          const checked = new FormData(event.currentTarget).getAll("roles");
-          if (checked.length > 0 || !confirmArmed) {
-            event.preventDefault();
-          }
-        }}
-        className="flex flex-col gap-5"
-      >
-        <HiddenIds ids={frozenIds} />
-        <DialogHeader>
-          <DialogTitle>{t.rolesDialog.confirmEmptyTitle}</DialogTitle>
-          <DialogDescription>
-            {fill(t.rolesDialog.confirmEmptyBody, { n: frozenIds.length })}
-          </DialogDescription>
-        </DialogHeader>
-
-        {failure ? (
-          <p role="alert" className="text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="quiet"
-            onClick={() => {
-              setConfirmingEmpty(false);
-              // A later visit must start unarmed.
-              setConfirmArmed(false);
-            }}
-            disabled={pending}
-          >
-            {t.rolesDialog.back}
-          </Button>
-          <Button type="submit" variant="danger" disabled={pending || !confirmArmed}>
-            {pending ? t.submitting : t.rolesDialog.confirmEmptySubmit}
-          </Button>
-        </DialogFooter>
-      </form>
-    );
-  }
 
   return (
-    <form
-      action={formAction}
-      onSubmit={(event) => {
-        const checked = new FormData(event.currentTarget).getAll("roles");
-        if (checked.length === 0) {
-          // Nothing ticked: ask before stripping every role from the selection.
-          event.preventDefault();
-          setConfirmingEmpty(true);
-        }
-      }}
+    <ActionForm
+      action={bulkReplaceRolesAction}
+      fields={{ ids: frozenIds }}
+      confirm={(form) =>
+        form.getAll("roles").length === 0 ? fill(t.rolesDialog.confirmEmpty, { n: frozenIds.length }) : null
+      }
+      errors={dict.errors}
       className="flex flex-col gap-5"
     >
-      <HiddenIds ids={frozenIds} />
+      {(state, pending) => (
+        <>
+          <ReportDismissible pending={pending} done={state.result !== undefined} report={reportDismissible} />
+          {state.result ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{title}</DialogTitle>
+              </DialogHeader>
+              <ChangedSkipped changedCount={state.result.changed.length} skipped={state.result.skipped} dict={dict} />
+              <DialogFooter>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (state.result && state.result.changed.length > 0) store.clear();
+                    onClose();
+                  }}
+                >
+                  {t.done}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>{title}</DialogTitle>
+                <DialogDescription>{t.rolesDialog.description}</DialogDescription>
+              </DialogHeader>
 
-      <DialogHeader>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{t.rolesDialog.description}</DialogDescription>
-      </DialogHeader>
+              <div className="flex max-h-56 flex-col gap-2.5 overflow-y-auto">
+                {roles.map((role) => (
+                  <label key={role.code} className="flex items-center gap-2.5 text-control text-ink">
+                    <input type="checkbox" name="roles" value={role.code} className="size-4 accent-cta" />
+                    {role.name}
+                    <span className="font-mono text-data text-ink-3">{role.code}</span>
+                  </label>
+                ))}
+              </div>
 
-      <div className="flex max-h-56 flex-col gap-2.5 overflow-y-auto">
-        {roles.map((role) => (
-          <label key={role.code} className="flex items-center gap-2.5 text-control text-ink">
-            <input type="checkbox" name="roles" value={role.code} className="size-4 accent-cta" />
-            {role.name}
-            <span className="font-mono text-data text-ink-3">{role.code}</span>
-          </label>
-        ))}
-      </div>
+              <ActionOutcome />
 
-      {failure ? (
-        <p role="alert" className="text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-
-      <DialogFooter>
-        <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
-          {t.cancel}
-        </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? t.submitting : t.rolesDialog.submit}
-        </Button>
-      </DialogFooter>
-    </form>
+              <DialogFooter>
+                <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
+                  {t.cancel}
+                </Button>
+                <ActionButton pendingLabel={t.submitting}>{t.rolesDialog.submit}</ActionButton>
+              </DialogFooter>
+            </>
+          )}
+        </>
+      )}
+    </ActionForm>
   );
 }
 
@@ -759,96 +655,83 @@ function ResetPasswordForm({
   const t = dict.accounts.selection.bulk;
   const store = useSelectionStore();
   const [frozenIds] = useState(ids);
-  const [state, formAction, pending] = useActionState<BulkPasswordState, FormData>(
-    bulkResetPasswordAction,
-    {},
-  );
-
-  useEffect(() => {
-    reportDismissible(!pending && !state.result);
-  }, [pending, state.result, reportDismissible]);
-
-  if (state.result) {
-    const issuedCount = state.result.issued.length;
-    const skippedCount = state.result.skipped.length;
-
-    return (
-      <>
-        <DialogHeader>
-          <DialogTitle>{t.resetDialog.issued}</DialogTitle>
-          <DialogDescription>{t.resetDialog.handover}</DialogDescription>
-        </DialogHeader>
-
-        {issuedCount > 0 ? (
-          <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto">
-            {state.result.issued.map((row) => (
-              <IssuedRow key={row.id} row={row} dict={dict} />
-            ))}
-          </ul>
-        ) : null}
-
-        <EmailSummary
-          rows={state.result.issued.map((row) => ({
-            login: row.login,
-            emailed: row.emailed,
-            reason: row.emailSkippedReason,
-          }))}
-          perMinute={sendingRate(mail)}
-          dict={dict}
-          locale={locale}
-        />
-
-        <SkippedList skipped={state.result.skipped} dict={dict} />
-
-        {issuedCount === 0 && skippedCount === 0 ? (
-          <p className="text-small text-ink-2">{t.resetDialog.none}</p>
-        ) : null}
-
-        <DialogFooter>
-          <Button
-            type="button"
-            onClick={() => {
-              if (issuedCount > 0) store.clear();
-              onClose();
-            }}
-          >
-            {t.done}
-          </Button>
-        </DialogFooter>
-      </>
-    );
-  }
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
 
   return (
-    <form action={formAction} className="flex flex-col gap-5">
-      <HiddenIds ids={frozenIds} />
+    <ActionForm
+      action={bulkResetPasswordAction}
+      fields={{ ids: frozenIds }}
+      errors={dict.errors}
+      className="flex flex-col gap-5"
+    >
+      {(state, pending) => (
+        <>
+          <ReportDismissible pending={pending} done={state.result !== undefined} report={reportDismissible} />
+          {state.result ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t.resetDialog.issued}</DialogTitle>
+                <DialogDescription>{t.resetDialog.handover}</DialogDescription>
+              </DialogHeader>
 
-      <DialogHeader>
-        <DialogTitle>{fill(t.resetDialog.title, { n: frozenIds.length })}</DialogTitle>
-        <DialogDescription>{t.resetDialog.description}</DialogDescription>
-      </DialogHeader>
+              {state.result.issued.length > 0 ? (
+                <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto">
+                  {state.result.issued.map((row) => (
+                    <IssuedRow key={row.id} row={row} dict={dict} />
+                  ))}
+                </ul>
+              ) : null}
 
-      <SendByEmailOption mail={mail} dict={dict} />
+              <EmailSummary
+                rows={state.result.issued.map((row) => ({
+                  login: row.login,
+                  emailed: row.emailed,
+                  reason: row.emailSkippedReason,
+                }))}
+                perMinute={sendingRate(mail)}
+                dict={dict}
+                locale={locale}
+              />
 
-      {failure ? (
-        <p role="alert" className="text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
+              <SkippedList skipped={state.result.skipped} dict={dict} />
 
-      <DialogFooter>
-        <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
-          {t.cancel}
-        </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? t.submitting : t.resetDialog.submit}
-        </Button>
-      </DialogFooter>
-    </form>
+              {state.result.issued.length === 0 && state.result.skipped.length === 0 ? (
+                <p className="text-small text-ink-2">{t.resetDialog.none}</p>
+              ) : null}
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (state.result && state.result.issued.length > 0) store.clear();
+                    onClose();
+                  }}
+                >
+                  {t.done}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>{fill(t.resetDialog.title, { n: frozenIds.length })}</DialogTitle>
+                <DialogDescription>{t.resetDialog.description}</DialogDescription>
+              </DialogHeader>
+
+              <SendByEmailOption mail={mail} dict={dict} />
+
+              <ActionOutcome />
+
+              <DialogFooter>
+                <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
+                  {t.cancel}
+                </Button>
+                <ActionButton pendingLabel={t.submitting}>{t.resetDialog.submit}</ActionButton>
+              </DialogFooter>
+            </>
+          )}
+        </>
+      )}
+    </ActionForm>
   );
 }
 

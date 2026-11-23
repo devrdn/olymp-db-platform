@@ -179,41 +179,28 @@ describe("AccountCard, clearing a sign-in lockout", () => {
         mail={{ status: "off" }} />,
     );
 
-  test("asks for confirmation before anything is sent", () => {
+  test("asks first, naming the login, and sends nothing on no", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderCard();
 
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
 
-    expect(
-      screen.getByText(fill(en.accounts.card.unlockSignInConfirmTitle, { login: "s.popescu" })),
-    ).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledWith(fill(en.accounts.card.confirmUnlockSignIn, { login: "s.popescu" }));
     expect(unlockSignInAction).not.toHaveBeenCalled();
-  });
-
-  test("sends nothing when the confirmation is cancelled", async () => {
-    renderCard();
-
-    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
-    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignInCancel }));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByText(fill(en.accounts.card.unlockSignInConfirmTitle, { login: "s.popescu" })),
-      ).not.toBeInTheDocument(),
-    );
-    expect(unlockSignInAction).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 
   test("clears the lockout for this account once confirmed, and says so", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderCard();
 
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
-    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignInConfirm }));
 
     await waitFor(() => expect(unlockSignInAction).toHaveBeenCalledTimes(1));
     const submitted = unlockSignInAction.mock.calls[0][1] as FormData;
     expect(submitted.get("userId")).toBe(account().id);
     expect(await screen.findByText(en.accounts.card.unlocked)).toBeInTheDocument();
+    confirm.mockRestore();
   });
 });
 

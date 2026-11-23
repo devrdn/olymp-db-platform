@@ -1419,11 +1419,8 @@ const ro = {
       unlockSignIn: "Deblocați autentificarea",
       unlockSignInNote:
         "Șterge încercările de autentificare eșuate contorizate pentru acest cont, astfel încât titularul să poată încerca acum, fără să aștepte până la 15 minute. Încercările contorizate pentru o adresă se păstrează.",
-      unlockSignInConfirmTitle: "Deblocați autentificarea pentru {login}?",
-      unlockSignInConfirmBody:
-        "Faceți acest lucru doar când știți că titularul încearcă să se autentifice: cine ghicește parola primește și el încercările înapoi.",
-      unlockSignInConfirm: "Deblocați",
-      unlockSignInCancel: "Anulați",
+      confirmUnlockSignIn:
+        "Deblocați autentificarea pentru {login}? Faceți acest lucru doar când știți că titularul încearcă să se autentifice: cine ghicește parola primește și el încercările înapoi.",
       unlocked: "Autentificarea a fost deblocată",
       created: "Creat",
       back: "← Toate conturile",
@@ -1488,11 +1485,8 @@ const ro = {
           title: "Schimbați rolurile pentru {n} conturi",
           description: "Înlocuiește setul de roluri al fiecărui cont selectat exact cu ce este bifat aici.",
           submit: "Înlocuiți rolurile",
-          confirmEmptyTitle: "Eliminați toate rolurile?",
-          confirmEmptyBody:
-            "Niciun rol nu este bifat. La continuare, vor fi eliminate toate rolurile din toate cele {n} conturi selectate.",
-          confirmEmptySubmit: "Eliminați toate rolurile",
-          back: "Înapoi",
+          confirmEmpty:
+            "Eliminați toate rolurile? Niciun rol nu este bifat. La continuare, vor fi eliminate toate rolurile din toate cele {n} conturi selectate.",
         },
         resetDialog: {
           title: "Resetați parolele pentru {n} conturi",

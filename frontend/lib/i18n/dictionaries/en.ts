@@ -1529,11 +1529,8 @@ const en = {
       unlockSignIn: "Clear sign-in lockout",
       unlockSignInNote:
         "Forgets the failed sign-in attempts counted against this account, so its owner can try again now instead of waiting up to 15 minutes. Attempts counted against an address are kept.",
-      unlockSignInConfirmTitle: "Clear the sign-in lockout for {login}?",
-      unlockSignInConfirmBody:
-        "Do this once you know it is the owner trying to sign in: anybody guessing the password gets their attempts back too.",
-      unlockSignInConfirm: "Clear lockout",
-      unlockSignInCancel: "Cancel",
+      confirmUnlockSignIn:
+        "Clear the sign-in lockout for {login}? Do this once you know it is the owner trying to sign in: anybody guessing the password gets their attempts back too.",
       unlocked: "Sign-in lockout cleared",
       created: "Created",
       back: "← All accounts",
@@ -1620,11 +1617,8 @@ const en = {
           // Shown only when the submit button is pressed with nothing
           // ticked — a legitimate way to strip every role, but never as an
           // accident behind a button that looks like it is only asking.
-          confirmEmptyTitle: "Remove every role?",
-          confirmEmptyBody:
-            "No role is checked. Continuing will remove every role from all {n} selected accounts.",
-          confirmEmptySubmit: "Remove all roles",
-          back: "Go back",
+          confirmEmpty:
+            "Remove every role? No role is checked. Continuing will remove every role from all {n} selected accounts.",
         },
         resetDialog: {
           title: "Reset passwords for {n} accounts",
