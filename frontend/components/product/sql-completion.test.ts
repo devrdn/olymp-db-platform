@@ -1,12 +1,24 @@
 import { CompletionContext, type Completion, type CompletionResult } from "@codemirror/autocomplete";
 import { PostgreSQL, sql } from "@codemirror/lang-sql";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
-import { describe, expect, test } from "vitest";
+import { EditorState, type Extension } from "@codemirror/state";
+import { describe, expect, test, vi } from "vitest";
 
 import type { GameSchema } from "@/lib/api/schema";
 
 import { sqlCompletion } from "./sql-completion";
+
+/**
+ * A state whose syntax tree covers the whole document. A new state keeps
+ * whatever its parser reached in 20 ms of wall time, and a view would finish
+ * the rest in the background; a bare state never does, so it is parsed to the
+ * end with no deadline and the finished tree is taken into the next state.
+ */
+function parsedState(doc: string, extensions: Extension): EditorState {
+  const state = EditorState.create({ doc, extensions });
+  ensureSyntaxTree(state, state.doc.length, Infinity);
+  return state.update({}).state;
+}
 
 /**
  * The options every source offers for `doc` with the caret at `|`, without a
@@ -16,11 +28,10 @@ async function resultsAt(doc: string, schema: GameSchema | null): Promise<Comple
   const pos = doc.indexOf("|");
   const completion = sqlCompletion();
   completion.setSchema(schema);
-  const state = EditorState.create({
-    doc: doc.replace("|", ""),
-    extensions: [sql({ dialect: PostgreSQL, upperCaseKeywords: true }), completion.extension],
-  });
-  ensureSyntaxTree(state, state.doc.length);
+  const state = parsedState(doc.replace("|", ""), [
+    sql({ dialect: PostgreSQL, upperCaseKeywords: true }),
+    completion.extension,
+  ]);
   const context = new CompletionContext(state, pos, false);
   const results = await Promise.all(
     state.languageDataAt<(context: CompletionContext) => CompletionResult | null>("autocomplete", pos).map(
@@ -156,6 +167,21 @@ describe("columns without a table in front", () => {
 describe("inside a string", () => {
   test("offers nothing, neither keywords nor names", async () => {
     expect(await labelsAt("SELECT * FROM suspects WHERE id = 'sus|", SCHEMA)).toEqual([]);
+  });
+});
+
+describe("on a slow machine", () => {
+  // Each read of the clock jumps past the 20 ms a new state is parsed for.
+  test("the names come from the whole statement however slowly it is parsed", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 25));
+    try {
+      const labels = await labelsAt("SELECT p| FROM suspects JOIN alibis USING (id)", SCHEMA);
+
+      expect(labels).toContain("place");
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 
