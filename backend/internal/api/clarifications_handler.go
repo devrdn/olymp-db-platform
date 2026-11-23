@@ -4,13 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
-	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
-	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 	"github.com/go-chi/chi/v5"
@@ -32,17 +30,6 @@ import (
 // and one of another contest is not found. After the contest ends for a
 // participant the gate refuses their feed too, as it refuses all of /play.
 
-// ClarificationAccess is the slice of queryproxy.Service the participant
-// routes need.
-type ClarificationAccess interface {
-	AdmitRead(userID uuid.UUID) error
-	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
-	// StartOnRead records the participant's start, which under individual
-	// timing starts their clock: the feed carries the organisers' corrections
-	// of the tasks, and asking is an act in the contest.
-	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error)
-}
-
 // Clarifications is the slice of clarifications.Service these routes call.
 type Clarifications interface {
 	AdmitAsk(ctx context.Context, account uuid.UUID) error
@@ -57,24 +44,14 @@ type Clarifications interface {
 
 // ClarificationsHandler serves both sides of the clarifications.
 type ClarificationsHandler struct {
-	service Clarifications
-	access  ClarificationAccess
-	mw      *auth.Middleware
-	log     *slog.Logger
-	// watcher hears of every admitted participant request; nil watches
-	// nothing.
-	watcher Watcher
+	service       Clarifications
+	participation Participation
+	mw            *auth.Middleware
+	log           *slog.Logger
 }
 
-func NewClarificationsHandler(service Clarifications, access ClarificationAccess, mw *auth.Middleware, log *slog.Logger) *ClarificationsHandler {
-	return &ClarificationsHandler{service: service, access: access, mw: mw, log: log}
-}
-
-// WithWatcher reports every admitted participant request to watcher, the one
-// the play screen reports to.
-func (h *ClarificationsHandler) WithWatcher(watcher Watcher) *ClarificationsHandler {
-	h.watcher = watcher
-	return h
+func NewClarificationsHandler(service Clarifications, admission Participation, mw *auth.Middleware, log *slog.Logger) *ClarificationsHandler {
+	return &ClarificationsHandler{service: service, participation: admission, mw: mw, log: log}
 }
 
 const clarificationIDParam = "clarificationID"
@@ -96,37 +73,6 @@ func (h *ClarificationsHandler) Mount(r chi.Router) {
 			r.Post(contest+"/announcements", h.announce)
 		})
 	})
-}
-
-// admit resolves the caller as a participant of the contest in the URL.
-func (h *ClarificationsHandler) admit(w http.ResponseWriter, r *http.Request, userID uuid.UUID) (contests.Participant, contests.Contest, bool) {
-	contestID, ok := contestIDFrom(w, r)
-	if !ok {
-		return contests.Participant{}, contests.Contest{}, false
-	}
-	participant, contest, err := h.access.Access(r.Context(), contestID, userID, clientAddress(r))
-	if err != nil {
-		h.fail(w, r, err)
-		return contests.Participant{}, contests.Contest{}, false
-	}
-	if h.watcher != nil {
-		h.watcher.Observe(r.Context(), monitor.Visit{
-			Contest: contest.ID, Registration: participant.ID,
-			Address: clientAddress(r), Session: sessionTag(h.mw, r), UserAgent: r.UserAgent(),
-		})
-	}
-	return participant, contest, true
-}
-
-// startOnRead records the participant's start after a successful read or ask
-// and before anything is sent, so a refused request starts nothing and nothing
-// is sent to a participant whose start could not be recorded.
-func (h *ClarificationsHandler) startOnRead(w http.ResponseWriter, r *http.Request, contest contests.Contest, participant contests.Participant) bool {
-	if _, err := h.access.StartOnRead(r.Context(), contest, participant, clientAddress(r)); err != nil {
-		h.fail(w, r, err)
-		return false
-	}
-	return true
 }
 
 // clarificationTimeLayout keeps the database's microseconds, always six
@@ -211,17 +157,14 @@ type feedResponse struct {
 	Open int `json:"open"`
 }
 
+// feed is a read of the play screen, and the organisers' corrections of the
+// tasks ride on it, so a successful one starts the participant.
 func (h *ClarificationsHandler) feed(w http.ResponseWriter, r *http.Request) {
-	identity, _ := auth.IdentityFrom(r.Context())
-	// Before any lookup, as every /play read (CLAUDE.md rule 13).
-	if err := h.access.AdmitRead(identity.UserID); err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	participant, contest, ok := h.admit(w, r, identity.UserID)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
+	contest := admission.Contest
 	var before *clarifications.Cursor
 	if text := r.URL.Query().Get("before"); text != "" {
 		cursor, err := clarifications.ParseCursor(text)
@@ -232,14 +175,14 @@ func (h *ClarificationsHandler) feed(w http.ResponseWriter, r *http.Request) {
 		before = &cursor
 	}
 	page, err := h.service.Feed(r.Context(), clarifications.FeedQuery{
-		ContestID: contest.ID, RegistrationID: participant.ID,
+		ContestID: contest.ID, RegistrationID: admission.Participant.ID,
 		Before: before, Limit: intParam(r, "limit"), Sequential: contest.SequentialActive(),
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	if !h.startOnRead(w, r, contest, participant) {
+	if !start(w, r, admission, h.fail) {
 		return
 	}
 
@@ -267,18 +210,16 @@ type askRequest struct {
 	Body       string  `json:"body"`
 }
 
+// ask spends the account's ask budget, not the read budget: every attempt
+// counts, and someone on no roster cannot make lookups for free (CLAUDE.md
+// rules 5 and 13). Asking is an act in the contest, so it starts the
+// participant.
 func (h *ClarificationsHandler) ask(w http.ResponseWriter, r *http.Request) {
-	identity, _ := auth.IdentityFrom(r.Context())
-	// Charged before the gate and the body: every attempt counts, and someone
-	// on no roster cannot make lookups for free (CLAUDE.md rules 5 and 13).
-	if err := h.service.AdmitAsk(r.Context(), identity.UserID); err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	participant, contest, ok := h.admit(w, r, identity.UserID)
+	admission, ok := h.participation.admit(w, r, h.mw, participation.BudgetFunc(h.service.AdmitAsk), h.fail)
 	if !ok {
 		return
 	}
+	contest := admission.Contest
 	var req askRequest
 	if !decodeBody(w, r, &req) {
 		return
@@ -293,14 +234,14 @@ func (h *ClarificationsHandler) ask(w http.ResponseWriter, r *http.Request) {
 		questionID = &id
 	}
 	asked, err := h.service.Ask(r.Context(), clarifications.AskCommand{
-		ContestID: contest.ID, RegistrationID: participant.ID, QuestionID: questionID,
+		ContestID: contest.ID, RegistrationID: admission.Participant.ID, QuestionID: questionID,
 		Sequential: contest.SequentialActive(), Body: req.Body,
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	if !h.startOnRead(w, r, contest, participant) {
+	if !start(w, r, admission, h.fail) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, toSeenClarification(asked.ID, asked.PostedAt(), clarifications.Seen{
@@ -495,10 +436,10 @@ func (h *ClarificationsHandler) announce(w http.ResponseWriter, r *http.Request)
 	httpx.JSON(w, r, http.StatusCreated, toAnnouncementResponse(posted))
 }
 
-// fail answers the gate's and the read budget's refusals as every /play route
-// does, and the package's own from clarificationsErrors (CLAUDE.md rule 1).
+// fail answers admission's refusals as every /play route does, and the
+// package's own from clarificationsErrors (CLAUDE.md rule 1).
 func (h *ClarificationsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	if queryproxyErrors.answer(w, r, h.log, err) || clarificationsErrors.answer(w, r, h.log, err) {
+	if participationErrors.answer(w, r, h.log, err) || clarificationsErrors.answer(w, r, h.log, err) {
 		return
 	}
 	h.log.ErrorContext(r.Context(), "a clarification request failed", "error", err)

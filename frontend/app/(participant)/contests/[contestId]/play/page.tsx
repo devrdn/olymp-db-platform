@@ -43,7 +43,7 @@ export async function generateMetadata() {
 /**
  * Whether a refusal means this participant may not use the screen at all
  * right now, whichever request surfaces it. Such refusals come from the
- * admission gate the `/play/*` reads share (`AdmitRead`, then `Access`): a
+ * admission the `/play/*` reads share (the read budget, then the gate): a
  * passed deadline, a disallowed address, removal from the roster, or the
  * rate limit. `question_not_found` is listed too, though none of the reads
  * below answers with it. `story_not_found` does not take the screen: it

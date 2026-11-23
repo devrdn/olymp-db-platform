@@ -7,8 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
-	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/workspace"
 	"github.com/go-chi/chi/v5"
@@ -66,30 +65,18 @@ func (h *ParticipantHandler) mountWorkspace(r chi.Router) {
 
 // workspaceSession turns an admitted request into the workspace session: whose
 // workspace, and the language a server-named tab takes.
-func (h *ParticipantHandler) workspaceSession(r *http.Request, participant contests.Participant, contest contests.Contest) workspace.Session {
-	return workspace.Session{Registration: participant.ID, Lang: h.languageFor(r, contest)}
+func (h *ParticipantHandler) workspaceSession(r *http.Request, admission *participation.Admission) workspace.Session {
+	return workspace.Session{Registration: admission.Participant.ID, Lang: h.languageFor(r, admission.Contest)}
 }
 
-// admitWorkspaceWrite spends a write of the workspace budget, then admits the
-// request like admit but without charging the read budget.
+// admitWorkspaceWrite admits a write on the workspace's own budget instead of
+// the read budget.
 func (h *ParticipantHandler) admitWorkspaceWrite(w http.ResponseWriter, r *http.Request) (workspace.Session, bool) {
-	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.workspaces.AdmitWrite(r.Context(), identity.UserID); err != nil {
-		h.failWorkspace(w, r, err)
-		return workspace.Session{}, false
-	}
-
-	contestID, ok := contestIDFrom(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, participation.BudgetFunc(h.workspaces.AdmitWrite), h.failWorkspace)
 	if !ok {
 		return workspace.Session{}, false
 	}
-	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
-	if err != nil {
-		h.fail(w, r, err)
-		return workspace.Session{}, false
-	}
-	h.observe(r, participant, contest)
-	return h.workspaceSession(r, participant, contest), true
+	return h.workspaceSession(r, admission), true
 }
 
 func tabID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -140,11 +127,11 @@ func updated(at time.Time) updatedResponse {
 
 // getWorkspace creates the first tab when the participant has none.
 func (h *ParticipantHandler) getWorkspace(w http.ResponseWriter, r *http.Request) {
-	participant, contest, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
-	found, err := h.workspaces.Get(r.Context(), h.workspaceSession(r, participant, contest))
+	found, err := h.workspaces.Get(r.Context(), h.workspaceSession(r, admission))
 	if err != nil {
 		h.failWorkspace(w, r, err)
 		return
@@ -312,7 +299,8 @@ func (h *ParticipantHandler) decodeWorkspaceBody(w http.ResponseWriter, r *http.
 	return false
 }
 
-// failWorkspace maps a workspace refusal to a response (CLAUDE.md rule 1).
+// failWorkspace maps a workspace refusal to a response, and anything else as
+// every participant route does (CLAUDE.md rule 1).
 func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, workspace.ErrTooOften):
@@ -338,6 +326,9 @@ func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Reques
 	case errors.Is(err, workspace.ErrNothingToChange):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 	default:
+		if h.answered(w, r, err) {
+			return
+		}
 		h.log.ErrorContext(r.Context(), "the participant's workspace could not be served", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 	}

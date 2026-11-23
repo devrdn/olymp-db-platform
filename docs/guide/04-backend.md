@@ -47,7 +47,7 @@ flowchart TB
   api["internal/api (HTTP adapters, error table, codes)"]
 
   subgraph domain["Domain packages"]
-    dom["contests, users, auth, rbac, audit, settings, workspace, monitor, leaderboard, profile, showcase, covers, mailing, health"]
+    dom["contests, participation, users, auth, rbac, audit, settings, workspace, monitor, leaderboard, profile, showcase, covers, mailing, health"]
     game["provisioning, queryproxy, gamefile"]
   end
 
@@ -104,8 +104,15 @@ flowchart TB
   they need as interfaces. `internal/postgres` holds every core-database query
   and implements those interfaces; `internal/gamedb` does the same for the game
   cluster, behind `provisioning.Cluster`.
-- **The Query Runner side.** `queryproxy` (in the Core API) decides whether and
-  where a query runs and calls a `queryrunner.Executor`. In production that
+- **Participant admission.** Every participant request, the console's queries
+  included, is admitted by `participation.Admitter.Admit`: it charges the
+  route's own budget, looks the participant up, asks the gate
+  (`contests.Gate`) and records the monitor visit, in that order. The
+  `Admission` it returns records the participant's start only when the route
+  calls `Start`, once the content is ready.
+- **The Query Runner side.** `queryproxy` (in the Core API) admits a query
+  through `participation`, decides where it runs and calls a
+  `queryrunner.Executor`. In production that
   executor is `rpc.Client`, which speaks gRPC to `rpc.Server` inside
   `cmd/queryrunner`; the server hands the request to `queryrunner.Runner`,
   which checks the SQL with `sqlpolicy/checker` and runs it on the game

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
@@ -17,7 +18,7 @@ import (
 func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	f := newParticipantFixture(t)
 	contest := f.playContest(t)
-	f.access.schema = provisioning.Schema{Tables: []provisioning.Table{
+	f.schemas.schema = provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "guests", Columns: []provisioning.Column{
 			{Name: "id", Type: "uuid"},
 			{Name: "room_id", Type: "uuid", Nullable: true, References: "rooms"},
@@ -28,14 +29,14 @@ func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
-	// Access is asked about the contest the URL names, and Schema is handed
-	// the pair Access admitted.
-	if f.access.gotContestID != contest {
-		t.Fatalf("Access asked about %s, want the contest named in the URL", f.access.gotContestID)
+	// Admission is asked about the contest the URL names, and Schema is
+	// handed the pair admission found.
+	if f.roster.AskedAbout() != contest {
+		t.Fatalf("admission asked about %s, want the contest named in the URL", f.roster.AskedAbout())
 	}
-	if f.access.schemaAsked != contest || f.access.schemaFor != f.access.participant.ID {
+	if f.schemas.asked != contest || f.schemas.askedFor != f.roster.Participant().ID {
 		t.Fatalf("Schema handed %s/%s, want the admitted %s/%s",
-			f.access.schemaAsked, f.access.schemaFor, contest, f.access.participant.ID)
+			f.schemas.asked, f.schemas.askedFor, contest, f.roster.Participant().ID)
 	}
 
 	var body struct {
@@ -69,7 +70,7 @@ func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 func TestSchemaEndpointCarriesEachTablesKeys(t *testing.T) {
 	f := newParticipantFixture(t)
 	contest := f.playContest(t)
-	f.access.schema = provisioning.Schema{Tables: []provisioning.Table{
+	f.schemas.schema = provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "floors", PrimaryKey: []string{"level", "building"}, Columns: []provisioning.Column{
 			{Name: "building", Type: "text"}, {Name: "level", Type: "integer"},
 		}},
@@ -115,7 +116,7 @@ func TestSchemaEndpointCarriesEachTablesKeys(t *testing.T) {
 func TestSchemaEndpointAnswersATableWithoutKeysWithEmptyLists(t *testing.T) {
 	f := newParticipantFixture(t)
 	contest := f.playContest(t)
-	f.access.schema = provisioning.Schema{Tables: []provisioning.Table{
+	f.schemas.schema = provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "notes", Columns: []provisioning.Column{{Name: "body", Type: "text"}}},
 	}}
 
@@ -133,11 +134,29 @@ func TestSchemaEndpointAnswersATableWithoutKeysWithEmptyLists(t *testing.T) {
 	}
 }
 
+// Without a Query Runner there is no schema to hand over: the panel is
+// admitted like every read, refused as hidden, and starts nobody.
+func TestAConsolelessSchemaPanelIsHiddenAndStartsNobody(t *testing.T) {
+	f := newConsolelessParticipantFixture(t)
+	contest := f.playContest(t)
+
+	rec := f.get("/contests/" + contest.String() + "/play/schema")
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != "schema_hidden" {
+		t.Fatalf("status %d, body %s; want 403 schema_hidden", rec.Code, rec.Body)
+	}
+	if f.roster.Lookups() == 0 {
+		t.Fatal("the panel was refused without being admitted")
+	}
+	if started := f.roster.Started(); len(started) != 0 {
+		t.Fatalf("started %v, want nobody", started)
+	}
+}
+
 // A client that must tell null from [] before drawing a tree is a bug waiting.
 func TestSchemaEndpointNeverAnswersWithANullList(t *testing.T) {
 	f := newParticipantFixture(t)
 
-	rec := f.get("/contests/" + uuid.NewString() + "/play/schema")
+	rec := f.get("/contests/" + f.admitted().String() + "/play/schema")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
@@ -170,9 +189,9 @@ func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newParticipantFixture(t)
-			f.access.schemaErr = tc.err
+			f.schemas.err = tc.err
 
-			rec := f.get("/contests/" + uuid.NewString() + "/play/schema")
+			rec := f.get("/contests/" + f.admitted().String() + "/play/schema")
 			if rec.Code != tc.status {
 				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
 			}
@@ -204,8 +223,8 @@ func TestASchemaReadIsObserved(t *testing.T) {
 	if len(visits) != 1 {
 		t.Fatalf("the request was observed %d times, want once", len(visits))
 	}
-	if got := visits[0]; got.Contest != contestID || got.Registration != f.access.participant.ID {
-		t.Fatalf("visit filed under %v/%v, want %v/%v", got.Contest, got.Registration, contestID, f.access.participant.ID)
+	if got := visits[0]; got.Contest != contestID || got.Registration != f.roster.Participant().ID {
+		t.Fatalf("visit filed under %v/%v, want %v/%v", got.Contest, got.Registration, contestID, f.roster.Participant().ID)
 	}
 }
 
@@ -228,7 +247,7 @@ func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			contestID := f.playContest(t)
-			f.access.err = tc.err
+			f.refuse(tc.err)
 
 			rec := f.get("/contests/" + contestID.String() + "/play/schema")
 			if rec.Code != tc.status {
@@ -245,7 +264,7 @@ func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 			if body.Error.Code != tc.code {
 				t.Fatalf("code %q, want %q", body.Error.Code, tc.code)
 			}
-			if f.access.schemaAsked != uuid.Nil {
+			if f.schemas.asked != uuid.Nil {
 				t.Fatal("the schema was asked for after admission refused the request")
 			}
 			if visits := f.watcher.seen(); len(visits) != 0 {
@@ -257,13 +276,13 @@ func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 
 func TestSchemaEndpointIsRateLimitedBeforeItLooksAnythingUp(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryproxy.ErrTooManyReads
+	f.reads.refuseWith(participation.ErrTooManyReads)
 
 	rec := f.get("/contests/" + uuid.NewString() + "/play/schema")
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status %d, want 429: %s", rec.Code, rec.Body)
 	}
-	if f.access.schemaAsked != uuid.Nil {
+	if f.schemas.asked != uuid.Nil {
 		t.Fatal("the schema was read despite the read budget refusing the request")
 	}
 }
@@ -275,7 +294,7 @@ func TestSchemaEndpointRefusesAContestIdentifierThatIsNotAUUID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
 	}
-	if f.access.schemaAsked != uuid.Nil {
+	if f.schemas.asked != uuid.Nil {
 		t.Fatal("looked the schema up for an identifier that never parsed")
 	}
 }
@@ -295,7 +314,7 @@ func TestTheQueryLogNeverHandsBackAFailureOfOurs(t *testing.T) {
 		},
 	}
 
-	rec := f.get("/contests/" + uuid.NewString() + "/play/log?limit=10&offset=0")
+	rec := f.get("/contests/" + f.admitted().String() + "/play/log?limit=10&offset=0")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
@@ -323,7 +342,7 @@ func TestTheQueryLogIsNotAnOracleForAHiddenSchema(t *testing.T) {
 		},
 	}
 
-	rec := f.get("/contests/" + uuid.NewString() + "/play/log?limit=10&offset=0")
+	rec := f.get("/contests/" + f.admitted().String() + "/play/log?limit=10&offset=0")
 	if strings.Contains(rec.Body.String(), "does not exist") || strings.Contains(rec.Body.String(), "suspects\"") {
 		t.Fatalf("the database's own words reached the participant: %s", rec.Body)
 	}
@@ -342,7 +361,7 @@ func TestTheQueryLogStillShowsARefusalOfTheirOwnQuery(t *testing.T) {
 		},
 	}
 
-	rec := f.get("/contests/" + uuid.NewString() + "/play/log?limit=10&offset=0")
+	rec := f.get("/contests/" + f.admitted().String() + "/play/log?limit=10&offset=0")
 	if !strings.Contains(rec.Body.String(), "syntax error at or near") {
 		t.Fatalf("the participant's own refusal was withheld too: %s", rec.Body)
 	}

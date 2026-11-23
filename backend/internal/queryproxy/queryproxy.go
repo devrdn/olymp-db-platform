@@ -1,10 +1,11 @@
 // Package queryproxy takes a participant's SQL and answers with rows.
 //
-// It decides whether and where a query runs: who is asking, whether the
-// participation gate (contests.Gate.StandingOf) admits them now, and which
-// database is theirs. What the SQL may do, how long it runs and how much it
-// returns belong to the Query Runner. The database is always looked up from
-// the registration; a request never names one.
+// It decides whether and where a query runs: it admits the asker through
+// participation.Admitter with the console's own query rate, then finds which
+// database is theirs. Who may act is the participation gate's decision; what
+// the SQL may do, how long it runs and how much it returns belong to the Query
+// Runner. The database is always looked up from the registration; a request
+// never names one.
 package queryproxy
 
 import (
@@ -14,10 +15,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
-	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
-	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
@@ -47,42 +46,17 @@ var (
 	// hides its schema: "relation x does not exist" would let a participant
 	// rebuild the hidden catalogue by guessing names.
 	ErrDatabaseDeclined = errors.New("the database refused the query")
-	// ErrTooManyReads is a participant loading the play screen faster than
-	// the read budget (WithReadsPerMinute) allows. It is not
-	// queryrunner.ErrTooManyQueries: the two budgets are separate, and a
-	// participant told "too many queries" after reloading a page would wait
-	// for nothing.
-	ErrTooManyReads = errors.New("too many page reads")
 )
 
 // Errors lists every sentinel this package declares, so internal/api can
 // answer each one (CLAUDE.md rule 1). The gate's, the Query Runner's and
-// sqlpolicy's errors belong to their own lists.
+// sqlpolicy's errors belong to their own lists, and admission's to
+// participation's.
 func Errors() []error {
 	return []error{
 		ErrNothingLeftToAnswer, ErrNoGameYet, ErrNoRoomForDatabase, ErrUnavailable,
 		ErrDatabaseDeclined, ErrSchemaHidden, ErrResetReadOnly, ErrResetTooOften,
-		ErrTooManyReads,
 	}
-}
-
-// People answers who is asking, and starts their clock.
-type People interface {
-	ByUser(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error)
-	// Start records now as the participant's first deliberate action, if they
-	// have not already begun. See contests.RegistrationRepository.Start for
-	// the concurrency guarantee.
-	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (p contests.Participant, recorded bool, err error)
-}
-
-// Contests answers what they are asking about.
-type Contests interface {
-	ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error)
-}
-
-// Games answers which template a contest plays on, and under what policy.
-type Games interface {
-	Game(ctx context.Context, contestID uuid.UUID) (provisioning.Contest, error)
 }
 
 // LookupResult is everything Run needs about one query before it reaches the
@@ -101,23 +75,16 @@ type LookupResult struct {
 	InstanceErr error
 }
 
-// Lookup answers who is asking and what about, in one round trip per request.
-//
-// The contest either method returns carries no Translations: no participant
-// path shows a title or description, and every language's description would
-// otherwise ride on each call. A participant path that needs one reads the
-// contest by ID.
+// Lookup answers who is asking, what about, and on which game and database,
+// in one round trip per query. The contest carries no Translations, as
+// participation.Lookup's does not.
 type Lookup interface {
 	ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error)
-	// ForAccess is the participant and the contest, for read endpoints that
-	// need neither the game nor a database.
-	ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error)
 }
 
 // Databases hands out the participant's own copy, says how large it may
-// grow, and remakes it on request. Only defaultLookup calls Instance.
+// grow, and remakes it on request.
 type Databases interface {
-	Instance(ctx context.Context, registration uuid.UUID) (provisioning.Instance, error)
 	EnsureFrom(ctx context.Context, contest provisioning.Contest, registration uuid.UUID, existing provisioning.Instance, err error) (string, error)
 	Quota(ctx context.Context, contest provisioning.Contest) (int64, error)
 	// Reset copies the template over the registration's database and records
@@ -141,7 +108,9 @@ type Executor interface {
 // Command is one participant asking one question. It carries no database:
 // the database is always looked up from the registration.
 type Command struct {
-	ContestID uuid.UUID
+	// ContestID is the identifier as the caller wrote it, parsed only after
+	// the rate is charged (participation.Request.Contest).
+	ContestID string
 	UserID    uuid.UUID
 	SQL       string
 	// Address is resolved by the HTTP layer. It is checked against the
@@ -154,117 +123,42 @@ type Command struct {
 	UserAgent string
 }
 
-// Watcher hears of every admitted request, to detect a changed address or a
-// second session (monitor.Tracker). It records and never refuses.
-type Watcher interface {
-	Observe(ctx context.Context, visit monitor.Visit)
-}
-
 // Service answers queries.
 type Service struct {
-	people    People
+	admitter  *participation.Admitter
+	lookup    Lookup
 	databases Databases
 	runner    Executor
 	// rate is a second instance of the Query Runner's limiter, so a query can
 	// be refused before the journal writes it. It holds two key spaces: the
 	// user ID, checked before any lookup, and the registration ID, checked
-	// against the contest's own limit.
+	// against the contest's own limit (queryBudget).
 	rate *queryrunner.RateLimiter
 	// resets is keyed by registration ID, so its keys are bounded by the
 	// rosters (CLAUDE.md rule 5).
 	resets *queryrunner.RateLimiter
-	// reads is the play screen's budget, apart from rate so that reloading a
-	// page never refuses the next query. Keyed by user ID, before any lookup.
-	reads          *queryrunner.RateLimiter
-	readsPerMinute int
 	// perMinuteDefault is the rate for a contest left at zero and the ceiling
 	// for any contest's own setting. Zero means no limit.
 	perMinuteDefault int
-	now              func() time.Time
-	// gate carries the installation's latency grace past a deadline. The grace
-	// is never shown to a participant; anything that renders a deadline must
-	// use contests.Deadline.
-	gate *contests.Gate
 	// schemas is nil until WithSchemas; see Schema.
 	schemas Schemas
 	// answerable is nil until WithAnswerable, and nil fails open.
 	answerable Answerable
-	lookup     Lookup
-	// watcher is nil until WithWatcher; nil watches nothing.
-	watcher Watcher
-	// audit records a participant's start in the transaction uow opens.
-	audit *audit.Recorder
-	uow   storage.UnitOfWork
 }
 
-// New assembles the façade around gate. It panics on a nil gate: no grace
-// assumed here is sure to match the rest of the installation's. It panics
-// without recorder or uow too: a participant's start is never recorded
-// without its audit entry.
-func New(people People, contestStore Contests, games Games, databases Databases, runner Executor, gate *contests.Gate,
-	recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
-	if gate == nil {
-		panic("queryproxy: New needs the participation gate")
-	}
-	if recorder == nil || uow == nil {
-		panic("queryproxy: New needs the audit recorder and its unit of work")
+// New assembles the façade. Admission, the gate and the start are admitter's;
+// lookup reads the game and the database in the same round trip as admission.
+// It panics without either.
+func New(admitter *participation.Admitter, lookup Lookup, databases Databases, runner Executor) *Service {
+	if admitter == nil || lookup == nil {
+		panic("queryproxy: New needs the participant admitter and the console's lookup")
 	}
 	return &Service{
-		people: people, databases: databases, runner: runner,
-		audit: recorder, uow: uow,
-		lookup:           defaultLookup{people: people, contests: contestStore, games: games, databases: databases},
+		admitter: admitter, lookup: lookup, databases: databases, runner: runner,
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		resets:           queryrunner.NewRateLimiter(ResetsPerWindow, ResetWindow),
-		reads:            queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
-		readsPerMinute:   ReadsPerMinute,
-		now:              func() time.Time { return time.Now().UTC() },
-		gate:             gate,
 	}
-}
-
-// defaultLookup is New's Lookup: separate calls in admission order. A
-// deployment replaces it with single queries (WithLookup).
-type defaultLookup struct {
-	people    People
-	contests  Contests
-	games     Games
-	databases Databases
-}
-
-func (d defaultLookup) ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error) {
-	participant, contest, err := d.ForAccess(ctx, contestID, userID)
-	if err != nil {
-		return LookupResult{}, err
-	}
-	game, gameErr := d.games.Game(ctx, contestID)
-	instance, instanceErr := d.databases.Instance(ctx, participant.ID)
-	return LookupResult{
-		Participant: participant, Contest: contest,
-		Game: game, GameErr: gameErr,
-		Instance: instance, InstanceErr: instanceErr,
-	}, nil
-}
-
-func (d defaultLookup) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
-	participant, err := d.people.ByUser(ctx, contestID, userID)
-	if err != nil {
-		return contests.Participant{}, contests.Contest{}, err
-	}
-	contest, err := d.contests.ByID(ctx, contestID)
-	if err != nil {
-		return contests.Participant{}, contests.Contest{}, err
-	}
-	contest.Translations = nil
-	return participant, contest, nil
-}
-
-// WithClock overrides the clock the gate is asked with, for tests.
-func (s *Service) WithClock(now func() time.Time) *Service {
-	if now != nil {
-		s.now = now
-	}
-	return s
 }
 
 // WithPerMinuteDefault sets the installation's rate, so this pre-check matches
@@ -279,22 +173,6 @@ func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 	return s
 }
 
-// ReadsPerMinute is the play screen's default read budget: the story, the
-// questions, the schema, the query log, the workspace and each events channel
-// opened all spend it. A reload costs about six reads, so this allows a
-// reload every few seconds for a minute.
-const ReadsPerMinute = 120
-
-// WithReadsPerMinute sets the read budget (PLAY_READ_PER_MINUTE). Zero means
-// no limit; a negative value panics, as WithPerMinuteDefault does.
-func (s *Service) WithReadsPerMinute(perMinute int) *Service {
-	if perMinute < 0 {
-		panic(fmt.Sprintf("queryproxy: negative read budget %d", perMinute))
-	}
-	s.readsPerMinute = perMinute
-	return s
-}
-
 // WithAnswerable supplies the reader behind ErrNothingLeftToAnswer.
 //
 // Without it the query runs: this check fails open, unlike WithSchemas.
@@ -302,20 +180,6 @@ func (s *Service) WithReadsPerMinute(perMinute int) *Service {
 // look the same as a contest that is over.
 func (s *Service) WithAnswerable(answerable Answerable) *Service {
 	s.answerable = answerable
-	return s
-}
-
-// WithWatcher reports every query admission lets through to watcher, before
-// the length or content checks, so a refused query still counts as the
-// registration being used from that address.
-func (s *Service) WithWatcher(watcher Watcher) *Service {
-	s.watcher = watcher
-	return s
-}
-
-// WithLookup replaces New's three-call default with a single query.
-func (s *Service) WithLookup(lookup Lookup) *Service {
-	s.lookup = lookup
 	return s
 }
 
@@ -333,57 +197,73 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 	return contestLimit
 }
 
+// queryBudget is the console's query rate as admission charges it: the
+// account at the installation's rate before any lookup, since no contest is
+// known yet and that rate is the ceiling of every contest's, then the
+// registration at the contest's own, so every refusal after the lookup counts
+// (CLAUDE.md rules 5 and 13).
+type queryBudget struct{ s *Service }
+
+func (b queryBudget) Charge(_ context.Context, account uuid.UUID) error {
+	return b.s.rate.Admit(account.String(), b.s.perMinuteDefault)
+}
+
+func (b queryBudget) ChargeRegistration(_ context.Context, participant contests.Participant, contest contests.Contest) error {
+	return b.s.rate.Admit(participant.ID.String(), effectiveRateLimit(contest.Settings.QueryRateLimitPerMin, b.s.perMinuteDefault))
+}
+
+// runLookup is Lookup.ForRun as admission's lookup, keeping the game and the
+// database it found so the console reads its row once.
+type runLookup struct {
+	lookup Lookup
+	found  LookupResult
+}
+
+func (l *runLookup) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
+	found, err := l.lookup.ForRun(ctx, contestID, userID)
+	l.found = found
+	return found.Participant, found.Contest, err
+}
+
+// admit admits the asker through participation, spending budget, and keeps
+// the game and the database the same round trip found.
+func (s *Service) admit(ctx context.Context, budget participation.Budget, contestID string, userID uuid.UUID,
+	addr netip.Addr, session, userAgent string) (*participation.Admission, LookupResult, error) {
+	found := &runLookup{lookup: s.lookup}
+	admission, err := s.admitter.Admit(ctx, budget, participation.Request{
+		Contest: contestID, Account: userID, Address: addr, Session: session, UserAgent: userAgent,
+	}, participation.LookedUpBy(found))
+	if err != nil {
+		return nil, LookupResult{}, err
+	}
+	return admission, found.found, nil
+}
+
 // Run answers one query, or says why it will not. Checks run cheapest first,
-// except the two rate checks, which come before anything they protect
-// (CLAUDE.md rules 5 and 13):
+// after admission (queryBudget, the gate and the visit), so a query refused
+// below still counts as the registration being used from that address:
 //
-//  1. Rate by user ID, before any lookup. ContestID is caller-chosen and
-//     unbounded; the user ID is one key per account. The installation's rate
-//     is used because no contest is known yet, and it is the ceiling of every
-//     contest's rate.
-//  2. One lookup, then rate by registration against the contest's own limit,
-//     so every refusal below is counted.
-//  3. The gate, from values in hand, then the query length.
-//  4. Anything left to answer (one round trip). Before provisioning, so a
+//  1. The query length.
+//  2. Anything left to answer (one round trip). Before provisioning, so a
 //     participant who cannot score cannot make the service build a database.
-//  5. The game exists, then the database is provisioned.
-//  6. Only then is the participant's start recorded, which under individual
+//  3. The game exists, then the database is provisioned.
+//  4. Only then is the participant's start recorded, which under individual
 //     timing starts their clock, so a refused request never costs them time.
 //     A query the SQL validator later rejects still records it: the
 //     participant did act against the game.
 func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, error) {
-	if err := s.rate.Admit(cmd.UserID.String(), s.perMinuteDefault); err != nil {
-		return nil, err
-	}
-
-	lookup, lookupErr := s.lookup.ForRun(ctx, cmd.ContestID, cmd.UserID)
-	participant, err := classifyParticipant(lookup.Participant, lookupErr, "look up the participant and the contest")
+	admission, lookup, err := s.admit(ctx, queryBudget{s}, cmd.ContestID, cmd.UserID, cmd.Address, cmd.Session, cmd.UserAgent)
 	if err != nil {
 		return nil, err
 	}
-	contest := lookup.Contest
-
-	limit := effectiveRateLimit(contest.Settings.QueryRateLimitPerMin, s.perMinuteDefault)
-	if err = s.rate.Admit(participant.ID.String(), limit); err != nil {
-		return nil, err
-	}
-
-	if err := s.admit(contest, participant, cmd.Address); err != nil {
-		return nil, err
-	}
-	if s.watcher != nil {
-		s.watcher.Observe(ctx, monitor.Visit{
-			Contest: contest.ID, Registration: participant.ID,
-			Address: cmd.Address, Session: cmd.Session, UserAgent: cmd.UserAgent,
-		})
-	}
+	participant := admission.Participant
 
 	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
 		return nil, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(cmd.SQL))}
 	}
 
 	if s.answerable != nil {
-		left, err := s.answerable.AnswerableLeft(ctx, cmd.ContestID, participant.ID)
+		left, err := s.answerable.AnswerableLeft(ctx, admission.Contest.ID, participant.ID)
 		if err != nil {
 			return nil, fmt.Errorf("%w: work out what is still answerable: %w", ErrUnavailable, err)
 		}
@@ -413,7 +293,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		}
 	}
 
-	if participant, err = s.recordStart(ctx, contest, participant, cmd.Address); err != nil {
+	if err := admission.Start(ctx); err != nil {
 		return nil, err
 	}
 
@@ -441,129 +321,6 @@ func provisionFailure(err error) error {
 		return fmt.Errorf("%w: %w", ErrNoRoomForDatabase, err)
 	}
 	return fmt.Errorf("%w: provide the participant's database: %w", ErrUnavailable, err)
-}
-
-// classifyParticipant maps a missing registration to contests.ErrNotAParticipant,
-// the same refusal the gate gives a disqualified one, so probing a contest
-// reveals nothing about who is on it. Any other error is ErrUnavailable.
-func classifyParticipant(participant contests.Participant, err error, wrap string) (contests.Participant, error) {
-	switch {
-	case errors.Is(err, contests.ErrParticipantNotFound):
-		return contests.Participant{}, contests.ErrNotAParticipant
-	case err != nil:
-		return contests.Participant{}, fmt.Errorf("%w: %s: %w", ErrUnavailable, wrap, err)
-	}
-	return participant, nil
-}
-
-// admit asks the gate whether participant may act in contest now, from addr.
-// It never starts a clock.
-func (s *Service) admit(contest contests.Contest, participant contests.Participant, addr netip.Addr) error {
-	return s.gate.StandingOf(contest, participant, s.now(), addr).Refusal()
-}
-
-// Access resolves who is asking and confirms they may currently interact with
-// contestID, for the read endpoints (story, questions). It is the same gate
-// Run asks, without Run's game lookup or provisioning. It starts no clock (see
-// StartOnRead) and charges no rate: AdmitRead before it is the read budget,
-// which a workspace write must not spend. The contest is Lookup's, without
-// Translations.
-func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
-	participant, contest, err := s.resolve(ctx, contestID, userID)
-	if err != nil {
-		return contests.Participant{}, contests.Contest{}, err
-	}
-
-	if err := s.admit(contest, participant, addr); err != nil {
-		return contests.Participant{}, contests.Contest{}, err
-	}
-	return participant, contest, nil
-}
-
-// StartOnRead records a participant's start on their first read of the
-// contest's content (story, question list or schema), under either timing,
-// and returns the participant as it now stands. Under individual timing it
-// starts their clock.
-//
-// Otherwise an individual participant could read everything, prepare offline,
-// and spend their duration only on typing. Callers invoke it only after a
-// successful read: a refused read showed nothing and must cost nothing. The
-// events channel and leaderboards never call it. The gate is asked here, not
-// trusted from an earlier Access, and asked again after Start (see
-// recordStart).
-func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
-	return s.recordStart(ctx, contest, participant, addr)
-}
-
-// recordStart checks the gate, records the start, and checks again: the start
-// may be another request's, and time may already be up. A participant already
-// started costs nothing.
-func (s *Service) recordStart(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
-	if !participant.AwaitsStart() {
-		return participant, nil
-	}
-	if err := s.admit(contest, participant, addr); err != nil {
-		return contests.Participant{}, err
-	}
-	started, err := contests.StartParticipant(ctx, s.uow, s.audit, s.people, participant.ID, s.now())
-	if err != nil {
-		return contests.Participant{}, fmt.Errorf("%w: record the participant's start: %w", ErrUnavailable, err)
-	}
-	// Gate first: a registration disqualified or finished meanwhile comes back
-	// with no start recorded, and the gate's refusal says why.
-	if err := s.admit(contest, started, addr); err != nil {
-		return contests.Participant{}, err
-	}
-	// An individual clock still pending yet admitted means the store broke its
-	// contract. Fail closed: the gate would otherwise admit a participant with
-	// no deadline. Under fixed timing the deadline never depends on the start.
-	if contests.ClockPending(contest, started) {
-		return contests.Participant{}, fmt.Errorf("%w: recording the participant's start left their clock pending", ErrUnavailable)
-	}
-	return started, nil
-}
-
-// resolve is the lookup Access and AccessForEvents share, classified the same
-// way Run classifies it.
-func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
-	participant, contest, err := s.lookup.ForAccess(ctx, contestID, userID)
-	if participant, err = classifyParticipant(participant, err, "look up the participant and the contest"); err != nil {
-		return contests.Participant{}, contests.Contest{}, err
-	}
-	return participant, contest, nil
-}
-
-// AccessForEvents confirms the caller may hold the events channel open for
-// contestID now (the gate's MayWait): everything Access admits, plus a
-// published contest that has not started, so the participant sees it begin.
-// It widens only what the channel may wait for, never what a participant may
-// do.
-//
-// The Standing is returned either way so the channel can tell "finished" from
-// a plain close (Standing.Over). A failed lookup returns the zero Standing,
-// which is over for nobody. The contest is Lookup's, without Translations.
-func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
-	participant, contest, err := s.resolve(ctx, contestID, userID)
-	if err != nil {
-		return contests.Participant{}, contests.Contest{}, contests.Standing{}, err
-	}
-
-	// MayWait is false only where MayAct is too, so Refusal names why.
-	standing := s.gate.StandingOf(contest, participant, s.now(), addr)
-	if !standing.MayWait() {
-		return contests.Participant{}, contests.Contest{}, standing, standing.Refusal()
-	}
-	return participant, contest, standing, nil
-}
-
-// AdmitRead charges a play-screen read to the caller's account before any
-// lookup: the contest ID is caller-chosen, the user ID is one key per account
-// (CLAUDE.md rule 5). Reads never spend the query budget, nor queries this.
-func (s *Service) AdmitRead(userID uuid.UUID) error {
-	if err := s.reads.Admit(userID.String(), s.readsPerMinute); err != nil {
-		return ErrTooManyReads
-	}
-	return nil
 }
 
 // speaksForTheDatabase reports an error carrying PostgreSQL's own words about

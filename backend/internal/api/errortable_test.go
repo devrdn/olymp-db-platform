@@ -19,6 +19,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
 	"github.com/devrdn/olymp-db-platform/backend/internal/microsoft"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
@@ -65,9 +66,71 @@ func answer(t *testing.T, table errorTable, err error) (answered, bool) {
 }
 
 // The expected values are written out, not derived: they are the contract the
-// interface reads codes from. The participation gate's refusals arrive through
-// queryproxy too, so deadline_passed answers the same at the console as at the
-// answer route.
+// interface reads codes from. Every participant route is admitted through
+// participation, so the gate's refusals arrive through it and answer the same
+// on every route.
+func TestEveryParticipationErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		contests.ErrNotAParticipant: {status: http.StatusForbidden, code: "not_a_participant",
+			message: "The caller is not taking part in this contest"},
+		contests.ErrContestNotRunning: {status: http.StatusConflict, code: "contest_not_running",
+			message: "The contest is not running"},
+		contests.ErrContestEnded: {status: http.StatusConflict, code: "contest_ended",
+			message: "The contest has ended"},
+		contests.ErrParticipantFinished: {status: http.StatusConflict, code: "contest_finished",
+			message: "The contest has ended for this participant"},
+		contests.ErrDeadlinePassed: {status: http.StatusConflict, code: "deadline_passed",
+			message: "The deadline for this contest has passed"},
+		contests.ErrAddressNotAllowed: {status: http.StatusForbidden, code: "address_not_allowed",
+			message: "This contest is only available from the university network"},
+		participation.ErrUnavailable: {status: http.StatusInternalServerError, code: "internal_error",
+			message: "Internal server error", logged: true},
+		participation.ErrInvalidContest: {status: http.StatusBadRequest, code: "invalid_contest_id",
+			message: "Contest identifier is not valid"},
+		participation.ErrTooManyReads: {status: http.StatusTooManyRequests, code: "play_read_too_often",
+			message: "This participant is loading the contest faster than this installation allows", retryAfter: "60"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	gate := []error{
+		contests.ErrNotAParticipant, contests.ErrContestNotRunning, contests.ErrContestEnded,
+		contests.ErrParticipantFinished, contests.ErrDeadlinePassed, contests.ErrAddressNotAllowed,
+	}
+	for _, err := range append(participation.Errors(), gate...) {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			for name, table := range map[string]errorTable{"participation": participationErrors, "queryproxy": queryproxyErrors} {
+				got, ok := answer(t, table, err)
+				if !ok {
+					t.Fatalf("the %s table has no row for it, so it would reach the client as internal_error", name)
+				}
+				if got != expected {
+					t.Errorf("%s answered %+v, want %+v", name, got, expected)
+				}
+			}
+			// Wrapped, as admission hands several over, it still finds its row.
+			wrapped, ok := answer(t, participationErrors, fmt.Errorf("%w: while admitting", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[expected.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", expected.code)
+			}
+		})
+	}
+}
+
+// The expected values are written out, not derived: they are the contract the
+// interface reads codes from. The console is admitted through participation,
+// so its table answers admission's errors too (walked above).
 func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
 		contests.ErrNotAParticipant: {status: http.StatusForbidden, code: "not_a_participant",
@@ -98,8 +161,6 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 			message: "This contest is read-only, so a participant's database has nothing to reset"},
 		queryproxy.ErrResetTooOften: {status: http.StatusTooManyRequests, code: "reset_too_often",
 			message: "This participant has reset their database as often as allowed for now", retryAfter: "600"},
-		queryproxy.ErrTooManyReads: {status: http.StatusTooManyRequests, code: "play_read_too_often",
-			message: "This participant is loading the contest faster than this installation allows", retryAfter: "60"},
 	}
 
 	declared := map[string]bool{}

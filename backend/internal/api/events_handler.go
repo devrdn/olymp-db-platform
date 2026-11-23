@@ -1,36 +1,23 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/metrics"
-	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
-
-// EventsAccess is the slice of queryproxy.Service this handler needs.
-// AccessForEvents differs from Access in one way: it also admits a published
-// contest that has not started, so an early participant learns of the start
-// without polling. Every read and answer still goes through Access.
-type EventsAccess interface {
-	AdmitRead(userID uuid.UUID) error
-	// AccessForEvents also returns the participant's Standing, refused or not,
-	// so a refused resync can tell whether the contest is over for them.
-	AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error)
-}
 
 // Hints is where the channel hears that a participant's clarifications have
 // changed (fanout.Hub). Subscribe returns a channel of hints for any of topics
@@ -57,26 +44,30 @@ type Hints interface {
 // the registration (a private answer, for its asker). Without hints
 // (WithHints) the event is never sent.
 //
-// Beyond admission, a held-open connection needs:
+// It is admitted with participation.MayWait: also a published contest that
+// has not started, so an early participant learns of the start without
+// polling. Every read and answer is still admitted on MayAct. It records no
+// monitor visit (participation.WithoutVisit), on opening or on a resync. Beyond
+// admission, a held-open connection needs:
 //
-//   - A connection limit. AdmitRead bounds how often a caller may open one
-//     (charged like any read, CLAUDE.md rule 13), not how many are open at
-//     once; connLimiter caps that per registration.
+//   - A connection limit. The read budget bounds how often a caller may open
+//     one (charged like any read, CLAUDE.md rule 13), not how many are open
+//     at once; connLimiter caps that per registration.
 //   - No read charge per tick. A resync is a push the server chose, and
 //     charging it would let an idle connection starve its own account's read
 //     budget.
 //   - Paced reconnects. The stream's retry field (reconnectDelay) replaces
 //     EventSource's three-second default, which would spend the account's read
 //     budget on flaky wifi.
-//   - Tolerance of transient failures. queryproxy.ErrUnavailable on a tick is
-//     retried next tick; only a real refusal closes the channel.
+//   - Tolerance of transient failures. participation.ErrUnavailable on a tick
+//     is retried next tick; only a real refusal closes the channel.
 //   - Nothing held while idle. Between ticks a connection holds a ticker and a
 //     socket, no pooled database connection or lock.
 //   - An end on disconnect, on shutdown, or on a stalled write (writeTimeout).
 type EventsHandler struct {
-	access EventsAccess
-	mw     *auth.Middleware
-	log    *slog.Logger
+	participation Participation
+	mw            *auth.Middleware
+	log           *slog.Logger
 
 	limiter *connLimiter
 	// resync is how often an open connection re-asks for the participant's
@@ -124,16 +115,16 @@ const (
 // NewEventsHandler assembles the events endpoint. shutdown is closed to end
 // every open connection when the process stops: pass the Done channel of the
 // context internal/app.App.Run waits on.
-func NewEventsHandler(access EventsAccess, mw *auth.Middleware, log *slog.Logger, shutdown <-chan struct{}) *EventsHandler {
+func NewEventsHandler(admission Participation, mw *auth.Middleware, log *slog.Logger, shutdown <-chan struct{}) *EventsHandler {
 	return &EventsHandler{
-		access:       access,
-		mw:           mw,
-		log:          log,
-		limiter:      newConnLimiter(defaultMaxConnections),
-		resync:       defaultResyncInterval,
-		writeTimeout: writeTimeout,
-		now:          func() time.Time { return time.Now().UTC() },
-		shutdown:     shutdown,
+		participation: admission,
+		mw:            mw,
+		log:           log,
+		limiter:       newConnLimiter(defaultMaxConnections),
+		resync:        defaultResyncInterval,
+		writeTimeout:  writeTimeout,
+		now:           func() time.Time { return time.Now().UTC() },
+		shutdown:      shutdown,
 	}
 }
 
@@ -191,25 +182,14 @@ func (h *EventsHandler) Mount(r chi.Router) {
 }
 
 func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
-	identity, _ := auth.IdentityFrom(r.Context())
 	// Charged like every participant read, ahead of any lookup, so opening and
 	// abandoning connections in a loop pays for each attempt.
-	if err := h.access.AdmitRead(identity.UserID); err != nil {
-		h.fail(w, r, err)
-		return
-	}
-
-	contestID, ok := contestIDFrom(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail,
+		participation.MayWait(), participation.WithoutVisit())
 	if !ok {
 		return
 	}
-
-	addr := clientAddress(r)
-	participant, contest, _, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
+	participant, contest := admission.Participant, admission.Contest
 
 	if !h.limiter.acquire(participant.ID) {
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyConnections,
@@ -289,11 +269,11 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			if !alive {
 				return
 			}
-			newParticipant, newContest, standing, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
+			again, err := admission.Recheck(r.Context())
 			if err != nil {
 				// A store that is briefly away is not a refusal of this
 				// participant; retry next tick.
-				if errors.Is(err, queryproxy.ErrUnavailable) {
+				if errors.Is(err, participation.ErrUnavailable) {
 					h.log.WarnContext(r.Context(), "events resync could not reach storage; retrying next tick", "error", err)
 					continue
 				}
@@ -304,7 +284,8 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 				// back in. A disqualified participant is over but still closes
 				// silently: the channel tells them nothing a stranger would not
 				// be told.
-				if standing.Over() && !errors.Is(err, contests.ErrNotAParticipant) {
+				var refused *participation.Refused
+				if errors.As(err, &refused) && refused.Standing.Over() && !errors.Is(err, contests.ErrNotAParticipant) {
 					h.setWriteDeadline(rc)
 					if writeEvent(w, eventContestFinished, statusPayload{Status: contests.StatusFinished}) == nil {
 						_ = rc.Flush()
@@ -316,7 +297,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			// state must stay, or the next tick would compare against a zero
 			// value and announce a fresh start.
 			wasRunning := contest.Status == contests.StatusRunning
-			participant, contest = newParticipant, newContest
+			participant, contest = again.Participant, again.Contest
 			// The write deadline is armed only after the lookup, so a slow
 			// database round trip on our side never counts against the client.
 			h.setWriteDeadline(rc)
@@ -434,10 +415,10 @@ func (l *connLimiter) count(id uuid.UUID) int {
 	return l.open[id]
 }
 
-// fail maps a refusal from the read budget or AccessForEvents to a response, from the
-// same tables the console and the play screen use (CLAUDE.md rule 1).
+// fail maps a refusal of admission to a response, from the same table every
+// participant route uses (CLAUDE.md rule 1).
 func (h *EventsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
+	if participationErrors.answer(w, r, h.log, err) {
 		return
 	}
 	h.log.ErrorContext(r.Context(), "could not open the events channel", "error", err)

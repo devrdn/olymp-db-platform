@@ -70,7 +70,7 @@ func TestSignalsAreStoredForTheAdmittedRegistration(t *testing.T) {
 		t.Fatalf("stored %d events in %d batches, want 2 in one", len(stored), len(f.signalStore.batches))
 	}
 	for _, e := range stored {
-		if e.Contest != f.access.contest.ID || e.Registration != f.access.participant.ID {
+		if e.Contest != f.roster.Contest().ID || e.Registration != f.roster.Participant().ID {
 			t.Fatalf("event %+v is not the admitted registration's", e)
 		}
 	}
@@ -88,8 +88,8 @@ func TestSignalsAreStoredForTheAdmittedRegistration(t *testing.T) {
 		t.Fatalf("the watcher heard of %d visits, want 1", len(f.watcher.visits))
 	}
 	// Posting signals is not reading the contest, and not a read either.
-	if len(f.access.startedOnRead) != 0 || f.access.admitReads != 0 {
-		t.Fatalf("signals started a clock (%v) or spent the read budget (%d)", f.access.startedOnRead, f.access.admitReads)
+	if len(f.roster.Started()) != 0 || f.reads.charged() != 0 {
+		t.Fatalf("signals started a clock (%v) or spent the read budget (%d)", f.roster.Started(), f.reads.charged())
 	}
 }
 
@@ -215,12 +215,9 @@ func TestABatchOverFiftyEventsIsRefused(t *testing.T) {
 	}
 	rec := f.send(http.MethodPost, play+"/signals", signalsBody(events...))
 	expectStatus(t, rec, http.StatusBadRequest, "signals_batch_too_large")
+	// Counted before any per-event work.
 	if len(f.signalStore.batches) != 0 {
 		t.Fatal("an oversized batch was stored")
-	}
-	// Counted before any per-event work or lookup.
-	if f.access.accessCalled {
-		t.Fatal("Access ran for a batch over the limit")
 	}
 
 	rec = f.send(http.MethodPost, play+"/signals", signalsBody(events[:monitor.MaxBatchEvents]...))
@@ -235,8 +232,31 @@ func TestAnOversizedBodyIsRefusedBeforeItIsDecoded(t *testing.T) {
 
 	huge := signalsBody(`{"kind":"paste","target":"notes","chars":1,"text":"` + strings.Repeat("x", 300<<10) + `"}`)
 	expectStatus(t, f.send(http.MethodPost, play+"/signals", huge), http.StatusBadRequest, "signals_batch_too_large")
-	if f.access.accessCalled {
-		t.Fatal("Access ran for a body refused for its size")
+	if len(f.signalStore.batches) != 0 {
+		t.Fatal("a body refused for its size was stored")
+	}
+}
+
+// The visit is held back until the batch is read, so a batch refused for its
+// shape or size is no visit, and a readable one is one.
+func TestARefusedSignalsBatchIsNoVisit(t *testing.T) {
+	f := newParticipantFixture(t)
+	play := f.workspaceContest(t)
+	before := len(f.watcher.seen())
+
+	oversized := make([]string, monitor.MaxBatchEvents+1)
+	for i := range oversized {
+		oversized[i] = goodAbsence
+	}
+	expectStatus(t, f.send(http.MethodPost, play+"/signals", `{`), http.StatusBadRequest, "invalid_request")
+	expectStatus(t, f.send(http.MethodPost, play+"/signals", signalsBody(oversized...)), http.StatusBadRequest, "signals_batch_too_large")
+	if got := len(f.watcher.seen()) - before; got != 0 {
+		t.Fatalf("refused batches recorded %d visits, want none", got)
+	}
+
+	expectStatus(t, f.send(http.MethodPost, play+"/signals", signalsBody(goodAbsence)), http.StatusNoContent, "")
+	if got := len(f.watcher.seen()) - before; got != 1 {
+		t.Fatalf("a readable batch recorded %d visits, want 1", got)
 	}
 }
 
@@ -267,7 +287,7 @@ func TestSignalsAreAdmittedLikeThePlayScreen(t *testing.T) {
 		t.Run(tc.code, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			play := f.workspaceContest(t)
-			f.access.err = tc.err
+			f.refuse(tc.err)
 			expectStatus(t, f.send(http.MethodPost, play+"/signals", signalsBody(goodAbsence)), tc.status, tc.code)
 			if len(f.signalStore.batches) != 0 {
 				t.Fatal("a refused participant's signals were stored")
@@ -300,18 +320,18 @@ func TestAnAccountSendsAtMostTwelveSignalBatchesAMinute(t *testing.T) {
 		}
 	}
 
-	f.access.accessCalled = false
+	lookups := f.roster.Lookups()
 	rec := f.send(http.MethodPost, play+"/signals", signalsBody(goodAbsence))
 	expectStatus(t, rec, http.StatusTooManyRequests, "signals_too_often")
 	if rec.Header().Get("Retry-After") != "60" {
 		t.Fatalf("Retry-After = %q, want 60", rec.Header().Get("Retry-After"))
 	}
-	if f.access.accessCalled {
-		t.Fatal("Access ran for a batch refused for its rate")
+	if f.roster.Lookups() != lookups {
+		t.Fatal("a batch refused for its rate was looked up")
 	}
 	// Its own budget: the workspace's and the read budget are untouched.
-	if f.access.admitReads != 0 {
-		t.Fatalf("signals spent the read budget %d times", f.access.admitReads)
+	if f.reads.charged() != 0 {
+		t.Fatalf("signals spent the read budget %d times", f.reads.charged())
 	}
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusOK, "")
 }

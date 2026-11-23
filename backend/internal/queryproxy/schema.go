@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 )
 
@@ -29,28 +29,25 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 }
 
 // Schema describes the contest's game as it was built, for the console's
-// schema panel. The caller has already admitted participant in contest through
-// Access; Schema does not admit them again.
-//
-// A successful read records the participant's start (StartOnRead); a refused
-// one, a hidden schema included, starts nothing. The catalogue flag is
-// checked before provisioning or reading anything, so a hidden schema costs the
-// cluster no connection and cannot be told apart from a slow one.
-func (s *Service) Schema(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (provisioning.Schema, error) {
-	// internal/app builds a console-less Service with nil collaborators when
-	// no Query Runner is deployed; refuse rather than panic.
+// schema panel. The caller has already admitted participant in contest
+// (participation.Admitter); Schema does not admit them again, and the caller
+// starts them once the schema is in hand, so a refused read, a hidden schema
+// included, starts nothing. The catalogue flag is checked before provisioning
+// or reading anything, so a hidden schema costs the cluster no connection and
+// cannot be told apart from a slow one.
+func (s *Service) Schema(ctx context.Context, contest contests.Contest, participant contests.Participant) (provisioning.Schema, error) {
+	// A Service built without WithSchemas refuses rather than panics.
 	if s.schemas == nil {
 		return provisioning.Schema{}, ErrSchemaHidden
 	}
 
 	lookup, err := s.lookup.ForRun(ctx, contest.ID, participant.UserID)
-	found, err := classifyParticipant(lookup.Participant, err, "look up the contest's game and the participant's copy")
 	if err != nil {
-		return provisioning.Schema{}, err
+		return provisioning.Schema{}, participation.LookupError(err)
 	}
-	// A registration removed and added back since Access is a different one,
+	// A registration removed and added back since admission is a different one,
 	// and its instance is not the admitted participant's database.
-	if found.ID != participant.ID {
+	if lookup.Participant.ID != participant.ID {
 		return provisioning.Schema{}, contests.ErrNotAParticipant
 	}
 
@@ -74,9 +71,6 @@ func (s *Service) Schema(ctx context.Context, contest contests.Contest, particip
 	schema, err := s.schemas.Schema(ctx, game, database)
 	if err != nil {
 		return provisioning.Schema{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
-	}
-	if _, err := s.StartOnRead(ctx, contest, participant, addr); err != nil {
-		return provisioning.Schema{}, err
 	}
 	return schema, nil
 }

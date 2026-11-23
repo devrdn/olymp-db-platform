@@ -3,12 +3,11 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,83 +17,17 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications/clarificationstest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation/participationtest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/fanout"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
-	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
-
-// clarifyAccess is the participation gate as these routes meet it: each
-// account resolves to its own registration, and err, when set, refuses
-// everyone the way the gate would.
-type clarifyAccess struct {
-	mu       sync.Mutex
-	contest  contests.Contest
-	byUser   map[uuid.UUID]contests.Participant
-	err      error
-	readErr  error
-	reads    int
-	accesses int
-	// started records StartOnRead calls; startErr is its answer.
-	started  []uuid.UUID
-	startErr error
-}
-
-func (a *clarifyAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant, _ netip.Addr) (contests.Participant, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.startErr != nil {
-		return contests.Participant{}, a.startErr
-	}
-	a.started = append(a.started, participant.ID)
-	now := time.Now()
-	participant.StartedAt = &now
-	return participant, nil
-}
-
-func (a *clarifyAccess) starts() []uuid.UUID {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]uuid.UUID(nil), a.started...)
-}
-
-func (a *clarifyAccess) AdmitRead(uuid.UUID) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.reads++
-	return a.readErr
-}
-
-func (a *clarifyAccess) Access(_ context.Context, contestID, userID uuid.UUID, _ netip.Addr) (contests.Participant, contests.Contest, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.accesses++
-	if a.err != nil {
-		return contests.Participant{}, contests.Contest{}, a.err
-	}
-	p, ok := a.byUser[userID]
-	if !ok || contestID != a.contest.ID {
-		return contests.Participant{}, contests.Contest{}, contests.ErrNotAParticipant
-	}
-	return p, a.contest, nil
-}
-
-func (a *clarifyAccess) setErr(err error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.err = err
-}
-
-func (a *clarifyAccess) counts() (reads, accesses int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.reads, a.accesses
-}
 
 // staffRoles gives each listed account its role in each listed contest.
 type staffRoles map[[2]uuid.UUID]rbac.ContestRole
@@ -105,7 +38,8 @@ func (r staffRoles) ContestRole(_ context.Context, userID, contestID uuid.UUID) 
 
 type clarifyFixture struct {
 	router  http.Handler
-	access  *clarifyAccess
+	roster  *participationtest.Roster
+	reads   *readBudget
 	domain  *clarificationstest.Fixture
 	hub     *fanout.Hub
 	contest uuid.UUID
@@ -153,13 +87,8 @@ func newClarifyFixture(t *testing.T) *clarifyFixture {
 	f.anaReg, f.benReg = uuid.New(), uuid.New()
 	f.domain.Repo.Register(f.contest, f.anaReg, f.ana.Login, f.ana.FullName)
 	f.domain.Repo.Register(f.contest, f.benReg, f.ben.Login, f.ben.FullName)
-	f.access = &clarifyAccess{
-		contest: contests.Contest{ID: f.contest, Status: contests.StatusRunning},
-		byUser: map[uuid.UUID]contests.Participant{
-			f.ana.ID: {ID: f.anaReg, ContestID: f.contest, UserID: f.ana.ID},
-			f.ben.ID: {ID: f.benReg, ContestID: f.contest, UserID: f.ben.ID},
-		},
-	}
+	f.roster, f.reads = participationtest.NewRoster(), &readBudget{}
+	f.admitBoth()
 
 	f.mw = auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: f.sessions, Users: userRepo,
@@ -170,9 +99,18 @@ func newClarifyFixture(t *testing.T) *clarifyFixture {
 		Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
 	router := chi.NewRouter()
-	api.NewClarificationsHandler(f.domain.Service, f.access, f.mw, log).Mount(router)
+	admission := api.Participation{Admitter: participationtest.NewAdmitter(f.roster, nil, nil), Reads: f.reads}
+	api.NewClarificationsHandler(f.domain.Service, admission, f.mw, log).Mount(router)
 	f.router = router
 	return f
+}
+
+// admitBoth stages the running contest with ana and ben on its roster, each
+// as their own registration, not yet started.
+func (f *clarifyFixture) admitBoth() {
+	f.roster.SetContest(participationtest.Running(f.contest))
+	f.roster.StageFor(f.ana.ID, contests.Participant{ID: f.anaReg, ContestID: f.contest, UserID: f.ana.ID})
+	f.roster.StageFor(f.ben.ID, contests.Participant{ID: f.benReg, ContestID: f.contest, UserID: f.ben.ID})
 }
 
 func (f *clarifyFixture) do(who users.User, method, path, body string) *httptest.ResponseRecorder {
@@ -365,14 +303,14 @@ func TestAskingOutsideTheRunningContestIsRefusedAndStoresNothing(t *testing.T) {
 		{contests.ErrParticipantFinished, "contest_finished"},
 		{contests.ErrNotAParticipant, "not_a_participant"},
 	} {
-		f.access.setErr(refusal.err)
+		stageRefusal(f.roster, refusal.err)
 		f.domain.Limiter.Reset()
 		rec := f.do(f.ana, http.MethodPost, f.play(), `{"body":"Too late?"}`)
 		if errorCode(t, rec) != refusal.code {
 			t.Errorf("asking when the gate says %v = %d %s, want %s", refusal.err, rec.Code, rec.Body, refusal.code)
 		}
 	}
-	f.access.setErr(nil)
+	f.admitBoth()
 	if page := f.feed(t, f.ana, ""); len(page.Items) != 0 || page.Open != 0 {
 		t.Fatalf("a refused question was stored: %+v", page)
 	}
@@ -399,8 +337,8 @@ func TestAskingIsRateLimitedBeforeTheGateAndEveryAttemptCounts(t *testing.T) {
 	// The account is charged before the gate is asked: someone on no roster
 	// pays for every attempt and soon reaches no lookup at all.
 	f.domain.Limiter.Reset()
-	f.access.setErr(contests.ErrNotAParticipant)
-	_, before := f.access.counts()
+	stageRefusal(f.roster, contests.ErrNotAParticipant)
+	before := f.roster.Lookups()
 	for range clarifications.AsksPerMinutePerAccount {
 		f.do(f.ana, http.MethodPost, f.play(), `{"body":"Why?"}`)
 	}
@@ -408,7 +346,7 @@ func TestAskingIsRateLimitedBeforeTheGateAndEveryAttemptCounts(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "clarification_too_often" {
 		t.Fatalf("attempt %d of a refused account = %d %s, want 429", clarifications.AsksPerMinutePerAccount+1, rec.Code, rec.Body)
 	}
-	if _, after := f.access.counts(); after-before != clarifications.AsksPerMinutePerAccount {
+	if after := f.roster.Lookups(); after-before != clarifications.AsksPerMinutePerAccount {
 		t.Fatalf("the gate was asked %d times, want %d: the refused attempt must not reach it",
 			after-before, clarifications.AsksPerMinutePerAccount)
 	}
@@ -448,23 +386,23 @@ func TestAQuestionNamesOnlyAQuestionOfItsContest(t *testing.T) {
 func TestTheFeedSpendsTheReadBudgetBeforeTheGate(t *testing.T) {
 	f := newClarifyFixture(t)
 	f.feed(t, f.ana, "")
-	if reads, _ := f.access.counts(); reads != 1 {
+	if reads := f.reads.charged(); reads != 1 {
 		t.Fatalf("a feed read spent %d reads, want 1", reads)
 	}
-	f.access.readErr = queryproxy.ErrTooManyReads
-	_, before := f.access.counts()
+	f.reads.refuseWith(participation.ErrTooManyReads)
+	before := f.roster.Lookups()
 	rec := f.do(f.ana, http.MethodGet, f.play(), "")
 	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "play_read_too_often" {
 		t.Fatalf("a feed past the read budget = %d %s, want 429 play_read_too_often", rec.Code, rec.Body)
 	}
-	if _, after := f.access.counts(); after != before {
+	if after := f.roster.Lookups(); after != before {
 		t.Fatal("a feed refused for its rate still asked the gate")
 	}
 	// Asking is a write and spends its own budget, never the read budget.
-	f.access.readErr = nil
-	reads, _ := f.access.counts()
+	f.reads.refuseWith(nil)
+	reads := f.reads.charged()
 	f.ask(t, f.ana, "Why?")
-	if after, _ := f.access.counts(); after != reads {
+	if after := f.reads.charged(); after != reads {
 		t.Fatal("asking spent the read budget")
 	}
 }
@@ -667,21 +605,21 @@ func TestReadingTheFeedOrAskingStartsTheClockAndARefusalDoesNot(t *testing.T) {
 	if rec := f.do(f.ana, http.MethodGet, f.play()+"?before=forged", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("a forged cursor = %d", rec.Code)
 	}
-	if got := f.access.starts(); len(got) != 0 {
+	if got := f.roster.Started(); len(got) != 0 {
 		t.Fatalf("a refused read started the clock for %v", got)
 	}
 	f.feed(t, f.ana, "")
-	if got := f.access.starts(); len(got) != 1 || got[0] != f.anaReg {
+	if got := f.roster.Started(); len(got) != 1 || got[0] != f.anaReg {
 		t.Fatalf("after a feed read the clock started for %v, want ana's registration", got)
 	}
 
 	long := `{"body":"` + strings.Repeat("x", clarifications.MaxQuestionRunes+1) + `"}`
 	f.do(f.ben, http.MethodPost, f.play(), long)
-	if got := f.access.starts(); len(got) != 1 {
+	if got := f.roster.Started(); len(got) != 1 {
 		t.Fatalf("a refused ask started a clock: %v", got)
 	}
 	f.ask(t, f.ben, "Why?")
-	if got := f.access.starts(); len(got) != 2 || got[1] != f.benReg {
+	if got := f.roster.Started(); len(got) != 2 || got[1] != f.benReg {
 		t.Fatalf("after ben's ask the clocks started are %v, want ben's last", got)
 	}
 }
@@ -690,10 +628,10 @@ func TestReadingTheFeedOrAskingStartsTheClockAndARefusalDoesNot(t *testing.T) {
 // participant whose start was not recorded.
 func TestAFeedWhoseClockCannotStartIsRefused(t *testing.T) {
 	f := newClarifyFixture(t)
-	f.access.startErr = contests.ErrDeadlinePassed
+	f.roster.FailStart(errors.New("connection reset"))
 	rec := f.do(f.ana, http.MethodGet, f.play(), "")
-	if rec.Code != http.StatusConflict || errorCode(t, rec) != "deadline_passed" {
-		t.Fatalf("a feed whose start failed = %d %s, want 409 deadline_passed", rec.Code, rec.Body)
+	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
+		t.Fatalf("a feed whose start failed = %d %s, want 500 internal_error", rec.Code, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "items") {
 		t.Fatalf("the feed was sent anyway: %s", rec.Body)
@@ -701,10 +639,10 @@ func TestAFeedWhoseClockCannotStartIsRefused(t *testing.T) {
 }
 
 func sequentialContest(f *clarifyFixture) {
-	f.access.mu.Lock()
-	defer f.access.mu.Unlock()
-	f.access.contest.Progression = contests.ProgressionSequential
-	f.access.contest.QuestionMode = contests.QuestionModeMulti
+	contest := f.roster.Contest()
+	contest.Progression = contests.ProgressionSequential
+	contest.QuestionMode = contests.QuestionModeMulti
+	f.roster.SetContest(contest)
 }
 
 func TestAnAskAboutAHiddenOrUnreachedQuestionIsNotFound(t *testing.T) {

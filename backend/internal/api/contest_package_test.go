@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation/participationtest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
@@ -390,9 +391,9 @@ func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
-	access := &fakeAccess{}
-	access.err = contests.ErrNotAParticipant
-	api.NewParticipantHandler(access, contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), nil),
+	// Nobody is on the roster, so every play route refuses as not_a_participant.
+	nobody := api.Participation{Admitter: participationtest.NewAdmitter(participationtest.NewRoster(), nil, nil), Reads: &readBudget{}}
+	api.NewParticipantHandler(nobody, contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), nil),
 		&fakeHistory{}, &fakeSubmitter{}, answerRate(memory, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	contestID := uuid.New().String()

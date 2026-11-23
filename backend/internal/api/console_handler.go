@@ -9,6 +9,7 @@ import (
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
@@ -72,19 +73,14 @@ type runQueryResponse struct {
 func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
-	contestID, err := uuid.Parse(chi.URLParam(r, "contestID"))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The contest identifier is not a UUID")
-		return
-	}
-
 	var req runQueryRequest
 	if !decodeBody(w, r, &req) {
 		return
 	}
 
 	result, err := h.console.Run(r.Context(), queryproxy.Command{
-		ContestID: contestID,
+		// Unparsed: Run charges the rate first, so a malformed one counts.
+		ContestID: chi.URLParam(r, "contestID"),
 		UserID:    identity.UserID,
 		SQL:       req.SQL,
 		// From the one place allowed to read a forwarded header, so a
@@ -146,6 +142,14 @@ func requestUUID(ctx context.Context) uuid.UUID {
 	return uuid.New()
 }
 
+// consoleErrors is queryproxyErrors with a malformed contest identifier
+// answered as the console always has: invalid_request, not the play routes'
+// invalid_contest_id.
+var consoleErrors = queryproxyErrors.with(
+	errorRow{err: participation.ErrInvalidContest, status: http.StatusBadRequest, code: codeInvalidRequest,
+		message: "The contest identifier is not a UUID"},
+)
+
 // fail turns an error into a status, a code and, where there is one, the
 // subject that was refused. Every refusal has its own code because the
 // interface picks its sentence by code; the subject travels separately so the
@@ -175,7 +179,7 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 	// Admission and runner outcomes, from the same tables the play screen and
 	// events channel use. Checked before rpc.ErrUnreachable; no error currently
 	// carries both.
-	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
+	if consoleErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
 		return
 	}
 

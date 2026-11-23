@@ -209,7 +209,8 @@ access of its own.
 | `provisioning` | How a contest's game is described and built, and creating and removing participants' game databases from its template: a worker queue plus a pool of spares (section 4.2) |
 | `gamedb` | The game cluster's side of provisioning: roles, grants and the DDL that copies and drops databases (section 4) |
 | `gamefile` | An organiser's uploaded dump and the table builder's CSV files, kept on the API host's disk as they arrive in chunks |
-| `queryproxy` | A thin façade: takes SQL from the interface, applies the rate limit, hands it to the Query Runner, writes the query log |
+| `participation` | Admitting a participant's request: the request's own budget first, one lookup, the participation gate, the monitor visit, and the participant's start once the content is ready (section 8.1) |
+| `queryproxy` | A thin façade: takes SQL from the interface, admits it through `participation` on the console's rate, hands it to the Query Runner, writes the query log |
 | `workspace` | A participant's notes and SQL editor tabs, kept per registration (section 6.4) |
 | `clarifications` | Participants' questions to the organisers, the answers, private or public, and announcements (section 6.5) |
 | `leaderboard` | The standings as each audience may see them: live, frozen, final (section 10) |
@@ -1662,9 +1663,9 @@ would only get in the way.
 | Write rate | 60 a minute per account, one counter shared by notes and tabs; refusals count too |
 
 **The write rate is a budget separate from the play screen's read budget, and
-it is checked first.** The `admit` the rest of `/play/*` goes through spends
-`AdmitRead` (`PLAY_READ_PER_MINUTE`, 120 by default, itself apart from the
-query budget). If autosave spent it, continuous typing (up to forty writes a
+it is checked first.** The admission the rest of `/play/*` goes through spends
+the read budget (`participation.Reads`, `PLAY_READ_PER_MINUTE`, 120 by
+default, itself apart from the query budget). If autosave spent it, continuous typing (up to forty writes a
 minute at a 1.5-second pause) would leave a participant unable to reload their
 own page. So a write goes through
 `workspace.Service.AdmitWrite` first — its own counter, keyed
@@ -1748,14 +1749,15 @@ hundred at most).
 **Who may do what.**
 
 - Asking is a write. It closes with the contest, like every `/play` route:
-  the participation gate (`queryproxy.Access`) admits it only while the
-  participant may act. It spends its own budget before the gate is asked:
-  six a minute per account, then three a minute per registration after it,
-  refused attempts included. Reading the feed spends the play screen's read
-  budget (`AdmitRead`) before the gate. A successful read of the feed, or a
-  stored question, records the participant's start as the story does
-  (`StartOnRead`): under individual timing it starts their clock, since the
-  feed carries the organisers' corrections of the tasks.
+  admission (`participation.Admitter`) lets it through only while the gate
+  says the participant may act. It spends its own budget before the gate is
+  asked: six a minute per account, then three a minute per registration after
+  it, refused attempts included. Reading the feed spends the play screen's
+  read budget (`participation.Reads`) before the gate. A successful read of
+  the feed, or a stored question, records the participant's start as the
+  story does (`participation.Admission.Start`): under individual timing it
+  starts their clock, since the feed carries the organisers' corrections of
+  the tasks.
 - Staff routes need `contest.clarify`, which owners and managers hold, and
   which `contest.admin_all` lifts like every contest permission. Staff read
   the queue at any time but write only while the contest runs: after it no
@@ -2886,15 +2888,16 @@ one place: `gate.StandingOf(contest, registration, now, address)`, a method of
 `contests.Gate`. The gate carries the installation's one deadline grace
 (`DEADLINE_GRACE`): `internal/app` builds it once, with
 `contests.NewGate(cfg.DeadlineGrace)`, and hands the same value to everything
-that asks the question or depends on its answer — `queryproxy.New` (the console
-and the participant reads), `contests.ServiceConfig.Gate` (answers),
+that asks the question or depends on its answer — `participation.Config.Gate`
+(every participant request, the console's queries included),
+`contests.ServiceConfig.Gate` (answers),
 `contests.NewScheduler` and `profile.Config.Gate`. None of them has a grace of
 its own or a default for one, and each refuses to be built without the gate,
 so two of them cannot disagree about when a participant's time is up.
 `StandingOf` is pure and reads nothing: every caller already holds the contest
-and the registration, and the console's admission fetches both in one round
-trip (`queryproxy.Lookup.ForAccess` for reads and the event stream, `ForRun`
-for the console). Its answer, a `contests.Standing`, is computed for the
+and the registration, and admission fetches both in one round trip
+(`participation.Lookup.ForAccess`; the console reads its game and database in
+the same one, `queryproxy.Lookup.ForRun`). Its answer, a `contests.Standing`, is computed for the
 request and never stored.
 Four questions are asked of it:
 
@@ -2967,26 +2970,33 @@ An ended contest and one that is merely not open are two codes on purpose:
 contest can be taken back to draft and published again), and the play screen
 stops for good on the first while it keeps waiting on the second.
 
-**Who asks it.** `queryproxy.Service.Access` admits every `/play` read, the
-answer route, the workspace and the signals, and the schema panel goes through
-it like every other `/play` read; `Run` admits the console's queries;
-`AccessForEvents` holds the events channel open on `MayWait`, and when the
-channel closes because `Over` holds it sends `contest_finished` — except for a
-disqualified participant, whose channel closes as `not_a_participant` always
-has. `contests.Service.Submit` asks before it reads the question.
-`profile.Service` asks `Over`, through the same gate. An
-individual clock is started (`queryproxy.Service.StartOnRead`, a console's
-first query, a first answer) only after the gate admits the participant, and
-the gate is asked again of the registration `Start` hands back: it may be
-another request's earlier start whose time is already up, or a registration
-disqualified in between, which `Start` does not move.
+**Who asks it.** Every participant request is admitted by one module,
+`participation.Admitter.Admit`, which charges the request's own budget, looks
+the participant and the contest up in one round trip, asks the gate and
+records the monitor visit, in that order, so no route can skip a step. Every
+`/play` read, the schema panel, the answer route, the workspace, the signals,
+the clarifications and the console's queries (`queryproxy.Service.Run`, with
+the game and the database read in the same round trip) go through it on
+`MayAct`. The events channel is admitted with the `MayWait` option and
+without a monitor visit (`WithoutVisit`), re-asked on each tick without a
+charge or a visit (`Admission.Recheck`), and when it closes
+because `Over` holds it sends `contest_finished` — except for a disqualified
+participant, whose channel closes as `not_a_participant` always has.
+`contests.Service.Submit` asks before it reads the question.
+`profile.Service` asks `Over`, through the same gate. A participant's start is
+recorded only through the admission, once the content is ready
+(`participation.Admission.Start`: a read of the story, questions, schema or
+feed, a console's first query) or by a first answer, and the gate is asked
+again of the registration the store hands back: it may be another request's
+earlier start whose time is already up, or a registration disqualified in
+between, which the store does not move.
 
 **What it does not decide.** Rate limits stay outside it and the gate counts
-nothing: each resource keeps its own budget. The read budget every
-participant-facing request pays (`AdmitRead`, per account) is apart from the
-console's query rate, so reloading the page never refuses a query; like the
-query rate, it is charged before the gate is asked, so a refused request still
-spends it.
+nothing: each resource keeps its own budget and hands it to admission
+(`participation.Budget`). The read budget every participant-facing read pays
+(`participation.Reads`, per account) is apart from the console's query rate,
+so reloading the page never refuses a query; like the query rate, it is
+charged before the gate is asked, so a refused request still spends it.
 The participant leaderboard is not gated; it keeps its own visibility
 rule. The registration lookup is the caller's — a registration that is not
 found is `not_a_participant`, a store that fails is ours. And the core
@@ -3096,11 +3106,11 @@ record of the session and starts from the oldest. One index,
 `query_log (registration_id, executed_at)`, serves both, so no migration was
 needed.
 
-Access is decided by the same `queryproxy.Service.Access` as every other
-`/play/*` endpoint, and the rate budget (`AdmitRead`) is spent **before** the
-read: it is this handler's most expensive read and the last one worth giving
-away. The rows are only the caller's own — `WHERE registration_id = $1`, with
-the identifier coming from `Access` rather than from the request. The error
+Admission is the same `participation.Admitter` as every other `/play/*`
+endpoint, and the read budget is spent **before** the read: it is this
+handler's most expensive read and the last one worth giving away. The rows are
+only the caller's own — `WHERE registration_id = $1`, with the identifier
+coming from admission rather than from the request. The error
 text goes through exactly the same redaction as the log page and not one of
 its own, because `query_log.error_text` is written before anything higher up
 the stack cleans anything — otherwise the file would become a second way, and
@@ -3120,7 +3130,7 @@ because a record that stopped silently is worse than a short one. How long a
 connection may be held: `api.exportDeadline`, one minute — the read runs
 inside a transaction, a slow reader is not bounded by the data's size, and the
 core pool has 25 connections. And how many such downloads one account may have
-at once: one (`api.ExportGate`), because `AdmitRead` bounds how often they
+at once: one (`api.ExportGate`), because the read budget bounds how often they
 start and not how many run, and a hundred and twenty starts a minute against a
 pool of 25 is sign-in stopped for everybody else. A fourth limit is per service rather
 than per account: `api.ExportSlots` (`EXPORT_CONCURRENCY`, five by default, a
@@ -3478,16 +3488,18 @@ The server parses a batch in this order, and the order is part of the design:
 
 1. The budget — twelve batches a minute per account
    (`monitor.BatchesPerMinute`, keyed `signals:user:<account>`), with refusals
-   counted, checked before anything else, even before the contest identifier
+   counted, charged before anything else, even before the contest identifier
    is parsed. A refusal is 429 `signals_too_often` with `Retry-After: 60`. The
    budget is its own: it spends neither the console's reads nor the
    workspace's writes.
-2. The body — at most 256 KiB, truncated where the bytes arrive
-   (`httpx.DecodeJSONWithin`); more than fifty events is a refusal. Both are
-   400 `signals_batch_too_large`, and both come before `Access`.
-3. `Access`, the same one the rest of `/play` uses, and the address and
-   session observation below. This route does not start the participant's
+2. Admission, the same `participation.Admitter` the rest of `/play` uses:
+   the lookup and the gate. This route does not start the participant's
    clock.
+3. The body — at most 256 KiB, truncated where the bytes arrive
+   (`httpx.DecodeJSONWithin`); more than fifty events is a refusal. Both are
+   400 `signals_batch_too_large`. A malformed batch costs one lookup, which
+   the budget above bounds, and is no visit: the address and session
+   observation below is recorded only once the batch is read.
 4. Each event on its own: an unknown kind, a server-side kind (`ip_changed`,
    `tab_*` and the like, which a client may not send), an absence shorter than
    a second, an unknown paste target, an unreadable event — all are
@@ -3524,13 +3536,15 @@ invalid UTF-8 is replaced and NUL is stripped, or one such character would
 tear down the whole batch.
 
 **A change of address and a parallel session are detected on the server,
-without a write per request.** `monitor.Tracker` is called immediately after
-`Access` admitted the participant: on `/play` reads and on an answer, on
-workspace writes, in the console (`queryproxy.Service.Run` once the
-participation gate, section 8.1, has admitted the query) and on the signals
-route. The event stream is not observed: it is one long connection rather than
-a stream of requests. This lives beside the participant's admission rather
-than in a general middleware.
+without a write per request.** `monitor.Tracker` is called by admission itself
+(`participation.Admitter`, section 8.1) the moment it admits a participant
+request: on `/play` reads and on an answer, on workspace writes, in the console
+(`queryproxy.Service.Run`), on a reset, the clarifications and, once its batch
+is read, the signals route (`participation.WithoutVisit`, then
+`Admission.Visit`). The event stream is not observed: it is one long
+connection rather than a stream of requests, so it is admitted with
+`WithoutVisit` alone. This lives beside the participant's admission
+rather than in a general middleware.
 
 - The cache holds one key per registration, `monitor:trail:<registration>`,
   with a 24-hour TTL: the last address, the last session and when it was seen,

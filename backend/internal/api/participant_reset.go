@@ -32,18 +32,13 @@ func (h *ParticipantHandler) mountReset(r chi.Router) {
 // resetDatabase gives the participant their database back as the contest
 // started it, and answers 204.
 //
-// It does not go through admit: Reset charges the account's budget, then the
-// registration's resets, then asks the gate, and admit would ask the gate
-// before the registration's limit was charged.
+// Reset admits the request itself, through the same module, on the console's
+// account rate and the registration's resets; the contest identifier goes to
+// it unparsed, so a malformed one is charged like any other press.
 func (h *ParticipantHandler) resetDatabase(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
-	contestID, ok := contestIDFrom(w, r)
-	if !ok {
-		return
-	}
-
 	err := h.resets.Reset(r.Context(), queryproxy.ResetCommand{
-		ContestID: contestID,
+		ContestID: chi.URLParam(r, contestIDParam),
 		UserID:    identity.UserID,
 		Address:   clientAddress(r),
 		Session:   sessionTag(h.mw, r),

@@ -132,7 +132,7 @@ export function useContestEvents(
      * channel, whatever failed. The delay doubles up to the ceiling for every
      * cause, including an admitted probe; a fixed floor there would reconnect
      * every five seconds for the whole contest, each turn spending two charges
-     * of the play screen's read budget (AdmitRead). A `sync` resets
+     * of the play screen's read budget. A `sync` resets
      * it, since it arrives only on an accepted connection.
      */
     const scheduleReconnect = () => {

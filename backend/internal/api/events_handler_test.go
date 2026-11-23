@@ -17,6 +17,8 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/api"
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation/participationtest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/fanout"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
@@ -29,11 +31,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// eventsFixture reuses fakeAccess from participant_handler_test.go.
+// eventsFixture admits through the real module over a roster, as the
+// participant fixture does (participant_handler_test.go).
 type eventsFixture struct {
 	router   http.Handler
 	handler  *api.EventsHandler
-	access   *fakeAccess
+	roster   *participationtest.Roster
+	reads    *readBudget
+	watcher  *recordingWatcher
+	clock    *clock
 	shutdown chan struct{}
 	cookie   *http.Cookie
 	sessions *auth.SessionStore
@@ -62,19 +68,22 @@ func newEventsFixture(t *testing.T) *eventsFixture {
 		Cookies:    auth.NewCookieWriter(false), Logger: log,
 	})
 
-	access := &fakeAccess{}
+	roster, reads, now, watcher := participationtest.NewRoster(), &readBudget{}, &clock{}, &recordingWatcher{}
 	shutdown := make(chan struct{})
-	handler := api.NewEventsHandler(access, mw, log, shutdown)
+	handler := api.NewEventsHandler(api.Participation{Admitter: participationtest.NewAdmitter(roster, watcher, now.now), Reads: reads}, mw, log, shutdown)
 
 	router := chi.NewRouter()
 	handler.Mount(router)
 
 	return &eventsFixture{
-		router: router, handler: handler, access: access, shutdown: shutdown,
+		router: router, handler: handler, roster: roster, reads: reads, watcher: watcher, clock: now, shutdown: shutdown,
 		cookie:   &http.Cookie{Name: sessionName, Value: token},
 		sessions: sessions,
 	}
 }
+
+// refuse stages the state admission refuses with err (stageRefusal).
+func (f *eventsFixture) refuse(err error) { stageRefusal(f.roster, err) }
 
 // syncedRecorder serialises reads and writes, so a test can read the buffer
 // while the handler still writes from its own goroutine.
@@ -162,11 +171,13 @@ func TestEventsRequiresAuthentication(t *testing.T) {
 }
 
 // One representative refusal: the mapping is one table (errortable.go).
-func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
+func TestEventsAnswersAdmissionRefusalsFromTheSharedTable(t *testing.T) {
 	f := newEventsFixture(t)
-	f.access.err = contests.ErrAddressNotAllowed
+	contestID := uuid.New()
+	f.roster.Stage(participationtest.Running(contestID), contests.Participant{ID: uuid.New()})
+	f.refuse(contests.ErrAddressNotAllowed)
 
-	req, cancel := f.request(uuid.New())
+	req, cancel := f.request(contestID)
 	defer cancel()
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
@@ -182,9 +193,9 @@ func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
 	}
 }
 
-func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
+func TestEventsRateLimitRefusalNeverReachesTheLookup(t *testing.T) {
 	f := newEventsFixture(t)
-	f.access.admitReadErr = queryproxy.ErrTooManyReads
+	f.reads.refuseWith(participation.ErrTooManyReads)
 
 	req, cancel := f.request(uuid.New())
 	defer cancel()
@@ -197,8 +208,8 @@ func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
 	if code := errorCode(t, rec); code != "play_read_too_often" {
 		t.Fatalf("code = %q, want play_read_too_often", code)
 	}
-	if f.access.accessCalled {
-		t.Fatal("Access was called after AdmitRead refused")
+	if f.roster.Lookups() > 0 {
+		t.Fatal("the roster was looked up after the read budget refused")
 	}
 	if retry := rec.Header().Get("Retry-After"); retry != "60" {
 		t.Fatalf("Retry-After = %q, want 60", retry)
@@ -210,10 +221,10 @@ func TestEventsSendsServerNowAndTheParticipantsOwnDeadlineOnConnect(t *testing.T
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	fixedNow := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
-	f.access.gateNow = fixedNow
+	f.clock.set(fixedNow)
 	f.handler.WithClock(func() time.Time { return fixedNow }).WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -245,8 +256,8 @@ func TestEventsSendsServerNowAndTheParticipantsOwnDeadlineOnConnect(t *testing.T
 func TestEventsOmitsTheDeadlineWhenThereIsNoneYet(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingIndividual}
-	f.access.participant = contests.Participant{ID: uuid.New()} // StartedAt is nil
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingIndividual})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()}) // StartedAt is nil
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -265,8 +276,8 @@ func TestEventsCarriesNothingButThisParticipantsOwnState(t *testing.T) {
 	contestID := uuid.New()
 	participantID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: participantID}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: participantID})
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -285,8 +296,8 @@ func TestEventsResyncsOnEveryTick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(testResync)
 
 	req, cancel := f.request(contestID)
@@ -303,8 +314,8 @@ func TestEventsChargesOneReadOnOpenAndNonePerTick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(testResync)
 
 	req, cancel := f.request(contestID)
@@ -313,10 +324,28 @@ func TestEventsChargesOneReadOnOpenAndNonePerTick(t *testing.T) {
 	cancel()
 	waitDone(t, done)
 
-	f.access.mu.Lock()
-	defer f.access.mu.Unlock()
-	if f.access.admitReads != 1 {
-		t.Fatalf("AdmitRead called %d times across three syncs, want 1", f.access.admitReads)
+	if f.reads.charged() != 1 {
+		t.Fatalf("the read budget was charged %d times across three syncs, want 1", f.reads.charged())
+	}
+}
+
+// The event stream is one long connection rather than a stream of requests,
+// so neither its opening nor its resyncs are observed (ARCHITECTURE §9.4).
+func TestEventsRecordsNoMonitorVisitOnOpenOrOnATick(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	f.roster.Stage(participationtest.Running(contestID), contests.Participant{ID: uuid.New()})
+	f.handler.WithResyncInterval(testResync)
+
+	req, cancel := f.request(contestID)
+	req.Header.Set("User-Agent", fixtureUserAgent)
+	rec, done := f.serve(req)
+	waitForCount(t, rec, "event: sync", 3)
+	cancel()
+	waitDone(t, done)
+
+	if visits := f.watcher.seen(); len(visits) != 0 {
+		t.Fatalf("the events channel recorded visits %+v, want none", visits)
 	}
 }
 
@@ -356,8 +385,8 @@ func TestEventsSendsContestFinishedAndClosesOnceItIsOverForTheParticipant(t *tes
 			contestID := uuid.New()
 			ends := time.Now().Add(time.Hour)
 			participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
-			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-			f.access.participant = participant
+			f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+			f.roster.SetParticipant(participant)
 			f.handler.WithResyncInterval(testResync)
 
 			req, cancel := f.request(contestID)
@@ -366,10 +395,10 @@ func TestEventsSendsContestFinishedAndClosesOnceItIsOverForTheParticipant(t *tes
 
 			waitForSubstring(t, rec, "event: contest_started")
 			if given.contest != nil {
-				f.access.setContest(given.contest(contestID))
+				f.roster.SetContest(given.contest(contestID))
 			}
 			if given.participant != nil {
-				f.access.setParticipant(given.participant(participant))
+				f.roster.SetParticipant(given.participant(participant))
 			}
 
 			waitDone(t, done)
@@ -425,11 +454,11 @@ func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified
 			contestID := uuid.New()
 			ends := time.Now().Add(time.Hour)
 			participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
-			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-			f.access.participant = participant
+			f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+			f.roster.SetParticipant(participant)
 			opened := "event: contest_started"
 			if given.waiting {
-				f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusPublished}
+				f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusPublished})
 				opened = "event: sync"
 			}
 			f.handler.WithResyncInterval(testResync)
@@ -440,13 +469,13 @@ func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified
 
 			waitForSubstring(t, rec, opened)
 			if given.contest != nil {
-				f.access.setContest(given.contest(contestID))
+				f.roster.SetContest(given.contest(contestID))
 			}
 			if given.participant != nil {
-				f.access.setParticipant(given.participant(participant))
+				f.roster.SetParticipant(given.participant(participant))
 			}
 			if given.err != nil {
-				f.access.setErr(given.err)
+				f.refuse(given.err)
 			}
 
 			waitDone(t, done)
@@ -461,9 +490,9 @@ func TestEventsReleasesItsSlotOnDisconnect(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
 	participant := contests.Participant{ID: uuid.New()}
-	f.access.participant = participant
+	f.roster.SetParticipant(participant)
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -487,8 +516,8 @@ func TestEventsEndOnShutdown(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -512,9 +541,9 @@ func TestEventsEnforcesTheConnectionLimitByCounting(t *testing.T) {
 	f.handler.WithMaxConnections(2).WithResyncInterval(time.Hour)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
 	participant := contests.Participant{ID: uuid.New()}
-	f.access.participant = participant
+	f.roster.SetParticipant(participant)
 
 	var cancels []context.CancelFunc
 	var dones []<-chan struct{}
@@ -556,9 +585,9 @@ func TestEventsFreesASlotForAnotherConnectionAfterOneCloses(t *testing.T) {
 	f.handler.WithMaxConnections(1).WithResyncInterval(time.Hour)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
 	participant := contests.Participant{ID: uuid.New()}
-	f.access.participant = participant
+	f.roster.SetParticipant(participant)
 
 	req1, cancel1 := f.request(contestID)
 	rec1, done1 := f.serve(req1)
@@ -588,8 +617,8 @@ func TestEventsSetsTheEventStreamContentType(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -608,8 +637,8 @@ func TestEventsMarksItselfStreamingForMetrics(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(time.Hour)
 
 	rec := metrics.NewPrometheus()
@@ -644,8 +673,8 @@ func TestEventsSendsARetryFieldOfThirtyToFortyFiveSeconds(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -669,8 +698,8 @@ func TestEventsToleratesATransientAccessFailureOnATick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(testResync)
 
 	req, cancel := f.request(contestID)
@@ -678,14 +707,14 @@ func TestEventsToleratesATransientAccessFailureOnATick(t *testing.T) {
 	rec, done := f.serve(req)
 	waitForSubstring(t, rec, "event: sync")
 
-	f.access.setErr(queryproxy.ErrUnavailable)
+	f.refuse(queryproxy.ErrUnavailable)
 	select {
 	case <-done:
 		t.Fatal("the channel closed on a transient failure instead of retrying the next tick")
 	case <-time.After(10 * testResync):
 	}
 
-	f.access.setErr(nil)
+	f.refuse(nil)
 	waitForCount(t, rec, "event: sync", 2)
 
 	cancel()
@@ -700,8 +729,8 @@ func TestEventsToleratesATransientAccessFailureOnATick(t *testing.T) {
 func TestEventsHoldsOpenForAPublishedContestAndAnnouncesTheTransitionOnATick(t *testing.T) {
 	f := newEventsFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusPublished}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusPublished})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(testResync)
 
 	req, cancel := f.request(contestID)
@@ -714,7 +743,7 @@ func TestEventsHoldsOpenForAPublishedContestAndAnnouncesTheTransitionOnATick(t *
 	}
 
 	ends := time.Now().Add(time.Hour)
-	f.access.setContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
 	waitForSubstring(t, rec, "event: contest_started")
 
 	cancel()
@@ -781,9 +810,9 @@ func TestEventsReclaimsAConnectionBlockedOnAWrite(t *testing.T) {
 	f.handler.WithResyncInterval(5 * time.Millisecond).WithWriteTimeout(20 * time.Millisecond)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
 	participant := contests.Participant{ID: uuid.New()}
-	f.access.participant = participant
+	f.roster.SetParticipant(participant)
 
 	req, cancel := f.request(contestID)
 	defer cancel()
@@ -842,7 +871,7 @@ func (w *deadlineAwareWriter) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
 }
 
-// AccessForEvents is a database round trip, and the write deadline bounds the
+// Each resync is a database round trip, and the write deadline bounds the
 // write, so it must be armed after the lookups or a slow tick would disconnect
 // a healthy client.
 func TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem(t *testing.T) {
@@ -850,11 +879,11 @@ func TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem(t *testing
 	f.handler.WithResyncInterval(5 * time.Millisecond).WithWriteTimeout(10 * time.Millisecond)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	// Longer than writeTimeout: a deadline armed before the lookup would be
 	// spent before the write.
-	f.access.setDelay(40 * time.Millisecond)
+	f.roster.Delay(40 * time.Millisecond)
 
 	req, cancel := f.request(contestID)
 	w := newDeadlineAwareWriter()
@@ -891,8 +920,8 @@ func TestEventsReturnsAfterOneFlushAttemptWhenTheResponseWriterCannotFlush(t *te
 	f := newEventsFixture(t)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -955,8 +984,8 @@ func TestEventsCloseWhenTheSessionPassesItsMaximumLifetime(t *testing.T) {
 	f.sessions.WithMaxLifetime(150 * time.Millisecond)
 	contestID := uuid.New()
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.handler.WithResyncInterval(testResync)
 
 	req, cancel := f.request(contestID)
@@ -973,8 +1002,8 @@ func runningStream(t *testing.T, hub *fanout.Hub, contestID, participantID uuid.
 	t.Helper()
 	f := newEventsFixture(t)
 	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: participantID}
+	f.roster.SetContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	f.roster.SetParticipant(contests.Participant{ID: participantID})
 	f.handler.WithResyncInterval(time.Hour).WithHints(hub)
 	req, cancel := f.request(contestID)
 	rec, done := f.serve(req)

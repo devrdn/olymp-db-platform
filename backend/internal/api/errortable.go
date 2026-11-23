@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/leaderboard"
 	"github.com/devrdn/olymp-db-platform/backend/internal/microsoft"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
@@ -89,8 +90,8 @@ func joined(tables ...errorTable) errorTable {
 
 // standingErrors answers the participation gate's refusals
 // (contests.Gate.StandingOf), which the console, play screen, events channel
-// and answer route all meet. Composed into queryproxyErrors and contestsErrors
-// and walked by both their tests.
+// and answer route all meet. Composed into participationErrors and
+// contestsErrors and walked by both their tests.
 var standingErrors = errorTable{
 	// One answer whether the caller never registered, was disqualified, or
 	// named someone else's contest: telling them apart would reveal rosters and
@@ -113,9 +114,24 @@ var standingErrors = errorTable{
 		message: "This contest is only available from the university network"},
 }
 
-// queryproxyErrors answers every error in queryproxy.Errors(), met when
-// admitting a participant. TestEveryQueryproxyErrorHasItsAnswer walks that list
-// and standingErrors.
+// participationErrors answers every error in participation.Errors() and the
+// gate's refusals admission passes on, wherever a participant route is
+// admitted. TestEveryParticipationErrorHasItsAnswer walks both.
+var participationErrors = joined(errorTable{
+	// Ours, not the participant's: the cause goes to the log only.
+	{err: participation.ErrUnavailable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
+		message: "Internal server error",
+		logAs:   "a participant's request could not be admitted"},
+	{err: participation.ErrInvalidContest, status: http.StatusBadRequest, code: auth.CodeInvalidContestID,
+		message: "Contest identifier is not valid"},
+	{err: participation.ErrTooManyReads, status: http.StatusTooManyRequests, code: codePlayReadTooOften,
+		message:    "This participant is loading the contest faster than this installation allows",
+		retryAfter: queryRetryAfter},
+}, standingErrors)
+
+// queryproxyErrors answers every error in queryproxy.Errors(), and
+// admission's, since every query is admitted first.
+// TestEveryQueryproxyErrorHasItsAnswer walks that list.
 var queryproxyErrors = joined(errorTable{
 	// 409, not 403: where the contest stands for this participant, not a
 	// permission, and it changes once there is something to answer again.
@@ -145,10 +161,7 @@ var queryproxyErrors = joined(errorTable{
 	{err: queryproxy.ErrResetTooOften, status: http.StatusTooManyRequests, code: codeResetTooOften,
 		message:    "This participant has reset their database as often as allowed for now",
 		retryAfter: queryproxy.ResetWindow},
-	{err: queryproxy.ErrTooManyReads, status: http.StatusTooManyRequests, code: codePlayReadTooOften,
-		message:    "This participant is loading the contest faster than this installation allows",
-		retryAfter: queryRetryAfter},
-}, standingErrors)
+}, participationErrors)
 
 // queryRetryAfter is long enough for a slot to be free: the limiter is a
 // sliding minute, so a full window always clears.

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
-	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/workspace"
 	"github.com/devrdn/olymp-db-platform/backend/internal/workspace/workspacetest"
@@ -77,11 +77,11 @@ func expectStatus(t *testing.T, rec *httptest.ResponseRecorder, status int, code
 func (f *participantFixture) workspaceContest(t *testing.T) string {
 	t.Helper()
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
+	f.roster.SetContest(contests.Contest{
 		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingIndividual,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ru"}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	return "/contests/" + contestID.String() + "/play"
 }
 
@@ -125,18 +125,18 @@ func TestReadingTheWorkspaceStartsNoClockAndSpendsTheReadBudget(t *testing.T) {
 	play := f.workspaceContest(t)
 	f.loadWorkspace(t, play)
 
-	if len(f.access.startedOnRead) != 0 {
-		t.Fatalf("StartOnRead was called for %v", f.access.startedOnRead)
+	if len(f.roster.Started()) != 0 {
+		t.Fatalf("started %v, want nobody", f.roster.Started())
 	}
-	if f.access.admitReads != 1 {
-		t.Fatalf("AdmitRead called %d times, want 1", f.access.admitReads)
+	if f.reads.charged() != 1 {
+		t.Fatalf("the read budget was charged %d times, want 1", f.reads.charged())
 	}
 
-	f.access.admitReadErr = queryproxy.ErrTooManyReads
-	f.access.accessCalled = false
+	f.reads.refuseWith(participation.ErrTooManyReads)
+	lookups := f.roster.Lookups()
 	expectStatus(t, f.get(play+"/workspace"), http.StatusTooManyRequests, "play_read_too_often")
-	if f.access.accessCalled {
-		t.Fatal("Access ran after the read budget refused")
+	if f.roster.Lookups() != lookups {
+		t.Fatal("the roster was looked up after the read budget refused")
 	}
 }
 
@@ -300,11 +300,11 @@ func TestWritesPastTheirRateAreA429BeforeAnyLookup(t *testing.T) {
 			t.Fatalf("write #%d refused for its rate", i+1)
 		}
 	}
-	if f.access.admitReads != 0 {
-		t.Fatalf("writes spent the read budget %d times", f.access.admitReads)
+	if f.reads.charged() != 0 {
+		t.Fatalf("writes spent the read budget %d times", f.reads.charged())
 	}
 
-	f.access.accessCalled = false
+	lookups := f.roster.Lookups()
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPut, "/notes", `{"body":"x"}`},
 		{http.MethodPost, "/tabs", `{}`},
@@ -318,8 +318,8 @@ func TestWritesPastTheirRateAreA429BeforeAnyLookup(t *testing.T) {
 			t.Fatalf("%s %s: Retry-After = %q, want 60", tc.method, tc.path, rec.Header().Get("Retry-After"))
 		}
 	}
-	if f.access.accessCalled {
-		t.Fatal("Access ran for a write refused for its rate")
+	if f.roster.Lookups() != lookups {
+		t.Fatal("a write refused for its rate was looked up")
 	}
 }
 
@@ -328,8 +328,8 @@ func TestAWriteStartsNoClock(t *testing.T) {
 	play := f.workspaceContest(t)
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusOK, "")
 	expectStatus(t, f.send(http.MethodPost, play+"/tabs", `{}`), http.StatusCreated, "")
-	if len(f.access.startedOnRead) != 0 {
-		t.Fatalf("StartOnRead was called for %v", f.access.startedOnRead)
+	if len(f.roster.Started()) != 0 {
+		t.Fatalf("started %v, want nobody", f.roster.Started())
 	}
 }
 
@@ -337,17 +337,17 @@ func TestAWriteStartsNoClock(t *testing.T) {
 func TestAWorkspaceWriteSpendsNoReadBudget(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
-	f.access.admitReads = 0
+	spent := f.reads.charged()
 
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusOK, "")
-	if f.access.admitReads != 0 {
-		t.Fatalf("a write spent the read budget: AdmitRead called %d times", f.access.admitReads)
+	if f.reads.charged() != spent {
+		t.Fatalf("a write spent the read budget: %d reads charged", f.reads.charged()-spent)
 	}
 }
 
 // Once the contest has ended for the participant, every workspace route answers
 // as /play/story does.
-func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
+func TestWorkspaceAdmissionRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
 		status int
@@ -364,7 +364,7 @@ func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 			f := newParticipantFixture(t)
 			play := f.workspaceContest(t)
 			tab := f.loadWorkspace(t, play).Tabs[0]
-			f.access.err = tc.err
+			f.refuse(tc.err)
 			before := f.workspaceStore.Calls()
 
 			for _, route := range []struct{ method, path, body string }{
@@ -430,7 +430,7 @@ func TestAWorkspaceWriteIsObserved(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	visits := f.watcher.seen()
-	if len(visits) != 1 || visits[0].Registration != f.access.participant.ID || visits[0].UserAgent != fixtureUserAgent {
+	if len(visits) != 1 || visits[0].Registration != f.roster.Participant().ID || visits[0].UserAgent != fixtureUserAgent {
 		t.Fatalf("visits = %+v, want the write observed once", visits)
 	}
 }

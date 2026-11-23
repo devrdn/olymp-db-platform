@@ -8,9 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
-	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -76,12 +75,12 @@ type signalEvent struct {
 
 // toEvent reads one raw event for the admitted registration, or reports it
 // unreadable. Kinds a browser may not send are dropped here.
-func toEvent(raw json.RawMessage, contest contests.Contest, participant contests.Participant) (monitor.Event, bool) {
+func toEvent(raw json.RawMessage, admission *participation.Admission) (monitor.Event, bool) {
 	var in signalEvent
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return monitor.Event{}, false
 	}
-	event := monitor.Event{Contest: contest.ID, Registration: participant.ID}
+	event := monitor.Event{Contest: admission.Contest.ID, Registration: admission.Participant.ID}
 	switch in.Kind {
 	case monitor.KindPageLeft:
 		event.Payload = monitor.PageLeft{AwayMs: in.AwayMs}
@@ -97,20 +96,15 @@ func toEvent(raw json.RawMessage, contest contests.Contest, participant contests
 	return event, true
 }
 
+// postSignals holds the monitor visit back until the batch is read, so a
+// refused batch is no visit.
 func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request) {
-	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.signals.AdmitBatch(r.Context(), identity.UserID); err != nil {
-		h.failSignals(w, r, err)
-		return
-	}
-
-	contestID, ok := contestIDFrom(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, participation.BudgetFunc(h.signals.AdmitBatch), h.failSignals,
+		participation.WithoutVisit())
 	if !ok {
 		return
 	}
 
-	// Body and size are checked before Access: both are cheap, and a malformed
-	// batch costs no lookup.
 	var req signalsRequest
 	if err := httpx.DecodeJSONWithin(w, r, &req, maxSignalBodyBytes); err != nil {
 		if errors.Is(err, httpx.ErrBodyTooLarge) {
@@ -129,17 +123,11 @@ func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request)
 		h.failSignals(w, r, monitor.ErrBatchTooLarge)
 		return
 	}
-
-	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
-	h.observe(r, participant, contest)
+	admission.Visit(r.Context())
 
 	events := make([]monitor.Event, 0, len(raw))
 	for _, one := range raw {
-		if event, ok := toEvent(one, contest, participant); ok {
+		if event, ok := toEvent(one, admission); ok {
 			events = append(events, event)
 		}
 	}
@@ -152,9 +140,10 @@ func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// failSignals maps a signal refusal to a response (CLAUDE.md rule 1).
+// failSignals maps a signal refusal to a response, and anything else as every
+// participant route does (CLAUDE.md rule 1).
 func (h *ParticipantHandler) failSignals(w http.ResponseWriter, r *http.Request, err error) {
-	if monitorErrors.answer(w, r, h.log, err) {
+	if monitorErrors.answer(w, r, h.log, err) || h.answered(w, r, err) {
 		return
 	}
 	h.log.ErrorContext(r.Context(), "the participant's browser signals could not be stored", "error", err)

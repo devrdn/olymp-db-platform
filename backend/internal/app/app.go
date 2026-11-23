@@ -32,6 +32,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/mailing"
 	"github.com/devrdn/olymp-db-platform/backend/internal/microsoft"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/config"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/fanout"
@@ -301,6 +302,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// disagree about when a participant's time is up.
 	gate := contests.NewGate(cfg.DeadlineGrace)
 
+	// Every participant request, the console's queries included, is admitted
+	// by this one module, and every admitted one is reported to the tracker.
+	// postgres.Registrations reads the participant and the contest, and the
+	// console's game and database with them, in one round trip.
+	participants := postgres.NewRegistrations(pool)
+	admitter := participation.New(participation.Config{
+		Lookup: participants, People: participants, Gate: gate,
+		Audit: auditRecorder, UnitOfWork: storage.NewUnitOfWork(pool),
+		Watcher: participantTracker,
+	})
+
 	var console *queryproxy.Service
 	// console, gameAuthoring and gameDatabases stay nil without a game
 	// cluster, and their endpoints are then not mounted.
@@ -422,26 +434,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			}
 			a.closers = append(a.closers, func() { _ = client.Close() })
 
-			consoleRegistrations := postgres.NewRegistrations(pool)
 			console = queryproxy.New(
-				consoleRegistrations,
-				postgres.NewContests(pool),
-				games,
-				databases,
+				admitter, participants, databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
-				gate,
-				auditRecorder, storage.NewUnitOfWork(pool),
 			).WithPerMinuteDefault(cfg.QueryPerMinute).
-				WithReadsPerMinute(cfg.PlayReadPerMinute).
-				// Collapses Run's and Access's lookups into one round trip.
-				WithLookup(consoleRegistrations).
-				// The schema panel; a console-less Service answers
-				// ErrSchemaHidden.
+				// The schema panel.
 				WithSchemas(provisioning.NewSchemaReader(games, cluster).WithLog(log)).
 				// Run and Reset refuse once nothing is left to answer
 				// (ErrNothingLeftToAnswer); the read endpoints stay open.
-				WithAnswerable(postgres.NewAnswerable(pool)).
-				WithWatcher(participantTracker)
+				WithAnswerable(postgres.NewAnswerable(pool))
 		}
 	}
 
@@ -630,22 +631,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		modules = append(modules, gameHandler)
 	}
 
-	// The participant's reads of a running contest use only Access and the
-	// read budget, which never touch the game cluster, so they are mounted
-	// even without a console. With a console its Service is reused; without
-	// one, a Service is built with nils for the collaborators only Run uses.
-	participantAccess := console
-	if participantAccess == nil {
-		registrations := postgres.NewRegistrations(pool)
-		participantAccess = queryproxy.New(
-			registrations, postgres.NewContests(pool),
-			nil, nil, nil,
-			gate,
-			auditRecorder, storage.NewUnitOfWork(pool),
-		).WithPerMinuteDefault(cfg.QueryPerMinute).
-			WithReadsPerMinute(cfg.PlayReadPerMinute).
-			WithLookup(registrations)
-	}
+	// The participant's reads of a running contest need only admission and
+	// the read budget, which never touch the game cluster, so they are
+	// mounted even without a console. One read budget is shared by the play
+	// screen, the clarifications feed and the events channel.
+	participant := api.Participation{Admitter: admitter, Reads: participation.NewReads(cfg.PlayReadPerMinute)}
 	reader := contests.NewReader(
 		postgres.NewStories(pool), postgres.NewSchemaNotes(pool), postgres.NewQuestions(pool),
 		postgres.NewAttempts(pool), postgres.NewSequence(pool))
@@ -656,15 +646,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// One export slot per registration across the play screen and profile
 	// routes that serve its query log.
 	logExports := api.NewExportGate()
-	participantHandler := api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
+	participantHandler := api.NewParticipantHandler(participant, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
 		WithWorkspace(workspaces).
-		WithWatcher(participantTracker).
 		WithSignals(signals).
 		WithExports(logExports).
 		WithExportSlots(exportSlots)
 	if console != nil {
-		// Only the console's Service has the game cluster behind it.
-		participantHandler = participantHandler.WithDatabaseReset(console)
+		// Only the console's Service has the game cluster behind it; without
+		// it the schema panel answers schema_hidden.
+		participantHandler = participantHandler.WithDatabaseReset(console).WithSchemas(console)
 	}
 	modules = append(modules, participantHandler)
 	// Answers and announcements reach the participants' open event channels
@@ -678,12 +668,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Audit:      auditRecorder,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 	})
-	modules = append(modules, api.NewClarificationsHandler(clarifyService, participantAccess, authMiddleware, log).
-		WithWatcher(participantTracker))
-	// The SSE channel shares participantAccess and its budget. ctx.Done() is
-	// the shutdown signal Run waits on, so open streams close as draining
-	// begins.
-	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()).WithHints(hints))
+	modules = append(modules, api.NewClarificationsHandler(clarifyService, participant, authMiddleware, log))
+	// ctx.Done() is the shutdown signal Run waits on, so open streams close as
+	// draining begins.
+	modules = append(modules, api.NewEventsHandler(participant, authMiddleware, log, ctx.Done()).WithHints(hints))
 	// The profile reuses standings, watch and the query log rather than
 	// reimplementing them.
 	modules = append(modules, api.NewProfileHandler(profile.NewService(profile.Config{

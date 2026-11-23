@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
@@ -36,7 +36,8 @@ const (
 // ResetCommand is one participant asking for their database back as the
 // contest started it. Like Command it names no database.
 type ResetCommand struct {
-	ContestID uuid.UUID
+	// ContestID is the identifier as the caller wrote it, as in Command.
+	ContestID string
 	UserID    uuid.UUID
 	// Address is checked against the contest's network restriction.
 	Address netip.Addr
@@ -45,40 +46,36 @@ type ResetCommand struct {
 	UserAgent string
 }
 
-// Reset remakes the caller's own database from the contest's template. The
-// two rate checks come first, as in Run: the account's shared budget before
-// any lookup, then this registration's resets before the gate, so every
-// refusal after the lookup, a read-only contest's included, spends a press.
-// Like Run it refuses once nothing is left to answer, after the checks made
-// from values in hand.
+// resetBudget is the reset's budget as admission charges it: the account's
+// query rate, shared with the console, before any lookup, then this
+// registration's resets before the gate, so every refusal after the lookup, a
+// read-only contest's included, spends a press.
+type resetBudget struct{ s *Service }
+
+func (b resetBudget) Charge(_ context.Context, account uuid.UUID) error {
+	return b.s.rate.Admit(account.String(), b.s.perMinuteDefault)
+}
+
+func (b resetBudget) ChargeRegistration(_ context.Context, participant contests.Participant, _ contests.Contest) error {
+	if err := b.s.resets.Admit(participant.ID.String(), ResetsPerWindow); err != nil {
+		return ErrResetTooOften
+	}
+	return nil
+}
+
+// Reset remakes the caller's own database from the contest's template, once
+// admission has spent resetBudget and asked the gate. Like Run it refuses once
+// nothing is left to answer, after the checks made from values in hand.
 //
 // A registration with no database yet is answered as done: the first query
 // copies a fresh one anyway. A reset starts no clock, since whatever made the
 // database already did.
 func (s *Service) Reset(ctx context.Context, cmd ResetCommand) error {
-	if err := s.rate.Admit(cmd.UserID.String(), s.perMinuteDefault); err != nil {
-		return err
-	}
-
-	lookup, lookupErr := s.lookup.ForRun(ctx, cmd.ContestID, cmd.UserID)
-	participant, err := classifyParticipant(lookup.Participant, lookupErr, "look up the participant and the contest")
+	admission, lookup, err := s.admit(ctx, resetBudget{s}, cmd.ContestID, cmd.UserID, cmd.Address, cmd.Session, cmd.UserAgent)
 	if err != nil {
 		return err
 	}
-	if err := s.resets.Admit(participant.ID.String(), ResetsPerWindow); err != nil {
-		return ErrResetTooOften
-	}
-
-	contest := lookup.Contest
-	if err := s.admit(contest, participant, cmd.Address); err != nil {
-		return err
-	}
-	if s.watcher != nil {
-		s.watcher.Observe(ctx, monitor.Visit{
-			Contest: contest.ID, Registration: participant.ID,
-			Address: cmd.Address, Session: cmd.Session, UserAgent: cmd.UserAgent,
-		})
-	}
+	participant := admission.Participant
 
 	switch {
 	case errors.Is(lookup.GameErr, provisioning.ErrNoGame):
@@ -90,7 +87,7 @@ func (s *Service) Reset(ctx context.Context, cmd ResetCommand) error {
 		return ErrResetReadOnly
 	}
 	if s.answerable != nil {
-		left, err := s.answerable.AnswerableLeft(ctx, cmd.ContestID, participant.ID)
+		left, err := s.answerable.AnswerableLeft(ctx, admission.Contest.ID, participant.ID)
 		if err != nil {
 			return fmt.Errorf("%w: work out what is still answerable: %w", ErrUnavailable, err)
 		}

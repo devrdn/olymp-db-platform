@@ -204,10 +204,11 @@ flowchart LR
 ```
 
 - Admission for the story, questions, schema, query log, workspace, signals,
-  answers and the console is `queryproxy.Service.Access`, which calls the gate
-  ([`queryproxy.go`](../../backend/internal/queryproxy/queryproxy.go)). The
-  events channel uses `AccessForEvents`, which also admits a participant
-  waiting for the start. `/play/leaderboard` asks only for a registration
+  clarifications, answers and the console is `participation.Admitter.Admit`,
+  which charges the route's budget and then calls the gate
+  ([`participation.go`](../../backend/internal/participation/participation.go)).
+  The events channel is admitted with its `MayWait` option, which also admits
+  a participant waiting for the start. `/play/leaderboard` asks only for a registration
   (`leaderboard.Service.ForParticipant`).
 - An answer is judged by `contests.Service` in
   [`submission.go`](../../backend/internal/contests/submission.go); the final

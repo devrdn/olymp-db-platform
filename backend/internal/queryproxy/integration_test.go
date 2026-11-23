@@ -14,6 +14,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
@@ -101,17 +102,17 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	if _, err := registrations.Add(ctx, contestID, student); err != nil {
 		t.Fatalf("Add() = %v", err)
 	}
-	service := queryproxy.New(
+	service := newService(
 		registrations,
 		postgres.NewContests(pool),
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"},
 		&runner{result: &queryrunner.Result{Columns: []string{"a"}}},
 		fiveSecondGate,
-		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
-	).WithClock(func() time.Time { return clock })
+		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool), at(func() time.Time { return clock }),
+	)
 
-	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
+	cmd := queryproxy.Command{ContestID: contestID.String(), UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
 
 	if _, err := service.Run(ctx, cmd); err != nil {
 		t.Fatalf("the participant's first query: %v", err)
@@ -153,141 +154,6 @@ func makeRunningFixedContest(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	return id
 }
 
-// Access refuses another contest's stranger, a disqualified participant and
-// a contest past its end, against the real schema.
-func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T) {
-	pool := integrationPool(t)
-	ctx := context.Background()
-
-	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
-	enrolled := makeIntegrationUser(t, ctx, pool, "enrolled-"+uuid.NewString()[:8])
-	stranger := makeIntegrationUser(t, ctx, pool, "stranger-"+uuid.NewString()[:8])
-	disqualified := makeIntegrationUser(t, ctx, pool, "disq-"+uuid.NewString()[:8])
-
-	farFuture := time.Now().Add(24 * time.Hour)
-	running := makeRunningFixedContest(t, ctx, pool, author, farFuture)
-	elsewhere := makeRunningFixedContest(t, ctx, pool, author, farFuture)
-	past := time.Now().Add(-time.Minute)
-	notRunningAnymore := makeRunningFixedContest(t, ctx, pool, author, past)
-	for _, id := range []uuid.UUID{running, elsewhere, notRunningAnymore} {
-		t.Cleanup(func() {
-			clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, id)
-		})
-	}
-
-	registrations := postgres.NewRegistrations(pool)
-	if _, err := registrations.Add(ctx, running, enrolled); err != nil {
-		t.Fatalf("enrol the participant: %v", err)
-	}
-	if _, err := registrations.Add(ctx, elsewhere, stranger); err != nil {
-		t.Fatalf("enrol the stranger elsewhere: %v", err)
-	}
-	if _, err := registrations.Add(ctx, running, disqualified); err != nil {
-		t.Fatalf("enrol the participant to disqualify: %v", err)
-	}
-	disqualifiedReg, err := registrations.ByUser(ctx, running, disqualified)
-	if err != nil {
-		t.Fatalf("ByUser() = %v", err)
-	}
-	if err := registrations.SetStatus(ctx, disqualifiedReg.ID, contests.RegistrationDisqualified); err != nil {
-		t.Fatalf("SetStatus() = %v", err)
-	}
-	if _, err := registrations.Add(ctx, notRunningAnymore, enrolled); err != nil {
-		t.Fatalf("enrol into the finished contest: %v", err)
-	}
-
-	service := queryproxy.New(
-		registrations, postgres.NewContests(pool),
-		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-		&databases{database: "x"}, &runner{},
-		fiveSecondGate,
-		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
-	)
-
-	if _, _, err := service.Access(ctx, running, enrolled, netip.Addr{}); err != nil {
-		t.Fatalf("an enrolled participant of a running contest was refused: %v", err)
-	}
-
-	// A stranger gets the same refusal as a contest that does not exist, so the
-	// answer never confirms the contest exists.
-	if _, _, err := service.Access(ctx, running, stranger, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
-		t.Fatalf("a stranger to this contest: error = %v, want ErrNotAParticipant", err)
-	}
-
-	if _, _, err := service.Access(ctx, uuid.New(), enrolled, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
-		t.Fatalf("a contest that does not exist: error = %v, want ErrNotAParticipant", err)
-	}
-
-	// Disqualified reads as the same code a stranger gets.
-	if _, _, err := service.Access(ctx, running, disqualified, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
-		t.Fatalf("a disqualified participant: error = %v, want ErrNotAParticipant", err)
-	}
-
-	// Past ends_at is refused although nothing flips status to finished.
-	if _, _, err := service.Access(ctx, notRunningAnymore, enrolled, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
-		t.Fatalf("a contest past its own deadline: error = %v, want ErrDeadlinePassed", err)
-	}
-}
-
-// New's lookup and the single-query one keep the same Lookup contract, against
-// a contest that has a title and description to leave out.
-func TestBothLookupsHandAccessAContestWithoutTranslations(t *testing.T) {
-	pool := integrationPool(t)
-	ctx := context.Background()
-
-	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
-	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
-	contestID := makeRunningFixedContest(t, ctx, pool, author, time.Now().Add(24*time.Hour))
-	t.Cleanup(func() {
-		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
-	})
-	contestStore := postgres.NewContests(pool)
-	if err := contestStore.ReplaceLanguages(ctx, contestID, []contests.ContestLanguage{{Code: "en", IsDefault: true}}); err != nil {
-		t.Fatalf("ReplaceLanguages() = %v", err)
-	}
-	if err := contestStore.ReplaceTranslations(ctx, contestID, []contests.Translation{
-		{Lang: "en", Title: "Night in the archive", Description: "A long brief."},
-	}); err != nil {
-		t.Fatalf("ReplaceTranslations() = %v", err)
-	}
-	registrations := postgres.NewRegistrations(pool)
-	if _, err := registrations.Add(ctx, contestID, student); err != nil {
-		t.Fatalf("Add() = %v", err)
-	}
-
-	newService := func() *queryproxy.Service {
-		return queryproxy.New(registrations, contestStore, nil, nil, nil, fiveSecondGate,
-			audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool))
-	}
-	for name, service := range map[string]*queryproxy.Service{
-		"New's lookup":           newService(),
-		"postgres.Registrations": newService().WithLookup(registrations),
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
-			if err != nil {
-				t.Fatalf("Access() = %v", err)
-			}
-			_, forEvents, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{})
-			if err != nil {
-				t.Fatalf("AccessForEvents() = %v", err)
-			}
-			for call, got := range map[string]contests.Contest{"Access": contest, "AccessForEvents": forEvents} {
-				if len(got.Translations) != 0 {
-					t.Errorf("%s translations = %v, want none", call, got.Translations)
-				}
-				if got.DefaultLanguage() != "en" {
-					t.Errorf("%s default language = %q, want en", call, got.DefaultLanguage())
-				}
-			}
-		})
-	}
-}
-
 // The fact that closes the console is decided in SQL (postgres.Answerable) and
 // applied in Go (Run), so it is tested across that boundary (CLAUDE.md
 // rule 11).
@@ -320,7 +186,7 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		t.Fatalf("Add() = %v", err)
 	}
 
-	service := queryproxy.New(
+	service := newService(
 		registrations,
 		postgres.NewContests(pool),
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
@@ -330,7 +196,7 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool),
 	).WithAnswerable(postgres.NewAnswerable(pool))
 
-	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
+	cmd := queryproxy.Command{ContestID: contestID.String(), UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
 
 	if _, err := service.Run(ctx, cmd); err != nil {
 		t.Fatalf("a query while the contest's only question is still open: %v", err)
@@ -347,183 +213,14 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		t.Fatalf("a query with every question closed: error = %v, want ErrNothingLeftToAnswer", err)
 	}
 
-	// Only the console closes: Access still admits them, which is why this is
-	// not ErrParticipantFinished.
-	if _, _, err := service.Access(ctx, contestID, student, netip.Addr{}); err != nil {
-		t.Fatalf("Access() = %v, want nil — only the console closes", err)
-	}
-}
-
-// The first read of content starts an individual clock, the events channel
-// never does, and a later read does not move started_at. The once-only
-// guarantee lives in the repository's WHERE clause, which fakes cannot show
-// (CLAUDE.md rule 10).
-func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelNever(t *testing.T) {
-	pool := integrationPool(t)
-	ctx := context.Background()
-
-	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
-	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
-	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
-	contestID := makeRunningIndividualContest(t, ctx, pool, author, 60, clock.Add(-time.Hour), clock.Add(24*time.Hour))
-	t.Cleanup(func() {
-		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	// Only the console closes: the play screen's reads still admit them, which
+	// is why this is not ErrParticipantFinished.
+	reads := participation.New(participation.Config{
+		Lookup: registrations, People: registrations, Gate: fiveSecondGate,
+		Audit: audit.New(postgres.NewAuditSink(pool)), UnitOfWork: storage.NewUnitOfWork(pool),
 	})
-
-	registrations := postgres.NewRegistrations(pool)
-	if _, err := registrations.Add(ctx, contestID, student); err != nil {
-		t.Fatalf("Add() = %v", err)
-	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate,
-		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
-		WithClock(func() time.Time { return clock })
-
-	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
-		t.Fatalf("AccessForEvents() = %v", err)
-	}
-	if stored, err := registrations.ByUser(ctx, contestID, student); err != nil || stored.StartedAt != nil {
-		t.Fatalf("after the events channel: StartedAt = %v, err = %v; want no clock started", stored.StartedAt, err)
-	}
-
-	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
-	if err != nil {
-		t.Fatalf("Access() = %v", err)
-	}
-	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
-		t.Fatalf("StartOnRead() = %v", err)
-	}
-	stored, err := registrations.ByUser(ctx, contestID, student)
-	if err != nil || stored.StartedAt == nil || !stored.StartedAt.Equal(clock) {
-		t.Fatalf("after the first read: StartedAt = %v, err = %v; want %v", stored.StartedAt, err, clock)
-	}
-
-	// A later read holding the participant as it was before the start, as a
-	// racing read would: started_at stays put.
-	clock = clock.Add(7 * time.Minute)
-	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
-		t.Fatalf("second StartOnRead() = %v", err)
-	}
-	again, err := registrations.ByUser(ctx, contestID, student)
-	if err != nil || again.StartedAt == nil || !again.StartedAt.Equal(*stored.StartedAt) {
-		t.Fatalf("after a second read: StartedAt = %v, err = %v; want %v unchanged", again.StartedAt, err, stored.StartedAt)
-	}
-}
-
-// Under a shared window the first read records the start and makes the
-// registration active, the events channel never does, and a later read moves
-// nothing.
-func TestAFixedTimingParticipantsFirstReadRecordsTheStartOnceAndTheEventsChannelNever(t *testing.T) {
-	pool := integrationPool(t)
-	ctx := context.Background()
-
-	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
-	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
-	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
-	contestID := makeRunningFixedContest(t, ctx, pool, author, clock.Add(24*time.Hour))
-	t.Cleanup(func() {
-		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
-	})
-
-	registrations := postgres.NewRegistrations(pool)
-	if _, err := registrations.Add(ctx, contestID, student); err != nil {
-		t.Fatalf("Add() = %v", err)
-	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate,
-		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
-		WithClock(func() time.Time { return clock })
-
-	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
-		t.Fatalf("AccessForEvents() = %v", err)
-	}
-	if stored, err := registrations.ByUser(ctx, contestID, student); err != nil || stored.StartedAt != nil || stored.Status != contests.RegistrationRegistered {
-		t.Fatalf("after the events channel: %+v, err = %v; want registered, no start", stored, err)
-	}
-
-	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
-	if err != nil {
-		t.Fatalf("Access() = %v", err)
-	}
-	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
-		t.Fatalf("StartOnRead() = %v", err)
-	}
-	stored, err := registrations.ByUser(ctx, contestID, student)
-	if err != nil || stored.StartedAt == nil || !stored.StartedAt.Equal(clock) || stored.Status != contests.RegistrationActive {
-		t.Fatalf("after the first read: %+v, err = %v; want active, started at %v", stored, err, clock)
-	}
-
-	clock = clock.Add(7 * time.Minute)
-	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
-		t.Fatalf("second StartOnRead() = %v", err)
-	}
-	again, err := registrations.ByUser(ctx, contestID, student)
-	if err != nil || again.StartedAt == nil || !again.StartedAt.Equal(*stored.StartedAt) || again.Status != contests.RegistrationActive {
-		t.Fatalf("after a second read: %+v, err = %v; want active, started at %v unchanged", again, err, stored.StartedAt)
-	}
-}
-
-// The start's audit entry goes through the real transaction and sink: one
-// entry for the read that recorded the start, with the caller's address from
-// the request, and none for a later read holding the same stale participant.
-func TestAFirstReadAuditsTheStartOnceWithTheCallersAddress(t *testing.T) {
-	pool := integrationPool(t)
-	ctx := audit.WithRequestMeta(context.Background(), "203.0.113.9", "integration-test")
-
-	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
-	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
-	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
-	contestID := makeRunningFixedContest(t, ctx, pool, author, clock.Add(24*time.Hour))
-	t.Cleanup(func() {
-		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
-	})
-
-	registrations := postgres.NewRegistrations(pool)
-	if _, err := registrations.Add(ctx, contestID, student); err != nil {
-		t.Fatalf("Add() = %v", err)
-	}
-	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil, fiveSecondGate,
-		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
-		WithClock(func() time.Time { return clock })
-
-	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
-	if err != nil {
-		t.Fatalf("Access() = %v", err)
-	}
-	for read := range 2 {
-		if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
-			t.Fatalf("read %d: StartOnRead() = %v", read+1, err)
-		}
-	}
-
-	rows, err := pool.Query(ctx, `
-		SELECT actor_id, host(ip) FROM audit_log
-		WHERE action = $1 AND entity = 'contest' AND entity_id = $2`,
-		audit.ActionParticipantStart, contestID.String())
-	if err != nil {
-		t.Fatalf("read the trail: %v", err)
-	}
-	type entry struct {
-		actor   uuid.UUID
-		address string
-	}
-	entries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (entry, error) {
-		var e entry
-		err := row.Scan(&e.actor, &e.address)
-		return e, err
-	})
-	if err != nil {
-		t.Fatalf("scan the trail: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("%d %s entries after two reads, want 1", len(entries), audit.ActionParticipantStart)
-	}
-	if entries[0].actor != student || entries[0].address != "203.0.113.9" {
-		t.Errorf("entry = %+v, want actor %s from 203.0.113.9", entries[0], student)
+	if _, err := reads.Admit(ctx, participation.NewReads(0), participation.Request{Contest: contestID.String(), Account: student}); err != nil {
+		t.Fatalf("Admit() = %v, want nil — only the console closes", err)
 	}
 }
 
@@ -599,6 +296,7 @@ func (noOpExecutor) Run(context.Context, queryrunner.Request, queryrunner.Origin
 // participant already started costs no Start (CLAUDE.md rule 6).
 type roundTrips struct {
 	tracer    *countingTracer
+	admitter  *participation.Admitter
 	service   *queryproxy.Service
 	contestID uuid.UUID
 	student   uuid.UUID
@@ -649,12 +347,14 @@ func roundTripFixture(t *testing.T) roundTrips {
 	}
 
 	databases := provisioning.New(games, panicCluster{t: t}, audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool))
-	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}, fiveSecondGate,
-		audit.New(postgres.NewAuditSink(pool)), storage.NewUnitOfWork(pool)).
+	admitter := participation.New(participation.Config{
+		Lookup: registrations, People: registrations, Gate: fiveSecondGate,
+		Audit: audit.New(postgres.NewAuditSink(pool)), UnitOfWork: storage.NewUnitOfWork(pool),
+	})
+	service := queryproxy.New(admitter, registrations, databases, noOpExecutor{}).
 		WithAnswerable(postgres.NewAnswerable(pool)).
-		WithLookup(registrations).
 		WithSchemas(&schemas{})
-	return roundTrips{tracer: tracer, service: service, contestID: contestID, student: student}
+	return roundTrips{tracer: tracer, admitter: admitter, service: service, contestID: contestID, student: student}
 }
 
 // measure runs call once to warm the connection, then counts the statements a
@@ -675,7 +375,7 @@ func (r roundTrips) measure(t *testing.T, call func() error) int {
 // lookup and AnswerableLeft.
 func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	r := roundTripFixture(t)
-	cmd := queryproxy.Command{ContestID: r.contestID, UserID: r.student, SQL: `SELECT 1`, RequestID: uuid.New()}
+	cmd := queryproxy.Command{ContestID: r.contestID.String(), UserID: r.student, SQL: `SELECT 1`, RequestID: uuid.New()}
 
 	got := r.measure(t, func() error {
 		_, err := r.service.Run(context.Background(), cmd)
@@ -686,13 +386,14 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	}
 }
 
-// Every participant-facing read is admitted through Access, so its single
-// statement is paid on each one, autosaves and signals included.
-func TestAccessCostsOneCoreRoundTrip(t *testing.T) {
+// Every participant-facing read is admitted through participation, so its
+// single statement is paid on each one, autosaves and signals included.
+func TestAdmissionCostsOneCoreRoundTrip(t *testing.T) {
 	r := roundTripFixture(t)
 
 	got := r.measure(t, func() error {
-		_, _, err := r.service.Access(context.Background(), r.contestID, r.student, netip.Addr{})
+		_, err := r.admitter.Admit(context.Background(), participation.NewReads(0),
+			participation.Request{Contest: r.contestID.String(), Account: r.student})
 		return err
 	})
 	if got != 1 {
@@ -700,20 +401,24 @@ func TestAccessCostsOneCoreRoundTrip(t *testing.T) {
 	}
 }
 
-// The schema panel costs two statements: Access, then the combined lookup.
+// The schema panel costs two statements: admission, then the combined lookup.
+// The start recorded by the warm-up costs the measured read nothing.
 func TestTheSchemaReadCostsTwoCoreRoundTrips(t *testing.T) {
 	r := roundTripFixture(t)
 
 	got := r.measure(t, func() error {
-		participant, contest, err := r.service.Access(context.Background(), r.contestID, r.student, netip.Addr{})
+		admission, err := r.admitter.Admit(context.Background(), participation.NewReads(0),
+			participation.Request{Contest: r.contestID.String(), Account: r.student})
 		if err != nil {
 			return err
 		}
-		_, err = r.service.Schema(context.Background(), contest, participant, netip.Addr{})
-		return err
+		if _, err = r.service.Schema(context.Background(), admission.Contest, admission.Participant); err != nil {
+			return err
+		}
+		return admission.Start(context.Background())
 	})
 	if got != 2 {
-		t.Errorf("core round trips = %d, want 2 (Access, then the combined lookup)", got)
+		t.Errorf("core round trips = %d, want 2 (admission, then the combined lookup)", got)
 	}
 }
 
@@ -747,7 +452,7 @@ func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 	}
 	journalled := queryrunner.NewJournalled(answeringRunner{}, postgres.NewQueryLog(pool),
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
-	service := queryproxy.New(
+	service := newService(
 		registrations,
 		postgres.NewContests(pool),
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
@@ -759,7 +464,7 @@ func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 
 	address := netip.MustParseAddr("203.0.113.9")
 	if _, err := service.Run(ctx, queryproxy.Command{
-		ContestID: contestID, UserID: student, SQL: "SELECT kind, found_at\n\tFROM Evidence\n WHERE room = 'library' ORDER BY found_at",
+		ContestID: contestID.String(), UserID: student, SQL: "SELECT kind, found_at\n\tFROM Evidence\n WHERE room = 'library' ORDER BY found_at",
 		Address: address, RequestID: uuid.New(),
 	}); err != nil {
 		t.Fatalf("Run() = %v", err)

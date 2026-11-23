@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
@@ -110,6 +111,38 @@ func (f *consoleFixture) run(sql string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	return rec
+}
+
+// The identifier goes to Run unparsed, so the rate is charged before the
+// parse (queryproxy's tests). A malformed one is answered as the console
+// always answered it, and over the rate it is refused for the rate.
+func TestAMalformedContestIdentifierReachesRunAndAnswersAsBefore(t *testing.T) {
+	var got queryproxy.Command
+	fixture := newConsoleFixture(t, recordingConsole{got: &got})
+	req := httptest.NewRequest(http.MethodPost, "/contests/not-a-uuid/query", strings.NewReader(`{"sql":"SELECT 1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(fixture.cookie)
+	fixture.router.ServeHTTP(httptest.NewRecorder(), req)
+	if got.ContestID != "not-a-uuid" {
+		t.Fatalf("Run was handed contest %q, want the identifier as written", got.ContestID)
+	}
+
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{participation.ErrInvalidContest, http.StatusBadRequest, "invalid_request"},
+		{queryrunner.ErrTooManyQueries, http.StatusTooManyRequests, "query_too_often"},
+	} {
+		rec := newConsoleFixture(t, fakeConsole{err: tc.err}).run("SELECT 1")
+		if rec.Code != tc.status || errorCode(t, rec) != tc.code {
+			t.Fatalf("%v: status = %d, body %s; want %d %s", tc.err, rec.Code, rec.Body, tc.status, tc.code)
+		}
+		if tc.code == "invalid_request" && errorMessage(t, rec) != "The contest identifier is not a UUID" {
+			t.Fatalf("message = %q", errorMessage(t, rec))
+		}
+	}
 }
 
 // strconvQuote is a JSON string literal good enough for the plain SQL these

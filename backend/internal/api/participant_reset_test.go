@@ -10,6 +10,7 @@ import (
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/google/uuid"
@@ -49,7 +50,7 @@ func TestAResetIsAskedForTheURLsContestAsTheSignedInParticipant(t *testing.T) {
 		t.Fatalf("%d resets asked for, want 1", len(f.resets.got))
 	}
 	got := f.resets.got[0]
-	if got.ContestID != contestID || got.UserID != f.userID {
+	if got.ContestID != contestID.String() || got.UserID != f.userID {
 		t.Fatalf("asked for contest %v as %v, want %v as %v", got.ContestID, got.UserID, contestID, f.userID)
 	}
 	// httptest's peer; the gate checks it against the contest's networks.
@@ -97,17 +98,27 @@ func TestResetRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 	}
 }
 
+// The identifier goes to Reset unparsed, so its budget is charged before the
+// parse (queryproxy's reset tests), and its refusal answers as on every play
+// route.
 func TestAResetWithAnInvalidContestIDIsA400(t *testing.T) {
 	f := newParticipantFixture(t)
+	f.resets.err = participation.ErrInvalidContest
 
 	rec := f.reset("not-a-uuid")
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	expectStatus(t, rec, http.StatusBadRequest, "invalid_contest_id")
+	if len(f.resets.got) != 1 || f.resets.got[0].ContestID != "not-a-uuid" {
+		t.Fatalf("Reset was handed %+v, want the identifier as written", f.resets.got)
 	}
-	if len(f.resets.got) != 0 {
-		t.Fatal("an unreadable contest identifier reached the service")
-	}
+}
+
+// Over the account's rate, a malformed identifier is refused for the rate.
+func TestAResetOverTheRateWithAnInvalidContestIDIsA429(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.resets.err = queryrunner.ErrTooManyQueries
+
+	expectStatus(t, f.reset("not-a-uuid"), http.StatusTooManyRequests, "query_too_often")
 }
 
 // A caller who left while their press waited is not an error of ours.

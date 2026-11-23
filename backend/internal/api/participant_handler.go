@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
-	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -25,33 +25,22 @@ import (
 // answering a question, and resetting their own database
 // (participant_reset.go). A successful read of the story, questions or schema
 // records the participant's start, which under individual timing starts their
-// clock (queryproxy.Service.StartOnRead).
+// clock (participation.Admission.Start).
 //
 // Nothing here may ever reveal a reference answer, a hidden question, anything
 // about another participant, or anything about a contest the caller is not
 // enrolled in, including whether it exists.
 //
-// Access is one rule, queryproxy.Service.Access, the same admission the SQL
-// console requires. There is no permission check: taking part is a
-// registration, not a permission. answer passes the caller's address so Submit
-// asks the participation gate again for itself.
+// Admission is one module, participation.Admitter, the same one the SQL
+// console's queries go through. There is no permission check: taking part is
+// a registration, not a permission. answer passes the caller's address so
+// Submit asks the participation gate again for itself.
 
-// ParticipantAccess is the slice of queryproxy.Service this handler needs:
-// admission, plus the read budget (CLAUDE.md rule 13), because a read that
-// costs database round trips must not be free.
-type ParticipantAccess interface {
-	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
-	// AdmitRead charges the caller's account before Access runs any lookup.
-	AdmitRead(userID uuid.UUID) error
-	// StartOnRead records the participant's start on their first read of the
-	// content. The story and question endpoints call it after the read
-	// and before sending; addr is admitted by the same gate as the read.
-	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error)
-	// Schema describes the game for the console's schema panel, to a
-	// participant Access has already admitted. A contest that hides its
-	// catalogues refuses with queryproxy.ErrSchemaHidden. A successful read
-	// records the start like the story does.
-	Schema(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (provisioning.Schema, error)
+// ParticipantSchemas describes the game for the console's schema panel, to a
+// participant already admitted (queryproxy.Service.Schema). A contest that
+// hides its catalogues refuses with queryproxy.ErrSchemaHidden.
+type ParticipantSchemas interface {
+	Schema(ctx context.Context, contest contests.Contest, participant contests.Participant) (provisioning.Schema, error)
 }
 
 // Submitter is the slice of contests.Service this handler needs to record an
@@ -89,7 +78,7 @@ type AnswerLimiter interface {
 // AnswerRate is the answer endpoint's own throttle: PerMinute answers per
 // registration.
 //
-// A separate budget from AdmitRead's, which is sized for page loads; at that
+// A separate budget from the read budget, which is sized for page loads; at that
 // rate a candidate list could be guessed quickly. It is keyed by the
 // registration admission resolved, so the key space is bounded by the roster
 // (CLAUDE.md rule 5), and a non-participant never creates a counter here.
@@ -104,7 +93,9 @@ const answerWindow = time.Minute
 // ParticipantHandler serves a participant's own view of, and actions on, a
 // running contest.
 type ParticipantHandler struct {
-	access    ParticipantAccess
+	participation Participation
+	// schemas is nil until WithSchemas.
+	schemas   ParticipantSchemas
 	reader    *contests.Reader
 	history   QueryHistory
 	submitter Submitter
@@ -122,8 +113,6 @@ type ParticipantHandler struct {
 	exportSlots *ExportSlots
 	// workspaces serves notes and tabs; nil leaves those routes unmounted.
 	workspaces Workspaces
-	// watcher hears of every admitted request; nil watches nothing.
-	watcher Watcher
 	// signals takes the browser's signal batches; nil leaves that route
 	// unmounted.
 	signals SignalRecorder
@@ -132,44 +121,27 @@ type ParticipantHandler struct {
 	resets DatabaseReset
 }
 
-// Watcher hears of every admitted participant request, to detect a
-// registration's address changing or a second session using it
-// (monitor.Tracker). It never refuses and bounds its own time.
-type Watcher interface {
-	Observe(ctx context.Context, visit monitor.Visit)
-}
-
-// WithWatcher reports every admitted request to watcher, the same one the
-// console reports to, so the play screen and the console form one trail per
-// registration.
-func (h *ParticipantHandler) WithWatcher(watcher Watcher) *ParticipantHandler {
-	h.watcher = watcher
-	return h
-}
-
-func (h *ParticipantHandler) observe(r *http.Request, participant contests.Participant, contest contests.Contest) {
-	if h.watcher == nil {
-		return
-	}
-	h.watcher.Observe(r.Context(), monitor.Visit{
-		Contest: contest.ID, Registration: participant.ID,
-		Address: clientAddress(r), Session: sessionTag(h.mw, r), UserAgent: r.UserAgent(),
-	})
-}
-
 // NewParticipantHandler assembles the endpoints. It panics without an answer
 // throttle: config never produces a rate below one, so a missing one is a
 // wiring bug, not something to run without.
-func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, history QueryHistory, submitter Submitter, answers AnswerRate, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
+func NewParticipantHandler(admission Participation, reader *contests.Reader, history QueryHistory, submitter Submitter, answers AnswerRate, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
 	if answers.Limiter == nil || answers.PerMinute < 1 {
 		panic(fmt.Sprintf("api: participant handler needs an answer limiter and a positive rate, got %d", answers.PerMinute))
 	}
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter,
+	return &ParticipantHandler{participation: admission, reader: reader, history: history, submitter: submitter,
 		answers: answers, mw: mw, log: log, defaultLocale: defaultLocale,
 		exports: NewExportGate(), exportSlots: NewExportSlots(0)}
+}
+
+// WithSchemas serves the schema panel from schemas. Without it, as when no
+// Query Runner is deployed, the panel is admitted like every read and then
+// refused with queryproxy.ErrSchemaHidden, the safe direction to fail.
+func (h *ParticipantHandler) WithSchemas(schemas ParticipantSchemas) *ParticipantHandler {
+	h.schemas = schemas
+	return h
 }
 
 // WithExports gives this handler the gate limiting one registration to one CSV
@@ -221,45 +193,6 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 	})
 }
 
-// admit resolves the caller against the contest in the URL through
-// queryproxy.Service.Access, the same admission the console uses. Every route
-// calls it first.
-//
-// AdmitRead runs before the URL is even parsed, as in Run: a caller must not
-// get Access's database round trip, or the Reader's on /play/questions, for
-// free by asking as fast as the network allows.
-func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (contests.Participant, contests.Contest, bool) {
-	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.access.AdmitRead(identity.UserID); err != nil {
-		h.fail(w, r, err)
-		return contests.Participant{}, contests.Contest{}, false
-	}
-
-	contestID, ok := contestIDFrom(w, r)
-	if !ok {
-		return contests.Participant{}, contests.Contest{}, false
-	}
-
-	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
-	if err != nil {
-		h.fail(w, r, err)
-		return contests.Participant{}, contests.Contest{}, false
-	}
-	h.observe(r, participant, contest)
-	return participant, contest, true
-}
-
-// startOnRead records the participant's start after a successful read and
-// before the content is sent: a refused read starts nothing, and content is
-// never sent to a participant whose start could not be recorded.
-func (h *ParticipantHandler) startOnRead(w http.ResponseWriter, r *http.Request, contest contests.Contest, participant contests.Participant) bool {
-	if _, err := h.access.StartOnRead(r.Context(), contest, participant, clientAddress(r)); err != nil {
-		h.fail(w, r, err)
-		return false
-	}
-	return true
-}
-
 // languageFor picks the response language (§6.2): the request's preference,
 // then the contest's default, then the installation's.
 func (h *ParticipantHandler) languageFor(r *http.Request, contest contests.Contest) string {
@@ -281,10 +214,11 @@ type storyResponse struct {
 }
 
 func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
-	participant, contest, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
+	contest := admission.Contest
 	lang := h.languageFor(r, contest)
 
 	body, err := h.reader.Story(r.Context(), contest.ID, lang)
@@ -297,7 +231,7 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	if !h.startOnRead(w, r, contest, participant) {
+	if !start(w, r, admission, h.fail) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, storyResponse{Lang: lang, BodyMD: body, SchemaNotesMD: notes})
@@ -384,18 +318,19 @@ type participantQuestionListResponse struct {
 }
 
 func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
-	participant, contest, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
+	contest := admission.Contest
 	lang := h.languageFor(r, contest)
 
-	found, err := h.reader.Questions(r.Context(), contest.ID, participant.ID, lang, contest.SequentialActive())
+	found, err := h.reader.Questions(r.Context(), contest.ID, admission.Participant.ID, lang, contest.SequentialActive())
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	if !h.startOnRead(w, r, contest, participant) {
+	if !start(w, r, admission, h.fail) {
 		return
 	}
 
@@ -436,7 +371,7 @@ type queryLogResponse struct {
 // (queryrunner.NormalizeHistoryPage), so an oversized page gets the largest
 // allowed (CLAUDE.md rule 2). "Load older" sends ?before=, a row id.
 func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
-	participant, _, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
@@ -446,7 +381,7 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 	if err != nil || before < 0 {
 		before = 0
 	}
-	found, total, err := h.history.History(r.Context(), participant.ID, intParam(r, "limit"), intParam(r, "offset"), before)
+	found, total, err := h.history.History(r.Context(), admission.Participant.ID, intParam(r, "limit"), intParam(r, "offset"), before)
 	if err != nil {
 		h.log.ErrorContext(r.Context(), "could not read the participant's query history", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
@@ -481,7 +416,7 @@ const queryLogEntryParam = "entryId"
 // page. An id that is not one of the caller's rows, or cannot be an id at
 // all, is not found: whether it is someone else's is not theirs to learn.
 func (h *ParticipantHandler) queryLogEntry(w http.ResponseWriter, r *http.Request) {
-	participant, _, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
@@ -494,7 +429,7 @@ func (h *ParticipantHandler) queryLogEntry(w http.ResponseWriter, r *http.Reques
 		notFound()
 		return
 	}
-	entry, found, err := h.history.HistoryEntry(r.Context(), participant.ID, id)
+	entry, found, err := h.history.HistoryEntry(r.Context(), admission.Participant.ID, id)
 	if err != nil {
 		h.log.ErrorContext(r.Context(), "could not read a row of the participant's query history", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
@@ -509,18 +444,18 @@ func (h *ParticipantHandler) queryLogEntry(w http.ResponseWriter, r *http.Reques
 
 // queryLogCSV serves this participant's whole query log as a file. The file and
 // its bounds belong to queryLogCSVExport, shared with the profile's
-// after-contest download. The registration comes from Access, never from the
-// request. The rate budget is charged first (CLAUDE.md rule 13): this is the
-// most expensive read here.
+// after-contest download. The registration comes from admission, never from
+// the request. The read budget is charged first (CLAUDE.md rule 13): this is
+// the most expensive read here.
 func (h *ParticipantHandler) queryLogCSV(w http.ResponseWriter, r *http.Request) {
-	participant, contest, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
 	// A second download while the first is still writing is refused as a rate
 	// refusal.
 	queryLogCSVExport{history: h.history, exports: h.exports, slots: h.exportSlots, fail: h.fail, log: h.log}.
-		serve(w, r, participant.ID, contest.ID, func() { h.fail(w, r, queryrunner.ErrTooManyQueries) })
+		serve(w, r, admission.Participant.ID, admission.Contest.ID, func() { h.fail(w, r, queryrunner.ErrTooManyQueries) })
 }
 
 // answerRequest is the body of POST .../answer: one value, compared server-side
@@ -540,13 +475,8 @@ type answerResponse struct {
 }
 
 func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
-	participant, contest, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, answerBudget{reads: h.participation.Reads, rate: h.answers}, h.fail)
 	if !ok {
-		return
-	}
-	// Charged before anything is parsed or graded: a malformed or refused
-	// answer is an attempt too (CLAUDE.md rule 13).
-	if !h.admitAnswer(w, r, participant.ID) {
 		return
 	}
 
@@ -562,8 +492,8 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outcome, err := h.submitter.Submit(r.Context(), contests.SubmitCommand{
-		Participant: participant,
-		Contest:     contest,
+		Participant: admission.Participant,
+		Contest:     admission.Contest,
 		QuestionID:  questionID,
 		Value:       req.Value,
 		Address:     clientAddress(r),
@@ -581,26 +511,33 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// admitAnswer spends one answer of this registration's budget, or answers the
-// refusal.
-//
-// Retry-After is the whole window, since the window's start is not known here.
-// A counter that cannot be kept refuses: grading unthrottled is what this
-// exists to prevent.
-func (h *ParticipantHandler) admitAnswer(w http.ResponseWriter, r *http.Request, registrationID uuid.UUID) bool {
-	allowed, err := h.answers.Limiter.Allow(r.Context(), "answer:reg:"+registrationID.String(), h.answers.PerMinute, answerWindow)
+// errAnswerTooOften is a registration past its answers for this minute; only
+// the answer route meets it, so its fail answers it.
+var errAnswerTooOften = errors.New("too many answers this minute")
+
+// answerBudget is what an answer spends, both before anything is parsed or
+// graded, since a malformed or refused answer is an attempt too (CLAUDE.md
+// rule 13): a read of the play screen per account before the lookup, then one
+// of the registration's answers before the gate. A counter that cannot be kept
+// refuses: grading unthrottled is what this exists to prevent.
+type answerBudget struct {
+	reads participation.Budget
+	rate  AnswerRate
+}
+
+func (b answerBudget) Charge(ctx context.Context, account uuid.UUID) error {
+	return b.reads.Charge(ctx, account)
+}
+
+func (b answerBudget) ChargeRegistration(ctx context.Context, participant contests.Participant, _ contests.Contest) error {
+	allowed, err := b.rate.Limiter.Allow(ctx, "answer:reg:"+participant.ID.String(), b.rate.PerMinute, answerWindow)
 	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the answer rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
+		return fmt.Errorf("check the answer rate limit: %w", err)
 	}
 	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(answerWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeAnswerTooOften,
-			"Too many answers this minute; wait before answering again")
-		return false
+		return errAnswerTooOften
 	}
-	return true
+	return nil
 }
 
 // participantContestsErrors is contestsErrors as a participant hears it. A
@@ -612,23 +549,32 @@ var participantContestsErrors = contestsErrors.with(
 		message: "The caller is not taking part in this contest"},
 )
 
-// fail maps errors from admission, Schema, the reader, Submit and the export
-// slots (CLAUDE.md rule 1). All but the export slots are answered from
-// errortable.go.
+// fail maps errors from admission, Schema, the reader, Submit, the answer rate
+// and the export slots (CLAUDE.md rule 1). All but the last two are answered
+// from errortable.go.
 func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
-		return
-	}
-	if participantContestsErrors.answer(w, r, h.log, err) {
+	if h.answered(w, r, err) {
 		return
 	}
 	switch {
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
+	case errors.Is(err, errAnswerTooOften):
+		// The whole window, since the window's start is not known here.
+		w.Header().Set("Retry-After", strconv.Itoa(int(answerWindow/time.Second)))
+		httpx.Error(w, r, http.StatusTooManyRequests, codeAnswerTooOften,
+			"Too many answers this minute; wait before answering again")
 	default:
 		h.log.ErrorContext(r.Context(), "participant content could not be read", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 	}
+}
+
+// answered answers err from the tables every participant route shares:
+// admission's, the console's and the contests', as a participant hears them.
+func (h *ParticipantHandler) answered(w http.ResponseWriter, r *http.Request, err error) bool {
+	return queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) ||
+		participantContestsErrors.answer(w, r, h.log, err)
 }
 
 // schemaResponse is the game's shape, as the console's schema panel and
@@ -661,18 +607,26 @@ type schemaColumn struct {
 	References string `json:"references"`
 }
 
-// schema answers what the game looks like. It is admitted like the story and
-// the questions. ErrSchemaHidden is 403, not 404: the contest exists and the
-// participant is in it, but this contest does not hand its schema over.
+// schema answers what the game looks like. It is admitted, and starts the
+// participant, like the story and the questions. ErrSchemaHidden is 403, not
+// 404: the contest exists and the participant is in it, but this contest does
+// not hand its schema over.
 func (h *ParticipantHandler) schema(w http.ResponseWriter, r *http.Request) {
-	participant, contest, ok := h.admit(w, r)
+	admission, ok := h.participation.admit(w, r, h.mw, h.participation.Reads, h.fail)
 	if !ok {
 		return
 	}
+	if h.schemas == nil {
+		h.fail(w, r, queryproxy.ErrSchemaHidden)
+		return
+	}
 
-	schema, err := h.access.Schema(r.Context(), contest, participant, clientAddress(r))
+	schema, err := h.schemas.Schema(r.Context(), admission.Contest, admission.Participant)
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !start(w, r, admission, h.fail) {
 		return
 	}
 

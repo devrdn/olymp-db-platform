@@ -27,6 +27,7 @@ backend/
 │   ├── auth/, rbac/, users/, audit/, settings/
 │   │                    accounts, sessions, permissions, the trail, installation settings
 │   ├── contests/        contests, content, staff, participants, the participation gate
+│   ├── participation/   admitting a participant's request: budget, gate, visit, start
 │   ├── leaderboard/, monitor/, profile/, showcase/, archive/, covers/, workspace/
 │   │                    standings, watching participants, own profile, front page,
 │   │                    the contest archive, cover pictures, notes and SQL tabs

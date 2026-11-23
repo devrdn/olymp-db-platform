@@ -301,7 +301,7 @@ type Config struct {
 	// explicit 0 is no limit on both.
 	QueryPerMinute int
 	// PlayReadPerMinute is the play screen's own budget per account
-	// (queryproxy.Service.AdmitRead), apart from QueryPerMinute so reloading a
+	// (participation.Reads), apart from QueryPerMinute so reloading a
 	// page never refuses a query. Bounded to 30-600, with no "unlimited": one
 	// page load costs about six reads, and a lower budget would leave the
 	// screen unable to load.

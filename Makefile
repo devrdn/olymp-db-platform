@@ -184,7 +184,7 @@ test-race: ## Run the tests with the race detector
 # The repository tests run their SQL against a real PostgreSQL, most inside a
 # transaction that is rolled back so they leave nothing behind; a few — where
 # the point is what happens between two separate connections, not one, such
-# as queryproxy's own guarantee that it and postgres.Registrations agree
+# as participation's own guarantee that it and postgres.Registrations agree
 # about what "started" means — commit their own fixture and delete it
 # afterwards instead. Without CORE_DB_DSN they skip rather than failing: a
 # developer with no database to hand can still run `make test`. This target
@@ -200,7 +200,8 @@ test-race: ## Run the tests with the race detector
 # database of its own because rolling back drops tables the other packages
 # are using.
 test-db: require-env test-db-reset ## Run the repository tests against a fresh test database
-	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" go test -count=1 ./cmd/migrate/... ./internal/app/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
+	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" go test -count=1 ./cmd/migrate/... ./internal/app/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/... \
+		./internal/participation/...
 
 # Once per run and before any test binary starts: `go test` runs packages in
 # parallel, and they share this database. The migrations are applied by the

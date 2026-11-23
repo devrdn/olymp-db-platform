@@ -8,6 +8,7 @@ import (
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
@@ -17,7 +18,7 @@ import (
 
 // resetFixture is a running contest whose game lets participants write, with
 // one participant, reached through the single lookup the deployment uses.
-func resetFixture(t *testing.T) (*queryproxy.Service, *databases, *lookupFake) {
+func resetFixture(t *testing.T, opts ...option) (*queryproxy.Service, *databases, *lookupFake) {
 	t.Helper()
 
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
@@ -32,14 +33,14 @@ func resetFixture(t *testing.T) (*queryproxy.Service, *databases, *lookupFake) {
 		calls:    &calls,
 	}
 	db := &databases{}
-	service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{}, fiveSecondGate, quietTrail, quiet{}).
-		WithLookup(lookup)
+	service := newService(people{}, contestStore{}, games{}, db, &runner{}, fiveSecondGate, quietTrail, quiet{},
+		append(opts, lookingUp(lookup))...)
 	return service, db, lookup
 }
 
 func resetCommand(contestID uuid.UUID) queryproxy.ResetCommand {
 	return queryproxy.ResetCommand{
-		ContestID: contestID, UserID: uuid.New(),
+		ContestID: contestID.String(), UserID: uuid.New(),
 		Address: netip.MustParseAddr("192.0.2.44"), Session: monitor.SessionTag("token"), UserAgent: "Firefox",
 	}
 }
@@ -197,9 +198,8 @@ func TestTheGateDecidesWhoMayReset(t *testing.T) {
 }
 
 func TestAnAdmittedResetIsObservedAndARefusedOneIsNot(t *testing.T) {
-	service, _, lookup := resetFixture(t)
 	seen := &watcher{}
-	service.WithWatcher(seen)
+	service, _, lookup := resetFixture(t, watchedBy(seen))
 	cmd := resetCommand(lookup.contest.ID)
 
 	if err := service.Reset(t.Context(), cmd); err != nil {
@@ -303,5 +303,25 @@ func TestAReadOnlyContestIsRefusedWithoutAskingWhatIsLeft(t *testing.T) {
 	}
 	if answers.calls != 0 {
 		t.Fatal("a read-only contest still cost the answerable round trip")
+	}
+}
+
+// A reset spends the account's rate before the identifier is parsed, so a
+// malformed one counts and past the rate is refused for it.
+func TestAMalformedContestIdentifierStillSpendsTheAccountsRate(t *testing.T) {
+	service, db, lookup := resetFixture(t)
+	service = service.WithPerMinuteDefault(1)
+	cmd := resetCommand(lookup.contest.ID)
+	cmd.ContestID = "not-a-uuid"
+	before := *lookup.calls
+
+	if err := service.Reset(t.Context(), cmd); !errors.Is(err, participation.ErrInvalidContest) {
+		t.Fatalf("the first press = %v, want ErrInvalidContest", err)
+	}
+	if err := service.Reset(t.Context(), cmd); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("the second press = %v, want ErrTooManyQueries", err)
+	}
+	if *lookup.calls != before || len(db.resets) != 0 {
+		t.Fatal("a malformed identifier was looked up or reset")
 	}
 }

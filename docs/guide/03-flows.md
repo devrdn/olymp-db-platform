@@ -747,7 +747,7 @@ sequenceDiagram
 
     B->>W: submit the answer
     W->>H: POST /contests/ID/questions/QID/answer with value
-    H->>H: AdmitRead, then Access - the participation gate
+    H->>H: participation.Admit - the read budget, then the participation gate
     H->>L: answer budget per registration, before parsing
     H->>S: Submit(SubmitCommand)
     S->>S: participation gate again, at most 1000 characters, question in this contest
@@ -827,7 +827,7 @@ Rules that matter:
   [§8.1](../ARCHITECTURE.md#81-the-participation-gate)).
 - Past admission, a refused or malformed answer still spends the answer
   budget; a request the participation gate turns away has already spent the
-  play screen's read budget (`AdmitRead`), which is apart from the query
+  play screen's read budget (`participation.Reads`), which is apart from the query
   budget. Every refusal is a declared sentinel with its own
   code
   ([CLAUDE.md, security rules 1 and 13](../../CLAUDE.md#security-and-performance-rules);
@@ -847,16 +847,16 @@ sequenceDiagram
     participant B as Browser useContestEvents
     participant E as EventsHandler
     participant M as auth.Middleware
-    participant Q as queryproxy.Service
+    participant Q as participation.Admitter
 
     B->>M: EventSource GET /api/v1/contests/ID/events, via Caddy
     M->>E: Authenticate passed
-    E->>Q: AdmitRead, then AccessForEvents - running, or published and waiting
+    E->>Q: Admit with MayWait - the read budget, then running, or published and waiting
     E->>E: connection cap per registration, 4 by default
     E-->>B: retry 30 to 45 s, drawn per connection, sync, contest_started if running
     loop every 30 seconds
         E->>M: SessionStillValid
-        E->>Q: AccessForEvents
+        E->>Q: Admission.Recheck - no budget spent
         alt still admitted
             E-->>B: contest_started on published to running, then sync
         else the participant's standing is over
@@ -870,7 +870,7 @@ sequenceDiagram
 - Server: `EventsHandler.events` in
   [backend/internal/api/events_handler.go](../../backend/internal/api/events_handler.go).
   `sync` carries `server_now` and the participant's deadline without the
-  deadline grace. A storage error on a tick (`queryproxy.ErrUnavailable`) is retried on
+  deadline grace. A storage error on a tick (`participation.ErrUnavailable`) is retried on
   the next tick; an invalid session ends the stream; server shutdown closes
   it.
 - `contest_finished` is sent when `Standing.Over()` is true: the contest

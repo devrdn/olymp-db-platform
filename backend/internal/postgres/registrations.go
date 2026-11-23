@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
@@ -20,9 +21,12 @@ import (
 // Registrations implements contests.RegistrationRepository.
 var _ contests.RegistrationRepository = (*Registrations)(nil)
 
-// Registrations also answers queryproxy's combined lookups, one round trip
-// each.
-var _ queryproxy.Lookup = (*Registrations)(nil)
+// Registrations also answers admission's lookup and the console's combined
+// one, one round trip each.
+var (
+	_ queryproxy.Lookup    = (*Registrations)(nil)
+	_ participation.Lookup = (*Registrations)(nil)
+)
 
 // participantColumns joins the account so a roster shows logins and names.
 const participantColumns = `
@@ -192,8 +196,8 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 	return result, nil
 }
 
-// ForAccess implements queryproxy.Lookup: the participant and the contest in
-// one round trip, for read endpoints that need no game. Not-found and the
+// ForAccess implements participation.Lookup: the participant and the contest
+// in one round trip, for every admission that needs no game. Not-found and the
 // contest's projection are as in ForRun.
 func (r *Registrations) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
 	var (

@@ -22,6 +22,8 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests/conteststest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/participation/participationtest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
@@ -36,130 +38,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeAccess answers Access with whatever a test staged; admission is tested in
-// internal/queryproxy.
-type fakeAccess struct {
-	participant contests.Participant
-	contest     contests.Contest
-	// mu guards err: events tests change it while a connection's goroutine
-	// calls Access on every resync tick.
-	mu  sync.Mutex
-	err error
-	// gotContestID records what Access was asked about.
-	gotContestID uuid.UUID
-	// admitReadErr is what AdmitRead answers (nil admits); accessCalled records
-	// whether Access was reached.
-	admitReadErr error
-	accessCalled bool
-	// admitReads counts AdmitRead calls.
-	admitReads int
-	// delay, when set, is how long AccessForEvents waits before answering,
-	// standing for slow resync lookups.
-	delay time.Duration
-	// schema and schemaErr are what Schema answers; schemaAsked and schemaFor
-	// record what it was handed.
-	schema      provisioning.Schema
-	schemaErr   error
-	schemaAsked uuid.UUID
-	schemaFor   uuid.UUID
-	// startedOnRead and startedFrom record StartOnRead calls; startOnReadErr is
-	// its answer.
-	startedOnRead  []uuid.UUID
-	startedFrom    []netip.Addr
-	startOnReadErr error
-	// gateNow is the instant AccessForEvents asks the gate about (zero is the
-	// wall clock), so fixed-date contests do not expire as the calendar moves.
-	gateNow time.Time
+// fakeSchemas answers Schema with whatever a test staged, and records what it
+// was handed.
+type fakeSchemas struct {
+	schema   provisioning.Schema
+	err      error
+	asked    uuid.UUID
+	askedFor uuid.UUID
 }
 
-func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.startedOnRead = append(a.startedOnRead, participant.ID)
-	a.startedFrom = append(a.startedFrom, addr)
-	if a.startOnReadErr != nil {
-		return contests.Participant{}, a.startOnReadErr
+func (s *fakeSchemas) Schema(_ context.Context, contest contests.Contest, participant contests.Participant) (provisioning.Schema, error) {
+	s.asked, s.askedFor = contest.ID, participant.ID
+	if s.err != nil {
+		return provisioning.Schema{}, s.err
 	}
-	return participant, nil
-}
-
-func (a *fakeAccess) Schema(_ context.Context, contest contests.Contest, participant contests.Participant, _ netip.Addr) (provisioning.Schema, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.schemaAsked = contest.ID
-	a.schemaFor = participant.ID
-	if a.schemaErr != nil {
-		return provisioning.Schema{}, a.schemaErr
-	}
-	return a.schema, nil
-}
-
-func (a *fakeAccess) AdmitRead(uuid.UUID) error {
-	a.mu.Lock()
-	a.admitReads++
-	a.mu.Unlock()
-	return a.admitReadErr
-}
-
-func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (contests.Participant, contests.Contest, error) {
-	a.accessCalled = true
-	a.gotContestID = contestID
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.participant, a.contest, a.err
-}
-
-// AccessForEvents mirrors queryproxy.Service.AccessForEvents: a staged err is a
-// failed lookup with a zero Standing; otherwise the real gate decides, so
-// events tests see the Standing a staged state produces.
-func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
-	a.mu.Lock()
-	delay := a.delay
-	a.mu.Unlock()
-	if delay > 0 {
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return contests.Participant{}, contests.Contest{}, contests.Standing{}, ctx.Err()
-		}
-	}
-	participant, contest, err := a.Access(ctx, contestID, userID, addr)
-	if err != nil {
-		return contests.Participant{}, contests.Contest{}, contests.Standing{}, err
-	}
-	now := a.gateNow
-	if now.IsZero() {
-		now = time.Now()
-	}
-	standing := contests.NewGate(0).StandingOf(contest, participant, now, addr)
-	if !standing.MayWait() {
-		return contests.Participant{}, contests.Contest{}, standing, standing.Refusal()
-	}
-	return participant, contest, standing, nil
-}
-
-func (a *fakeAccess) setDelay(d time.Duration) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.delay = d
-}
-
-func (a *fakeAccess) setErr(err error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.err = err
-}
-
-func (a *fakeAccess) setParticipant(p contests.Participant) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.participant = p
-}
-
-func (a *fakeAccess) setContest(c contests.Contest) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.contest = c
+	return s.schema, nil
 }
 
 // fakeHistory answers History with whatever a test staged.
@@ -293,11 +186,14 @@ func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, 
 	return false, errors.New("cache unreachable")
 }
 
-// participantFixture mounts the participant endpoints with a fake Access and a
-// real Reader over in-memory stores.
+// participantFixture mounts the participant endpoints with admission over a
+// roster and a real Reader over in-memory stores.
 type participantFixture struct {
 	router         http.Handler
-	access         *fakeAccess
+	roster         *participationtest.Roster
+	reads          *readBudget
+	clock          *clock
+	schemas        *fakeSchemas
 	history        *fakeHistory
 	submitter      *fakeSubmitter
 	stories        *conteststest.Stories
@@ -335,6 +231,18 @@ func (w *recordingWatcher) seen() []monitor.Visit {
 
 func newParticipantFixture(t *testing.T) *participantFixture {
 	t.Helper()
+	return buildParticipantFixture(t, true)
+}
+
+// newConsolelessParticipantFixture is the fixture as a deployment without a
+// Query Runner mounts it: no schema source.
+func newConsolelessParticipantFixture(t *testing.T) *participantFixture {
+	t.Helper()
+	return buildParticipantFixture(t, false)
+}
+
+func buildParticipantFixture(t *testing.T, withSchemas bool) *participantFixture {
+	t.Helper()
 
 	userRepo := userstest.New()
 	userRepo.GrantRole("student")
@@ -364,7 +272,10 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	submissions.Clock = func() time.Time { return conteststest.FixtureNow }
 	reader := contests.NewReader(stories, schemaNotes, questions, conteststest.NewAttempts(submissions),
 		conteststest.NewSequentialProgress(questions, submissions))
-	access := &fakeAccess{}
+	roster := participationtest.NewRoster()
+	reads := &readBudget{}
+	now := &clock{}
+	schemas := &fakeSchemas{}
 	history := &fakeHistory{}
 	submitter := &fakeSubmitter{}
 
@@ -375,15 +286,19 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	resets := &fakeResets{}
 
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").
+	admission := api.Participation{Admitter: participationtest.NewAdmitter(roster, watcher, now.now), Reads: reads}
+	handler := api.NewParticipantHandler(admission, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").
 		WithWorkspace(workspaces).
-		WithWatcher(watcher).
 		WithSignals(monitor.NewSignals(auth.NewLimiter(c), signals)).
-		WithDatabaseReset(resets).
-		Mount(router)
+		WithDatabaseReset(resets)
+	if withSchemas {
+		handler = handler.WithSchemas(schemas)
+	}
+	handler.Mount(router)
 
 	return &participantFixture{
-		router: router, access: access, history: history, submitter: submitter,
+		router: router, roster: roster, reads: reads, clock: now, schemas: schemas,
+		history: history, submitter: submitter,
 		stories: stories, schemaNotes: schemaNotes, questions: questions, submissions: submissions,
 		workspaceStore: workspaceStore,
 		watcher:        watcher,
@@ -393,6 +308,17 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 		cookie:         &http.Cookie{Name: sessionName, Value: token},
 		userID:         actor.ID,
 	}
+}
+
+// refuse stages the state admission refuses with err (stageRefusal).
+func (f *participantFixture) refuse(err error) { stageRefusal(f.roster, err) }
+
+// admitted stages a running contest open for a day, with a participant not
+// yet started, and returns the contest's identifier.
+func (f *participantFixture) admitted() uuid.UUID {
+	contestID := uuid.New()
+	f.roster.Stage(participationtest.Running(contestID), contests.Participant{ID: uuid.New()})
+	return contestID
 }
 
 func (f *participantFixture) get(path string) *httptest.ResponseRecorder {
@@ -426,16 +352,18 @@ func (f *participantFixture) submit(t *testing.T, registrationID uuid.UUID, q co
 	}
 }
 
-// playContest stages a running contest with one visible question and a story
-// in English, and returns its identifier.
+// playContest stages a running individual-timing contest of an hour per
+// participant, with one visible question and a story in English, and returns
+// its identifier.
 func (f *participantFixture) playContest(t *testing.T) uuid.UUID {
 	t.Helper()
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+	hour := 60
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &hour,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.questions.Put(contests.Question{
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
@@ -446,24 +374,24 @@ func (f *participantFixture) playContest(t *testing.T) uuid.UUID {
 	return contestID
 }
 
-// Under individual timing reading starts the clock; the gate admitting the
-// start needs the caller's address.
-func TestReadingTheStoryOrTheQuestionsStartsTheClock(t *testing.T) {
-	for _, path := range []string{"/play/story", "/play/questions"} {
+// Under individual timing reading starts the clock. The gate admitting the
+// start is asked about the caller's address: the contest allows only
+// httptest.NewRequest's own RemoteAddr, 192.0.2.1.
+func TestReadingTheStoryTheQuestionsOrTheSchemaStartsTheClock(t *testing.T) {
+	for _, path := range []string{"/play/story", "/play/questions", "/play/schema"} {
 		t.Run(path, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			contestID := f.playContest(t)
+			onlyTheCaller := f.roster.Contest()
+			onlyTheCaller.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}
+			f.roster.SetContest(onlyTheCaller)
 
 			rec := f.get("/contests/" + contestID.String() + path)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 			}
-			if len(f.access.startedOnRead) != 1 || f.access.startedOnRead[0] != f.access.participant.ID {
-				t.Fatalf("StartOnRead asked for %v, want exactly the resolved registration", f.access.startedOnRead)
-			}
-			// httptest.NewRequest's own RemoteAddr, 192.0.2.1:1234.
-			if want := netip.MustParseAddr("192.0.2.1"); len(f.access.startedFrom) != 1 || f.access.startedFrom[0] != want {
-				t.Fatalf("StartOnRead asked from %v, want %v", f.access.startedFrom, want)
+			if started := f.roster.Started(); len(started) != 1 || started[0] != f.roster.Participant().ID {
+				t.Fatalf("started %v, want exactly the admitted registration", started)
 			}
 		})
 	}
@@ -475,11 +403,14 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 		stage func(f *participantFixture)
 		want  int
 	}{
-		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryproxy.ErrTooManyReads }, http.StatusTooManyRequests},
-		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.access.err = contests.ErrAddressNotAllowed }, http.StatusForbidden},
+		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.reads.refuseWith(participation.ErrTooManyReads) }, http.StatusTooManyRequests},
+		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.refuse(contests.ErrAddressNotAllowed) }, http.StatusForbidden},
 		"a story that does not exist": {"/play/story", func(f *participantFixture) {
-			_ = f.stories.Delete(context.Background(), f.access.contest.ID)
+			_ = f.stories.Delete(context.Background(), f.roster.Contest().ID)
 		}, http.StatusNotFound},
+		"a schema the contest hides":           {"/play/schema", func(f *participantFixture) { f.schemas.err = queryproxy.ErrSchemaHidden }, http.StatusForbidden},
+		"a schema of a game never built":       {"/play/schema", func(f *participantFixture) { f.schemas.err = queryproxy.ErrNoGameYet }, http.StatusConflict},
+		"a schema from an address not allowed": {"/play/schema", func(f *participantFixture) { f.refuse(contests.ErrAddressNotAllowed) }, http.StatusForbidden},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newParticipantFixture(t)
@@ -490,22 +421,22 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 			if rec.Code != given.want {
 				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, given.want, rec.Body.String())
 			}
-			if len(f.access.startedOnRead) != 0 {
-				t.Fatalf("StartOnRead was reached by a refused read")
+			if len(f.roster.Started()) != 0 {
+				t.Fatalf("a refused read started %v", f.roster.Started())
 			}
 		})
 	}
 }
 
-// The window can close between admission and the read.
+// Content is never sent to a participant whose start could not be recorded.
 func TestAContentReadWhoseClockCannotStartIsRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
-	f.access.startOnReadErr = contests.ErrContestNotRunning
+	f.roster.FailStart(errors.New("connection reset"))
 
 	rec := f.get("/contests/" + contestID.String() + "/play/questions")
-	if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_not_running" {
-		t.Fatalf("status = %d, body %s; want 409 contest_not_running", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
+		t.Fatalf("status = %d, body %s; want 500 internal_error", rec.Code, rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), "Who did it?") {
 		t.Fatal("the question was sent although the clock could not start")
@@ -513,7 +444,7 @@ func TestAContentReadWhoseClockCannotStartIsRefused(t *testing.T) {
 }
 
 // The query log is the participant's own record, not the contest, and an
-// answer starts the clock inside Submit: neither asks StartOnRead.
+// answer starts the clock inside Submit: neither starts it on admission.
 func TestTheQueryLogAndAnswersDoNotStartTheClockOnRead(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
@@ -524,19 +455,19 @@ func TestTheQueryLogAndAnswersDoNotStartTheClockOnRead(t *testing.T) {
 	if rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`); rec.Code != http.StatusOK {
 		t.Fatalf("answer: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if len(f.access.startedOnRead) != 0 {
-		t.Fatalf("StartOnRead asked for %v, want nothing", f.access.startedOnRead)
+	if len(f.roster.Started()) != 0 {
+		t.Fatalf("started %v, want nobody", f.roster.Started())
 	}
 }
 
 func TestAHiddenQuestionIsAbsentFromTheParticipantsList(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	visible := f.questions.Put(contests.Question{
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
@@ -577,11 +508,11 @@ func TestAHiddenQuestionIsAbsentFromTheParticipantsList(t *testing.T) {
 func TestTheQuestionsResponseCarriesNoOrdinal(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	// Three visible questions with two hidden ones between them, so a dense
 	// staff ordinal would visibly skip (1, then 4, 5 — never 2 or 3).
@@ -626,11 +557,11 @@ func TestTheQuestionsResponseCarriesNoOrdinal(t *testing.T) {
 func TestAQuestionTitleReachesItsParticipant(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.questions.Put(contests.Question{
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
 		Texts: map[string]contests.QuestionText{"en": {Title: "The culprit", BodyMD: "Who did it?"}},
@@ -665,11 +596,11 @@ func TestAQuestionTitleReachesItsParticipant(t *testing.T) {
 func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	f.questions.Put(contests.Question{
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
@@ -690,10 +621,10 @@ func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 }
 
 // One representative refusal: the mapping is one table (errortable.go).
-func TestAccessRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
+func TestAdmissionRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.err = contests.ErrAddressNotAllowed
-	contestID := uuid.New()
+	contestID := f.admitted()
+	f.refuse(contests.ErrAddressNotAllowed)
 
 	for _, path := range []string{
 		"/contests/" + contestID.String() + "/play/story",
@@ -716,9 +647,9 @@ func TestAccessRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
 // The pool's own warning does not say participants are being refused.
 func TestAFullGameClusterOnTheSchemaPanelIsLogged(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.schemaErr = fmt.Errorf("%w: %w", queryproxy.ErrNoRoomForDatabase, provisioning.ErrClusterFull)
+	f.schemas.err = fmt.Errorf("%w: %w", queryproxy.ErrNoRoomForDatabase, provisioning.ErrClusterFull)
 
-	rec := f.get("/contests/" + uuid.New().String() + "/play/schema")
+	rec := f.get("/contests/" + f.admitted().String() + "/play/schema")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -733,7 +664,7 @@ func TestAFullGameClusterOnTheSchemaPanelIsLogged(t *testing.T) {
 // Not a 404, which would confirm the contest exists.
 func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.err = contests.ErrNotAParticipant
+	f.refuse(contests.ErrNotAParticipant)
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/story")
 	if rec.Code != http.StatusForbidden {
@@ -744,13 +675,13 @@ func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 	}
 }
 
-// Refused before Access runs its lookups, with the sentinel the console maps to
-// 429.
-func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
+// Refused before admission looks anything up, with the sentinel the console
+// maps to 429.
+func TestARateLimitRefusalIsA429AndNeverReachesTheLookup(t *testing.T) {
 	for _, path := range []string{"story", "questions", "log", "log/42"} {
 		t.Run(path, func(t *testing.T) {
 			f := newParticipantFixture(t)
-			f.access.admitReadErr = queryproxy.ErrTooManyReads
+			f.reads.refuseWith(participation.ErrTooManyReads)
 
 			rec := f.get("/contests/" + uuid.New().String() + "/play/" + path)
 			if rec.Code != http.StatusTooManyRequests {
@@ -759,8 +690,8 @@ func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 			if code := errorCode(t, rec); code != "play_read_too_often" {
 				t.Fatalf("code = %q, want play_read_too_often", code)
 			}
-			if f.access.accessCalled {
-				t.Fatal("Access was called after AdmitRead refused — the rate check must run first, before Access's own lookups")
+			if f.roster.Lookups() > 0 {
+				t.Fatal("the roster was looked up after the read budget refused: the budget must be charged first")
 			}
 			if retry := rec.Header().Get("Retry-After"); retry != "60" {
 				t.Fatalf("Retry-After = %q, want 60", retry)
@@ -769,34 +700,34 @@ func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 	}
 }
 
-func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
+func TestACallerWithinTheRateBudgetIsStillLookedUp(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.contest = contests.Contest{
-		ID: uuid.New(), Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	if _, err := f.stories.Save(context.Background(), f.access.contest.ID, map[string]string{"en": "A body."}); err != nil {
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
+	if _, err := f.stories.Save(context.Background(), f.roster.Contest().ID, map[string]string{"en": "A body."}); err != nil {
 		t.Fatalf("Save() = %v", err)
 	}
 
-	rec := f.get("/contests/" + f.access.contest.ID.String() + "/play/story")
+	rec := f.get("/contests/" + f.roster.Contest().ID.String() + "/play/story")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if !f.access.accessCalled {
-		t.Fatal("Access was never called for a caller within their rate budget")
+	if f.roster.Lookups() == 0 {
+		t.Fatal("a caller within their rate budget was never looked up")
 	}
 }
 
 func TestAMissingStoryIsA404(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	// No story saved, so the reader answers contests.ErrStoryNotFound.
 
 	rec := f.get("/contests/" + contestID.String() + "/play/story")
@@ -812,11 +743,11 @@ func TestAMissingStoryIsA404(t *testing.T) {
 func TestStoryFallsBackToTheContestsDefaultLanguage(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ru"}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	if _, err := f.stories.Save(context.Background(), contestID, map[string]string{
 		"en": "A body in the stacks.",
 		"ru": "Тело в архиве.",
@@ -875,11 +806,11 @@ func (f *participantFixture) readStory(t *testing.T, contestID uuid.UUID, lang s
 func (f *participantFixture) notesPlay(t *testing.T) uuid.UUID {
 	t.Helper()
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en"}, {Code: "ro", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	if _, err := f.stories.Save(t.Context(), contestID, map[string]string{
 		"en": "A body in the stacks.", "ro": "Un cadavru între rafturi.",
 	}); err != nil {
@@ -904,8 +835,8 @@ func TestTheStoryCarriesTheSchemaNotesInTheParticipantsLanguage(t *testing.T) {
 	if payload.SchemaNotesMD == nil || *payload.SchemaNotesMD != "## suspects\nOne row per person." {
 		t.Fatalf("schema_notes_md = %v, want the English text", payload.SchemaNotesMD)
 	}
-	if f.access.admitReads != 1 {
-		t.Errorf("AdmitRead charged %d times, want once: the descriptions ride on the story's read", f.access.admitReads)
+	if f.reads.charged() != 1 {
+		t.Errorf("the read budget was charged %d times, want once: the descriptions ride on the story's read", f.reads.charged())
 	}
 }
 
@@ -943,7 +874,7 @@ func TestAContestWithoutSchemaNotesSendsAnEmptyDocument(t *testing.T) {
 func TestAContestThatHidesItsCatalogueStillShowsItsSchemaNotes(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.notesPlay(t)
-	f.access.schemaErr = queryproxy.ErrSchemaHidden
+	f.schemas.err = queryproxy.ErrSchemaHidden
 	if _, err := f.schemaNotes.Save(t.Context(), contestID, map[string]string{"en": "The tables."}); err != nil {
 		t.Fatalf("Save() = %v", err)
 	}
@@ -964,7 +895,7 @@ func TestARefusedStoryReadSendsNoSchemaNotes(t *testing.T) {
 	if _, err := f.schemaNotes.Save(t.Context(), contestID, map[string]string{"en": "The tables."}); err != nil {
 		t.Fatalf("Save() = %v", err)
 	}
-	f.access.setErr(contests.ErrNotAParticipant)
+	f.refuse(contests.ErrNotAParticipant)
 
 	rec := f.get("/contests/" + contestID.String() + "/play/story?lang=en")
 
@@ -983,8 +914,8 @@ func TestASchemaNotesReadFailureFailsTheStoryRead(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 rather than a story that silently lost its descriptions", rec.Code)
 	}
-	if len(f.access.startedOnRead) != 0 {
-		t.Errorf("StartOnRead ran for %v, want no start on a failed read", f.access.startedOnRead)
+	if len(f.roster.Started()) != 0 {
+		t.Errorf("started %v, want no start on a failed read", f.roster.Started())
 	}
 }
 
@@ -995,12 +926,12 @@ func (f *participantFixture) sequentialPlay(t *testing.T, maxAttempts int) (uuid
 	t.Helper()
 	contestID := uuid.New()
 	registrationID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		QuestionMode: contests.QuestionModeMulti, Progression: contests.ProgressionSequential,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: registrationID}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: registrationID})
 	staged := make([]contests.Question, 0, 3)
 	for i, word := range []string{"culprit", "weapon", "room"} {
 		staged = append(staged, f.questions.Put(contests.Question{
@@ -1080,11 +1011,11 @@ func TestALockedQuestionReachesItsParticipantAsANumberAlone(t *testing.T) {
 func TestABonusQuestionReachesItsParticipantMarked(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	for i, bonus := range []bool{false, true} {
 		f.questions.Put(contests.Question{
 			ContestID: contestID, Ord: i + 1, Kind: contests.KindText, Points: 4, IsBonus: bonus, IsVisible: true,
@@ -1145,7 +1076,9 @@ func TestTheNextQuestionReachesItsParticipantOnceTheCurrentOneCloses(t *testing.
 func TestFreeProgressionListsEveryQuestionInFull(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID, staged, _ := f.sequentialPlay(t, 2)
-	f.access.contest.Progression = contests.ProgressionFree
+	changed := f.roster.Contest()
+	changed.Progression = contests.ProgressionFree
+	f.roster.SetContest(changed)
 
 	items, _ := f.playItems(t, contestID)
 	if len(items) != 3 {
@@ -1161,7 +1094,9 @@ func TestFreeProgressionListsEveryQuestionInFull(t *testing.T) {
 func TestSequentialProgressionLocksNothingInSingleQuestionMode(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID, staged, _ := f.sequentialPlay(t, 2)
-	f.access.contest.QuestionMode = contests.QuestionModeSingle
+	changed := f.roster.Contest()
+	changed.QuestionMode = contests.QuestionModeSingle
+	f.roster.SetContest(changed)
 
 	items, _ := f.playItems(t, contestID)
 	for i, q := range staged {
@@ -1173,11 +1108,11 @@ func TestQuestionsCarryAttemptsRemainingAndClosed(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	registrationID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: registrationID}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: registrationID})
 
 	maxAttempts := 3
 	q := f.questions.Put(contests.Question{
@@ -1220,11 +1155,11 @@ func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	registrationID := uuid.New()
-	f.access.contest = contests.Contest{
-		ID: contestID, Status: contests.StatusRunning,
+	f.roster.SetContest(contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openUntil,
 		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
-	}
-	f.access.participant = contests.Participant{ID: registrationID}
+	})
+	f.roster.SetParticipant(contests.Participant{ID: registrationID})
 
 	q := f.questions.Put(contests.Question{
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
@@ -1270,8 +1205,8 @@ func TestAnInvalidContestIDInTheURLIsA400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if f.access.gotContestID != uuid.Nil {
-		t.Fatalf("Access was called with %s for a URL that never named a contest", f.access.gotContestID)
+	if f.roster.AskedAbout() != uuid.Nil {
+		t.Fatalf("admission asked about %s for a URL that never named a contest", f.roster.AskedAbout())
 	}
 }
 
@@ -1306,8 +1241,8 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	reader := contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
-	access := &fakeAccess{err: contests.ErrNotAParticipant}
-	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
+	nobody := admitting(participationtest.NewRoster(), nil)
+	api.NewParticipantHandler(nobody, reader, &fakeHistory{}, stores.Service, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	do := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -1334,7 +1269,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 		t.Fatalf("staff body = %+v, want the full staff projection", staffBody)
 	}
 
-	// The fake Access refuses everyone, so not_a_participant proves the request
+	// Nobody is on the roster, so not_a_participant proves the request
 	// reached this handler's admission and not the staff route's RBAC, which
 	// would answer a bare 403.
 	participant := do("/contests/" + contestID.String() + "/play/story")
@@ -1351,8 +1286,8 @@ func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
 	contestID := uuid.New()
 	questionID := uuid.New()
 	participantID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: participantID}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: participantID})
 
 	rec := f.post("/contests/"+contestID.String()+"/questions/"+questionID.String()+"/answer",
 		`{"value":"the butler"}`)
@@ -1370,7 +1305,7 @@ func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
 		t.Fatalf("Value = %q, want %q (from the body)", got.Value, "the butler")
 	}
 	if got.Participant.ID != participantID || got.Contest.ID != contestID {
-		t.Fatalf("command = %+v, want the participant and contest Access resolved", got)
+		t.Fatalf("command = %+v, want the participant and contest admission found", got)
 	}
 	// httptest's RemoteAddr: Submit asks the gate from the caller's address.
 	if want := netip.MustParseAddr("192.0.2.1"); got.Address != want {
@@ -1381,8 +1316,8 @@ func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
 func TestAnswerReturnsTheOutcome(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	remaining := 2
 	f.submitter.outcome = contests.SubmitOutcome{
 		Correct: true, PointsAwarded: 10, AttemptsRemaining: &remaining, Closed: true,
@@ -1423,7 +1358,7 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		{"contest not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running", ""},
 		{"contest ended", contests.ErrContestEnded, http.StatusConflict, "contest_ended", ""},
 		// Submit asks the participation gate itself, so every refusal of the
-		// gate can come back from it, not only from Access.
+		// gate can come back from it, not only from admission.
 		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed", ""},
 		{"address not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed", ""},
 		{"participant finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished", ""},
@@ -1435,8 +1370,8 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			contestID := uuid.New()
-			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-			f.access.participant = contests.Participant{ID: uuid.New()}
+			f.roster.SetContest(participationtest.Running(contestID))
+			f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 			f.submitter.err = tc.err
 
 			rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`)
@@ -1458,8 +1393,8 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 func TestAnswerWithAnInvalidQuestionIDIsA400(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	rec := f.post("/contests/"+contestID.String()+"/questions/not-a-uuid/answer", `{"value":"x"}`)
 	if rec.Code != http.StatusBadRequest {
@@ -1473,8 +1408,8 @@ func TestAnswerWithAnInvalidQuestionIDIsA400(t *testing.T) {
 func TestAnswerWithAnInvalidBodyIsA400(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `not json`)
 	if rec.Code != http.StatusBadRequest {
@@ -1519,11 +1454,11 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 		Cookies:    auth.NewCookieWriter(false), Logger: log,
 	})
 
-	access := &fakeAccess{participant: p, contest: c}
+	admission := admittedAs(c, p, func() time.Time { return conteststest.FixtureNow })
 	reader := contests.NewReader(stores.Stories, stores.SchemaNotes, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
 	router := chi.NewRouter()
 	// The real retry loop, not a fakeSubmitter.
-	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c2, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
+	api.NewParticipantHandler(admission, reader, &fakeHistory{}, stores.Service, answerRate(c2, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/contests/"+c.ID.String()+"/questions/"+q.ID.String()+"/answer",
@@ -1543,7 +1478,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 
 func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryproxy.ErrTooManyReads
+	f.reads.refuseWith(participation.ErrTooManyReads)
 
 	rec := f.post("/contests/"+uuid.New().String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`)
 	if rec.Code != http.StatusTooManyRequests {
@@ -1552,8 +1487,8 @@ func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	if code := errorCode(t, rec); code != "play_read_too_often" {
 		t.Fatalf("code = %q, want play_read_too_often", code)
 	}
-	if f.access.accessCalled || f.submitter.called {
-		t.Fatal("Access or Submit was reached after AdmitRead refused")
+	if f.roster.Lookups() > 0 || f.submitter.called {
+		t.Fatal("the lookup or Submit was reached after the read budget refused")
 	}
 }
 
@@ -1561,8 +1496,8 @@ func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 func TestAnswersBeyondTheRegistrationsRateAreRefusedBeforeGrading(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
 
 	for i := 0; i < fixtureAnswersPerMinute; i++ {
@@ -1587,12 +1522,34 @@ func TestAnswersBeyondTheRegistrationsRateAreRefusedBeforeGrading(t *testing.T) 
 	}
 }
 
+// The answer rate is charged to the registration before the gate, so an answer
+// the gate refuses is an attempt too (CLAUDE.md rule 13).
+func TestAnAnswerTheGateRefusesStillCountsAgainstTheAnswerRate(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.admitted()
+	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
+	f.refuse(contests.ErrDeadlinePassed)
+
+	for i := 0; i < fixtureAnswersPerMinute; i++ {
+		if rec := f.post(path, `{"value":"x"}`); rec.Code != http.StatusConflict || errorCode(t, rec) != "deadline_passed" {
+			t.Fatalf("answer %d: status = %d, body %s; want 409 deadline_passed", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	rec := f.post(path, `{"value":"x"}`)
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "answer_too_often" {
+		t.Fatalf("status = %d, body %s; want 429 answer_too_often", rec.Code, rec.Body.String())
+	}
+	if f.submitter.called {
+		t.Fatal("Submit was reached by a refused answer")
+	}
+}
+
 // CLAUDE.md rule 13: malformed and refused answers spend the budget too.
 func TestARefusedAnswerStillCountsAgainstTheAnswerRate(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
 
 	if rec := f.post(path, `not json`); rec.Code != http.StatusBadRequest {
@@ -1620,15 +1577,15 @@ func TestARefusedAnswerStillCountsAgainstTheAnswerRate(t *testing.T) {
 func TestTheAnswerRateIsKeptPerRegistration(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
 
 	for i := 0; i <= fixtureAnswersPerMinute; i++ {
 		f.post(path, `{"value":"x"}`)
 	}
 
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	if rec := f.post(path, `{"value":"x"}`); rec.Code != http.StatusOK {
 		t.Fatalf("another registration: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -1652,13 +1609,10 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 		Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
 	contestID := uuid.New()
-	access := &fakeAccess{
-		contest:     contests.Contest{ID: contestID, Status: contests.StatusRunning},
-		participant: contests.Participant{ID: uuid.New()},
-	}
+	admission := admittedAs(participationtest.Running(contestID), contests.Participant{ID: uuid.New()}, nil)
 	submitter := &fakeSubmitter{}
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, contests.NewReader(conteststest.NewStories(), conteststest.NewSchemaNotes(), conteststest.NewQuestions(), conteststest.NewAttempts(conteststest.NewSubmissions()), nil),
+	api.NewParticipantHandler(admission, contests.NewReader(conteststest.NewStories(), conteststest.NewSchemaNotes(), conteststest.NewQuestions(), conteststest.NewAttempts(conteststest.NewSubmissions()), nil),
 		&fakeHistory{}, submitter, api.AnswerRate{Limiter: failingLimiter{}, PerMinute: 6}, mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer",
@@ -1680,17 +1634,17 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 func TestAnAnswerRefusedAsNotAChoiceStillSpendsTheRateBudget(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.submitter.err = contests.ErrNotAChoice
 
 	rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"abc"}`)
 	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "answer_not_a_choice" {
 		t.Fatalf("status = %d, body %s; want 400 answer_not_a_choice", rec.Code, rec.Body.String())
 	}
-	if f.access.admitReads != 1 || !f.submitter.called {
-		t.Fatalf("AdmitRead called %d times, Submit called %v; want the budget spent once before Submit",
-			f.access.admitReads, f.submitter.called)
+	if f.reads.charged() != 1 || !f.submitter.called {
+		t.Fatalf("the read budget was charged %d times, Submit called %v; want the budget spent once before Submit",
+			f.reads.charged(), f.submitter.called)
 	}
 }
 
@@ -1700,8 +1654,8 @@ func TestQueryLogAsksHistoryForTheResolvedRegistrationAndThePagingParams(t *test
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	registrationID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: registrationID}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: registrationID})
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log?limit=10&offset=20")
 	if rec.Code != http.StatusOK {
@@ -1711,7 +1665,7 @@ func TestQueryLogAsksHistoryForTheResolvedRegistrationAndThePagingParams(t *test
 		t.Fatal("History was never called")
 	}
 	if f.history.gotRegistration != registrationID {
-		t.Fatalf("registration = %s, want %s (from Access, never the request)", f.history.gotRegistration, registrationID)
+		t.Fatalf("registration = %s, want %s (from admission, never the request)", f.history.gotRegistration, registrationID)
 	}
 	if f.history.gotLimit != 10 || f.history.gotOffset != 20 {
 		t.Fatalf("limit=%d offset=%d, want 10 and 20 straight from the query string", f.history.gotLimit, f.history.gotOffset)
@@ -1723,8 +1677,8 @@ func TestQueryLogAsksHistoryForTheResolvedRegistrationAndThePagingParams(t *test
 func TestQueryLogResponseCarriesTheHistoryEntries(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	duration, rows := 42, 7
 	f.history.items = []queryrunner.HistoryEntry{
@@ -1766,8 +1720,8 @@ func TestQueryLogResponseCarriesTheHistoryEntries(t *testing.T) {
 func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	f.history.items = []queryrunner.HistoryEntry{
 		{SQL: "SELECT 1", Status: queryrunner.StatusOK, ExecutedAt: time.Now()},
@@ -1807,8 +1761,8 @@ func TestQueryLogPagesOlderThanTheRowItIsGiven(t *testing.T) {
 		t.Run(query, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			contestID := uuid.New()
-			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-			f.access.participant = contests.Participant{ID: uuid.New()}
+			f.roster.SetContest(participationtest.Running(contestID))
+			f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 			rec := f.get("/contests/" + contestID.String() + "/play/log?limit=50&" + query)
 			if rec.Code != http.StatusOK {
@@ -1825,8 +1779,8 @@ func TestQueryLogPagesOlderThanTheRowItIsGiven(t *testing.T) {
 func TestQueryLogNamesEachRowByItsID(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.items = []queryrunner.HistoryEntry{{ID: 42, SQL: "SELECT 1", Status: queryrunner.StatusOK, ExecutedAt: time.Now()}}
 	f.history.total = 1
 
@@ -1844,14 +1798,14 @@ func TestQueryLogNamesEachRowByItsID(t *testing.T) {
 	}
 }
 
-// One row whole, of the registration Access resolved, never one the request
+// One row whole, of the registration admission found, never one the request
 // names.
 func TestQueryLogEntryIsTheCallersOwnRowWithItsStatementWhole(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	registrationID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: registrationID}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: registrationID})
 	whole := "SELECT " + strings.Repeat("x", 5000)
 	rows := 3
 	f.history.entry = queryrunner.HistoryEntry{ID: 42, SQL: whole, Status: queryrunner.StatusOK, RowCount: &rows, ExecutedAt: time.Now()}
@@ -1885,8 +1839,8 @@ func TestQueryLogEntryIsTheCallersOwnRowWithItsStatementWhole(t *testing.T) {
 func TestQueryLogEntryThatIsNotTheCallersIsNotFound(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log/42")
 	if rec.Code != http.StatusNotFound {
@@ -1902,8 +1856,8 @@ func TestQueryLogEntryWithAnIDThatCannotBeOneIsNotFoundAndReadsNothing(t *testin
 		t.Run(id, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			contestID := uuid.New()
-			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-			f.access.participant = contests.Participant{ID: uuid.New()}
+			f.roster.SetContest(participationtest.Running(contestID))
+			f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 			rec := f.get("/contests/" + contestID.String() + "/play/log/" + id)
 			if rec.Code != http.StatusNotFound {
@@ -1924,25 +1878,25 @@ func TestQueryLogEntryWithAnIDThatCannotBeOneIsNotFoundAndReadsNothing(t *testin
 // reads nothing.
 func TestQueryLogEntryOfACallerNotAdmittedReadsNothing(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.err = contests.ErrNotAParticipant
+	f.refuse(contests.ErrNotAParticipant)
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/log/42")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (body: %s)", rec.Code, rec.Body.String())
 	}
 	if f.history.entryCalled {
-		t.Fatal("the log was read for a caller Access refused")
+		t.Fatal("the log was read for a caller admission refused")
 	}
-	if f.access.admitReads != 1 {
-		t.Fatalf("AdmitRead called %d times, want the read budget spent once", f.access.admitReads)
+	if f.reads.charged() != 1 {
+		t.Fatalf("the read budget was charged %d times, want once", f.reads.charged())
 	}
 }
 
 func TestQueryLogEntryReadFailureIsA500(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.entryErr = errors.New("connection reset")
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log/42")
@@ -1955,8 +1909,8 @@ func TestQueryLogEntryReadFailureIsA500(t *testing.T) {
 func TestQueryLogReadFailureIsA500(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.err = errors.New("connection reset")
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log")
@@ -1965,14 +1919,14 @@ func TestQueryLogReadFailureIsA500(t *testing.T) {
 	}
 }
 
-// Whose rows is decided by the registration Access resolved, not the request
+// Whose rows is decided by the registration admission found, not the request
 // (§9.1).
 func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	registration := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: registration}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: registration})
 
 	duration, rows := 12, 3
 	f.history.exported = []queryrunner.HistoryEntry{
@@ -2001,7 +1955,7 @@ func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
 		t.Errorf("Content-Disposition = %q, want an attachment", got)
 	}
 	if f.history.gotExportRegistration != registration {
-		t.Fatalf("the log was read for registration %s, want the one Access resolved (%s)",
+		t.Fatalf("the log was read for registration %s, want the one admission found (%s)",
 			f.history.gotExportRegistration, registration)
 	}
 
@@ -2033,8 +1987,8 @@ func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
 func TestTheQueryLogCSVOfAParticipantWhoRanNothingIsAHeaderRow(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
 	if rec.Code != http.StatusOK {
@@ -2053,7 +2007,7 @@ func TestTheQueryLogCSVOfAParticipantWhoRanNothingIsAHeaderRow(t *testing.T) {
 // registration.
 func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.setErr(contests.ErrNotAParticipant)
+	f.refuse(contests.ErrNotAParticipant)
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
 	if rec.Code != http.StatusForbidden {
@@ -2071,13 +2025,13 @@ func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 // trip.
 func TestTheQueryLogCSVSpendsTheReadBudgetFirst(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.admitReadErr = queryproxy.ErrTooManyReads
+	f.reads.refuseWith(participation.ErrTooManyReads)
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", rec.Code)
 	}
-	if f.access.accessCalled {
+	if f.roster.Lookups() > 0 {
 		t.Error("the contest was looked up for a caller the rate limit had already refused")
 	}
 	if f.history.exportCalled {
@@ -2090,8 +2044,8 @@ func TestTheQueryLogCSVSpendsTheReadBudgetFirst(t *testing.T) {
 func TestAQueryLogCSVThatFailsBeforeItStartsIsAnErrorNotAnEmptyFile(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.exportErr = errors.New("the database is away")
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
@@ -2108,8 +2062,8 @@ func TestAQueryLogCSVThatFailsBeforeItStartsIsAnErrorNotAnEmptyFile(t *testing.T
 func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.exported = []queryrunner.HistoryEntry{
 		{
 			SQL:    "select * from guests;",
@@ -2148,8 +2102,8 @@ func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
 func TestAQueryLogDownloadCutShortSaysSoInTheFileItself(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.exported = []queryrunner.HistoryEntry{
 		{SQL: "SELECT 1", Status: queryrunner.StatusOK, ExecutedAt: time.Now().UTC()},
 	}
@@ -2188,8 +2142,8 @@ func TestAQueryLogDownloadCutShortSaysSoInTheFileItself(t *testing.T) {
 func TestAQueryLogDownloadHoldsItsConnectionForABoundedTime(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 
 	before := time.Now()
 	if rec := f.get("/contests/" + contestID.String() + "/play/log.csv"); rec.Code != http.StatusOK {
@@ -2212,8 +2166,8 @@ func TestAQueryLogDownloadHoldsItsConnectionForABoundedTime(t *testing.T) {
 func TestASecondQueryLogDownloadWhileOneIsStillRunningIsRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	held := make(chan struct{})
 	f.history.exportGate = held
 
@@ -2257,8 +2211,8 @@ func TestAnAdmittedPlayRequestIsObserved(t *testing.T) {
 		t.Fatalf("the request was observed %d times, want once", len(visits))
 	}
 	got := visits[0]
-	if got.Contest != contestID || got.Registration != f.access.participant.ID {
-		t.Fatalf("visit filed under %v/%v, want %v/%v", got.Contest, got.Registration, contestID, f.access.participant.ID)
+	if got.Contest != contestID || got.Registration != f.roster.Participant().ID {
+		t.Fatalf("visit filed under %v/%v, want %v/%v", got.Contest, got.Registration, contestID, f.roster.Participant().ID)
 	}
 	if got.Session != monitor.SessionTag(f.cookie.Value) || got.Session == f.cookie.Value {
 		t.Fatalf("session = %q, want the tag of the token", got.Session)
@@ -2271,7 +2225,7 @@ func TestAnAdmittedPlayRequestIsObserved(t *testing.T) {
 func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
-	f.access.err = contests.ErrContestNotRunning
+	f.refuse(contests.ErrContestNotRunning)
 
 	if rec := f.get("/contests/" + contestID.String() + "/play/story"); rec.Code == http.StatusOK {
 		t.Fatalf("status = %d, want a refusal", rec.Code)
@@ -2286,8 +2240,8 @@ func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
 func TestTheQueryLogCSVDefusesSpreadsheetFormulas(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.roster.SetContest(participationtest.Running(contestID))
+	f.roster.SetParticipant(contests.Participant{ID: uuid.New()})
 	f.history.exported = []queryrunner.HistoryEntry{{
 		SQL:        `=1+1`,
 		Status:     queryrunner.StatusRejected,
