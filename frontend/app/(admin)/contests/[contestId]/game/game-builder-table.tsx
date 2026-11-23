@@ -21,7 +21,7 @@ import {
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { knownMessage, messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
@@ -462,7 +462,7 @@ export function GameBuilderTable({
 
         {windowError ? (
           <p role="alert" className="text-small text-bad">
-            {(errors as Record<string, string>)[windowError] ?? td.windowError}
+            {knownMessage(windowError, errors) ?? td.windowError}
           </p>
         ) : windowLoading ? (
           <p className="text-small text-ink-3">{td.loading}</p>

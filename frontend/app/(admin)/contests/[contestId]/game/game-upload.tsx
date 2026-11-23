@@ -21,7 +21,7 @@ import {
   gameUploadWindowAction,
 } from "./actions";
 import { useGamePoll } from "./game-poll";
-import { messageForCode } from "@/lib/i18n/errors";
+import { knownMessage, messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 /**
@@ -609,7 +609,7 @@ export function GameUpload({
               {windowError ? (
                 <p role="alert" className="text-small text-bad">
                   {/* Falls back to `tu.windowError`, not the generic "something went wrong". */}
-                  {(errors as Record<string, string>)[windowError] ?? tu.windowError}
+                  {knownMessage(windowError, errors) ?? tu.windowError}
                 </p>
               ) : windowLoading ? (
                 <p className="text-small text-ink-3">{tu.loading}</p>
