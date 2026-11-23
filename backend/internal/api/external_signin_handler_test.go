@@ -676,6 +676,21 @@ func TestTheStartSpendsTheAddressBudget(t *testing.T) {
 	}
 }
 
+// The routes are navigations, so an address that cannot be read lands on the
+// sign-in page like any refusal; an operator hears of it, as on every route.
+func TestAStartFromAnUnreadableAddressIsRefusedAndLogged(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{})
+
+	rec := f.get("", "/auth/microsoft/start")
+
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login?error=external_signin_failed" {
+		t.Errorf("start = %d to %q, want 302 to the sign-in page", rec.Code, rec.Header().Get("Location"))
+	}
+	if !f.logs.loggedWarning("/auth/microsoft/start") || f.logs.loggedError("") {
+		t.Error("want one Warn line naming the route and no error")
+	}
+}
+
 func TestMicrosoftRoutesDoNotExistWithoutAClient(t *testing.T) {
 	f := newExternalFixture(t, externalOptions{noClient: true})
 

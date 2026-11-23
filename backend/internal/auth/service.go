@@ -190,6 +190,8 @@ type LoginResult struct {
 // Login authenticates a set of credentials and issues a session. The order
 // of the steps is deliberate:
 //
+//  0. Refuse an attempt with no address (httpx.ErrAddressUnreadable), which
+//     no address budget could count.
 //  1. Spend a budget first: a trusted browser's limits (spendTrusted), or
 //     else the address budget and the length guards.
 //  2. Look the account up, the same way whether or not it exists.
@@ -204,6 +206,9 @@ type LoginResult struct {
 // oracle. password.ErrBusy means the attempt spent its step-1 budget but was
 // not evaluated.
 func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, error) {
+	if cmd.IP == "" {
+		return LoginResult{}, errAddressUnreadable
+	}
 	// A trusted browser skips the ordinary address and account limits, which
 	// a rival at the next desk could spend, and spends its own (spendTrusted),
 	// where only attempts its device and account admitted reach the address's
@@ -568,22 +573,19 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 }
 
 func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
-	if cmd.IP != "" {
-		allowed, first, err := s.limiter.Spend(ctx, "ip:"+httpx.AddressSubject(cmd.IP), s.maxPerAddress, loginAttemptWindow)
-		if err != nil {
-			return err
+	allowed, first, err := s.limiter.Spend(ctx, "ip:"+httpx.AddressSubject(cmd.IP), s.maxPerAddress, loginAttemptWindow)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		// Once per window, not once per attempt: past the budget an attempt
+		// costs the caller nothing, so every one of them journalled would let
+		// an anonymous flood write the audit trail full. The attempts that
+		// spent the budget are each on record already.
+		if first {
+			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
 		}
-		if !allowed {
-			// Once per window, not once per attempt: past the budget an
-			// attempt costs the caller nothing, so every one of them
-			// journalled would let an anonymous flood write the audit
-			// trail full. The attempts that spent the budget are each on
-			// record already.
-			if first {
-				s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
-			}
-			return ErrTooManyAttempts
-		}
+		return ErrTooManyAttempts
 	}
 
 	// An over-long login would mint a key of its own size; an over-long
@@ -595,6 +597,12 @@ func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 	return nil
 }
 
+// errAddressUnreadable refuses a sign-in or a password change whose client
+// address could not be read, as httpx.Budgets refuses a request budget's:
+// either would otherwise spend no address window, or share one with every
+// other such caller.
+var errAddressUnreadable = fmt.Errorf("%w: a password check", httpx.ErrAddressUnreadable)
+
 // errAddressQueueFull refuses an attempt whose address already has its share
 // of the hashing queue. It wraps password.ErrBusy: nothing was evaluated.
 var errAddressQueueFull = fmt.Errorf("%w: this address already has its share of sign-ins waiting", password.ErrBusy)
@@ -605,9 +613,6 @@ var errAddressQueueFull = fmt.Errorf("%w: this address already has its share of 
 // budgets bound those. The caller calls leave once it holds a slot, or on
 // the way out; leave is safe to call twice.
 func (s *Service) joinQueue(cmd LoginCommand) (leave func(), ok bool) {
-	if cmd.IP == "" {
-		return func() {}, true
-	}
 	return s.waiting.join(httpx.AddressSubject(cmd.IP))
 }
 
@@ -635,11 +640,15 @@ func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string
 
 // AllowPasswordChange counts one attempt to change the account's own password
 // and reports ErrTooManyAttempts once a window is spent (CLAUDE.md rule 4).
-// address is the caller's httpx.ClientSubject. The account's window guards
+// address is the caller's httpx.ClientSubject; an empty one is refused with
+// httpx.ErrAddressUnreadable. The account's window guards
 // against a second person holding the session; the address's, the address
 // budget's size, bounds one machine holding sessions for many accounts. It is
 // spent last, so one session adds at most its own window to it.
 func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID, address string) error {
+	if address == "" {
+		return errAddressUnreadable
+	}
 	for _, window := range []struct {
 		subject string
 		limit   int

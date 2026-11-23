@@ -403,6 +403,36 @@ func TestLogoutClearsTheCookieAndEndsTheSession(t *testing.T) {
 	}
 }
 
+// A request whose address cannot be read is ours to answer, as every request
+// budget answers it: a 500 with no Retry-After, never a session.
+func TestSignInAndPasswordChangeRefuseARequestWhoseAddressCannotBeRead(t *testing.T) {
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+	for _, route := range []struct{ path, body string }{
+		{"/auth/password", `{"old_password":"` + testPassword + `","new_password":"a brand new password"}`},
+		{"/auth/login", `{"login":"ivanov","password":"` + testPassword + `"}`},
+	} {
+		path := route.path
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(route.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "not an address"
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		f.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
+			t.Errorf("%s: status = %d, want 500 internal_error (body: %s)", path, rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Retry-After") != "" {
+			t.Errorf("%s: Retry-After = %q, want none: waiting does not help", path, rec.Header().Get("Retry-After"))
+		}
+	}
+	stored, _ := f.repo.Get(f.user.ID)
+	if !passwordtest.Matches(t, stored.PasswordHash, testPassword) {
+		t.Error("the password was changed by a request whose address could not be read")
+	}
+}
+
 func TestPasswordChangeEndpointReplacesTheDigest(t *testing.T) {
 	f := newHandlerFixture(t)
 	cookie := f.login(t)

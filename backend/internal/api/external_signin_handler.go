@@ -235,7 +235,10 @@ func (h signInFlow) spend(w http.ResponseWriter, r *http.Request, budget httpx.A
 	if err == nil {
 		return true
 	}
-	if !errors.Is(err, httpx.ErrBudgetSpent) {
+	switch {
+	case errors.Is(err, httpx.ErrAddressUnreadable):
+		warnUnreadableAddress(r, h.cfg.Log, err)
+	case !errors.Is(err, httpx.ErrBudgetSpent):
 		h.cfg.Log.ErrorContext(r.Context(), "could not check the sign-in rate limit", "provider", h.provider.ID, "error", err)
 	}
 	redirect(w, signInPage(codeExternalSignInFailed))

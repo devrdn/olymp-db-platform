@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
 	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
@@ -822,6 +824,10 @@ func TestEveryBudgetErrorHasItsAnswer(t *testing.T) {
 		"unavailable": {err: fmt.Errorf("%w: cache down", httpx.ErrBudgetUnavailable),
 			want: answered{status: http.StatusInternalServerError, code: "internal_error",
 				message: "Internal server error", logged: true}},
+		// Logged at Warn, not Error (TestAnUnreadableAddressIsLoggedWithItsRoute).
+		"unreadable address": {err: fmt.Errorf("%w: budget form:ip", httpx.ErrAddressUnreadable),
+			want: answered{status: http.StatusInternalServerError, code: "internal_error",
+				message: "Internal server error"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, ok := answerBy(t, answerBudgetError, tc.err)
@@ -835,6 +841,39 @@ func TestEveryBudgetErrorHasItsAnswer(t *testing.T) {
 	}
 	if _, ok := answerBy(t, answerBudgetError, errors.New("something else")); ok {
 		t.Error("an error that is not a budget's was answered as one")
+	}
+}
+
+// The one way to meet it is a listener or proxy handing over a peer address
+// that does not parse, so an operator must be able to tell which route.
+func TestAnUnreadableAddressIsLoggedWithItsRoute(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	router := chi.NewRouter()
+	router.Get("/contests/{contestID}/leaderboard", func(w http.ResponseWriter, r *http.Request) {
+		answerBudgetError(w, r, log, fmt.Errorf("%w: budget leaderboard:ip", httpx.ErrAddressUnreadable))
+	})
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/contests/c/leaderboard", nil))
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], "level=WARN") ||
+		!strings.Contains(lines[0], `route="GET /contests/{contestID}/leaderboard"`) {
+		t.Errorf("logged %q, want one Warn line naming the route", logs.String())
+	}
+}
+
+// A path is whatever the client typed; outside a matched route the log says
+// so rather than repeat it.
+func TestAnUnreadableAddressOutsideARouteLogsNoRawPath(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	req := httptest.NewRequest(http.MethodGet, "/typed/by-the-client", nil)
+
+	answerBudgetError(httptest.NewRecorder(), req, log, fmt.Errorf("%w: budget x", httpx.ErrAddressUnreadable))
+
+	if strings.Contains(logs.String(), "typed/by-the-client") || !strings.Contains(logs.String(), `route="GET an unmatched route"`) {
+		t.Errorf("logged %q, want the method and no raw path", logs.String())
 	}
 }
 

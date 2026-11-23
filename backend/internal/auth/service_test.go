@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/logging"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password/passwordtest"
@@ -974,6 +975,31 @@ func (f *unlockFixture) trustedBrowser(t *testing.T, ip string) string {
 		t.Fatal("a successful sign-in issued no device cookie")
 	}
 	return result.DeviceToken
+}
+
+// An address that could not be read is refused before any window, trusted or
+// not, as every request budget refuses one: without it a sign-in would run on
+// the per-login windows alone, and one shared address window would count
+// every such caller together.
+func TestASignInOrPasswordChangeWithNoReadableAddressIsRefused(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{})
+	ctx := context.Background()
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+
+	for name, cmd := range map[string]LoginCommand{
+		"untrusted": {Login: "ivanov", Password: testPassword},
+		"trusted":   {Login: "ivanov", Password: testPassword, DeviceToken: cookie},
+	} {
+		if result, err := f.service.Login(ctx, cmd); !errors.Is(err, httpx.ErrAddressUnreadable) || result.Token != "" {
+			t.Errorf("%s: Login() with no address = %q, %v; want no session and ErrAddressUnreadable", name, result.Token, err)
+		}
+	}
+	if err := f.service.AllowPasswordChange(ctx, f.user.ID, ""); !errors.Is(err, httpx.ErrAddressUnreadable) {
+		t.Errorf("AllowPasswordChange() with no address = %v, want ErrAddressUnreadable", err)
+	}
+	if len(f.sink.entries) != 1 {
+		t.Errorf("audit entries = %d, want only the first sign-in's: a refused address is no attempt", len(f.sink.entries))
+	}
 }
 
 func (f *unlockFixture) lockOut(t *testing.T, ip string) {

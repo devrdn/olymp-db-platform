@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
 	"github.com/devrdn/olymp-db-platform/backend/internal/connector"
@@ -99,15 +101,35 @@ var budgetErrors = errorTable{
 
 // answerBudgetError answers what httpx.Budgets.Charge returns, wherever a
 // budget is charged: a spent budget as 429 under the code and text it was
-// declared with and Retry-After its window, anything else from budgetErrors.
+// declared with and Retry-After its window; an unreadable address as ours, a
+// 500 with no Retry-After, since waiting never helps; anything else from
+// budgetErrors.
 // TestEveryBudgetErrorHasItsAnswer walks both.
 func answerBudgetError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) bool {
+	if errors.Is(err, httpx.ErrAddressUnreadable) {
+		warnUnreadableAddress(r, log, err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return true
+	}
 	var spent *httpx.Refusal
 	if errors.As(err, &spent) {
 		return errorTable{{err: httpx.ErrBudgetSpent, status: http.StatusTooManyRequests,
 			code: spent.Code(), message: spent.Message(), retryAfter: spent.RetryAfter()}}.answer(w, r, log, err)
 	}
 	return budgetErrors.answer(w, r, log, err)
+}
+
+// warnUnreadableAddress tells the operator which route met a request whose
+// address could not be read. A Warn, not an Error: the code is right, and the
+// listener or proxy in front of it is not. It logs the route's pattern, never
+// the path the client typed.
+func warnUnreadableAddress(r *http.Request, log *slog.Logger, err error) {
+	route := "an unmatched route"
+	if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
+		route = rctx.RoutePattern()
+	}
+	log.WarnContext(r.Context(), "a request was refused because its client address could not be read",
+		"route", r.Method+" "+route, "error", err)
 }
 
 // standingErrors answers the participation gate's refusals

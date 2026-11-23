@@ -1127,6 +1127,18 @@ func TestBeginningAnUploadIsRateLimitedPerContestAcrossAddresses(t *testing.T) {
 	assertRetryAfter(t, last, "600")
 }
 
+// CLAUDE.md rule 9: an address that cannot be read is refused, not let past
+// the address budget to spend only the contest's. The fault is the
+// deployment's, so it is ours, and waiting would not help.
+func TestBeginningAnUploadFromAnUnreadableAddressIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	rec := f.beginUploadFrom("", uuid.NewString())
+	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
+		t.Fatalf("status %d, want 500 internal_error: %s", rec.Code, rec.Body)
+	}
+}
+
 // CLAUDE.md rule 5. Both keys answer alike, so the order shows in the contest
 // budget afterwards.
 func TestTheAddressBudgetIsSpentBeforeTheContestsOwn(t *testing.T) {

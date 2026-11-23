@@ -124,6 +124,25 @@ func TestBudgetsAreChargedBoundedFirstAndStopAtTheFirstRefusal(t *testing.T) {
 	}
 }
 
+// CLAUDE.md rule 9: an address that cannot be read may only make a request
+// stricter. It is not let past its address budget, nor charged to one bucket
+// every such request shares, and nothing after it is charged. It is not a
+// spent budget either: waiting would never help.
+func TestARequestWhoseAddressCannotBeReadIsRefused(t *testing.T) {
+	budgets, counter := newBudgets(t)
+	byAddress := httpx.PerAddress("form:ip", 5, time.Minute, codeTestTooOften, "Too many from this address")
+	byContest := httpx.PerKey("form:contest", 5, time.Minute, codeTestTooOften, "Too many for this contest")
+
+	err := budgets.Charge(t.Context(), byAddress.Of(from("")), byContest.Of("c"))
+
+	if !errors.Is(err, httpx.ErrAddressUnreadable) || errors.Is(err, httpx.ErrBudgetSpent) {
+		t.Fatalf("Charge() = %v, want ErrAddressUnreadable and not a spent budget", err)
+	}
+	if got := counter.count(t, "form:contest:c"); got != 0 {
+		t.Errorf("the contest was charged %d times, want none", got)
+	}
+}
+
 type failingCounter struct{}
 
 var errCacheDown = errors.New("cache down")

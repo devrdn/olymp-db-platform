@@ -393,6 +393,24 @@ func TestTheParticipantsTableIsLimitedPerAccount(t *testing.T) {
 	assertRetryAfter(t, rec, "60")
 }
 
+// CLAUDE.md rule 9: an address that cannot be read is refused, not counted in
+// one bucket that every such caller shares.
+func TestThePublicTableRefusesAnUnreadableAddress(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.contest(t, contests.StatusRunning, nil)
+	req := httptest.NewRequest(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil)
+	req.RemoteAddr = ""
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
+		t.Fatalf("status = %d (%s), want 500 internal_error", rec.Code, rec.Body.String())
+	}
+	if after := rec.Header().Get("Retry-After"); after != "" {
+		t.Errorf("Retry-After = %q, want none: waiting would not help", after)
+	}
+}
+
 func TestThePublicTableLimitsAnIPv6NetworkAsOneAddress(t *testing.T) {
 	f := newBoardFixture(t)
 	c, _ := f.contest(t, contests.StatusRunning, nil)

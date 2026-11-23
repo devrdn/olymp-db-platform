@@ -64,11 +64,15 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
-func (b *logBuffer) loggedError(message string) bool {
+func (b *logBuffer) loggedError(message string) bool { return b.loggedAt("ERROR", message) }
+
+func (b *logBuffer) loggedWarning(message string) bool { return b.loggedAt("WARN", message) }
+
+func (b *logBuffer) loggedAt(level, message string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, line := range strings.Split(b.buf.String(), "\n") {
-		if strings.Contains(line, `"level":"ERROR"`) && strings.Contains(line, message) {
+		if strings.Contains(line, `"level":"`+level+`"`) && strings.Contains(line, message) {
 			return true
 		}
 	}

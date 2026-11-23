@@ -117,6 +117,9 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, password.ErrBusy):
 		busy(w, r)
 		return
+	case errors.Is(err, httpx.ErrAddressUnreadable):
+		answerBudgetError(w, r, h.log, err)
+		return
 	default:
 		h.log.ErrorContext(r.Context(), "login failed", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
@@ -230,6 +233,9 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, auth.ErrTooManyAttempts):
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many attempts. Try again in a few minutes.")
+		return
+	case errors.Is(err, httpx.ErrAddressUnreadable):
+		answerBudgetError(w, r, h.log, err)
 		return
 	default:
 		h.log.ErrorContext(r.Context(), "password change throttle failed", "error", err)
