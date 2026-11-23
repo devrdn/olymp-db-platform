@@ -1,17 +1,17 @@
 "use client";
 
 import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
-import { Tag } from "@/components/ui/tag";
 import { ScrollBox } from "@/components/ui/scroll-box";
+import { Tag } from "@/components/ui/tag";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
 import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill, isolate } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { dropGameInstanceAction } from "./actions";
-import { fill, isolate } from "@/lib/i18n/fill";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";

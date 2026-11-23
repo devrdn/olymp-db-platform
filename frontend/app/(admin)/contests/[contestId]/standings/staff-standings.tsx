@@ -13,11 +13,11 @@ import type { ContestStatus } from "@/lib/api/contests";
 import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { revealStandingsAction } from "./actions";
 import { fetchStaffStandings } from "./requests";
-import { fill } from "@/lib/i18n/fill";
 
 type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors">;
 

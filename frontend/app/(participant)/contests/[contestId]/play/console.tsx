@@ -4,16 +4,16 @@ import { useActionState, useEffect, useId, useImperativeHandle, useLayoutEffect,
 
 import { CodeEditor, type CodeEditorHandle, type EditorShortcut } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/use-confirm";
 import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
-import type { PlayDictionary } from "./dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
+import type { PlayDictionary } from "./dictionary";
 import { runQuery, type ConsoleState } from "./requests";
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
 import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
-import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/use-confirm";
 
 /**
  * The SQL editor: always visible, never behind a tab. It is only the input

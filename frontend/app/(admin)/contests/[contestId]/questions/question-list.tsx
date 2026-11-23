@@ -4,17 +4,17 @@ import Link from "next/link";
 
 import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { StateView } from "@/components/product/state-view";
+import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
-import { ScrollBox } from "@/components/ui/scroll-box";
-import { answerable, untranslated } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
+import { answerable, untranslated } from "@/lib/api/content-terms";
 import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { addQuestionAction, deleteQuestionAction, reorderQuestionsAction } from "./actions";
-import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";

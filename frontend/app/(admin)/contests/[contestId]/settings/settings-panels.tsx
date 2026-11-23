@@ -7,14 +7,15 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
-import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "@/lib/api/contests-terms";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
+import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "@/lib/api/contests-terms";
 import { FREEZE_UNITS, freezeForForm } from "@/lib/api/leaderboard";
-import { SQL_MODES } from "@/lib/api/policy-terms";
 import { type SqlPolicy } from "@/lib/api/policy";
+import { SQL_MODES } from "@/lib/api/policy-terms";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { LOCALES, LOCALE_NAMES, type Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import {
@@ -24,7 +25,6 @@ import {
   savePrizePlacesAction,
   saveSettingsAction,
 } from "./actions";
-import { fill } from "@/lib/i18n/fill";
 
 /**
  * A titled block with its own save. One form per endpoint, so one refusal

@@ -67,7 +67,6 @@ export function GameBuild({
   const builder = game.source === "builder";
   if (!editable || !builder || (!game.needsBuild && !failed && !building)) return null;
 
-
   function requestBuild() {
     setRefusalCode(null);
     startTransition(async () => {

@@ -10,13 +10,13 @@ import { API_PREFIX } from "@/lib/api/client";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import { formatMoment } from "@/lib/format/datetime";
-import type { PlayDictionary } from "./dictionary";
 import type { Locale } from "@/lib/i18n/config";
 import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
-import { cn } from "@/lib/utils";
 import { labelFor } from "@/lib/i18n/label";
+import { cn } from "@/lib/utils";
 
+import type { PlayDictionary } from "./dictionary";
 import { fetchQueryLog, fetchQueryLogEntry } from "./requests";
 
 /**

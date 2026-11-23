@@ -10,6 +10,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { Account, Role } from "@/lib/api/accounts";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import {
   blockAction,
@@ -23,7 +24,6 @@ import {
 } from "./actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "../email-delivery";
 import { offeredActions } from "./offered";
-import { fill } from "@/lib/i18n/fill";
 
 /**
  * One account and its actions. Three forms for three endpoints (profile, roles,

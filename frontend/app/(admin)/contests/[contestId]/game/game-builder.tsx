@@ -7,15 +7,15 @@ import { buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useConfirm } from "@/components/ui/use-confirm";
 import type { GameDefinition, TableData } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 import { cn } from "@/lib/utils";
 
 import { saveGameDefinitionAction } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
-import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/use-confirm";
-import { labelFor } from "@/lib/i18n/label";
 
 /**
  * `ColumnDefinition` plus a client-only `key`, so reordering or removing keeps
@@ -186,7 +186,6 @@ export function GameBuilder({
       >
         {(state) => (
           <>
-
             <div className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h4 className="text-control text-ink">{tb.structureHeading}</h4>

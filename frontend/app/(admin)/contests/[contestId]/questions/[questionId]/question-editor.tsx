@@ -8,14 +8,14 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
-import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
+import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
 import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { saveQuestionAction } from "./actions";
-import { fill } from "@/lib/i18n/fill";
 
 /**
  * One question in one form with one save, so a partial failure cannot leave
