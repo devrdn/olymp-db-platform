@@ -358,6 +358,39 @@ describe("the table builder's own data panel", () => {
     expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
   });
 
+  // The question does not stop the page: the upload can finish while it is open.
+  test("a yes given after the upload finished sends no abort for it", async () => {
+    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
+    let release = () => {};
+    let received = 0;
+    request.mockImplementationOnce(
+      (_path: string, options: { rawBody?: Blob }) =>
+        new Promise((resolve) => {
+          release = () => {
+            received += options.rawBody?.size ?? 0;
+            resolve({ received_bytes: received });
+          };
+        }),
+    );
+    request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
+      received += options.rawBody?.size ?? 0;
+      return { received_bytes: received };
+    });
+    completeTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
+
+    show();
+    await userEvent.upload(screen.getByLabelText(td.pick), new File([new Uint8Array(12)], "suspects.csv"));
+    await userEvent.click(await screen.findByRole("button", { name: td.cancel }));
+    await screen.findByRole("dialog", { name: td.cancelConfirm });
+
+    release();
+    await waitFor(() => expect(completeTableUploadAction).toHaveBeenCalled());
+    await answerYes(td.cancel);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(abortTableUploadAction).not.toHaveBeenCalled();
+  });
+
   test("adds a row typed into the form, one input per column", async () => {
     gameTableDataWindowAction.mockResolvedValueOnce({
       value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },

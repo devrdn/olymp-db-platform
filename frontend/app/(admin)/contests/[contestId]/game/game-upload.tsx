@@ -35,6 +35,9 @@ const MAX_AUTO_RESYNCS = 3;
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "done" | "error";
 
+/** Where the panel offers its cancel. */
+const CANCELLABLE: ReadonlySet<Phase> = new Set(["resumable", "uploading", "error"]);
+
 /**
  * Sends one chunk straight to the API, not through a Server Action: an action's
  * body is capped at 1 MiB while `chunk_bytes` is configured per installation at
@@ -101,8 +104,19 @@ export function GameUpload({
   // the current game.
   const restored = !resumable && game.source === "file" ? (game.upload ?? null) : null;
 
-  const [phase, setPhase] = useState<Phase>(resumable ? "resumable" : restored ? "done" : "idle");
-  const [uploadId, setUploadId] = useState<string | null>(resumable?.id ?? restored?.id ?? null);
+  const [phase, setPhaseState] = useState<Phase>(resumable ? "resumable" : restored ? "done" : "idle");
+  const [uploadId, setUploadIdState] = useState<string | null>(resumable?.id ?? restored?.id ?? null);
+  // What the upload is doing now, written with the state it mirrors, for a
+  // question answered after the upload moved on.
+  const live = useRef({ phase, uploadId });
+  const setPhase = (next: Phase) => {
+    live.current.phase = next;
+    setPhaseState(next);
+  };
+  const setUploadId = (next: string | null) => {
+    live.current.uploadId = next;
+    setUploadIdState(next);
+  };
   const [filename, setFilename] = useState(resumable?.filename ?? restored?.filename ?? "");
   const [totalBytes, setTotalBytes] = useState(resumable?.declaredBytes ?? restored?.bytes ?? 0);
   const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? restored?.bytes ?? 0);
@@ -317,6 +331,10 @@ export function GameUpload({
 
   async function cancel() {
     if (!(await ask({ title: tu.cancelConfirm, answer: tu.cancel, cancel: tu.keepUploading, danger: true }))) return;
+    // The page went on while the question was open: an upload that finished
+    // meanwhile is not cancelled, nor is one that has become another.
+    const now = live.current;
+    if (!CANCELLABLE.has(now.phase) || now.uploadId !== uploadId) return;
     controllerRef.current?.abort();
     const id = uploadId;
     fileRef.current = null;

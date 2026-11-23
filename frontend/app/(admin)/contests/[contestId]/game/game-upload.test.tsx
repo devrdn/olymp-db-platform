@@ -307,6 +307,45 @@ describe("the game upload panel", () => {
     expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
   });
 
+  // The question does not stop the page: the upload can finish while it is open.
+  test("a yes given after the upload finished leaves the finished upload alone", async () => {
+    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
+    let release = () => {};
+    let received = 0;
+    request.mockImplementationOnce(
+      (_path: string, options: { rawBody?: Blob }) =>
+        new Promise((resolve) => {
+          release = () => {
+            received += options.rawBody?.size ?? 0;
+            resolve({ received_bytes: received });
+          };
+        }),
+    );
+    request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
+      received += options.rawBody?.size ?? 0;
+      return { received_bytes: received };
+    });
+    completeGameUploadAction.mockResolvedValueOnce({
+      value: game({ status: "pending", version: 2, building: true }),
+    });
+    gameUploadWindowAction.mockResolvedValue({
+      value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
+    });
+
+    show();
+    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
+    await userEvent.click(await screen.findByRole("button", { name: tu.cancel }));
+    await screen.findByRole("dialog", { name: tu.cancelConfirm });
+
+    release();
+    await waitFor(() => expect(screen.getByText(tu.done)).toBeInTheDocument());
+    await answerYes(tu.cancel);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText(tu.done)).toBeInTheDocument();
+    expect(abortGameUploadAction).not.toHaveBeenCalled();
+  });
+
   // After a reload only `game.upload` names the file: the viewer is restored
   // (with `sourceNote`, not the live `done` message) and loads its first window
   // without a click.
