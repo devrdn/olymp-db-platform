@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useArmed } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -23,7 +24,9 @@ const IDLE: ResetState = { kind: "idle" };
 /**
  * The console's "reset my database" control, offered only by a writing
  * contest. A reset drops everything the participant changed, so it asks first;
- * the dialog stays open while the copy is made and then says how it went.
+ * the dialog stays open while the copy is made and then says how it went. It
+ * keeps its own dialog for that reason rather than `useConfirm`, whose
+ * question closes on the answer, and arms its answer the same way.
  */
 export function ResetDatabase({
   contestId,
@@ -104,14 +107,22 @@ export function ResetDatabase({
                 <Button type="button" variant="secondary" disabled={pending} onClick={() => setOpen(false)}>
                   {t.cancel}
                 </Button>
-                <Button type="submit" variant="danger" disabled={pending}>
-                  {pending ? t.resetting : t.confirm}
-                </Button>
+                <ResetButton pending={pending} label={pending ? t.resetting : t.confirm} />
               </DialogFooter>
             </form>
           )}
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/** Mounted with the question, so the second click of a double-click on the trigger cannot press it. */
+function ResetButton({ pending, label }: { pending: boolean; label: string }) {
+  const armed = useArmed();
+  return (
+    <Button type="submit" variant="danger" disabled={pending || !armed}>
+      {label}
+    </Button>
   );
 }

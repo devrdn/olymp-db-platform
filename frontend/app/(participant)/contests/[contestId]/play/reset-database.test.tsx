@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -34,10 +35,18 @@ function show(onReset = vi.fn()) {
 
 async function openAndConfirm() {
   await userEvent.click(screen.getByRole("button", { name: t.open }));
-  await userEvent.click(screen.getByRole("button", { name: t.confirm }));
+  await answerYes(t.confirm);
 }
 
 describe("ResetDatabase", () => {
+  test("holds its answer at first, so a double click on the control cannot reset", async () => {
+    show();
+
+    await userEvent.click(screen.getByRole("button", { name: t.open }));
+
+    expect(screen.getByRole("button", { name: t.confirm })).toBeDisabled();
+  });
+
   // It sits in the toolbar beside Run, at the same height on a touch screen.
   test("is 44px high on a touch screen", () => {
     show();

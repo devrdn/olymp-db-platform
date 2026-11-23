@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -569,7 +570,7 @@ describe("the database reset", () => {
 
   async function reset() {
     await userEvent.click(screen.getByRole("button", { name: r.open }));
-    await userEvent.click(screen.getByRole("button", { name: r.confirm }));
+    await answerYes(r.confirm);
     await screen.findByRole("status");
     // The open dialog hides the screen behind it from the accessibility tree.
     await userEvent.click(screen.getAllByRole("button", { name: r.close }).at(-1)!);

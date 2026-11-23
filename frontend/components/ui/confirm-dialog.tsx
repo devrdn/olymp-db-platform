@@ -36,6 +36,21 @@ export const CONFIRM_ARM_MS = 400;
 type Asking = { question: Question; resolve: (yes: boolean) => void };
 
 /**
+ * False for `CONFIRM_ARM_MS` after the calling component mounts, then true:
+ * an answer mounted with its question is pressable only once armed.
+ */
+export function useArmed(): boolean {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), CONFIRM_ARM_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return armed;
+}
+
+/**
  * The product's one way of asking first: an in-page dialog whose words come
  * from the dictionary, so the answers are in the interface's language and a
  * name in the question is text, not layout. `ask` resolves true on the answer
@@ -77,12 +92,7 @@ export function useConfirm(): [ask: (question: Question) => Promise<boolean>, di
 }
 
 function Asked({ question, onAnswer }: { question: Question; onAnswer: (yes: boolean) => void }) {
-  const [armed, setArmed] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setArmed(true), CONFIRM_ARM_MS);
-    return () => clearTimeout(timer);
-  }, []);
+  const armed = useArmed();
 
   return (
     <DialogContent closeLabel={question.cancel}>
