@@ -1,6 +1,5 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderToString } from "react-dom/server";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { Participant } from "@/lib/api/people";
@@ -175,24 +174,6 @@ describe("ParticipantPanel, disqualifying", () => {
   );
   const name = () => dict.workspace.people.participants.disqualify;
 
-  test("the server's markup leaves the button disabled until the page is hydrated", () => {
-    const page = new DOMParser().parseFromString(renderToString(panel()), "text/html");
-    const button = [...page.querySelectorAll("button")].find((b) => b.textContent === name());
-
-    expect(button?.hasAttribute("disabled")).toBe(true);
-  });
-
-  test("hydrating the server's markup enables the button", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    container.innerHTML = renderToString(panel());
-
-    render(panel(), { container, hydrate: true });
-
-    expect(await screen.findByRole("button", { name: name() })).toBeEnabled();
-    container.remove();
-  });
-
   test("asks first and sends nothing on no", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(panel());
@@ -202,26 +183,5 @@ describe("ParticipantPanel, disqualifying", () => {
     expect(confirm).toHaveBeenCalledWith(dict.workspace.people.participants.confirmDisqualify);
     expect(disqualifyParticipantAction).not.toHaveBeenCalled();
     confirm.mockRestore();
-  });
-});
-
-describe("ParticipantPanel, removing a registered participant", () => {
-  test("needs no question, so its button is not held back before hydration", () => {
-    const html = renderToString(
-      <ParticipantPanel
-        contestId="c1"
-        participants={[participant({ status: "registered" })]}
-        total={1}
-        locale="en"
-        scoring="points"
-        dict={dict}
-      />,
-    );
-    const page = new DOMParser().parseFromString(html, "text/html");
-    const button = [...page.querySelectorAll("button")].find(
-      (b) => b.textContent === dict.workspace.people.participants.remove,
-    );
-
-    expect(button?.hasAttribute("disabled")).toBe(false);
   });
 });

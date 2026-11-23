@@ -1,8 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Tag } from "@/components/ui/tag";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
@@ -10,11 +8,9 @@ import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
 
-import { dropGameInstanceAction, type GameState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { dropGameInstanceAction } from "./actions";
 import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
@@ -27,11 +23,6 @@ const STATUS_TONE: Record<GameInstance["status"], "good" | "warn" | "bad" | "mut
   failed: "bad",
   dropped: "mute",
 };
-
-/** A failure code in the interface's words. */
-function message(code: string | undefined, dict: Dictionary): string | null {
-  return code ? (messageForCode(code, dict.errors)) : null;
-}
 
 /**
  * The contest's databases in one table, spare and held alike, with the holder's
@@ -157,34 +148,20 @@ function DropDatabase({
   dict: Dictionary;
 }) {
   const t = dict.workspace.databases;
-  const [state, formAction, pending] = useActionState<GameState, FormData>(
-    dropGameInstanceAction,
-    {},
-  );
-  const hydrated = useHydrated();
-  const failure = message(state.code, dict);
   const who = instance.participantName || instance.participant || instance.database;
 
   return (
-    <form
-      action={formAction}
+    <ActionForm
+      action={dropGameInstanceAction}
+      fields={{ contestId, database: instance.database }}
+      confirm={fill(t.confirm, { who })}
+      errors={dict.errors}
       className="flex flex-col items-end gap-1"
-      onSubmit={(event) => {
-        if (!window.confirm(fill(t.confirm, { who }))) event.preventDefault();
-      }}
     >
-      <input type="hidden" name="contestId" value={contestId} />
-      <input type="hidden" name="database" value={instance.database} />
-
-      <Button type="submit" size="sm" variant="quiet" disabled={!hydrated || pending}>
+      <ActionButton size="sm" variant="quiet">
         {t.drop}
-      </Button>
-
-      {failure ? (
-        <p role="alert" className="max-w-40 text-small text-balance text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+      </ActionButton>
+      <ActionOutcome narrow />
+    </ActionForm>
   );
 }

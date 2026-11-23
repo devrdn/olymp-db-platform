@@ -1,22 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
-import { useHydrated } from "@/lib/use-hydrated";
 
-import { type DeleteDraftState, deleteDraftAction } from "./actions";
+import { deleteDraftAction } from "./actions";
 import { Panel } from "./settings-panels";
 
-/**
- * Deleting a draft, last on the page and away from the status buttons. The
- * question is asked in the submit handler, which React skips when it replays a
- * submission queued before hydration, so the button is enabled only once the
- * page is hydrated: before that, and without JavaScript, it cannot be pressed.
- */
+/** Deleting a draft, last on the page and away from the status buttons. */
 export function DeleteDraftPanel({
   contestId,
   title,
@@ -27,34 +18,23 @@ export function DeleteDraftPanel({
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings.deleteDraft;
-  const [state, formAction, pending] = useActionState<DeleteDraftState, FormData>(deleteDraftAction, {});
-  const hydrated = useHydrated();
 
   return (
-    <form
-      action={formAction}
+    <ActionForm
+      action={deleteDraftAction}
+      fields={{ contestId }}
+      confirm={fill(t.confirm, { title })}
+      errors={dict.errors}
       className="contents"
-      onSubmit={(event) => {
-        if (!window.confirm(fill(t.confirm, { title }))) event.preventDefault();
-      }}
     >
       <Panel title={t.heading} dict={dict}>
-        <input type="hidden" name="contestId" value={contestId} />
-
         <p className="max-w-body text-body text-ink-2">{t.body}</p>
 
         <div className="flex flex-wrap items-center gap-4">
-          <Button type="submit" variant="danger" disabled={!hydrated || pending}>
-            {t.action}
-          </Button>
-
-          {state.code ? (
-            <p role="alert" className="max-w-body text-small text-bad">
-              {messageForCode(state.code, dict.errors)}
-            </p>
-          ) : null}
+          <ActionButton variant="danger">{t.action}</ActionButton>
+          <ActionOutcome />
         </div>
       </Panel>
-    </form>
+    </ActionForm>
   );
 }

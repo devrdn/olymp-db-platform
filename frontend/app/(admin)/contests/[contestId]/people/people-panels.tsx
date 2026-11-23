@@ -1,9 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
-
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { StateView } from "@/components/product/state-view";
-import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -14,7 +12,6 @@ import { type Manager, type Participant, type RegistrationStatus } from "@/lib/a
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
 
 import {
@@ -24,11 +21,9 @@ import {
   importParticipantsAction,
   removeParticipantAction,
   revokeManagerAction,
-  type ImportState,
   type PeopleState,
 } from "./actions";
 import { PersonPicker } from "./person-picker";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
@@ -41,11 +36,6 @@ const STATUS_TONE: Record<RegistrationStatus, "live" | "good" | "mute" | "bad"> 
   finished: "good",
   disqualified: "bad",
 };
-
-/** A failure code in the interface's words. */
-function message(code: string | undefined, dict: Dictionary): string | null {
-  return code ? (messageForCode(code, dict.errors)) : null;
-}
 
 /**
  * Who runs the contest. The owner is listed without controls: ownership is not
@@ -121,16 +111,9 @@ export function ManagerPanel({
 
 function GrantManager({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.workspace.people;
-  const [state, formAction, pending] = useActionState<PeopleState, FormData>(
-    grantManagerAction,
-    {},
-  );
-  const failure = message(state.code, dict);
 
   return (
-    <form action={formAction} className="flex flex-col gap-3">
-      <input type="hidden" name="contestId" value={contestId} />
-
+    <ActionForm action={grantManagerAction} fields={{ contestId }} errors={dict.errors} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-3">
         <PersonPicker
           id="managerId"
@@ -146,17 +129,13 @@ function GrantManager({ contestId, dict }: { contestId: string; dict: Dictionary
           selectedTemplate={t.picker.selected}
         />
 
-        <Button type="submit" variant="secondary" disabled={pending}>
-          {pending ? t.managers.adding : t.managers.addAction}
-        </Button>
+        <ActionButton variant="secondary" pendingLabel={t.managers.adding}>
+          {t.managers.addAction}
+        </ActionButton>
       </div>
 
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+      <ActionOutcome />
+    </ActionForm>
   );
 }
 
@@ -321,36 +300,19 @@ function RowAction({
   confirm?: string;
   dict: Dictionary;
 }) {
-  const [state, formAction, pending] = useActionState<PeopleState, FormData>(action, {});
-  const hydrated = useHydrated();
-  const failure = message(state.code, dict);
-
   return (
-    <form
-      action={formAction}
+    <ActionForm
+      action={action}
+      fields={{ contestId, userId }}
+      confirm={confirm}
+      errors={dict.errors}
       className="flex flex-col items-end gap-1"
-      onSubmit={(event) => {
-        if (confirm && !window.confirm(confirm)) event.preventDefault();
-      }}
     >
-      <input type="hidden" name="contestId" value={contestId} />
-      <input type="hidden" name="userId" value={userId} />
-
-      <Button
-        type="submit"
-        size="sm"
-        variant="quiet"
-        disabled={(confirm !== undefined && !hydrated) || pending}
-      >
+      <ActionButton size="sm" variant="quiet">
         {label}
-      </Button>
-
-      {failure ? (
-        <p role="alert" className="max-w-40 text-small text-balance text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+      </ActionButton>
+      <ActionOutcome narrow />
+    </ActionForm>
   );
 }
 
@@ -360,122 +322,115 @@ function RowAction({
  */
 function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.workspace.people;
-  const [state, formAction, pending] = useActionState<PeopleState, FormData>(
-    addParticipantAction,
-    {},
-  );
-  const failure = message(state.code, dict);
-  // Not an API error: the server answered 200 and skipped the entry, so read it
-  // through the import's reason vocabulary.
-  const skipped = state.skipReason
-    ? ((t.import.reason as Record<string, string>)[state.skipReason] ?? state.skipReason)
-    : null;
 
   return (
-    <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
-      <input type="hidden" name="contestId" value={contestId} />
+    <ActionForm
+      action={addParticipantAction}
+      fields={{ contestId }}
+      errors={dict.errors}
+      className="flex flex-col gap-3 border-t border-line pt-5"
+    >
+      {(state) => (
+        <>
+          {/* No heading: the picker's label already says it. */}
+          <div className="flex flex-wrap items-end gap-3">
+            <PersonPicker
+              id="participantId"
+              name="userId"
+              contestId={contestId}
+              label={t.addOne.heading}
+              placeholder={t.picker.placeholder}
+              helpText={t.picker.helpText}
+              searchingText={t.picker.searching}
+              noResultsText={t.picker.noResults}
+              searchFailedText={t.picker.searchFailed}
+              changeText={t.picker.change}
+              selectedTemplate={t.picker.selected}
+              help={t.addOne.help}
+              helpLabel={dict.chrome.helpLabel}
+            />
 
-      {/* No heading: the picker's label already says it. */}
-      <div className="flex flex-wrap items-end gap-3">
-        <PersonPicker
-          id="participantId"
-          name="userId"
-          contestId={contestId}
-          label={t.addOne.heading}
-          placeholder={t.picker.placeholder}
-          helpText={t.picker.helpText}
-          searchingText={t.picker.searching}
-          noResultsText={t.picker.noResults}
-          searchFailedText={t.picker.searchFailed}
-          changeText={t.picker.change}
-          selectedTemplate={t.picker.selected}
-          help={t.addOne.help}
-          helpLabel={dict.chrome.helpLabel}
-        />
+            <ActionButton variant="secondary" pendingLabel={t.addOne.adding}>
+              {t.addOne.action}
+            </ActionButton>
+          </div>
 
-        <Button type="submit" variant="secondary" disabled={pending}>
-          {pending ? t.addOne.adding : t.addOne.action}
-        </Button>
-      </div>
+          {/* Not an API error: the server answered 200 and skipped the entry, so
+             read it through the import's reason vocabulary. */}
+          {state.skipReason ? (
+            <p role="alert" className="max-w-body text-small text-warn">
+              {(t.import.reason as Record<string, string>)[state.skipReason] ?? state.skipReason}
+            </p>
+          ) : null}
 
-      {skipped ? (
-        <p role="alert" className="max-w-body text-small text-warn">
-          {skipped}
-        </p>
-      ) : null}
-
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+          <ActionOutcome />
+        </>
+      )}
+    </ActionForm>
   );
 }
 
 function ImportParticipants({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.workspace.people;
-  const [state, formAction, pending] = useActionState<ImportState, FormData>(
-    importParticipantsAction,
-    {},
-  );
-  const failure = message(state.code, dict);
 
   return (
-    <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
-      <input type="hidden" name="contestId" value={contestId} />
-
-      <div className="flex items-center gap-1.5">
-        <label htmlFor="logins" className="font-mono text-label text-ink-3 uppercase">
-          {t.import.heading}
-        </label>
-        <Tooltip label={dict.chrome.helpLabel}>{t.import.help}</Tooltip>
-      </div>
-      {/* The format stays on screen as the textarea's description. */}
-      <p id="logins-format" className="max-w-body text-small text-ink-2">
-        {t.import.hint}
-      </p>
-
-      <Textarea
-        id="logins"
-        name="logins"
-        aria-describedby="logins-format"
-        className="min-h-28 max-w-96 font-mono text-data"
-        placeholder={t.import.placeholder}
-      />
-
-      <Button type="submit" variant="secondary" disabled={pending} className="self-start">
-        {pending ? t.import.importing : t.import.action}
-      </Button>
-
-      {/* Report a partial success: the count added and every rejected line with
-         its reason, which a revalidated list cannot show. */}
-      {state.result ? (
-        <div role="status" className="flex flex-col gap-2 pt-1">
-          <p className="text-small text-good">
-            {fill(t.import.added, { n: state.result.added })}
+    <ActionForm
+      action={importParticipantsAction}
+      fields={{ contestId }}
+      errors={dict.errors}
+      className="flex flex-col gap-3 border-t border-line pt-5"
+    >
+      {(state) => (
+        <>
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="logins" className="font-mono text-label text-ink-3 uppercase">
+              {t.import.heading}
+            </label>
+            <Tooltip label={dict.chrome.helpLabel}>{t.import.help}</Tooltip>
+          </div>
+          {/* The format stays on screen as the textarea's description. */}
+          <p id="logins-format" className="max-w-body text-small text-ink-2">
+            {t.import.hint}
           </p>
 
-          {state.result.skipped.length > 0 ? (
-            <ul className="flex flex-col gap-1">
-              {state.result.skipped.map((row) => (
-                <li key={row.ref} className="font-mono text-data text-ink-2">
-                  {row.ref}
-                  <span className="ml-3 text-warn">
-                    {(t.import.reason as Record<string, string>)[row.reason] ?? row.reason}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
+          <Textarea
+            id="logins"
+            name="logins"
+            aria-describedby="logins-format"
+            className="min-h-28 max-w-96 font-mono text-data"
+            placeholder={t.import.placeholder}
+          />
 
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+          <ActionButton variant="secondary" pendingLabel={t.import.importing} className="self-start">
+            {t.import.action}
+          </ActionButton>
+
+          {/* Report a partial success: the count added and every rejected line with
+             its reason, which a revalidated list cannot show. */}
+          {state.result ? (
+            <div role="status" className="flex flex-col gap-2 pt-1">
+              <p className="text-small text-good">
+                {fill(t.import.added, { n: state.result.added })}
+              </p>
+
+              {state.result.skipped.length > 0 ? (
+                <ul className="flex flex-col gap-1">
+                  {state.result.skipped.map((row) => (
+                    <li key={row.ref} className="font-mono text-data text-ink-2">
+                      {row.ref}
+                      <span className="ml-3 text-warn">
+                        {(t.import.reason as Record<string, string>)[row.reason] ?? row.reason}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          <ActionOutcome />
+        </>
+      )}
+    </ActionForm>
   );
 }

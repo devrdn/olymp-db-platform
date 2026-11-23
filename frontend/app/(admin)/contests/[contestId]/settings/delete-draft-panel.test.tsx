@@ -1,6 +1,5 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderToString } from "react-dom/server";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
@@ -79,24 +78,6 @@ describe("DeleteDraftPanel", () => {
     expect(serverRequest).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: t().action })).toBeDisabled();
     confirm.mockRestore();
-  });
-
-  test("the server's markup leaves the button disabled until the page is hydrated", () => {
-    const html = renderToString(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
-    const page = new DOMParser().parseFromString(html, "text/html");
-
-    expect(page.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true);
-  });
-
-  test("hydrating the server's markup enables the button", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    container.innerHTML = renderToString(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
-
-    render(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />, { container, hydrate: true });
-
-    expect(await screen.findByRole("button", { name: t().action })).toBeEnabled();
-    container.remove();
   });
 
   test("the button is the danger variant", () => {
