@@ -6,7 +6,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { ApiError } from "@/lib/api/client";
 
@@ -52,7 +55,7 @@ describe("blockAction", () => {
       method: "POST",
       body: { reason: "cheating in the October contest" },
     });
-    expect(state).toEqual({ done: true });
+    expect(state).toEqual({ ok: true });
     expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
   });
 });
@@ -80,7 +83,7 @@ describe("deleteAction", () => {
       method: "POST",
       body: { reason: "graduated" },
     });
-    expect(state).toEqual({ done: true });
+    expect(state).toEqual({ ok: true });
   });
 });
 
@@ -95,7 +98,7 @@ describe("restoreAction", () => {
     const state = await restoreAction({}, form({ userId }));
 
     expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/restore`, { method: "POST" });
-    expect(state).toEqual({ done: true });
+    expect(state).toEqual({ ok: true });
   });
 
   test("names the login when a live account has since taken it", async () => {
@@ -122,7 +125,7 @@ describe("unlockSignInAction", () => {
     const state = await unlockSignInAction({}, form({ userId }));
 
     expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/sign-in/unlock`, { method: "POST" });
-    expect(state).toEqual({ done: true });
+    expect(state).toEqual({ ok: true });
     expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
   });
 
@@ -147,7 +150,7 @@ describe("resetPasswordAction", () => {
     const state = await resetPasswordAction({}, form({ userId }));
 
     expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/password-reset`, { method: "POST" });
-    expect(state).toMatchObject({ done: true, oneTimePassword: "swordfish-1", emailed: false });
+    expect(state).toMatchObject({ ok: true, oneTimePassword: "swordfish-1", emailed: false });
     expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
   });
 
@@ -165,7 +168,7 @@ describe("resetPasswordAction", () => {
       body: { send_by_email: true },
     });
     expect(state).toEqual({
-      done: true,
+      ok: true,
       oneTimePassword: "swordfish-1",
       emailed: false,
       emailSkippedReason: "no_address",

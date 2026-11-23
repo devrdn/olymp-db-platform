@@ -6,7 +6,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { ApiError } from "@/lib/api/client";
 
@@ -104,7 +107,7 @@ describe("saveGameScriptAction", () => {
 
     const state = await saveGameScriptAction({}, form({ contestId, script: "  SELECT 1" }));
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/script`, {
       method: "PUT",
       body: { script: "  SELECT 1" },
@@ -305,7 +308,7 @@ describe("abortGameUploadAction", () => {
 
     const result = await abortGameUploadAction(contestId, uploadId);
 
-    expect(result).toEqual({});
+    expect(result).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(
       `/contests/${contestId}/game/uploads/${uploadId}/abort`,
       { method: "POST" },
@@ -347,7 +350,7 @@ describe("saveGameDefinitionAction", () => {
 
     const state = await saveGameDefinitionAction({}, definitionForm(contestId, definition));
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/definition`, {
       method: "PUT",
       body: definition,
@@ -551,7 +554,7 @@ describe("deleteTableRowAction", () => {
 
     const result = await deleteTableRowAction(contestId, "suspects", 3);
 
-    expect(result).toEqual({});
+    expect(result).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/tables/suspects/rows/3`, {
       method: "DELETE",
     });

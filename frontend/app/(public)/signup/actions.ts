@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { outcome } from "@/lib/api/outcome";
 import { signupAnswerCode, startSignup } from "@/lib/api/signup";
 import { browserRelay } from "@/lib/auth/relay";
 import { rememberSignupEmail } from "@/lib/auth/signup-email";
@@ -43,14 +44,9 @@ export async function signUpAction(_previous: SignUpState, form: FormData): Prom
 
   const [relay, lang] = await Promise.all([browserRelay([]), activeLocale()]);
 
-  // `.then(ok, failed)`, not try/catch: `redirect` throws, and a catch would
-  // swallow it.
-  const outcome = await startSignup(check.command, lang, relay).then(
-    (sent) => ({ ok: true as const, email: sent.email }),
-    (error: unknown) => ({ ok: false as const, code: signupAnswerCode(error) }),
-  );
-  if (!outcome.ok) return { code: outcome.code, values };
+  const started = await outcome(() => startSignup(check.command, lang, relay));
+  if (!started.ok) return { code: signupAnswerCode(started.code), values };
 
-  await rememberSignupEmail(outcome.email);
+  await rememberSignupEmail(started.value.email);
   redirect("/signup/confirm");
 }

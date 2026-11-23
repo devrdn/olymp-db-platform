@@ -149,7 +149,7 @@ export function PerLanguageForm({
         </Button>
 
         {/* `status`, not `alert`: a successful save is not an interruption. */}
-        {state.saved ? (
+        {state.ok ? (
           <p role="status" className="text-small text-good">
             {labels.saved}
           </p>

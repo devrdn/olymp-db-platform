@@ -6,7 +6,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { addParticipantAction } from "./actions";
 
@@ -34,7 +37,7 @@ describe("addParticipantAction", () => {
 
     const state = await addParticipantAction({}, form({ contestId, userId }));
 
-    expect(state).toEqual({ done: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/participants`, {
       method: "POST",
       body: { user_ids: [userId] },

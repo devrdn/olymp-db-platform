@@ -237,7 +237,7 @@ export function GameBuilder({
           </span>
           {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
           <span role="status" aria-live="polite" className="text-small text-ink-2">
-            {state.code ? (messageForCode(state.code, errors)) : state.saved ? tb.saved : ""}
+            {state.code ? (messageForCode(state.code, errors)) : state.ok ? tb.saved : ""}
           </span>
         </div>
         {/* Validation refusals name the table or column; shown beside the dictionary sentence. */}

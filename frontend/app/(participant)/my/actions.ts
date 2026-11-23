@@ -1,15 +1,10 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
-import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
-import { serverRequest } from "@/lib/api/server";
+import { serverOutcome, serverRequest, type ActionState } from "@/lib/api/server";
 
-export type EnrollState = {
-  code?: string;
-  enrolled?: boolean;
+export type EnrollState = ActionState & {
   /** With `contest_trusted_email_required`: the site's domain, when it has one. */
   domain?: string;
   /**
@@ -33,17 +28,19 @@ export async function enrollAction(_previous: EnrollState, form: FormData): Prom
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const failure = await serverRequest(`/contests/${contestId}/enroll`, { method: "POST" }).then(
-    () => null,
-    (error: unknown) => error,
+  // The listing is session-scoped, so the new contest appears only after a
+  // fresh request.
+  const enrolled = await serverOutcome(
+    () => serverRequest(`/contests/${contestId}/enroll`, { method: "POST" }),
+    { revalidate: ["/my"] },
   );
 
-  if (failure) {
-    const code = failureCode(failure);
+  if (!enrolled.ok) {
+    const { code } = enrolled;
 
     // A double click or a stale list: either way the account is enrolled,
     // which is what it asked for.
-    if (code === "already_enrolled") return { enrolled: true };
+    if (code === "already_enrolled") return { ok: true };
 
     // The refusal's sentence cannot name the domain, so it is asked for here,
     // only on this refusal, rather than on every load of the register.
@@ -60,9 +57,5 @@ export async function enrollAction(_previous: EnrollState, form: FormData): Prom
     return { code };
   }
 
-  // The listing is session-scoped, so the new contest appears only after
-  // a fresh request.
-  revalidatePath("/my");
-
-  return { enrolled: true };
+  return { ok: true };
 }

@@ -1,8 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
-import { ApiError, failureCode } from "@/lib/api/client";
 import {
   gameSchema,
   tableDataSchema,
@@ -16,24 +13,51 @@ import {
   type UploadWindow,
 } from "@/lib/api/game";
 import { isId } from "@/lib/api/ids";
-import { serverRequest } from "@/lib/api/server";
+import type { Failure } from "@/lib/api/outcome";
+import { serverAction, serverOutcome, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
 /**
- * `detail` is `ApiError.message`, shown beside (never instead of) the
+ * `detail` is the API's message, shown beside (never instead of) the
  * dictionary sentence for refusals whose sentence is generic because the table,
  * column or row at fault is specific to this attempt.
  */
-export type GameState = { code?: string; saved?: boolean; detail?: string };
+export type GameState = ActionState & { detail?: string };
 
 /** A refusal code, or what the write produced (an upload id, a game's status). */
-export type UploadActionResult<T> = { code?: string; value?: T; detail?: string };
+export type UploadActionResult<T> = ActionState & { value?: T; detail?: string };
 
-/** Turns a caught error into `{code, detail}` for the table-builder actions. */
-function refusal(error: unknown): { code: string; detail?: string } {
-  return {
-    code: failureCode(error),
-    detail: error instanceof ApiError ? error.message : undefined,
-  };
+/** The publish gate and this section both depend on the game. */
+function changed(contestId: string): Revalidation[] {
+  return [{ layout: `/contests/${contestId}` }];
+}
+
+/** A refusal that keeps the API's message as `detail`. */
+function withDetail(failure: Failure): { code: string; detail?: string } {
+  return failure.detail === undefined ? { code: failure.code } : { code: failure.code, detail: failure.detail };
+}
+
+/** One call for the upload and builder controls: what the write produced, or the refusal's code. */
+function control<T>(call: () => Promise<T>, revalidate: readonly Revalidation[]): Promise<UploadActionResult<T>> {
+  return serverAction(call, { revalidate, success: (value) => ({ ok: true, value }) });
+}
+
+/**
+ * `control` for the refusals that name the table, column or row at fault, so
+ * `detail` crosses too: read from the outcome itself, since an action's own
+ * `failure` is never given the API's message.
+ */
+async function controlNamingFault<T>(
+  call: () => Promise<T>,
+  revalidate: readonly Revalidation[],
+): Promise<UploadActionResult<T>> {
+  const result = await serverOutcome(call, { revalidate });
+  return result.ok ? { ok: true, value: result.value } : withDetail(result);
+}
+
+/** What a read the page already has an answer for gives on any failure: nothing. */
+async function orNull<T>(call: () => Promise<T>): Promise<T | null> {
+  const result = await serverOutcome(call);
+  return result.ok ? result.value : null;
 }
 
 /**
@@ -48,20 +72,10 @@ export async function saveGameScriptAction(_previous: GameState, form: FormData)
   // whitespace-only script with a known code.
   const script = String(form.get("script") ?? "");
 
-  const failure = await serverRequest(`/contests/${contestId}/game/script`, {
-    method: "PUT",
-    body: { script },
-  }).then(
-    () => null,
-    (error: unknown) => error,
+  return serverAction(
+    () => serverRequest(`/contests/${contestId}/game/script`, { method: "PUT", body: { script } }),
+    { revalidate: changed(contestId) },
   );
-
-  if (failure) return { code: failureCode(failure) };
-
-  // The publish gate and this section both depend on whether the game is built.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { saved: true };
 }
 
 /**
@@ -70,10 +84,7 @@ export async function saveGameScriptAction(_previous: GameState, form: FormData)
  */
 export async function gameStatusAction(contestId: string): Promise<Game | null> {
   if (!isId(contestId)) return null;
-  return serverRequest(`/contests/${contestId}/game`).then(
-    (payload) => gameSchema.parse(payload),
-    () => null,
-  );
+  return orNull(async () => gameSchema.parse(await serverRequest(`/contests/${contestId}/game`)));
 }
 
 /**
@@ -83,15 +94,10 @@ export async function gameStatusAction(contestId: string): Promise<Game | null> 
 export async function requestGameBuildAction(contestId: string): Promise<UploadActionResult<Game>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  let value: Game;
-  try {
-    value = gameSchema.parse(await serverRequest(`/contests/${contestId}/game/build`, { method: "POST" }));
-  } catch (error) {
-    return refusal(error);
-  }
-
-  revalidatePath(`/contests/${contestId}`, "layout");
-  return { value };
+  return controlNamingFault(
+    async () => gameSchema.parse(await serverRequest(`/contests/${contestId}/game/build`, { method: "POST" })),
+    changed(contestId),
+  );
 }
 
 // Building from an uploaded dump. Only the control calls live here; chunks are
@@ -109,21 +115,17 @@ export async function beginGameUploadAction(
 ): Promise<UploadActionResult<Upload>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  let value: Upload;
-  try {
-    const body = await serverRequest(`/contests/${contestId}/game/uploads`, {
-      method: "POST",
-      body: { filename, declared_bytes: declaredBytes },
-    });
-    value = uploadSchema.parse(body);
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
-
   // Another tab or a racing reload must see the "receiving" row.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { value };
+  return control(
+    async () =>
+      uploadSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/uploads`, {
+          method: "POST",
+          body: { filename, declared_bytes: declaredBytes },
+        }),
+      ),
+    changed(contestId),
+  );
 }
 
 /**
@@ -133,10 +135,7 @@ export async function beginGameUploadAction(
  */
 export async function currentGameUploadAction(contestId: string): Promise<Upload | null> {
   if (!isId(contestId)) return null;
-  return serverRequest(`/contests/${contestId}/game/uploads/current`).then(
-    (payload) => uploadSchema.parse(payload),
-    () => null,
-  );
+  return orNull(async () => uploadSchema.parse(await serverRequest(`/contests/${contestId}/game/uploads/current`)));
 }
 
 /** A slice of a completed upload's lines (`GET .../uploads/{id}/window`) for the viewer. */
@@ -147,17 +146,13 @@ export async function gameUploadWindowAction(
 ): Promise<UploadActionResult<UploadWindow>> {
   if (!isId(contestId) || !isId(uploadId)) return { code: "game_upload_not_found" };
 
-  let value: UploadWindow;
-  try {
-    const body = await serverRequest(
-      `/contests/${contestId}/game/uploads/${uploadId}/window?from=${fromLine}`,
-    );
-    value = uploadWindowSchema.parse(body);
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
-
-  return { value };
+  return control(
+    async () =>
+      uploadWindowSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/window?from=${fromLine}`),
+      ),
+    [],
+  );
 }
 
 /**
@@ -170,19 +165,13 @@ export async function completeGameUploadAction(
 ): Promise<UploadActionResult<Game>> {
   if (!isId(contestId) || !isId(uploadId)) return { code: "game_upload_not_found" };
 
-  let value: Game;
-  try {
-    const body = await serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/complete`, {
-      method: "POST",
-    });
-    value = gameSchema.parse(body);
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
-
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { value };
+  return control(
+    async () =>
+      gameSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/complete`, { method: "POST" }),
+      ),
+    changed(contestId),
+  );
 }
 
 /**
@@ -195,19 +184,11 @@ export async function abortGameUploadAction(
 ): Promise<UploadActionResult<never>> {
   if (!isId(contestId) || !isId(uploadId)) return { code: "game_upload_not_found" };
 
-  const failure = await serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/abort`, {
-    method: "POST",
-  }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
   // Frees the "one receiving upload" slot for a reload's read.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return {};
+  return serverAction(
+    () => serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/abort`, { method: "POST" }),
+    { revalidate: changed(contestId) },
+  );
 }
 
 // Building from a structural description of tables and columns
@@ -230,25 +211,12 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
     return { code: "invalid_request" };
   }
 
-  const failure = await serverRequest(`/contests/${contestId}/game/definition`, {
-    method: "PUT",
-    body: definition,
-  }).then(
-    () => null,
-    (error: unknown) => error,
+  // Several validation refusals name the table or column at fault.
+  const saved = await serverOutcome(
+    () => serverRequest(`/contests/${contestId}/game/definition`, { method: "PUT", body: definition }),
+    { revalidate: changed(contestId) },
   );
-
-  if (failure) {
-    return {
-      code: failureCode(failure),
-      // Several validation refusals name the table or column at fault.
-      detail: failure instanceof ApiError ? failure.message : undefined,
-    };
-  }
-
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { saved: true };
+  return saved.ok ? { ok: true } : withDetail(saved);
 }
 
 /**
@@ -257,9 +225,8 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
  */
 export async function currentTableUploadAction(contestId: string, table: string): Promise<TableData | null> {
   if (!isId(contestId)) return null;
-  return serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/current`).then(
-    (payload) => tableDataSchema.parse(payload),
-    () => null,
+  return orNull(async () =>
+    tableDataSchema.parse(await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/current`)),
   );
 }
 
@@ -274,18 +241,16 @@ export async function beginTableUploadAction(
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  let value: TableData;
-  try {
-    const body = await serverRequest(
-      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data`,
-      { method: "POST", body: { declared_bytes: declaredBytes } },
-    );
-    value = tableDataSchema.parse(body);
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
-
-  return { value };
+  return control(
+    async () =>
+      tableDataSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data`, {
+          method: "POST",
+          body: { declared_bytes: declaredBytes },
+        }),
+      ),
+    [],
+  );
 }
 
 /**
@@ -300,24 +265,18 @@ export async function completeTableUploadAction(
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId) || !isId(id)) return { code: "game_table_data_not_found" };
 
-  let value: TableData;
-  try {
-    const body = await serverRequest(
-      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/complete`,
-      { method: "POST" },
-    );
-    value = tableDataSchema.parse(body);
-  } catch (error) {
-    // The server's full validation names the row and column at fault; `detail`
-    // carries it.
-    return refusal(error);
-  }
-
   // The file marks the built game out of date on the server, and `page.tsx`
-  // renders that notice, so its cached output must be refreshed.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { value };
+  // renders that notice, so its cached output must be refreshed. The server's
+  // full validation names the row and column at fault.
+  return controlNamingFault(
+    async () =>
+      tableDataSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/complete`, {
+          method: "POST",
+        }),
+      ),
+    changed(contestId),
+  );
 }
 
 /** Cancels a table's CSV upload before it finished (`POST .../data/{id}/abort`). */
@@ -328,18 +287,15 @@ export async function abortTableUploadAction(
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId) || !isId(id)) return { code: "game_table_data_not_found" };
 
-  let value: TableData;
-  try {
-    const body = await serverRequest(
-      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/abort`,
-      { method: "POST" },
-    );
-    value = tableDataSchema.parse(body);
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
-
-  return { value };
+  return control(
+    async () =>
+      tableDataSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/abort`, {
+          method: "POST",
+        }),
+      ),
+    [],
+  );
 }
 
 /** A page of a table's current rows (`GET .../data/window`), previewed before any build. */
@@ -350,17 +306,13 @@ export async function gameTableDataWindowAction(
 ): Promise<UploadActionResult<TableRowWindow>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  let value: TableRowWindow;
-  try {
-    const body = await serverRequest(
-      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/window?from=${fromRow}`,
-    );
-    value = tableRowWindowSchema.parse(body);
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
-
-  return { value };
+  return control(
+    async () =>
+      tableRowWindowSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/window?from=${fromRow}`),
+      ),
+    [],
+  );
 }
 
 /** Appends one typed row (`POST .../game/tables/{table}/rows`). */
@@ -371,22 +323,18 @@ export async function appendTableRowAction(
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  let value: TableData;
-  try {
-    const body = await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/rows`, {
-      method: "POST",
-      body: { values },
-    });
-    value = tableDataSchema.parse(body);
-  } catch (error) {
-    // The server's row validation names the column at fault.
-    return refusal(error);
-  }
-
-  // The row marks the game out of date; see `completeTableUploadAction`.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { value };
+  // The row marks the game out of date, as in `completeTableUploadAction`; the
+  // server's row validation names the column at fault.
+  return controlNamingFault(
+    async () =>
+      tableDataSchema.parse(
+        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/rows`, {
+          method: "POST",
+          body: { values },
+        }),
+      ),
+    changed(contestId),
+  );
 }
 
 /** Tombstones one row (`DELETE .../game/tables/{table}/rows/{row}`); 204 on success. */
@@ -397,18 +345,9 @@ export async function deleteTableRowAction(
 ): Promise<UploadActionResult<never>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const failure = await serverRequest(
-    `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/rows/${row}`,
-    { method: "DELETE" },
-  ).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
   // Marks the game out of date, like an added row.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return {};
+  return serverAction(
+    () => serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/rows/${row}`, { method: "DELETE" }),
+    { revalidate: changed(contestId) },
+  );
 }

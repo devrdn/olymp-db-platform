@@ -20,7 +20,7 @@ export function EnrollButton({ contestId, dict }: { contestId: string; dict: Pic
   const t = dict.participant;
   const [state, formAction, pending] = useActionState<EnrollState, FormData>(enrollAction, {});
 
-  if (state.enrolled) {
+  if (state.ok) {
     return (
       <span role="status" className="text-small whitespace-nowrap text-good">
         {t.joined}

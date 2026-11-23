@@ -1,15 +1,17 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
-import { failureCode } from "@/lib/api/client";
 import { CONTEST_STATUSES, type ContestStatus } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
-export type StatusState = { code?: string; moved?: ContestStatus };
+export type StatusState = ActionState & { moved?: ContestStatus };
 
-export type TitleState = { code?: string; saved?: boolean };
+export type TitleState = ActionState;
+
+/** The title and the status also appear in the header, breadcrumb and register. */
+function changed(contestId: string): Revalidation[] {
+  return ["/contests", { layout: `/contests/${contestId}` }];
+}
 
 /**
  * Replaces titles and descriptions as a set, so the publish gate never sees a
@@ -35,21 +37,10 @@ export async function saveTranslationsAction(
     translations[lang] = description ? { title, description } : { title };
   }
 
-  const failure = await serverRequest(`/contests/${contestId}/translations`, {
-    method: "PUT",
-    body: { translations },
-  }).then(
-    () => null,
-    (error: unknown) => error,
+  return serverAction(
+    () => serverRequest(`/contests/${contestId}/translations`, { method: "PUT", body: { translations } }),
+    { revalidate: changed(contestId) },
   );
-
-  if (failure) return { code: failureCode(failure) };
-
-  // The title also appears in the header, breadcrumb and register.
-  revalidatePath("/contests");
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { saved: true };
 }
 
 /**
@@ -68,19 +59,8 @@ export async function setStatusAction(
   const status = String(form.get("status") ?? "");
   if (!CONTEST_STATUSES.includes(status as ContestStatus)) return { code: "invalid_request" };
 
-  const failure = await serverRequest(`/contests/${contestId}/status`, {
-    method: "POST",
-    body: { status },
-  }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
-  // The status also appears in the header and register.
-  revalidatePath("/contests");
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { moved: status as ContestStatus };
+  return serverAction(() => serverRequest(`/contests/${contestId}/status`, { method: "POST", body: { status } }), {
+    revalidate: changed(contestId),
+    success: () => ({ ok: true, moved: status as ContestStatus }),
+  });
 }

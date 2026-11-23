@@ -41,7 +41,7 @@ export function GameEditor({
   // Derived rather than set from an effect: after a save the server said
   // `pending`, and this holds whether or not revalidation has refreshed
   // `initial` yet.
-  const game: Game = polled ?? (state.saved ? { ...initial, status: "pending", building: true } : initial);
+  const game: Game = polled ?? (state.ok ? { ...initial, status: "pending", building: true } : initial);
 
   // The textarea a form submits and the browser restores; CodeEditor only draws
   // the text, as in the participant's console.
@@ -131,7 +131,7 @@ export function GameEditor({
         {tooLong ? <span className="text-small text-bad">{t.tooLong}</span> : null}
         {!editable ? <span className="text-small text-ink-2">{t.frozen}</span> : null}
         <span role="status" aria-live="polite" className="text-small text-ink-2">
-          {state.code ? (errors[state.code as keyof typeof errors] ?? state.code) : state.saved ? t.saved : ""}
+          {state.code ? (errors[state.code as keyof typeof errors] ?? state.code) : state.ok ? t.saved : ""}
         </span>
       </div>
     </form>

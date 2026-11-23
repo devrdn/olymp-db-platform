@@ -1,14 +1,23 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { forgetBranding } from "@/lib/api/branding";
-import { ApiError, failureCode } from "@/lib/api/client";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings";
 
-export type SettingsState = { code?: string; saved?: boolean };
+export type SettingsState = ActionState;
+
+/**
+ * Saves one installation setting. The name, the marks and the archive's entry
+ * are in every screen's bar, so the branding cache goes and every layout is
+ * revalidated.
+ */
+async function saveInstallation(path: string, init: { method: string; body?: unknown; rawBody?: ArrayBuffer }) {
+  const saved = await serverAction(() => serverRequest(path, init), { revalidate: [{ layout: "/" }] });
+  if (saved.ok) forgetBranding();
+  return saved;
+}
 
 /** After a switch is pressed: the same two answers as a save. */
 export type SwitchState = SettingsState;
@@ -28,19 +37,7 @@ export async function saveSettingsAction(
     [SETTING_KEYS.mailLanguage]: String(form.get("mailLanguage") ?? ""),
   };
 
-  const failure = await serverRequest("/settings", { method: "PUT", body: { values } }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) {
-    return { code: failureCode(failure) };
-  }
-
-  // The name is in every screen's bar.
-  forgetBranding();
-  revalidatePath("/", "layout");
-  return { saved: true };
+  return saveInstallation("/settings", { method: "PUT", body: { values } });
 }
 
 /**
@@ -57,21 +54,10 @@ export async function uploadImageAction(
   const file = form.get("file");
   if (!(file instanceof File) || file.size === 0) return { code: "invalid_request" };
 
-  const failure = await serverRequest(`/settings/images/${kind}`, {
+  return saveInstallation(`/settings/images/${kind}`, {
     method: "PUT",
     rawBody: await file.arrayBuffer(),
-  }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) {
-    return { code: failureCode(failure) };
-  }
-
-  forgetBranding();
-  revalidatePath("/", "layout");
-  return { saved: true };
+  });
 }
 
 export async function removeImageAction(
@@ -81,18 +67,7 @@ export async function removeImageAction(
   const kind = String(form.get("kind") ?? "");
   if (!(IMAGE_KINDS as readonly string[]).includes(kind)) return { code: "invalid_request" };
 
-  const failure = await serverRequest(`/settings/images/${kind}`, { method: "DELETE" }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) {
-    return { code: failureCode(failure) };
-  }
-
-  forgetBranding();
-  revalidatePath("/", "layout");
-  return { saved: true };
+  return saveInstallation(`/settings/images/${kind}`, { method: "DELETE" });
 }
 
 /** Switches the contest archive on or off for the whole installation. */
@@ -100,36 +75,23 @@ export async function switchArchiveAction(_previous: SwitchState, form: FormData
   const enabled = String(form.get("enabled") ?? "");
   if (enabled !== "true" && enabled !== "false") return { code: "invalid_request" };
 
-  const failure = await serverRequest("/settings/archive", {
+  return saveInstallation("/settings/archive", {
     method: "PUT",
     body: { enabled: enabled === "true" },
-  }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) {
-    return { code: failureCode(failure) };
-  }
-
-  // The archive's entry in every signed-in menu follows the switch.
-  forgetBranding();
-  revalidatePath("/", "layout");
-  return { saved: true };
+  });
 }
 
 /** After a test message: the address it went to, or why it did not, with the relay's reply when there was one. */
-export type MailTestState = { sentTo?: string; code?: string; subject?: string };
+export type MailTestState = ActionState & { sentTo?: string; subject?: string };
 
 const mailTestResultSchema = z.object({ to: z.string() });
 
 /** Sends the caller the test message; the API picks the address, the caller's own. */
 export async function sendTestMailAction(): Promise<MailTestState> {
-  try {
-    const { to } = mailTestResultSchema.parse(await serverRequest("/settings/mail-test", { method: "POST" }));
-    return { sentTo: to };
-  } catch (error: unknown) {
-    const subject = error instanceof ApiError ? error.subject : undefined;
-    return subject ? { code: failureCode(error), subject } : { code: failureCode(error) };
-  }
+  const send = async () => mailTestResultSchema.parse(await serverRequest("/settings/mail-test", { method: "POST" }));
+  return serverAction(send, {
+    success: ({ to }) => ({ ok: true, sentTo: to }),
+    // The relay's reply, when there was one, is what the administrator needs to see.
+    failure: ({ code, subject }) => (subject ? { code, subject } : { code }),
+  });
 }

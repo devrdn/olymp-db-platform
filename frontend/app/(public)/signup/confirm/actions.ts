@@ -2,8 +2,9 @@
 
 import { redirect } from "next/navigation";
 
+import { outcome } from "@/lib/api/outcome";
+import type { ActionDone, ActionRefused, ActionState } from "@/lib/api/server";
 import { confirmSignup, resendSignup, signupAnswerCode, signupCookieName } from "@/lib/api/signup";
-import { ApiError } from "@/lib/api/client";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { browserRelay } from "@/lib/auth/relay";
 import { fetchIdentity, sessionCookie } from "@/lib/auth/session";
@@ -11,7 +12,7 @@ import { forgetSignupEmail, rememberSignupEmail, signupEmail } from "@/lib/auth/
 import { isSignupCode, normalizeCode } from "@/lib/auth/signup-rules";
 import { activeLocale } from "@/lib/i18n/server";
 
-export type ConfirmState = { code?: string };
+export type ConfirmState = ActionState;
 
 /**
  * With no address kept, there is no sign-up in this browser to confirm, and
@@ -37,13 +38,8 @@ export async function confirmSignupAction(_previous: ConfirmState, form: FormDat
 
   const relay = await browserRelay([signupCookieName(), sessionCookie().name]);
 
-  // `.then(ok, failed)`, not try/catch: `redirect` throws, and a catch would
-  // swallow it.
-  const outcome = await confirmSignup({ email, code }, relay).then(
-    (confirmed) => ({ ok: true as const, mustChangePassword: confirmed.mustChangePassword }),
-    (error: unknown) => ({ ok: false as const, code: signupAnswerCode(error) }),
-  );
-  if (!outcome.ok) return { code: outcome.code };
+  const confirmed = await outcome(() => confirmSignup({ email, code }, relay));
+  if (!confirmed.ok) return { code: signupAnswerCode(confirmed.code) };
 
   await forgetSignupEmail();
 
@@ -52,14 +48,14 @@ export async function confirmSignupAction(_previous: ConfirmState, form: FormDat
   const identity = await fetchIdentity().catch(() => null);
   redirect(
     destinationAfterLogin({
-      mustChangePassword: outcome.mustChangePassword,
+      mustChangePassword: confirmed.value.mustChangePassword,
       permissions: identity?.permissions ?? [],
       managesContests: identity?.managesContests ?? false,
     }),
   );
 }
 
-export type ResendOutcome = { sent: true } | { sent: false; code: string; retryAfterSeconds?: number };
+export type ResendOutcome = ActionDone | (ActionRefused & { retryAfterSeconds?: number });
 
 /**
  * Mails a fresh code to the sign-up this browser started, at the address
@@ -68,19 +64,17 @@ export type ResendOutcome = { sent: true } | { sent: false; code: string; retryA
  */
 export async function resendCodeAction(): Promise<ResendOutcome> {
   const email = await signupEmail();
-  if (!email) return { sent: false, code: NOTHING_TO_CONFIRM };
+  if (!email) return { code: NOTHING_TO_CONFIRM };
 
   const [relay, lang] = await Promise.all([browserRelay([signupCookieName()]), activeLocale()]);
 
-  try {
-    await resendSignup({ email }, lang, relay);
-    // The new code's window is the address's too.
-    await rememberSignupEmail(email);
-    return { sent: true };
-  } catch (error) {
-    const retryAfterSeconds = error instanceof ApiError ? error.retryAfterSeconds : undefined;
-    return retryAfterSeconds === undefined
-      ? { sent: false, code: signupAnswerCode(error) }
-      : { sent: false, code: signupAnswerCode(error), retryAfterSeconds };
+  const resent = await outcome(() => resendSignup({ email }, lang, relay));
+  if (!resent.ok) {
+    const code = signupAnswerCode(resent.code);
+    return resent.retryAfterSeconds === undefined ? { code } : { code, retryAfterSeconds: resent.retryAfterSeconds };
   }
+
+  // The new code's window is the address's too.
+  await rememberSignupEmail(email);
+  return { ok: true };
 }

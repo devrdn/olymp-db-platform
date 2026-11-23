@@ -7,11 +7,16 @@ const { sessionHeader } = vi.hoisted(() => ({
   sessionHeader: vi.fn(async (): Promise<Record<string, string>> => ({ cookie: "dbcontest_session=abc" })),
 }));
 vi.mock("@/lib/auth/session", () => ({ sessionHeader }));
+// Next's cache is a port: the recording fake stands in for the one adapter.
+const { revalidatePath } = vi.hoisted(() => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath }));
 
-import { SERVER_REQUEST_TIMEOUT_MS, serverRequest } from "./server";
+import { ApiError } from "./client";
+import { SERVER_REQUEST_TIMEOUT_MS, serverAction, serverOutcome, serverRequest } from "./server";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  revalidatePath.mockReset();
 });
 
 describe("serverRequest", () => {
@@ -69,5 +74,75 @@ describe("serverRequest", () => {
       "x-forwarded-for": "203.0.113.7",
       cookie: "dbcontest_session=abc",
     });
+  });
+});
+
+describe("serverOutcome", () => {
+  test("revalidates the paths it is given once the call succeeded, a layout as a layout", async () => {
+    const result = await serverOutcome(async () => ({ id: "c1" }), {
+      revalidate: ["/contests", { layout: "/contests/c1" }],
+    });
+
+    expect(result).toEqual({ ok: true, value: { id: "c1" } });
+    expect(revalidatePath.mock.calls).toEqual([["/contests"], ["/contests/c1", "layout"]]);
+  });
+
+  test("revalidates nothing when the call was refused", async () => {
+    const result = await serverOutcome(async () => {
+      throw new ApiError("not_editable", 409, "not editable");
+    }, { revalidate: ["/contests"] });
+
+    expect(result).toEqual({ ok: false, code: "not_editable", detail: "not editable" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("serverAction", () => {
+  const refusal = () => {
+    throw new ApiError("query_syntax", 400, "near FORM in orders", "req-1", "orders", 4, 30);
+  };
+
+  test("answers ok, or only the refusal's code: the request id and the API's message stay on the server", async () => {
+    expect(await serverAction(async () => undefined)).toEqual({ ok: true });
+
+    const refused = await serverAction(async () => refusal(), {
+      revalidate: ["/contests"],
+      success: (value) => ({ ok: true as const, value }),
+    });
+
+    expect(refused).toEqual({ code: "query_syntax" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("gives an action's own failure only the code and the subject, whatever it returns", async () => {
+    const state = await serverAction(async () => refusal(), { failure: (failure) => failure });
+
+    expect(state).toEqual({ code: "query_syntax", subject: "orders" });
+  });
+
+  test("shapes a success from the answer, after revalidating what changed", async () => {
+    const state = await serverAction(async () => ({ added: 2 }), {
+      revalidate: [{ layout: "/contests/c1" }],
+      success: (result) => ({ ok: true as const, result }),
+    });
+
+    expect(state).toEqual({ ok: true, result: { added: 2 } });
+    expect(revalidatePath).toHaveBeenCalledWith("/contests/c1", "layout");
+  });
+
+  test("lets the answer decide what changed", async () => {
+    await serverAction(async () => ({ added: 0 }), { revalidate: (answer) => (answer.added > 0 ? ["/contests"] : []) });
+
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("lets an answer the form cannot read surface as a contract break, not as a refusal", async () => {
+    await expect(
+      serverAction(async () => ({}), {
+        success: () => {
+          throw new Error("unreadable answer");
+        },
+      }),
+    ).rejects.toThrow("unreadable answer");
   });
 });

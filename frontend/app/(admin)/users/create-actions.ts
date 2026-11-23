@@ -1,15 +1,13 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
 import {
   createAccount,
   importAccounts,
   type CreatedAccount,
   type ImportResult,
 } from "@/lib/api/accounts";
-import { ApiError } from "@/lib/api/client";
 import { MAX_IMPORT_ROWS } from "@/lib/api/accounts-terms";
+import { serverAction, type ActionState, type Revalidation } from "@/lib/api/server";
 
 import { sendByEmail } from "./delivery";
 import { parseRoster } from "./roster";
@@ -19,8 +17,11 @@ import { parseRoster } from "./roster";
  * catches only an empty login or full name, and an empty or oversized paste.
  */
 
-export type CreateAccountState = { code?: string; result?: CreatedAccount };
-export type ImportAccountsState = { code?: string; result?: ImportResult };
+export type CreateAccountState = ActionState & { result?: CreatedAccount };
+export type ImportAccountsState = ActionState & { result?: ImportResult };
+
+/** A new account must appear in the register. */
+const CHANGED: Revalidation[] = [{ layout: "/users" }];
 
 /** Ticked roles; an empty set is legitimate. */
 function checkedRoles(form: FormData): string[] {
@@ -38,24 +39,10 @@ export async function createAccountAction(
 
   const email = String(form.get("email") ?? "").trim();
 
-  const outcome = await createAccount({
-    login,
-    fullName,
-    email,
-    roles: checkedRoles(form),
-    sendByEmail: sendByEmail(form),
-  }).then(
-    (result) => ({ ok: true as const, result }),
-    (error: unknown) => ({ ok: false as const, error }),
+  return serverAction(
+    () => createAccount({ login, fullName, email, roles: checkedRoles(form), sendByEmail: sendByEmail(form) }),
+    { revalidate: CHANGED, success: (result) => ({ ok: true, result }) },
   );
-
-  if (!outcome.ok) {
-    return { code: outcome.error instanceof ApiError ? outcome.error.code : "unreachable" };
-  }
-
-  // The new account must appear in the register.
-  revalidatePath("/users", "layout");
-  return { result: outcome.result };
 }
 
 export async function importAccountsAction(
@@ -67,15 +54,8 @@ export async function importAccountsAction(
   // `users.maxImportRows`) is refused before the request.
   if (rows.length === 0 || rows.length > MAX_IMPORT_ROWS) return { code: "invalid_request" };
 
-  const outcome = await importAccounts(rows, checkedRoles(form), sendByEmail(form)).then(
-    (result) => ({ ok: true as const, result }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-
-  if (!outcome.ok) {
-    return { code: outcome.error instanceof ApiError ? outcome.error.code : "unreachable" };
-  }
-
-  revalidatePath("/users", "layout");
-  return { result: outcome.result };
+  return serverAction(() => importAccounts(rows, checkedRoles(form), sendByEmail(form)), {
+    revalidate: CHANGED,
+    success: (result) => ({ ok: true, result }),
+  });
 }

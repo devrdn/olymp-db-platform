@@ -2,12 +2,11 @@
 
 import { redirect } from "next/navigation";
 
-import { failureCode } from "@/lib/api/client";
 import { isResetToken } from "@/lib/api/recovery";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionRefused, type ActionState } from "@/lib/api/server";
 
 /** Only a code: the token and the password never travel back to the browser. */
-export type ResetState = { code?: string };
+export type ResetState = ActionState;
 
 /**
  * Sets the new password through the mailed link. The reset ends every session
@@ -22,21 +21,15 @@ export async function resetPasswordAction(_previous: ResetState, form: FormData)
   // Nothing is trimmed: a space is part of the secret. Strength is the API's.
   if (password !== confirm) return { code: "password_mismatch" };
 
-  // `.then(ok, failed)`, not try/catch: `redirect` throws, and a catch would
-  // swallow it.
-  const failure = await serverRequest("/public/password/reset", {
-    method: "POST",
-    body: { token, password },
-  }).then(
-    () => null,
-    (error: unknown) => failureCode(error),
+  const reset = await serverAction(
+    () => serverRequest("/public/password/reset", { method: "POST", body: { token, password } }),
+    {
+      // The routes are not mounted while the installation sends no mail, and
+      // then no link can work.
+      failure: ({ code }): ActionRefused => ({ code: code === "not_found" ? "reset_link_invalid" : code }),
+    },
   );
-
-  if (failure) {
-    // The routes are not mounted while the installation sends no mail, and
-    // then no link can work.
-    return { code: failure === "not_found" ? "reset_link_invalid" : failure };
-  }
+  if (!reset.ok) return reset;
 
   // The address carries only the flag that selects the notice.
   redirect("/login?changed=1");

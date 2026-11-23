@@ -1,11 +1,8 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
 import { deleteAccount, resetPassword, restoreAccount } from "@/lib/api/accounts";
-import { ApiError, failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
 import { sendByEmail } from "../delivery";
 
@@ -15,7 +12,7 @@ import { sendByEmail } from "../delivery";
  * rule again; `offered.ts` only decides what to show.
  */
 
-export type AccountState = { code?: string; done?: boolean };
+export type AccountState = ActionState;
 
 /** The id reaches a request path, so it is validated first. */
 function subject(form: FormData): string | null {
@@ -23,23 +20,8 @@ function subject(form: FormData): string | null {
   return isId(userId) ? userId : null;
 }
 
-/**
- * Runs one request, maps a failure to a code `Outcome` in `account-card.tsx`
- * knows, and revalidates on success. Takes the request itself so delete and
- * restore reuse `lib/api/accounts`.
- */
-async function attempt(action: () => Promise<unknown>): Promise<AccountState> {
-  const failure = await action().then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
-  // Both the card and the register list.
-  revalidatePath("/users", "layout");
-  return { done: true };
-}
+/** Both the card and the register list. */
+const CHANGED: Revalidation[] = [{ layout: "/users" }];
 
 export async function updateProfileAction(
   _previous: AccountState,
@@ -51,11 +33,13 @@ export async function updateProfileAction(
   const fullName = String(form.get("full_name") ?? "").trim();
   if (fullName === "") return { code: "invalid_request" };
 
-  return attempt(() =>
-    serverRequest(`/users/${userId}`, {
-      method: "PATCH",
-      body: { full_name: fullName, email: String(form.get("email") ?? "").trim() },
-    }),
+  return serverAction(
+    () =>
+      serverRequest(`/users/${userId}`, {
+        method: "PATCH",
+        body: { full_name: fullName, email: String(form.get("email") ?? "").trim() },
+      }),
+    { revalidate: CHANGED },
   );
 }
 
@@ -70,7 +54,9 @@ export async function replaceRolesAction(
   // nothing.
   const roles = form.getAll("roles").map(String).filter(Boolean);
 
-  return attempt(() => serverRequest(`/users/${userId}/roles`, { method: "PUT", body: { roles } }));
+  return serverAction(() => serverRequest(`/users/${userId}/roles`, { method: "PUT", body: { roles } }), {
+    revalidate: CHANGED,
+  });
 }
 
 /** The required reason, or null when empty or whitespace-only. */
@@ -88,7 +74,9 @@ export async function blockAction(_previous: AccountState, form: FormData): Prom
   const reason = requiredReason(form);
   if (reason === null) return { code: "reason_required" };
 
-  return attempt(() => serverRequest(`/users/${userId}/block`, { method: "POST", body: { reason } }));
+  return serverAction(() => serverRequest(`/users/${userId}/block`, { method: "POST", body: { reason } }), {
+    revalidate: CHANGED,
+  });
 }
 
 export async function unblockAction(
@@ -99,7 +87,7 @@ export async function unblockAction(
   if (!userId) return { code: "invalid_user_id" };
 
   // Unblocking needs no reason (`users.Service.Unblock`).
-  return attempt(() => serverRequest(`/users/${userId}/unblock`, { method: "POST" }));
+  return serverAction(() => serverRequest(`/users/${userId}/unblock`, { method: "POST" }), { revalidate: CHANGED });
 }
 
 /** Soft-deletes the account; requires a reason, like blocking. */
@@ -110,7 +98,7 @@ export async function deleteAction(_previous: AccountState, form: FormData): Pro
   const reason = requiredReason(form);
   if (reason === null) return { code: "reason_required" };
 
-  return attempt(() => deleteAccount(userId, reason));
+  return serverAction(() => deleteAccount(userId, reason), { revalidate: CHANGED });
 }
 
 /**
@@ -124,7 +112,7 @@ export async function restoreAction(
   const userId = subject(form);
   if (!userId) return { code: "invalid_user_id" };
 
-  return attempt(() => restoreAccount(userId));
+  return serverAction(() => restoreAccount(userId), { revalidate: CHANGED });
 }
 
 export type ResetState = AccountState & {
@@ -147,22 +135,15 @@ export async function resetPasswordAction(
   const userId = subject(form);
   if (!userId) return { code: "invalid_user_id" };
 
-  const outcome = await resetPassword(userId, sendByEmail(form)).then(
-    (body) => ({ ok: true as const, body }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-
-  if (!outcome.ok) {
-    return { code: outcome.error instanceof ApiError ? outcome.error.code : "unreachable" };
-  }
-
-  revalidatePath("/users", "layout");
-  return {
-    done: true,
-    oneTimePassword: outcome.body.one_time_password,
-    emailed: outcome.body.emailed,
-    emailSkippedReason: outcome.body.email_skipped_reason,
-  };
+  return serverAction(() => resetPassword(userId, sendByEmail(form)), {
+    revalidate: CHANGED,
+    success: (issued) => ({
+      ok: true,
+      oneTimePassword: issued.one_time_password,
+      emailed: issued.emailed,
+      emailSkippedReason: issued.email_skipped_reason,
+    }),
+  });
 }
 
 /**
@@ -177,5 +158,7 @@ export async function unlockSignInAction(
   const userId = subject(form);
   if (!userId) return { code: "invalid_user_id" };
 
-  return attempt(() => serverRequest(`/users/${userId}/sign-in/unlock`, { method: "POST" }));
+  return serverAction(() => serverRequest(`/users/${userId}/sign-in/unlock`, { method: "POST" }), {
+    revalidate: CHANGED,
+  });
 }

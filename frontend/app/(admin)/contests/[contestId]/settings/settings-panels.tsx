@@ -111,7 +111,7 @@ export function SaveRow({
           {pending ? t.saving : t.save}
         </Button>
 
-        {state.saved && !failure ? (
+        {state.ok && !failure ? (
           <p role="status" className="text-small text-good">
             {t.saved}
           </p>

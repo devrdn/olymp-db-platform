@@ -9,12 +9,12 @@ import type { GameInstance, GameInstances } from "@/lib/api/game";
 
 import { GameDatabases } from "./game-databases";
 
-type State = { saved?: boolean; code?: string };
+type State = { ok?: true; code?: string };
 
-const dropped = vi.hoisted(() => ({ current: { saved: true } as State }));
+const dropped = vi.hoisted(() => ({ current: { ok: true } as State }));
 // Typed like the Server Action, so the assertion reads its FormData.
 const dropGameInstanceAction = vi.hoisted(() =>
-  vi.fn<(previous: { saved?: boolean; code?: string }, form: FormData) => Promise<State>>(
+  vi.fn<(previous: { ok?: true; code?: string }, form: FormData) => Promise<State>>(
     async () => dropped.current,
   ),
 );
@@ -54,7 +54,7 @@ function show(databases: Partial<GameInstances> = {}, ended = false) {
 }
 
 beforeEach(() => {
-  dropped.current = { saved: true };
+  dropped.current = { ok: true };
   dropGameInstanceAction.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });

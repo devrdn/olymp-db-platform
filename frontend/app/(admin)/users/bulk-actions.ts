@@ -1,7 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
 import {
   bulkReplaceRoles,
   bulkResetPassword,
@@ -10,8 +8,8 @@ import {
   type BulkPasswordResetResult,
   type BulkResult,
 } from "@/lib/api/accounts";
-import { ApiError } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
+import { serverAction, type ActionState, type Revalidation } from "@/lib/api/server";
 
 import { sendByEmail } from "./delivery";
 
@@ -21,8 +19,8 @@ import { sendByEmail } from "./delivery";
  * first: no account picked, a missing reason.
  */
 
-export type BulkState = { code?: string; result?: BulkResult };
-export type BulkPasswordState = { code?: string; result?: BulkPasswordResetResult };
+export type BulkState = ActionState & { result?: BulkResult };
+export type BulkPasswordState = ActionState & { result?: BulkPasswordResetResult };
 
 /**
  * Ids from the form, validated. A malformed one means tampering (the register
@@ -32,21 +30,8 @@ function ids(form: FormData): string[] {
   return form.getAll("ids").map(String).filter(isId);
 }
 
-/** Runs one bulk call and shapes the outcome for `useActionState`. */
-async function run<T>(work: () => Promise<T>): Promise<{ code?: string; result?: T }> {
-  const outcome = await work().then(
-    (result) => ({ ok: true as const, result }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-
-  if (!outcome.ok) {
-    return { code: outcome.error instanceof ApiError ? outcome.error.code : "unreachable" };
-  }
-
-  // The list must show the new statuses.
-  revalidatePath("/users", "layout");
-  return { result: outcome.result };
-}
+/** The list must show the new statuses. */
+const CHANGED: Revalidation[] = [{ layout: "/users" }];
 
 async function setStatus(
   form: FormData,
@@ -61,7 +46,10 @@ async function setStatus(
   const reason = String(form.get("reason") ?? "").trim();
   if (requireReason && reason === "") return { code: "reason_required" };
 
-  return run(() => bulkSetStatus(picked, status, reason));
+  return serverAction(() => bulkSetStatus(picked, status, reason), {
+    revalidate: CHANGED,
+    success: (result) => ({ ok: true, result }),
+  });
 }
 
 export async function bulkBlockAction(_previous: BulkState, form: FormData): Promise<BulkState> {
@@ -89,7 +77,10 @@ export async function bulkReplaceRolesAction(
   // An empty set is legitimate, as for one account.
   const roles = form.getAll("roles").map(String).filter(Boolean);
 
-  return run(() => bulkReplaceRoles(picked, roles));
+  return serverAction(() => bulkReplaceRoles(picked, roles), {
+    revalidate: CHANGED,
+    success: (result) => ({ ok: true, result }),
+  });
 }
 
 export async function bulkResetPasswordAction(
@@ -99,5 +90,8 @@ export async function bulkResetPasswordAction(
   const picked = ids(form);
   if (picked.length === 0) return { code: "invalid_request" };
 
-  return run(() => bulkResetPassword(picked, sendByEmail(form)));
+  return serverAction(() => bulkResetPassword(picked, sendByEmail(form)), {
+    revalidate: CHANGED,
+    success: (result) => ({ ok: true, result }),
+  });
 }

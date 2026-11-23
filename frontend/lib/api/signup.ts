@@ -4,7 +4,7 @@ import { parseSetCookie, type ParsedCookie } from "@/lib/auth/cookie";
 import { cookieSecure } from "@/lib/auth/cookie-policy";
 import type { SignupCommand } from "@/lib/auth/signup-rules";
 
-import { failureCode, request } from "./client";
+import { request } from "./client";
 import { SERVER_REQUEST_TIMEOUT_MS } from "./server";
 
 /**
@@ -86,7 +86,6 @@ export async function resendSignup(input: { email: string }, lang: string, relay
  * when the installation does not offer sign-up, so the router's `not_found`
  * means exactly that.
  */
-export function signupAnswerCode(error: unknown): string {
-  const code = failureCode(error);
+export function signupAnswerCode(code: string): string {
   return code === "not_found" ? "signup_not_available" : code;
 }

@@ -7,10 +7,10 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 // The real Server Action would pull in Next's server runtime; `vi.hoisted`
 // because `vi.mock` factories run first.
 const { saveSchemaNotesAction } = vi.hoisted(() => ({
-  saveSchemaNotesAction: vi.fn(async (previous: unknown, form: FormData): Promise<{ code?: string; saved?: boolean }> => {
+  saveSchemaNotesAction: vi.fn(async (previous: unknown, form: FormData): Promise<{ code?: string; ok?: true }> => {
     void previous;
     void form;
-    return { saved: true };
+    return { ok: true };
   }),
 }));
 vi.mock("./actions", () => ({ saveSchemaNotesAction }));

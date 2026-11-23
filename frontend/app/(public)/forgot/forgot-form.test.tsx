@@ -34,7 +34,7 @@ describe("ForgotForm", () => {
 
   /** One answer for every account, and for none. */
   test("replaces the form with the one neutral confirmation", async () => {
-    forgotPasswordAction.mockResolvedValue({ sent: true });
+    forgotPasswordAction.mockResolvedValue({ ok: true });
     renderForm();
 
     await submit();

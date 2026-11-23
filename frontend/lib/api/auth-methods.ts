@@ -1,10 +1,8 @@
-import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 
 import { PROVIDER_IDS, type ProviderId } from "@/lib/auth/external";
 
-import { failureCode } from "./client";
-import { serverRequest } from "./server";
+import { serverOutcome, serverRequest } from "./server";
 
 /** The ways in this installation offers, as `GET /auth/methods` says. */
 export const authMethodsSchema = z
@@ -26,17 +24,16 @@ export const authMethodsSchema = z
 
 export type AuthMethods = z.infer<typeof authMethodsSchema>;
 
+const AUTH_METHODS = "/auth/methods";
+
 /**
  * The ways in, or null when the API could not say. Throws only Next's own
  * control flow: the pages that ask only offer more, and must keep working
  * without the answer.
  */
 export async function fetchAuthMethods(): Promise<AuthMethods | null> {
-  try {
-    return authMethodsSchema.parse(await serverRequest("/auth/methods"));
-  } catch (error) {
-    unstable_rethrow(error);
-    console.warn(`auth methods unavailable: ${failureCode(error)}`);
-    return null;
-  }
+  const read = await serverOutcome(async () => authMethodsSchema.parse(await serverRequest(AUTH_METHODS)), {
+    report: AUTH_METHODS,
+  });
+  return read.ok ? read.value : null;
 }

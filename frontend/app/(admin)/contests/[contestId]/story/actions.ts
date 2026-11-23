@@ -1,14 +1,11 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
-import { failureCode } from "@/lib/api/client";
 import { storedMarkdown } from "@/lib/format/markdown";
 import { isId } from "@/lib/api/ids";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
 /** What a save of one per-language document reports back to its form. */
-export type TranslationsState = { code?: string; saved?: boolean };
+export type TranslationsState = ActionState;
 export type StoryState = TranslationsState;
 export type SchemaNotesState = TranslationsState;
 
@@ -28,27 +25,24 @@ function translationsFrom(form: FormData, prefix: string): Record<string, string
   return translations;
 }
 
-/** PUTs the set to `/contests/{id}{path}`; `revalidate` runs only on success. */
+/** PUTs the set to `/contests/{id}{path}`, then revalidates what `changed` names. */
 async function saveTranslations(
   form: FormData,
   prefix: string,
   path: string,
-  revalidate: (contestId: string) => void,
+  changed: (contestId: string) => Revalidation[],
 ): Promise<TranslationsState> {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const failure = await serverRequest(`/contests/${contestId}${path}`, {
-    method: "PUT",
-    body: { translations: translationsFrom(form, prefix) },
-  }).then(
-    () => null,
-    (error: unknown) => error,
+  return serverAction(
+    () =>
+      serverRequest(`/contests/${contestId}${path}`, {
+        method: "PUT",
+        body: { translations: translationsFrom(form, prefix) },
+      }),
+    { revalidate: changed(contestId) },
   );
-  if (failure) return { code: failureCode(failure) };
-
-  revalidate(contestId);
-  return { saved: true };
 }
 
 /**
@@ -58,7 +52,7 @@ async function saveTranslations(
  */
 export async function saveStoryAction(_previous: StoryState, form: FormData): Promise<StoryState> {
   // The publish gate counts the story.
-  return saveTranslations(form, "body", "/story", (contestId) => revalidatePath(`/contests/${contestId}`, "layout"));
+  return saveTranslations(form, "body", "/story", (contestId) => [{ layout: `/contests/${contestId}` }]);
 }
 
 /**
@@ -67,7 +61,5 @@ export async function saveStoryAction(_previous: StoryState, form: FormData): Pr
  * language's.
  */
 export async function saveSchemaNotesAction(_previous: SchemaNotesState, form: FormData): Promise<SchemaNotesState> {
-  return saveTranslations(form, "schemaNotes", "/schema-notes", (contestId) =>
-    revalidatePath(`/contests/${contestId}/story`),
-  );
+  return saveTranslations(form, "schemaNotes", "/schema-notes", (contestId) => [`/contests/${contestId}/story`]);
 }

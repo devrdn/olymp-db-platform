@@ -1,12 +1,11 @@
 "use server";
 
-import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { registrationSchema } from "@/lib/api/registrations";
 import type { Registration } from "@/lib/api/registrations-terms";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
-export type CheckInResult = { registration?: Registration; code?: string };
+export type CheckInResult = ActionState & { registration?: Registration };
 
 /**
  * Marks a registered guest as arrived, or takes the mark back. It does not
@@ -18,13 +17,11 @@ export async function checkInAction(id: string, checkedIn: boolean): Promise<Che
   if (!isId(id)) return { code: "registration_not_found" };
   if (typeof checkedIn !== "boolean") return { code: "invalid_request" };
 
-  try {
-    const payload = await serverRequest(`/registrations/${id}/check-in`, {
-      method: "PUT",
-      body: { checked_in: checkedIn },
-    });
-    return { registration: registrationSchema.parse(payload) };
-  } catch (error) {
-    return { code: failureCode(error) };
-  }
+  return serverAction(
+    async () =>
+      registrationSchema.parse(
+        await serverRequest(`/registrations/${id}/check-in`, { method: "PUT", body: { checked_in: checkedIn } }),
+      ),
+    { success: (registration) => ({ ok: true, registration }) },
+  );
 }

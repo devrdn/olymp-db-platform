@@ -1,12 +1,9 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
-import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
-export type GameState = { code?: string; saved?: boolean };
+export type GameState = ActionState;
 
 /**
  * Drops one participant's database, forcing connections closed, so a running
@@ -25,18 +22,9 @@ export async function dropGameInstanceAction(
   const database = String(form.get("database") ?? "");
   if (database === "") return { code: "game_instance_not_found" };
 
-  const failure = await serverRequest(
-    `/contests/${contestId}/game/instances/${encodeURIComponent(database)}`,
-    { method: "DELETE" },
-  ).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
   // The list is server-rendered, so revalidate.
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { saved: true };
+  return serverAction(
+    () => serverRequest(`/contests/${contestId}/game/instances/${encodeURIComponent(database)}`, { method: "DELETE" }),
+    { revalidate: [{ layout: `/contests/${contestId}` }] },
+  );
 }

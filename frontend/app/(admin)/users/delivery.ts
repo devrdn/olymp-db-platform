@@ -1,7 +1,5 @@
-import { unstable_rethrow } from "next/navigation";
-
 import { mailStatusSchema } from "@/lib/api/accounts";
-import { serverRequest } from "@/lib/api/server";
+import { serverOutcome, serverRequest } from "@/lib/api/server";
 
 import type { MailOffer } from "./email-delivery";
 
@@ -24,12 +22,9 @@ const MAIL_STATUS = "/users/mail-status";
  * the page still renders.
  */
 export async function readMailOffer(): Promise<MailOffer> {
-  try {
-    const status = mailStatusSchema.parse(await serverRequest(MAIL_STATUS));
-    return status.enabled ? { status: "on", perMinute: status.perMinute } : { status: "off" };
-  } catch (error: unknown) {
-    unstable_rethrow(error);
-    console.error("reading %s for the accounts screens failed", MAIL_STATUS, error);
-    return { status: "unknown" };
-  }
+  const read = await serverOutcome(async () => mailStatusSchema.parse(await serverRequest(MAIL_STATUS)), {
+    report: MAIL_STATUS,
+  });
+  if (!read.ok) return { status: "unknown" };
+  return read.value.enabled ? { status: "on", perMinute: read.value.perMinute } : { status: "off" };
 }

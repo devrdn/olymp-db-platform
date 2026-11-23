@@ -1,14 +1,11 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-
-import { ApiError, failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { importResultSchema, parseLogins, type ImportResult } from "@/lib/api/people";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
-export type PeopleState = { code?: string; done?: boolean; skipReason?: string };
-export type ImportState = { code?: string; result?: ImportResult };
+export type PeopleState = ActionState & { skipReason?: string };
+export type ImportState = ActionState & { result?: ImportResult };
 
 /** Both ids reach a request path, so both are validated first. */
 function pair(form: FormData): { contestId: string; userId: string } | null {
@@ -17,16 +14,12 @@ function pair(form: FormData): { contestId: string; userId: string } | null {
   return isId(contestId) && isId(userId) ? { contestId, userId } : null;
 }
 
-async function attempt(path: string, init: { method: string; body?: unknown }, contestId: string) {
-  const failure = await serverRequest(path, init).then(
-    () => null,
-    (error: unknown) => error,
-  );
+function changed(contestId: string): Revalidation[] {
+  return [{ layout: `/contests/${contestId}` }];
+}
 
-  if (failure) return { code: failureCode(failure) };
-
-  revalidatePath(`/contests/${contestId}`, "layout");
-  return { done: true };
+function change(contestId: string, path: string, init: { method: string; body?: unknown }): Promise<PeopleState> {
+  return serverAction(() => serverRequest(path, init), { revalidate: changed(contestId) });
 }
 
 /** Appoints a manager. The role is fixed: ownership is never granted through this list. */
@@ -37,11 +30,10 @@ export async function grantManagerAction(
   const at = pair(form);
   if (!at) return { code: "invalid_user_id" };
 
-  return attempt(
-    `/contests/${at.contestId}/managers/${at.userId}`,
-    { method: "PUT", body: { role: "manager" } },
-    at.contestId,
-  );
+  return change(at.contestId, `/contests/${at.contestId}/managers/${at.userId}`, {
+    method: "PUT",
+    body: { role: "manager" },
+  });
 }
 
 export async function revokeManagerAction(
@@ -51,11 +43,7 @@ export async function revokeManagerAction(
   const at = pair(form);
   if (!at) return { code: "invalid_user_id" };
 
-  return attempt(
-    `/contests/${at.contestId}/managers/${at.userId}`,
-    { method: "DELETE" },
-    at.contestId,
-  );
+  return change(at.contestId, `/contests/${at.contestId}/managers/${at.userId}`, { method: "DELETE" });
 }
 
 /**
@@ -69,11 +57,7 @@ export async function removeParticipantAction(
   const at = pair(form);
   if (!at) return { code: "invalid_user_id" };
 
-  return attempt(
-    `/contests/${at.contestId}/participants/${at.userId}`,
-    { method: "DELETE" },
-    at.contestId,
-  );
+  return change(at.contestId, `/contests/${at.contestId}/participants/${at.userId}`, { method: "DELETE" });
 }
 
 export async function disqualifyParticipantAction(
@@ -83,18 +67,14 @@ export async function disqualifyParticipantAction(
   const at = pair(form);
   if (!at) return { code: "invalid_user_id" };
 
-  return attempt(
-    `/contests/${at.contestId}/participants/${at.userId}/disqualify`,
-    { method: "POST" },
-    at.contestId,
-  );
+  return change(at.contestId, `/contests/${at.contestId}/participants/${at.userId}/disqualify`, { method: "POST" });
 }
 
 /**
  * Adds one participant from the picker. Sends `user_ids`, since the picker
- * already resolved the account. Parsed with `importResultSchema`, not
- * `attempt()`: the endpoint answers 200 with `{ added, skipped }` even for
- * someone already enrolled, and a skip must not read as success.
+ * already resolved the account. The endpoint answers 200 with
+ * `{ added, skipped }` even for someone already enrolled, and a skip must not
+ * read as success, so nothing is revalidated until the count says so.
  */
 export async function addParticipantAction(
   _previous: PeopleState,
@@ -103,20 +83,19 @@ export async function addParticipantAction(
   const at = pair(form);
   if (!at) return { code: "invalid_user_id" };
 
-  const outcome = await serverRequest(`/contests/${at.contestId}/participants`, {
-    method: "POST",
-    body: { user_ids: [at.userId] },
-  }).then(
-    (payload) => importResultSchema.parse(payload),
-    (error: unknown) => (error instanceof ApiError ? error : null),
+  return serverAction(
+    async () =>
+      importResultSchema.parse(
+        await serverRequest(`/contests/${at.contestId}/participants`, {
+          method: "POST",
+          body: { user_ids: [at.userId] },
+        }),
+      ),
+    {
+      revalidate: (result) => (result.added === 0 ? [] : changed(at.contestId)),
+      success: (result) => (result.added === 0 ? { skipReason: result.skipped[0]?.reason } : { ok: true }),
+    },
   );
-
-  if (outcome instanceof ApiError) return { code: outcome.code };
-  if (outcome === null) return { code: "unreachable" };
-  if (outcome.added === 0) return { skipReason: outcome.skipped[0]?.reason };
-
-  revalidatePath(`/contests/${at.contestId}`, "layout");
-  return { done: true };
 }
 
 /**
@@ -134,18 +113,11 @@ export async function importParticipantsAction(
   const logins = parseLogins(String(form.get("logins") ?? ""));
   if (logins.length === 0) return { code: "invalid_request" };
 
-  const outcome = await serverRequest(`/contests/${contestId}/participants`, {
-    method: "POST",
-    body: { logins },
-  }).then(
-    (payload) => importResultSchema.parse(payload),
-    (error: unknown) => (error instanceof ApiError ? error : null),
+  return serverAction(
+    async () =>
+      importResultSchema.parse(
+        await serverRequest(`/contests/${contestId}/participants`, { method: "POST", body: { logins } }),
+      ),
+    { revalidate: changed(contestId), success: (result) => ({ ok: true, result }) },
   );
-
-  if (outcome instanceof ApiError) return { code: outcome.code };
-  if (outcome === null) return { code: "unreachable" };
-
-  revalidatePath(`/contests/${contestId}`, "layout");
-
-  return { result: outcome };
 }

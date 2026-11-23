@@ -11,9 +11,12 @@ import { GameBuilder } from "./game-builder";
 // The real `GameBuilderTable` calls `router.refresh()`, and there is no app
 // router here.
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
-const saved = vi.hoisted(() => ({ current: { saved: true } as { saved?: boolean; code?: string } }));
+const saved = vi.hoisted(() => ({ current: { ok: true } as { ok?: true; code?: string } }));
 const saveGameDefinitionAction = vi.hoisted(() => vi.fn(async (_prev: unknown, form: FormData) => ({
   ...saved.current,
   // Exposed so tests can check the definition tree that was sent.
@@ -82,7 +85,7 @@ function show({
 }
 
 beforeEach(() => {
-  saved.current = { saved: true };
+  saved.current = { ok: true };
   saveGameDefinitionAction.mockClear();
   gameTableDataWindowAction.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);

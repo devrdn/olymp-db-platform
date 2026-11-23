@@ -6,7 +6,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { ApiError } from "@/lib/api/client";
 
@@ -31,7 +34,7 @@ describe("dropGameInstanceAction", () => {
 
     const state = await dropGameInstanceAction({}, form({ contestId, database: "game_c1_u1" }));
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(
       `/contests/${contestId}/game/instances/game_c1_u1`,
       { method: "DELETE" },

@@ -12,7 +12,7 @@ const { saveTranslationsAction } = vi.hoisted(() => ({
   saveTranslationsAction: vi.fn(async (previous: unknown, form: FormData) => {
     void previous;
     void form;
-    return { saved: true };
+    return { ok: true };
   }),
 }));
 vi.mock("./actions", () => ({ saveTranslationsAction }));
@@ -130,7 +130,7 @@ describe("TitleEditor: editing reaches the server action", () => {
 
 describe("TitleEditor: dismissal is blocked while the save is pending", () => {
   test("Escape does not close the dialog mid-request", async () => {
-    let resolveAction: (value: { saved: boolean }) => void = () => {};
+    let resolveAction: (value: { ok: true }) => void = () => {};
     saveTranslationsAction.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -147,7 +147,7 @@ describe("TitleEditor: dismissal is blocked while the save is pending", () => {
 
     expect(screen.getByRole("button", { name: dict.workspace.settings.saving })).toBeVisible();
 
-    resolveAction({ saved: true });
+    resolveAction({ ok: true });
     await waitFor(() =>
       expect(screen.queryByLabelText(dict.workspace.titleEditor.title)).not.toBeInTheDocument(),
     );

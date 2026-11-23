@@ -8,7 +8,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { ApiError } from "@/lib/api/client";
 

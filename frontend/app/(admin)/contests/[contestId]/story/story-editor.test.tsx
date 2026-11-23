@@ -14,10 +14,10 @@ const { saveStoryAction, serializer, pendingReady } = vi.hoisted(() => ({
   // With `readyLater`, the editor reports that it is built only when a test calls these.
   pendingReady: [] as (() => void)[],
 
-  saveStoryAction: vi.fn(async (previous: unknown, form: FormData): Promise<{ code?: string; saved?: boolean }> => {
+  saveStoryAction: vi.fn(async (previous: unknown, form: FormData): Promise<{ code?: string; ok?: true }> => {
     void previous;
     void form;
-    return { saved: true };
+    return { ok: true };
   }),
 }));
 vi.mock("./actions", () => ({ saveStoryAction }));

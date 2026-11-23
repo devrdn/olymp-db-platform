@@ -6,7 +6,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { ApiError } from "@/lib/api/client";
 
@@ -35,7 +38,7 @@ describe("saveSchemaNotesAction", () => {
       form({ "schemaNotes.en": "  The suspects table.  ", "schemaNotes.ro": "   ", "body.en": "not ours" }),
     );
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/schema-notes`, {
       method: "PUT",
       body: { translations: { en: "The suspects table." } },
@@ -89,7 +92,7 @@ describe("saveStoryAction", () => {
       form({ "body.en": "  A body in the stacks.  ", "body.ro": "  ", "schemaNotes.en": "not ours" }),
     );
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/story`, {
       method: "PUT",
       body: { translations: { en: "A body in the stacks." } },

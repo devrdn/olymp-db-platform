@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { redirect } from "next/navigation";
 
@@ -42,18 +45,19 @@ describe("readMailOffer", () => {
     serverRequest.mockRejectedValueOnce(failure);
 
     expect(await readMailOffer()).toEqual({ status: "unknown" });
-    expect(consoleError).toHaveBeenCalledWith(
-      "reading %s for the accounts screens failed",
-      "/users/mail-status",
-      failure,
-    );
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/\/users\/mail-status.*internal_error/));
   });
 
-  test("reports an answer it cannot read as unknown too", async () => {
+  test("reports an answer it cannot read as unknown too, logged once with the path", async () => {
+    // As on Next's server, where the outcome module logs drift by itself.
+    vi.stubGlobal("window", undefined);
     serverRequest.mockResolvedValueOnce({ enabled: "yes" });
 
     expect(await readMailOffer()).toEqual({ status: "unknown" });
     expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("/users/mail-status"));
+    vi.unstubAllGlobals();
   });
 
   test("lets Next's own control flow through rather than reading it as a failure", async () => {

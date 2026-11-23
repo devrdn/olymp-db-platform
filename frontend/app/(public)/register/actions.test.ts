@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { registerAction } from "./actions";
 
@@ -29,7 +32,7 @@ describe("registerAction", () => {
       method: "POST",
       body: { first_name: "Ana", last_name: "Popescu", email: "ana@example.com" },
     });
-    expect(state).toEqual({ outcome: { status: "existing", email: "ana@example.com", emailSent: true } });
+    expect(state).toEqual({ ok: true, outcome: { status: "existing", email: "ana@example.com", emailSent: true } });
   });
 
   test("refuses an empty name without calling the server, keeping what was typed", async () => {

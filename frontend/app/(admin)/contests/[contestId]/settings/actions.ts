@@ -1,9 +1,7 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { ApiError, failureCode } from "@/lib/api/client";
 import {
   archiveSettingsFromForm,
   type ContestCover,
@@ -19,13 +17,11 @@ import {
 import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 import { instantFromWallClock } from "@/lib/format/datetime";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 
-export type SettingsState = {
-  code?: string;
-  saved?: boolean;
+export type SettingsState = ActionState & {
   rejected?: string[];
   /**
    * After a cover save: the stored picture, or `null` once removed, so the
@@ -34,26 +30,13 @@ export type SettingsState = {
   cover?: ContestCover | null;
 };
 
-async function attempt(
-  path: string,
-  init: { method: string; body: unknown },
-  contestId: string,
-): Promise<SettingsState> {
-  const failure = await serverRequest(path, init).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
-  refresh(contestId);
-  return { saved: true };
+/** The contest's workspace and the register. */
+function changed(contestId: string): Revalidation[] {
+  return ["/contests", { layout: `/contests/${contestId}` }];
 }
 
-/** Revalidates the contest's workspace and the register. */
-function refresh(contestId: string): void {
-  revalidatePath("/contests");
-  revalidatePath(`/contests/${contestId}`, "layout");
+function save(contestId: string, path: string, init: { method: string; body: unknown }): Promise<SettingsState> {
+  return serverAction(() => serverRequest(path, init), { revalidate: changed(contestId) });
 }
 
 /**
@@ -132,7 +115,7 @@ export async function saveSettingsAction(
   };
   if (icpcPenalty.value !== undefined) body.icpc_penalty_min = icpcPenalty.value;
 
-  return attempt(`/contests/${contestId}`, { method: "PATCH", body }, contestId);
+  return save(contestId, `/contests/${contestId}`, { method: "PATCH", body });
 }
 
 /**
@@ -150,7 +133,7 @@ export async function savePrizePlacesAction(
   const places = prizePlacesFromForm(form);
   if (!places.ok) return { code: "invalid_request" };
 
-  return attempt(`/contests/${contestId}/prize-places`, { method: "PUT", body: places.value }, contestId);
+  return save(contestId, `/contests/${contestId}/prize-places`, { method: "PUT", body: places.value });
 }
 
 /**
@@ -169,10 +152,10 @@ export async function extendGraceAction(
   const grace = graceFromForm(form, Number.isFinite(current) && current > 0 ? current : 0);
   if (!grace.ok) return { code: grace.code };
 
-  return attempt(
+  return save(
+    contestId,
     `/contests/${contestId}/grace`,
     { method: "PATCH", body: { grace_period_min: grace.value } },
-    contestId,
   );
 }
 
@@ -192,10 +175,10 @@ export async function saveArchiveSettingsAction(
   if (!settings.ok) return { code: "invalid_request" };
 
   const { visibility, archiveTasks } = settings.value;
-  return attempt(
+  return save(
+    contestId,
     `/contests/${contestId}/archive-settings`,
     { method: "PUT", body: { visibility, archive_tasks: archiveTasks } },
-    contestId,
   );
 }
 
@@ -219,13 +202,13 @@ export async function saveLanguagesAction(
   const asked = enumFromForm(form.get("defaultLanguage"), LOCALES);
   const fallback = asked && chosen.includes(asked) ? asked : chosen[0];
 
-  return attempt(
+  return save(
+    contestId,
     `/contests/${contestId}/languages`,
     {
       method: "PUT",
       body: { languages: chosen.map((code) => ({ code, is_default: code === fallback })) },
     },
-    contestId,
   );
 }
 
@@ -248,7 +231,8 @@ export async function savePolicyAction(
 
   const quota = Number(form.get("diskQuotaRatio"));
 
-  return attempt(
+  return save(
+    contestId,
     `/contests/${contestId}/sql-policy`,
     {
       method: "PUT",
@@ -263,7 +247,6 @@ export async function savePolicyAction(
         disk_quota_ratio: Number.isFinite(quota) && quota > 0 ? Math.floor(quota) : 1,
       },
     },
-    contestId,
   );
 }
 
@@ -290,20 +273,12 @@ export async function uploadCoverAction(
   payload.set("file", file);
   payload.set("attribution", attribution);
 
-  const answer = await serverRequest(`/contests/${contestId}/cover`, {
-    method: "PUT",
-    rawBody: payload,
-  }).then(
-    (value: unknown) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
-
-  if ("error" in answer) {
-    return { code: answer.error instanceof ApiError ? answer.error.code : "unreachable" };
-  }
-
-  refresh(contestId);
-  return { saved: true, cover: contestCoverSchema.parse(answer.value) };
+  // Read after the save is revalidated: a cover the API stored but answered
+  // in a shape this side cannot read is a contract break, not a refusal.
+  return serverAction(() => serverRequest(`/contests/${contestId}/cover`, { method: "PUT", rawBody: payload }), {
+    revalidate: changed(contestId),
+    success: (answer) => ({ ok: true, cover: contestCoverSchema.parse(answer) }),
+  });
 }
 
 /** Removes the picture; the contest falls back to its drawn cover. */
@@ -314,18 +289,13 @@ export async function removeCoverAction(
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const failure = await serverRequest(`/contests/${contestId}/cover`, { method: "DELETE" }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-
-  if (failure) return { code: failureCode(failure) };
-
-  refresh(contestId);
-  return { saved: true, cover: null };
+  return serverAction(() => serverRequest(`/contests/${contestId}/cover`, { method: "DELETE" }), {
+    revalidate: changed(contestId),
+    success: () => ({ ok: true, cover: null }),
+  });
 }
 
-export type DeleteDraftState = { code?: string };
+export type DeleteDraftState = ActionState;
 
 /**
  * Deletes a draft. The id is checked here; the server refuses anything that is
@@ -339,13 +309,10 @@ export async function deleteDraftAction(
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const failure = await serverRequest(`/contests/${contestId}`, { method: "DELETE" }).then(
-    () => null,
-    (error: unknown) => error,
-  );
-  if (failure) return { code: failureCode(failure) };
+  const deleted = await serverAction(() => serverRequest(`/contests/${contestId}`, { method: "DELETE" }), {
+    revalidate: ["/contests"],
+  });
+  if (!deleted.ok) return deleted;
 
-  revalidatePath("/contests");
-  // Outside any catch: `redirect` works by throwing.
   redirect("/contests");
 }

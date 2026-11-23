@@ -5,7 +5,10 @@ import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 vi.mock("./actions", () => ({ signUpAction: vi.fn() }));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");

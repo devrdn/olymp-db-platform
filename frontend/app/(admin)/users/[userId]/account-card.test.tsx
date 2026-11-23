@@ -169,7 +169,7 @@ describe("AccountCard, the roles panel", () => {
 describe("AccountCard, clearing a sign-in lockout", () => {
   beforeEach(() => {
     unlockSignInAction.mockReset();
-    unlockSignInAction.mockResolvedValue({ done: true });
+    unlockSignInAction.mockResolvedValue({ ok: true });
   });
 
   const renderCard = () =>
@@ -239,7 +239,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     );
 
   test("offers no email option while mail is off, and sends none", async () => {
-    resetPasswordAction.mockResolvedValue({ done: true, oneTimePassword: "swordfish-1", emailed: false });
+    resetPasswordAction.mockResolvedValue({ ok: true, oneTimePassword: "swordfish-1", emailed: false });
     renderCard({ status: "off" });
 
     expect(screen.queryByRole("checkbox", { name: en.accounts.signInMail.option })).not.toBeInTheDocument();
@@ -253,7 +253,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
   });
 
   test("ticks the option by default, sends it, and shows the password, the queued email and when it goes", async () => {
-    resetPasswordAction.mockResolvedValue({ done: true, oneTimePassword: "swordfish-1", emailed: true });
+    resetPasswordAction.mockResolvedValue({ ok: true, oneTimePassword: "swordfish-1", emailed: true });
     renderCard(on);
 
     expect(screen.getByRole("checkbox", { name: en.accounts.signInMail.option })).toBeChecked();
@@ -292,7 +292,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
   // answer is what counts.
   test("names why the password was not emailed, and still shows it", async () => {
     resetPasswordAction.mockResolvedValue({
-      done: true,
+      ok: true,
       oneTimePassword: "swordfish-1",
       emailed: false,
       emailSkippedReason: "no_address",

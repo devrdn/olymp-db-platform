@@ -95,7 +95,7 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
         </Button>
 
         {/* `status`, not `alert`: a successful save is not an interruption. */}
-        {state.saved && !failure ? (
+        {state.ok && !failure ? (
           <p role="status" className="text-small text-good">
             {t.saved}
           </p>

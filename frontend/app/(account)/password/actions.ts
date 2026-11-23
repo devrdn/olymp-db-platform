@@ -3,12 +3,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { failureCode } from "@/lib/api/client";
-import { serverRequest } from "@/lib/api/server";
+import { serverOutcome, serverRequest, type ActionState } from "@/lib/api/server";
 import { checkPasswordChange } from "@/lib/auth/password-change";
 import { sessionCookie } from "@/lib/auth/session";
 
-export type ChangePasswordState = { code?: string };
+export type ChangePasswordState = ActionState;
 
 /**
  * Replaces the issued password. A Server Action: works without JavaScript,
@@ -31,18 +30,10 @@ export async function changePasswordAction(
 
   if (!check.ok) return { code: check.code };
 
-  // `.then(null, ...)`, not try/catch: `redirect` throws, and a catch would
-  // swallow it.
-  const failure = await serverRequest("/auth/password", {
-    method: "POST",
-    body: check.command,
-  }).then(
-    () => null,
-    (error: unknown) => error,
-  );
+  const changed = await serverOutcome(() => serverRequest("/auth/password", { method: "POST", body: check.command }));
 
-  if (failure) {
-    const code = failureCode(failure);
+  if (!changed.ok) {
+    const { code } = changed;
 
     // The session expired meanwhile; this is not a password-field error.
     if (code === "unauthenticated") {

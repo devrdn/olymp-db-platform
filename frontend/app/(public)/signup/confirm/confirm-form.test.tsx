@@ -102,7 +102,7 @@ describe("ConfirmForm, a new code", () => {
 
   test("asks for a new code and counts down again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    resendCodeAction.mockResolvedValue({ sent: true });
+    resendCodeAction.mockResolvedValue({ ok: true });
     renderForm();
     act(() => vi.advanceTimersByTime(60_000));
 
@@ -115,7 +115,7 @@ describe("ConfirmForm, a new code", () => {
 
   test("waits as long as the API says when a code went out too recently", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    resendCodeAction.mockResolvedValue({ sent: false, code: "signup_too_soon", retryAfterSeconds: 37 });
+    resendCodeAction.mockResolvedValue({ code: "signup_too_soon", retryAfterSeconds: 37 });
     renderForm();
     act(() => vi.advanceTimersByTime(60_000));
 
@@ -127,7 +127,7 @@ describe("ConfirmForm, a new code", () => {
 
   test("offers to sign up again when the sign-up a new code was asked for is gone", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    resendCodeAction.mockResolvedValue({ sent: false, code: "signup_code_expired" });
+    resendCodeAction.mockResolvedValue({ code: "signup_code_expired" });
     renderForm();
     act(() => vi.advanceTimersByTime(60_000));
 
@@ -138,7 +138,7 @@ describe("ConfirmForm, a new code", () => {
 
   test("says why when a new code was refused, and lets the person try again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    resendCodeAction.mockResolvedValue({ sent: false, code: "too_many_attempts" });
+    resendCodeAction.mockResolvedValue({ code: "too_many_attempts" });
     renderForm();
     act(() => vi.advanceTimersByTime(60_000));
 

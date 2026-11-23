@@ -13,12 +13,18 @@ const { serverRequest, fetchIdentity, redirect } = vi.hoisted(() => ({
     throw new Error(`NEXT_REDIRECT ${target}`);
   }),
 }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 vi.mock("@/lib/auth/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth/session")>()),
   fetchIdentity,
 }));
-vi.mock("next/navigation", () => ({ redirect, unstable_rethrow: () => {} }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
 vi.mock("./actions", () => ({ signInAction: vi.fn() }));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");

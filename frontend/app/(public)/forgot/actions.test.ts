@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 vi.mock("@/lib/i18n/server", () => ({ activeLocale: async () => "ro" }));
 
 import { forgotPasswordAction } from "./actions";
@@ -28,7 +31,7 @@ describe("forgotPasswordAction", () => {
       method: "POST",
       body: { login: "ana@example.com" },
     });
-    expect(state).toEqual({ sent: true });
+    expect(state).toEqual({ ok: true });
   });
 
   /** The API answers alike for every identifier; so does the page. */

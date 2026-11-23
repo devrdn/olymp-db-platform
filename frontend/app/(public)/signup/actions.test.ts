@@ -9,7 +9,10 @@ const { jar, redirect } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("next/headers", () => ({ cookies: async () => jar }));
-vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
 vi.mock("@/lib/api/caller", () => ({ callerHeaders: async () => ({ "x-forwarded-for": "203.0.113.7" }) }));
 vi.mock("@/lib/i18n/server", () => ({ activeLocale: async () => "ro" }));
 

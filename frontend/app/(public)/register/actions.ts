@@ -1,8 +1,7 @@
 "use server";
 
-import { failureCode } from "@/lib/api/client";
 import { registrationOutcomeSchema, type RegistrationOutcome } from "@/lib/api/registrations";
-import { serverRequest } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
 export type RegisterValues = { firstName: string; lastName: string; email: string };
 
@@ -10,8 +9,7 @@ export type RegisterValues = { firstName: string; lastName: string; email: strin
  * Either the outcome, or a code with what was typed, since React resets an
  * action's form and the visitor should not type it all again.
  */
-export type RegisterState = {
-  code?: string;
+export type RegisterState = ActionState & {
   outcome?: RegistrationOutcome;
   values?: RegisterValues;
 };
@@ -33,13 +31,14 @@ export async function registerAction(_previous: RegisterState, form: FormData): 
   }
   if (values.email === "") return { code: "registration_invalid_email", values };
 
-  try {
-    const payload = await serverRequest("/public/registrations", {
-      method: "POST",
-      body: { first_name: values.firstName, last_name: values.lastName, email: values.email },
-    });
-    return { outcome: registrationOutcomeSchema.parse(payload) };
-  } catch (error) {
-    return { code: failureCode(error), values };
-  }
+  return serverAction(
+    async () =>
+      registrationOutcomeSchema.parse(
+        await serverRequest("/public/registrations", {
+          method: "POST",
+          body: { first_name: values.firstName, last_name: values.lastName, email: values.email },
+        }),
+      ),
+    { success: (outcome) => ({ ok: true, outcome }), failure: ({ code }) => ({ code, values }) },
+  );
 }

@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "./client";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("./server", () => ({ serverRequest }));
+vi.mock("./server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server")>()),
+  serverRequest,
+}));
 
 import { authMethodsSchema, fetchAuthMethods } from "./auth-methods";
 
@@ -12,7 +15,7 @@ const body = { password_signup: true, password_reset: false, microsoft: false, t
 
 beforeEach(() => {
   serverRequest.mockReset();
-  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
 });
 
 describe("the ways in", () => {
@@ -64,13 +67,14 @@ describe("the ways in", () => {
     await expect(fetchAuthMethods()).rejects.toThrow();
   });
 
-  test("are unknown, and warned about, when the answer has no providers list", async () => {
+  test("are unknown, and logged with the path, when the answer has no providers list", async () => {
     const without: Record<string, unknown> = { ...body };
     delete without.providers;
     serverRequest.mockResolvedValueOnce(without);
 
     expect(await fetchAuthMethods()).toBeNull();
-    expect(console.warn).toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("/auth/methods"));
   });
 
   test("are unknown when the answer is not the contract", async () => {

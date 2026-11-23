@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-const saveSettingsAction = vi.hoisted(() => vi.fn(async () => ({ saved: true })));
+const saveSettingsAction = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("./actions", () => ({ saveSettingsAction }));
 
 import type { Settings } from "@/lib/api/settings";

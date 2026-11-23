@@ -7,8 +7,14 @@ const { redirect, revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("next/navigation", () => ({ redirect }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { ApiError } from "@/lib/api/client";
 import { deleteDraftAction, extendGraceAction, saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
@@ -185,7 +191,7 @@ describe("savePrizePlacesAction", () => {
 
     const state = await savePrizePlacesAction({}, form({ prizeFirst: "1", prizeSecond: "2", prizeThird: "" }));
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/prize-places`, {
       method: "PUT",
       body: { first: 1, second: 2, third: 0 },
@@ -254,7 +260,7 @@ describe("saveArchiveSettingsAction", () => {
 
     const state = await saveArchiveSettingsAction({}, form({ visibility: "closed", archiveTasks: "on" }));
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/archive-settings`, {
       method: "PUT",
       body: { visibility: "closed", archive_tasks: true },
@@ -300,7 +306,7 @@ describe("extendGraceAction", () => {
 
     const state = await extendGraceAction({}, form({ gracePeriodMin: "4320", currentGraceMin: "1440" }));
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledTimes(1);
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/grace`, {
       method: "PATCH",

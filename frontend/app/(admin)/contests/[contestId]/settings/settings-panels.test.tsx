@@ -9,7 +9,10 @@ import { fill } from "@/lib/i18n/fill";
 
 // The real actions run in one test below, against a faked API.
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { saveSettingsAction } from "./actions";

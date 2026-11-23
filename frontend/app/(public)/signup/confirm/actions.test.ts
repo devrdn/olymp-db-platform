@@ -8,7 +8,10 @@ const { jar, redirect, fetchIdentity } = vi.hoisted(() => ({
   fetchIdentity: vi.fn(),
 }));
 vi.mock("next/headers", () => ({ cookies: async () => jar }));
-vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
 vi.mock("@/lib/api/caller", () => ({ callerHeaders: async () => ({ "x-forwarded-for": "203.0.113.7" }) }));
 vi.mock("@/lib/i18n/server", () => ({ activeLocale: async () => "ru" }));
 vi.mock("@/lib/auth/session", async (importOriginal) => ({
@@ -185,7 +188,7 @@ describe("resendCodeAction", () => {
       ]),
     );
 
-    expect(await resendCodeAction()).toEqual({ sent: true });
+    expect(await resendCodeAction()).toEqual({ ok: true });
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe("http://api.test/api/v1/public/signup/resend?lang=ru");
@@ -224,7 +227,6 @@ describe("resendCodeAction", () => {
     );
 
     expect(await resendCodeAction()).toEqual({
-      sent: false,
       code: "signup_too_soon",
       retryAfterSeconds: 37,
     });
@@ -233,7 +235,7 @@ describe("resendCodeAction", () => {
   test("sends the person to start again when the browser holds no address", async () => {
     browserHolds({ dbcontest_signup: "tok" });
 
-    expect(await resendCodeAction()).toEqual({ sent: false, code: "signup_code_expired" });
+    expect(await resendCodeAction()).toEqual({ code: "signup_code_expired" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

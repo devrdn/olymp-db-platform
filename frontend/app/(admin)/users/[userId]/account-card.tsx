@@ -90,7 +90,7 @@ function Outcome({
       </p>
     );
   }
-  if (state.done) {
+  if (state.ok) {
     return (
       <p role="status" className="text-small text-good">
         {doneLabel ?? dict.accounts.card.saved}
@@ -425,7 +425,7 @@ export function AccountCard({
                   <Button type="submit" variant="secondary" disabled={resetting}>
                     {resetting ? t.saving : t.resetPassword}
                   </Button>
-                  <Outcome state={{ code: reset.code }} dict={dict} />
+                  <Outcome state={reset.ok ? {} : reset} dict={dict} />
                 </div>
 
                 {/* Shown until the page is left: it arrives once and cannot be retrieved. */}

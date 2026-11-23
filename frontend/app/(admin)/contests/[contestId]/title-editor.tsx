@@ -55,8 +55,8 @@ function TitleForm({
 
   // The header shows the saved title, so closing is the confirmation.
   useEffect(() => {
-    if (state.saved) onClose();
-  }, [state.saved, onClose]);
+    if (state.ok) onClose();
+  }, [state.ok, onClose]);
 
   if (!primary) return null;
 

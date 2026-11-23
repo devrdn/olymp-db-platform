@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { ApiError } from "./client";
 import {
   confirmSignup,
   resendSignup,
@@ -47,12 +46,12 @@ describe("signupCookieName", () => {
 describe("signupAnswerCode", () => {
   /** The routes are not mounted when sign-up is off. */
   test("reads the router's not_found as sign-up not being offered", () => {
-    expect(signupAnswerCode(new ApiError("not_found", 404, "Resource not found"))).toBe("signup_not_available");
+    expect(signupAnswerCode("not_found")).toBe("signup_not_available");
   });
 
   test("passes every other code through", () => {
-    expect(signupAnswerCode(new ApiError("login_taken", 409, "taken"))).toBe("login_taken");
-    expect(signupAnswerCode(new Error("socket"))).toBe("unreachable");
+    expect(signupAnswerCode("login_taken")).toBe("login_taken");
+    expect(signupAnswerCode("unreachable")).toBe("unreachable");
   });
 });
 

@@ -83,11 +83,6 @@ export class ApiError extends Error {
   }
 }
 
-/** The API's code when the API answered, `unreachable` for anything else. */
-export function failureCode(error: unknown): string {
-  return error instanceof ApiError ? error.code : CLIENT_ERROR_CODES.unreachable;
-}
-
 /**
  * Whether a thrown value is a cancelled fetch. Checked by name: a
  * `DOMException` is not reliably an `Error` across environments.

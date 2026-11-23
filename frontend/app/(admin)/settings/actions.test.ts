@@ -5,7 +5,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { branding, forgetBranding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
@@ -43,7 +46,7 @@ describe("saveSettingsAction", () => {
         },
       },
     });
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
   });
 
   test("sends an empty feedback address, which removes the link", async () => {
@@ -78,7 +81,7 @@ describe("uploadImageAction, the dark-theme slots", () => {
 
     const state = await uploadImageAction({}, data);
 
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(
       `/settings/images/${kind}`,
       expect.objectContaining({ method: "PUT" }),
@@ -105,7 +108,7 @@ describe("a change to the installation's frame", () => {
     await branding();
 
     serverRequest.mockResolvedValueOnce(undefined);
-    expect(await act()).toEqual({ saved: true });
+    expect(await act()).toEqual({ ok: true });
 
     serverRequest.mockResolvedValueOnce({ values: { "installation.name": "USM Chișinău" } });
     expect((await branding()).name).toBe("USM Chișinău");
@@ -123,7 +126,7 @@ describe("switchArchiveAction", () => {
 
     expect(serverRequest).toHaveBeenLastCalledWith("/settings/archive", { method: "PUT", body: { enabled: true } });
     expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
-    expect(state).toEqual({ saved: true });
+    expect(state).toEqual({ ok: true });
 
     serverRequest.mockResolvedValueOnce({ values: {}, archive: true });
     expect((await branding()).archive).toBe(true);
@@ -153,7 +156,7 @@ describe("sendTestMailAction", () => {
     const state = await sendTestMailAction();
 
     expect(serverRequest).toHaveBeenCalledWith("/settings/mail-test", { method: "POST" });
-    expect(state).toEqual({ sentTo: "root@usm.md" });
+    expect(state).toEqual({ ok: true, sentTo: "root@usm.md" });
   });
 
   test("passes a refusal through by its code, with the relay's reply", async () => {

@@ -7,7 +7,10 @@ const { revalidatePath, serverRequest } = vi.hoisted(() => ({
   serverRequest: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
 
 import { enrollAction } from "./actions";
 
@@ -41,7 +44,7 @@ describe("enrollAction", () => {
   test("enrols and refreshes the register", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
 
-    expect(await enrollAction({}, form())).toEqual({ enrolled: true });
+    expect(await enrollAction({}, form())).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/enroll`, { method: "POST" });
     expect(revalidatePath).toHaveBeenCalledWith("/my");
   });

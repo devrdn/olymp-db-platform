@@ -107,7 +107,7 @@ function Resend({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
     startSending(async () => {
       const answer = await resendCodeAction();
       setOutcome(answer);
-      if (answer.sent) wait(RESEND_COOLDOWN_SECONDS);
+      if (answer.ok) wait(RESEND_COOLDOWN_SECONDS);
       else if (answer.code === "signup_too_soon") wait(answer.retryAfterSeconds ?? RESEND_COOLDOWN_SECONDS);
     });
   };
@@ -118,7 +118,7 @@ function Resend({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
         {sending ? t.resending : waiting ? fill(t.resendIn, { seconds: left }) : t.resend}
       </Button>
 
-      {outcome?.sent ? (
+      {outcome?.ok ? (
         <p role="status" className="text-small text-ink-2">
           {t.resent}
         </p>

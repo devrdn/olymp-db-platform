@@ -8,8 +8,14 @@ const { serverRequest, redirect } = vi.hoisted(() => ({
     throw new Error(`NEXT_REDIRECT ${target}`);
   }),
 }));
-vi.mock("@/lib/api/server", () => ({ serverRequest }));
-vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("@/lib/api/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/server")>()),
+  serverRequest,
+}));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
 
 import { resetPasswordAction } from "./actions";
 

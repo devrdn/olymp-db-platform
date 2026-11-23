@@ -12,7 +12,7 @@ const { saveQuestionAction } = vi.hoisted(() => ({
   saveQuestionAction: vi.fn(async (previous: unknown, form: FormData) => {
     void previous;
     void form;
-    return { saved: true };
+    return { ok: true };
   }),
 }));
 vi.mock("./actions", () => ({ saveQuestionAction }));

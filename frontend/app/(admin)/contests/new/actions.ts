@@ -1,15 +1,12 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { ApiError } from "@/lib/api/client";
 import { contestSchema, type Enrollment, ENROLLMENTS, enumFromForm, QUESTION_MODES, type QuestionMode, type Timing, TIMINGS } from "@/lib/api/contests";
-import { serverRequest } from "@/lib/api/server";
+import { serverOutcome, serverRequest, type ActionState } from "@/lib/api/server";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 
-export type NewContestState = { code?: string };
-
+export type NewContestState = ActionState;
 
 /**
  * Creates a contest with the choices that freeze later: question format, timing
@@ -53,29 +50,28 @@ export async function createContestAction(
 
   if (timing === "individual" && durationMin === null) return { code: "invalid_request" };
 
-  const created = await serverRequest("/contests", {
-    method: "POST",
-    body: {
-      enrollment: enumFromForm<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
-      question_mode: enumFromForm<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
-      timing,
-      duration_min: durationMin,
-      starts_at: null,
-      ends_at: null,
-      allowed_cidrs: [],
-      languages: chosen.map((code) => ({ code, is_default: code === defaultLanguage })),
-      translations,
-    },
-  }).then(
-    (payload) => contestSchema.parse(payload),
-    (error: unknown) => (error instanceof ApiError ? error : null),
+  const created = await serverOutcome(
+    async () =>
+      contestSchema.parse(
+        await serverRequest("/contests", {
+          method: "POST",
+          body: {
+            enrollment: enumFromForm<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
+            question_mode: enumFromForm<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
+            timing,
+            duration_min: durationMin,
+            starts_at: null,
+            ends_at: null,
+            allowed_cidrs: [],
+            languages: chosen.map((code) => ({ code, is_default: code === defaultLanguage })),
+            translations,
+          },
+        }),
+      ),
+    { revalidate: ["/contests"] },
   );
-
-  if (created instanceof ApiError) return { code: created.code };
-  if (created === null) return { code: "unreachable" };
-
-  revalidatePath("/contests");
+  if (!created.ok) return { code: created.code };
 
   // Straight to the workspace, where the author writes the story next.
-  redirect(`/contests/${created.id}`);
+  redirect(`/contests/${created.value.id}`);
 }

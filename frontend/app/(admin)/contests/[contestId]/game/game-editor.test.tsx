@@ -8,7 +8,7 @@ import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 
 import { GameEditor } from "./game-editor";
 
-const saved = vi.hoisted(() => ({ current: { saved: true } as { saved?: boolean; code?: string } }));
+const saved = vi.hoisted(() => ({ current: { ok: true } as { ok?: true; code?: string } }));
 const status = vi.hoisted(() => ({ current: null as Game | null }));
 const saveGameScriptAction = vi.hoisted(() => vi.fn(async () => saved.current));
 const gameStatusAction = vi.hoisted(() => vi.fn(async () => status.current));
@@ -47,7 +47,7 @@ function show(initial: Game, { editable = true, script = "" } = {}) {
 }
 
 beforeEach(() => {
-  saved.current = { saved: true };
+  saved.current = { ok: true };
   status.current = null;
   gameStatusAction.mockClear();
 });

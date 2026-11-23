@@ -97,7 +97,7 @@ export function CoverPanel({
       // `undefined`: the save was not about the cover; `null`: the cover is
       // gone.
       if (state.cover !== undefined) setCurrent(state.cover);
-      if (state.saved) setChosen(null);
+      if (state.ok) setChosen(null);
     });
   }
 
@@ -219,7 +219,7 @@ export function CoverPanel({
                 {uploading ? t.uploading : current ? t.replace : t.upload}
               </Button>
 
-              {outcome?.of === "upload" && outcome.state.saved ? (
+              {outcome?.of === "upload" && outcome.state.ok ? (
                 <p role="status" className="text-small text-good">
                   {t.uploaded}
                 </p>
@@ -244,7 +244,7 @@ export function CoverPanel({
                 </p>
               ) : null}
             </form>
-          ) : outcome?.of === "remove" && outcome.state.saved ? (
+          ) : outcome?.of === "remove" && outcome.state.ok ? (
             <p role="status" className="text-small text-good">
               {t.removed}
             </p>

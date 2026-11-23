@@ -23,7 +23,7 @@ const FAILURE_ID = "forgot-failure";
 export function ForgotForm({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
   const [state, formAction, pending] = useActionState<ForgotState, FormData>(forgotPasswordAction, {});
 
-  if (state.sent) return <Sent t={t} />;
+  if (state.ok) return <Sent t={t} />;
   if (state.unavailable) return <Unavailable t={t} />;
 
   const failure = state.code ? messageForCode(state.code, errors) : null;
