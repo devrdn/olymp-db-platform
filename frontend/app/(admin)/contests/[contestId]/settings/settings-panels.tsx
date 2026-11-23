@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState, useId, useState } from "react";
+import { useId, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { ActionFooter, ActionForm } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
@@ -23,9 +23,7 @@ import {
   savePolicyAction,
   savePrizePlacesAction,
   saveSettingsAction,
-  type SettingsState,
 } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 /**
@@ -84,51 +82,6 @@ function HelpLegend({
         <Tooltip label={dict.chrome.helpLabel}>{help}</Tooltip>
       </span>
     </legend>
-  );
-}
-
-export function SaveRow({
-  state,
-  pending,
-  editable,
-  dict,
-}: {
-  state: SettingsState;
-  pending: boolean;
-  editable: boolean;
-  dict: Dictionary;
-}) {
-  const t = dict.workspace.settings;
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-4">
-        <Button type="submit" disabled={pending || !editable}>
-          {pending ? t.saving : t.save}
-        </Button>
-
-        {state.ok && !failure ? (
-          <p role="status" className="text-small text-good">
-            {t.saved}
-          </p>
-        ) : null}
-
-        {failure ? (
-          <p role="alert" className="max-w-body text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
-      </div>
-
-      {/* The server answers one code; only this side knows which entries were wrong. */}
-      {state.rejected && state.rejected.length > 0 ? (
-        <p className="max-w-body font-mono text-data text-warn">{state.rejected.join(", ")}</p>
-      ) : null}
-    </div>
   );
 }
 
@@ -262,10 +215,6 @@ export function ContestPanel({
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings;
-  const [state, formAction, pending] = useActionState<SettingsState, FormData>(
-    saveSettingsAction,
-    {},
-  );
   const [timing, setTiming] = useState<string>(contest.timing);
   const [progression, setProgression] = useState<string>(contest.progression);
   const [scoring, setScoring] = useState<string>(contest.scoring);
@@ -279,15 +228,15 @@ export function ContestPanel({
   const [freezeMode, setFreezeMode] = useState<string>(freezeInitial.mode);
   const [names, setNames] = useState<string>(contest.leaderboard.names);
 
-  // Keyed by the server's version: the fields are uncontrolled, so only a
-  // remount shows the saved values. The key is on the form, not the panel, so
-  // `useActionState` and the "saved" message survive, and it changes only when
-  // the server copy does.
   return (
-    <form key={contest.updatedAt} action={formAction} className="contents">
+    <ActionForm
+      action={saveSettingsAction}
+      fields={{ contestId: contest.id }}
+      errors={dict.errors}
+      revision={contest.updatedAt}
+      className="contents"
+    >
       <Panel title={t.schedule.heading} help={t.schedule.help} dict={dict}>
-        <input type="hidden" name="contestId" value={contest.id} />
-
         <div className="grid gap-6 narrow:grid-cols-2">
           <Field id="startsAt" label={t.schedule.startsAt}>
             <Input
@@ -602,9 +551,9 @@ export function ContestPanel({
           </p>
         </div>
 
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+        <ActionFooter labels={dict.workspace.settings} disabled={!editable} />
       </Panel>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -622,7 +571,6 @@ export function PrizePanel({
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings.prizes;
-  const [state, formAction, pending] = useActionState<SettingsState, FormData>(savePrizePlacesAction, {});
   const hintId = useId();
   const winnerId = useId();
 
@@ -632,19 +580,22 @@ export function PrizePanel({
     { name: "prizeThird", label: t.third, value: contest.prizePlaces.third },
   ];
 
-  // Keyed on the counts, not updatedAt, which this save leaves alone: a save
-  // remounts the uncontrolled fields onto the server's values.
+  // The counts, not updatedAt, which this save leaves alone.
   const { first, second, third } = contest.prizePlaces;
   return (
-    <form key={`${first}-${second}-${third}`} action={formAction} className="contents">
+    <ActionForm
+      action={savePrizePlacesAction}
+      fields={{ contestId: contest.id }}
+      errors={dict.errors}
+      revision={`${first}-${second}-${third}`}
+      className="contents"
+    >
       <Panel
         title={t.heading}
         help={t.help}
         dict={dict}
         frozen={editable ? undefined : dict.workspace.facts.frozen}
       >
-        <input type="hidden" name="contestId" value={contest.id} />
-
         <div className="grid gap-6 narrow:grid-cols-3">
           {fields.map((field) => (
             <Field key={field.name} id={field.name} label={field.label} describedBy={`${hintId} ${winnerId}`}>
@@ -671,9 +622,9 @@ export function PrizePanel({
           </p>
         </div>
 
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+        <ActionFooter labels={dict.workspace.settings} disabled={!editable} />
       </Panel>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -693,7 +644,6 @@ export function ArchivePanel({
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings.archive;
-  const [state, formAction, pending] = useActionState<SettingsState, FormData>(saveArchiveSettingsAction, {});
   const reasonId = useId();
   const tasksHintId = useId();
 
@@ -701,13 +651,16 @@ export function ArchivePanel({
   // server refuses the same combination.
   const selfRegistration = contest.enrollment === "open";
 
-  // Keyed on the choices, not updatedAt, which this save leaves alone: a save
-  // remounts the uncontrolled fields onto the server's values.
+  // The choices, not updatedAt, which this save leaves alone.
   return (
-    <form key={`${contest.visibility}-${contest.archiveTasks}`} action={formAction} className="contents">
+    <ActionForm
+      action={saveArchiveSettingsAction}
+      fields={{ contestId: contest.id }}
+      errors={dict.errors}
+      revision={`${contest.visibility}-${contest.archiveTasks}`}
+      className="contents"
+    >
       <Panel title={t.heading} help={t.help} dict={dict}>
-        <input type="hidden" name="contestId" value={contest.id} />
-
         {archiveOn ? null : (
           <p className="max-w-body text-small text-warn">{t.switchedOff}</p>
         )}
@@ -744,9 +697,9 @@ export function ArchivePanel({
           </p>
         </div>
 
-        <SaveRow state={state} pending={pending} editable dict={dict} />
+        <ActionFooter labels={dict.workspace.settings} />
       </Panel>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -764,10 +717,6 @@ export function LanguagePanel({
   const declared = contest.languages.map((l) => l.code);
   const fallbackCode = contest.languages.find((l) => l.isDefault)?.code ?? declared[0];
 
-  const [state, formAction, pending] = useActionState<SettingsState, FormData>(
-    saveLanguagesAction,
-    {},
-  );
   const [chosen, setChosen] = useState<string[]>(declared);
   const [fallback, setFallback] = useState<string>(fallbackCode ?? "en");
 
@@ -780,10 +729,8 @@ export function LanguagePanel({
   }
 
   return (
-    <form action={formAction} className="contents">
+    <ActionForm action={saveLanguagesAction} fields={{ contestId: contest.id }} errors={dict.errors} className="contents">
       <Panel title={t.languages.heading} help={t.languages.help} dict={dict}>
-        <input type="hidden" name="contestId" value={contest.id} />
-
         <div className="flex flex-col gap-2.5">
           {LOCALES.map((code) => {
             const on = chosen.includes(code);
@@ -829,9 +776,9 @@ export function LanguagePanel({
 
         <p className="max-w-body text-small text-ink-3">{t.languages.warning}</p>
 
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+        <ActionFooter labels={dict.workspace.settings} disabled={!editable} />
       </Panel>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -852,7 +799,6 @@ export function PolicyPanel({
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings;
-  const [state, formAction, pending] = useActionState<SettingsState, FormData>(savePolicyAction, {});
   const [mode, setMode] = useState<string>(policy.mode);
 
   const toggles = [
@@ -862,84 +808,95 @@ export function PolicyPanel({
     { name: "allowCatalog", on: policy.allowCatalog, label: t.policy.catalog },
   ];
 
-  // Keyed like the contest form; the policy has its own stamp.
+  // The policy has its own stamp.
   return (
-    <form key={policy.updatedAt} action={formAction} className="contents">
-      <Panel
-        title={t.policy.heading}
-        help={t.policy.help}
-        dict={dict}
-        frozen={editable ? undefined : dict.workspace.facts.frozen}
-      >
-        <input type="hidden" name="contestId" value={contest.id} />
-
-        <fieldset className="flex flex-col gap-3" disabled={!editable}>
-          <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
-            {t.policy.mode}
-          </legend>
-          <Choices
-            name="mode"
-            values={SQL_MODES}
-            labels={t.policy.modes}
-            initial={policy.mode}
-            disabled={!editable}
-            onPick={setMode}
-          />
-        </fieldset>
-
-        {/* Only read-write grants writable tables. */}
-        {mode === "read_write" ? (
-          <Field
-            id="writableTables"
-            label={t.policy.tables}
-            hint={t.policy.tablesHint}
-            help={t.policy.tablesHelp}
-            helpLabel={dict.chrome.helpLabel}
-          >
-            <Input
-              name="writableTables"
-              defaultValue={policy.writableTables.join(", ")}
+    <ActionForm
+      action={savePolicyAction}
+      fields={{ contestId: contest.id }}
+      errors={dict.errors}
+      revision={policy.updatedAt}
+      className="contents"
+    >
+      {(state) => (
+        <Panel
+          title={t.policy.heading}
+          help={t.policy.help}
+          dict={dict}
+          frozen={editable ? undefined : dict.workspace.facts.frozen}
+        >
+          <fieldset className="flex flex-col gap-3" disabled={!editable}>
+            <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
+              {t.policy.mode}
+            </legend>
+            <Choices
+              name="mode"
+              values={SQL_MODES}
+              labels={t.policy.modes}
+              initial={policy.mode}
               disabled={!editable}
-              className="font-mono text-data"
+              onPick={setMode}
+            />
+          </fieldset>
+
+          {/* Only read-write grants writable tables. */}
+          {mode === "read_write" ? (
+            <Field
+              id="writableTables"
+              label={t.policy.tables}
+              hint={t.policy.tablesHint}
+              help={t.policy.tablesHelp}
+              helpLabel={dict.chrome.helpLabel}
+            >
+              <Input
+                name="writableTables"
+                defaultValue={policy.writableTables.join(", ")}
+                disabled={!editable}
+                className="font-mono text-data"
+              />
+            </Field>
+          ) : null}
+
+          <div className="flex flex-col gap-2.5">
+            {toggles.map((toggle) => (
+              <label
+                key={toggle.name}
+                className={cn(
+                  "flex items-center gap-3 text-control",
+                  editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  name={toggle.name}
+                  defaultChecked={toggle.on}
+                  disabled={!editable}
+                  className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+                />
+                {toggle.label}
+              </label>
+            ))}
+          </div>
+
+          <Field id="diskQuotaRatio" label={t.policy.quota} hint={t.policy.quotaHint}>
+            <Input
+              name="diskQuotaRatio"
+              type="number"
+              min={1}
+              step={1}
+              defaultValue={policy.diskQuotaRatio}
+              disabled={!editable}
+              className="max-w-40"
             />
           </Field>
-        ) : null}
 
-        <div className="flex flex-col gap-2.5">
-          {toggles.map((toggle) => (
-            <label
-              key={toggle.name}
-              className={cn(
-                "flex items-center gap-3 text-control",
-                editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
-              )}
-            >
-              <input
-                type="checkbox"
-                name={toggle.name}
-                defaultChecked={toggle.on}
-                disabled={!editable}
-                className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
-              />
-              {toggle.label}
-            </label>
-          ))}
-        </div>
-
-        <Field id="diskQuotaRatio" label={t.policy.quota} hint={t.policy.quotaHint}>
-          <Input
-            name="diskQuotaRatio"
-            type="number"
-            min={1}
-            step={1}
-            defaultValue={policy.diskQuotaRatio}
-            disabled={!editable}
-            className="max-w-40"
-          />
-        </Field>
-
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
-      </Panel>
-    </form>
+          <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
+            {/* The server answers one code; only this side knows which entries were wrong. */}
+            {state.rejected && state.rejected.length > 0 ? (
+              <p className="max-w-body font-mono text-data text-warn">{state.rejected.join(", ")}</p>
+            ) : null}
+          </ActionFooter>
+        </Panel>
+      )}
+    </ActionForm>
   );
 }

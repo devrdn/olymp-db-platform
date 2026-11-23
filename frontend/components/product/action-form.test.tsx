@@ -239,6 +239,26 @@ describe("ActionOutcome", () => {
 });
 
 describe("ActionForm's children", () => {
+  test("take the server's values on a new revision, and the outcome stays", async () => {
+    const action = async (): Promise<ActionState> => ({ ok: true });
+    const form = (revision: string, value: string) => (
+      <ActionForm action={action} errors={dict.errors} revision={revision}>
+        <input aria-label="title" name="title" defaultValue={value} />
+        <ActionFooter labels={dict.workspace.settings} />
+      </ActionForm>
+    );
+    const { rerender } = render(form("v1", "Old"));
+    await userEvent.clear(screen.getByRole("textbox", { name: "title" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "title" }), "Typed");
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    expect(await screen.findByRole("status")).toHaveTextContent(dict.workspace.settings.saved);
+    rerender(form("v2", "Saved"));
+
+    expect(screen.getByRole("textbox", { name: "title" })).toHaveValue("Saved");
+    expect(screen.getByRole("status")).toHaveTextContent(dict.workspace.settings.saved);
+  });
+
   test("may read what the action returned", async () => {
     const action = async (): Promise<ActionState & { added?: number }> => ({ ok: true, added: 3 });
     render(

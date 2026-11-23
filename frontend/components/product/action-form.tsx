@@ -1,6 +1,14 @@
 "use client";
 
-import { createContext, useActionState, useContext, type ComponentProps, type FormEvent, type ReactNode } from "react";
+import {
+  createContext,
+  Fragment,
+  useActionState,
+  useContext,
+  type ComponentProps,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import type { ActionState } from "@/lib/api/server";
@@ -48,6 +56,7 @@ export function ActionForm<S extends ActionState>({
   fields = {},
   confirm,
   errors,
+  revision,
   onSubmit,
   className,
   noValidate,
@@ -57,6 +66,12 @@ export function ActionForm<S extends ActionState>({
   fields?: Record<string, string | number | readonly string[]>;
   confirm?: Confirmation;
   errors: Errors;
+  /**
+   * The version of the server's copy the fields show. A new one remounts the
+   * form's contents, so uncontrolled fields take the saved values, while how
+   * the save went stays on screen; a `key` on the form would forget both.
+   */
+  revision?: string | number;
   /** Runs before the question; preventing the event sends nothing and asks nothing. */
   onSubmit?: (event: FormEvent<HTMLFormElement>) => void;
   className?: string;
@@ -88,7 +103,7 @@ export function ActionForm<S extends ActionState>({
             <input key={`${name}-${index}`} type="hidden" name={name} value={one} />
           )),
         )}
-        {typeof children === "function" ? children(state, pending) : children}
+        <Fragment key={revision}>{typeof children === "function" ? children(state, pending) : children}</Fragment>
       </form>
     </BoundForm.Provider>
   );

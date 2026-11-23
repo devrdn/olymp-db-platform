@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useId, useState } from "react";
+import { useId, useState } from "react";
 
+import { ActionFooter, ActionForm } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -13,8 +14,7 @@ import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { saveQuestionAction, type QuestionState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { saveQuestionAction } from "./actions";
 import { fill } from "@/lib/i18n/fill";
 
 /**
@@ -54,16 +54,13 @@ export function QuestionEditor({
   const [choiceIds, setChoiceIds] = useState<string[]>(question.choiceIds);
   const [kind, setKind] = useState(question.kind);
 
-  const [state, formAction, pending] = useActionState<QuestionState, FormData>(
-    saveQuestionAction,
-    {},
-  );
-
   return (
-    <form action={formAction} className="flex flex-col gap-12">
-      <input type="hidden" name="contestId" value={contestId} />
-      <input type="hidden" name="questionId" value={question.id} />
-
+    <ActionForm
+      action={saveQuestionAction}
+      fields={{ contestId, questionId: question.id }}
+      errors={dict.errors}
+      className="flex flex-col gap-12"
+    >
       <ShapeSection
         question={question}
         editable={editable}
@@ -95,9 +92,9 @@ export function QuestionEditor({
       />
 
       <div className="border-t border-line pt-5">
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+        <ActionFooter labels={dict.workspace.question} disabled={!editable} />
       </div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -121,44 +118,6 @@ function Section({
       </div>
       {children}
     </section>
-  );
-}
-
-function SaveRow({
-  state,
-  pending,
-  editable,
-  dict,
-}: {
-  state: QuestionState;
-  pending: boolean;
-  editable: boolean;
-  dict: Dictionary;
-}) {
-  const t = dict.workspace.question;
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-4">
-      <Button type="submit" disabled={pending || !editable}>
-        {pending ? t.saving : t.save}
-      </Button>
-
-      {state.ok && !failure ? (
-        <p role="status" className="text-small text-good">
-          {t.saved}
-        </p>
-      ) : null}
-
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </div>
   );
 }
 
