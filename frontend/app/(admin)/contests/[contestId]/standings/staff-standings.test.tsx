@@ -9,13 +9,16 @@ import { fill } from "@/lib/i18n/fill";
 
 // One stable router object, as Next provides: the component lists `router` in
 // an effect's dependencies.
-const { fetchStaffStandings, routerRefresh, router } = vi.hoisted(() => {
+const { fetchStaffStandings, routerRefresh, router, revealStandingsAction } = vi.hoisted(() => {
   const routerRefresh = vi.fn();
-  return { fetchStaffStandings: vi.fn(), routerRefresh, router: { refresh: routerRefresh } };
+  return {
+    fetchStaffStandings: vi.fn(),
+    routerRefresh,
+    router: { refresh: routerRefresh },
+    revealStandingsAction: vi.fn(async () => ({ revealedAt: "2026-09-20T13:00:00Z" })),
+  };
 });
-vi.mock("./actions", () => ({
-  revealStandingsAction: vi.fn(async () => ({ revealedAt: "2026-09-20T13:00:00Z" })),
-}));
+vi.mock("./actions", () => ({ revealStandingsAction }));
 vi.mock("./requests", () => ({ fetchStaffStandings }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
@@ -141,14 +144,16 @@ describe("the staff table", () => {
     ).toBeInTheDocument();
   });
 
-  test("asks before revealing, because it cannot be undone", async () => {
+  test("asks before revealing, because it cannot be undone, and sends nothing on no", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const user = userEvent.setup();
     show(board(), "finished");
 
     await user.click(screen.getByRole("button", { name: t().reveal }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(t().revealBody)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: t().revealConfirm })).toBeInTheDocument();
+
+    expect(confirm).toHaveBeenCalledWith(t().confirmReveal);
+    expect(revealStandingsAction).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 
   test("uses a fixed table layout so a long name truncates rather than growing the table", () => {

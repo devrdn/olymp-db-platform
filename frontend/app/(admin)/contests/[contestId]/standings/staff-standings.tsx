@@ -1,20 +1,13 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { GridCells, GridHeaderCells, gridTableWidth, ICPC_COLUMN, hasPrize, Initials, medalEdge, PlaceBadge, PrizeBadge } from "@/components/product/standings";
 import { Button, buttonVariants } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import type { ContestStatus } from "@/lib/api/contests";
 import type { StaffStandings } from "@/lib/api/leaderboard";
@@ -22,9 +15,8 @@ import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { revealStandingsAction, type RevealState } from "./actions";
+import { revealStandingsAction } from "./actions";
 import { fetchStaffStandings } from "./requests";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
 type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors">;
@@ -324,39 +316,19 @@ function CopyLink({ contestId, dict }: { contestId: string; dict: StaffStandings
 /** The irreversible reveal, behind a confirmation. */
 function Reveal({ contestId, dict }: { contestId: string; dict: StaffStandingsDictionary }) {
   const t = dict.leaderboard.staff;
-  const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState<RevealState, FormData>(revealStandingsAction, {});
-  const failure = state.code ? (messageForCode(state.code, dict.errors)) : null;
 
   return (
-    <>
-      <Button type="button" size="sm" variant="primary" onClick={() => setOpen(true)}>
+    <ActionForm
+      action={revealStandingsAction}
+      fields={{ contestId }}
+      confirm={t.confirmReveal}
+      errors={dict.errors}
+      className="flex flex-col items-start gap-1"
+    >
+      <ActionButton size="sm" variant="primary" pendingLabel={t.revealing}>
         {t.reveal}
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent closeLabel={t.cancel}>
-          <form action={formAction} className="flex flex-col gap-4">
-            <input type="hidden" name="contestId" value={contestId} />
-            <DialogHeader>
-              <DialogTitle>{t.revealTitle}</DialogTitle>
-              <DialogDescription>{t.revealBody}</DialogDescription>
-            </DialogHeader>
-            {failure ? (
-              <p role="alert" className="text-small text-bad">
-                {failure}
-              </p>
-            ) : null}
-            <DialogFooter>
-              <Button type="button" variant="quiet" onClick={() => setOpen(false)}>
-                {t.cancel}
-              </Button>
-              <Button type="submit" variant="primary" disabled={pending}>
-                {pending ? t.revealing : t.revealConfirm}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </>
+      </ActionButton>
+      <ActionOutcome narrow />
+    </ActionForm>
   );
 }
