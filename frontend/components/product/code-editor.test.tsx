@@ -967,6 +967,24 @@ describe("completion", () => {
     expect(offeredCompletions()).not.toContain("motive");
   });
 
+  // A keystroke's parse stops after 20 ms of wall time, here because each read
+  // of the clock jumps past them, and the view finishes it only later. The
+  // clock then stands still, so the completion's own parse budget cannot run
+  // out however busy the machine is.
+  test("offers the statement's columns when the keystroke before it was parsed slowly", async () => {
+    const { container } = render(<Editor schema={SCHEMA} />);
+    await typeInto(container, 'SELECT * FROM "CaseFiles" WHERE ');
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 25));
+    try {
+      await userEvent.keyboard("o");
+      clock.mockImplementation(() => now);
+      await waitForCompletion("OpenedAt");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("offers no table or column when the contest hides its schema", async () => {
     const { container } = render(<Editor schema={null} />);
     await typeInto(container, "SEL");

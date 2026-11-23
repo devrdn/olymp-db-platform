@@ -2,11 +2,17 @@ import { CompletionContext, type Completion, type CompletionResult } from "@code
 import { PostgreSQL, sql } from "@codemirror/lang-sql";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { GameSchema } from "@/lib/api/schema";
 
-import { sqlCompletion } from "./sql-completion";
+import { isStackOverflow, sqlCompletion } from "./sql-completion";
+
+// Counted, to see how many parses one request costs.
+vi.mock("@codemirror/language", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@codemirror/language")>();
+  return { ...actual, ensureSyntaxTree: vi.fn(actual.ensureSyntaxTree) };
+});
 
 /**
  * A state whose syntax tree covers the whole document. A new state keeps
@@ -24,11 +30,15 @@ function parsedState(doc: string, extensions: Extension): EditorState {
  * The options every source offers for `doc` with the caret at `|`, without a
  * view: the popup itself is tested through `CodeEditor`.
  */
-async function resultsAt(doc: string, schema: GameSchema | null): Promise<CompletionResult[]> {
+async function resultsAt(
+  doc: string,
+  schema: GameSchema | null,
+  stateOf: (doc: string, extensions: Extension) => EditorState = parsedState,
+): Promise<CompletionResult[]> {
   const pos = doc.indexOf("|");
   const completion = sqlCompletion();
   completion.setSchema(schema);
-  const state = parsedState(doc.replace("|", ""), [
+  const state = stateOf(doc.replace("|", ""), [
     sql({ dialect: PostgreSQL, upperCaseKeywords: true }),
     completion.extension,
   ]);
@@ -172,7 +182,7 @@ describe("inside a string", () => {
 
 describe("on a slow machine", () => {
   // Each read of the clock jumps past the 20 ms a new state is parsed for.
-  test("the names come from the whole statement however slowly it is parsed", async () => {
+  test("a test's state is parsed to the end however slowly the clock runs", async () => {
     let now = Date.now();
     const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 25));
     try {
@@ -182,6 +192,105 @@ describe("on a slow machine", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  // The state is made while the clock jumps, so its tree stops early as a
+  // keystroke's does; the clock then stands still, so the request's own
+  // parse cannot run out of time however busy the machine is.
+  test("a completion reads the whole statement when the keystroke's parse was cut short", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 25));
+    const cutShort = (doc: string, extensions: Extension) => {
+      const state = EditorState.create({ doc, extensions });
+      clock.mockImplementation(() => now);
+      return state;
+    };
+    try {
+      const results = await resultsAt("SELECT p| FROM suspects JOIN alibis USING (id)", SCHEMA, cutShort);
+
+      expect(results.flatMap((result) => result.options).map((option) => option.label)).toContain("place");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+describe("one request", () => {
+  // Each parse may spend CodeMirror's 50 ms budget, so the sources share one.
+  test("parses the document once, however many sources read its tree", async () => {
+    const counted = (doc: string, extensions: Extension) => {
+      const state = parsedState(doc, extensions);
+      vi.mocked(ensureSyntaxTree).mockClear();
+      return state;
+    };
+
+    await resultsAt('SELECT * FROM "Case|Files" WHERE true', SCHEMA, counted);
+
+    expect(ensureSyntaxTree).toHaveBeenCalledOnce();
+  });
+
+  test("spends no second budget after the first one ran out", async () => {
+    const spent = (doc: string, extensions: Extension) => {
+      const state = parsedState(doc, extensions);
+      vi.mocked(ensureSyntaxTree).mockClear();
+      vi.mocked(ensureSyntaxTree).mockReturnValueOnce(null);
+      return state;
+    };
+
+    const results = await resultsAt('SELECT * FROM "Case|Files" WHERE true', SCHEMA, spent);
+
+    // Both sources read the tree: the columns', and the tables' for the quoted name's end.
+    expect(results.some((result) => result.options.some((option) => option.label === '"CaseFiles"'))).toBe(true);
+    expect(ensureSyntaxTree).toHaveBeenCalledOnce();
+  });
+});
+
+/** A state whose finishing parse throws `error`, as a statement nested thousands deep overflows the stack. */
+function throwingOnParse(error: Error) {
+  return (doc: string, extensions: Extension) => {
+    const state = parsedState(doc, extensions);
+    vi.mocked(ensureSyntaxTree).mockImplementationOnce(() => {
+      throw error;
+    });
+    return state;
+  };
+}
+
+describe("a parse that throws", () => {
+  afterEach(() => {
+    vi.mocked(ensureSyntaxTree).mockReset();
+  });
+
+  test("falls back to the state's own tree when the stack overflows", async () => {
+    const overflow = throwingOnParse(new RangeError("Maximum call stack size exceeded"));
+
+    const results = await resultsAt("SELECT p| FROM suspects JOIN alibis USING (id)", SCHEMA, overflow);
+
+    expect(vi.mocked(ensureSyntaxTree).mock.results.at(-1)?.type).toBe("throw");
+    expect(results.flatMap((result) => result.options).map((option) => option.label)).toContain("place");
+  });
+
+  test.each([new TypeError("parser defect"), new RangeError("Token end out of bounds")])(
+    "passes any other error on: %s",
+    async (error) => {
+      await expect(resultsAt("SELECT p| FROM suspects", SCHEMA, throwingOnParse(error))).rejects.toBe(error);
+    },
+  );
+});
+
+describe("isStackOverflow", () => {
+  test("is V8's and JavaScriptCore's RangeError about the call stack", () => {
+    expect(isStackOverflow(new RangeError("Maximum call stack size exceeded"))).toBe(true);
+  });
+
+  test("is Firefox's InternalError of too much recursion", () => {
+    expect(isStackOverflow(Object.assign(new Error("too much recursion"), { name: "InternalError" }))).toBe(true);
+  });
+
+  test("is not another RangeError the parser raises", () => {
+    expect(isStackOverflow(new RangeError("Token end out of bounds"))).toBe(false);
+    expect(isStackOverflow(new TypeError("Maximum call stack size exceeded"))).toBe(false);
+    expect(isStackOverflow("Maximum call stack size exceeded")).toBe(false);
   });
 });
 

@@ -17,7 +17,7 @@ import {
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import { PostgreSQL, schemaCompletionSource, type SQLNamespace } from "@codemirror/lang-sql";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { Prec, type EditorState, type Extension } from "@codemirror/state";
 import { keymap, type EditorView } from "@codemirror/view";
 
@@ -73,14 +73,51 @@ function referencedName(text: string, quoted: boolean): string {
   return quoted ? text.slice(1, -1).replace(/""/g, '"') : text.toLowerCase();
 }
 
+type Tree = ReturnType<typeof syntaxTree>;
+
+/**
+ * Whether `error` is the engine running out of stack: a RangeError about the
+ * call stack in V8 and JavaScriptCore, an InternalError of too much recursion
+ * in Firefox. Its type and message are all the engines offer.
+ */
+export function isStackOverflow(error: unknown): boolean {
+  if (error instanceof RangeError) return /call stack/i.test(error.message);
+  return error instanceof Error && error.name === "InternalError" && /too much recursion/i.test(error.message);
+}
+
+/** Per state, so the sources of one request share one parse budget. */
+const wholeTrees = new WeakMap<EditorState, Tree>();
+
+/**
+ * The document's syntax tree, parsed to the end. A keystroke's own parse stops
+ * after 20 ms and the view finishes it in the background, up to half a second
+ * later, so the tree the state holds may stop short of the cursor or of the
+ * tables the statement names. The rest is parsed here within CodeMirror's
+ * default budget, falling back to the state's tree when it does not fit, or
+ * when a statement nested thousands deep overflows the stack while the
+ * finished tree is built.
+ */
+function wholeTree(state: EditorState): Tree {
+  let tree = wholeTrees.get(state);
+  if (tree) return tree;
+  try {
+    tree = ensureSyntaxTree(state, state.doc.length) ?? syntaxTree(state);
+  } catch (error) {
+    if (!isStackOverflow(error)) throw error;
+    tree = syntaxTree(state);
+  }
+  wholeTrees.set(state, tree);
+  return tree;
+}
+
 /**
  * Where a completion typed inside a closed quoted name ends: after its closing
  * quote, so accepting replaces the whole name instead of leaving its tail
  * behind. Only a name of word characters counts: an unclosed quote runs to the
  * next one, and the text between is not part of the name being typed.
  */
-function closedQuotedEnd(state: EditorState, pos: number): number | undefined {
-  const at = syntaxTree(state).resolveInner(pos, -1);
+function closedQuotedEnd(state: EditorState, tree: Tree, pos: number): number | undefined {
+  const at = tree.resolveInner(pos, -1);
   if (at.name !== "QuotedIdentifier" || pos <= at.from || pos >= at.to) return undefined;
   return /^\w*"$/.test(state.sliceDoc(pos, at.to)) ? at.to : undefined;
 }
@@ -103,7 +140,7 @@ function replacingQuotedName(source: CompletionSource): CompletionSource {
   return async (context) => {
     const result = await source(context);
     if (!result) return result;
-    const to = closedQuotedEnd(context.state, context.pos);
+    const to = closedQuotedEnd(context.state, wholeTree(context.state), context.pos);
     return to === undefined ? result : { ...result, to };
   };
 }
@@ -116,7 +153,8 @@ function columnsInScope(schema: GameSchema): CompletionSource {
   const byTable = new Map(schema.tables.map((table) => [table.name, columnOptions(table)]));
   return (context: CompletionContext): CompletionResult | null => {
     const { state, pos } = context;
-    const at = syntaxTree(state).resolveInner(pos, -1);
+    const tree = wholeTree(state);
+    const at = tree.resolveInner(pos, -1);
     // Inside a quoted name the word runs from its opening quote; where it ends
     // is `closedQuotedEnd`'s answer.
     const quoted = at.name === "QuotedIdentifier";
@@ -130,7 +168,7 @@ function columnsInScope(schema: GameSchema): CompletionSource {
     if (statement.name !== "Statement") return null;
 
     const options = new Map<string, Completion>();
-    syntaxTree(state).iterate({
+    tree.iterate({
       from: statement.from,
       to: statement.to,
       enter: (node) => {
@@ -150,7 +188,7 @@ function columnsInScope(schema: GameSchema): CompletionSource {
       const written = `"${option.label.replace(/"/g, '""')}"`;
       return { ...option, label: written, apply: written };
     });
-    return { from: word.from, to: closedQuotedEnd(state, pos), options: inQuotes, validFor: /^"\w*"?$/ };
+    return { from: word.from, to: closedQuotedEnd(state, tree, pos), options: inQuotes, validFor: /^"\w*"?$/ };
   };
 }
 
