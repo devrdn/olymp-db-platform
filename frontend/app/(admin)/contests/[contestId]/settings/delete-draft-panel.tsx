@@ -23,7 +23,7 @@ export function DeleteDraftPanel({
     <ActionForm
       action={deleteDraftAction}
       fields={{ contestId }}
-      confirm={fill(t.confirm, { title })}
+      confirm={{ title: fill(t.confirm, { title }), answer: t.action, cancel: dict.chrome.cancel, danger: true }}
       errors={dict.errors}
       className="contents"
     >

@@ -321,7 +321,7 @@ function Reveal({ contestId, dict }: { contestId: string; dict: StaffStandingsDi
     <ActionForm
       action={revealStandingsAction}
       fields={{ contestId }}
-      confirm={t.confirmReveal}
+      confirm={{ title: t.revealTitle, detail: t.revealBody, answer: t.revealConfirm, cancel: t.cancel }}
       errors={dict.errors}
       className="flex flex-col items-start gap-1"
     >

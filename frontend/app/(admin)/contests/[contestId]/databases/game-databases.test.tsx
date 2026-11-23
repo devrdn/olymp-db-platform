@@ -7,6 +7,7 @@ import { fill } from "@/lib/i18n/fill";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
 
 import { GameDatabases } from "./game-databases";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 type State = { ok?: true; code?: string };
 
@@ -55,7 +56,6 @@ function show(databases: Partial<GameInstances> = {}, ended = false) {
 beforeEach(() => {
   dropped.current = { ok: true };
   dropGameInstanceAction.mockClear();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -130,12 +130,11 @@ describe("the contest's databases", () => {
 
   // The confirmation names the participant, to catch the wrong row.
   test("asks before dropping, naming the participant", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     show();
 
     await userEvent.click(screen.getByRole("button", { name: t.drop }));
 
-    expect(confirm).toHaveBeenCalledWith(fill(t.confirm, { who: "Ivan Petrov" }));
+    expect(await screen.findByRole("dialog", { name: fill(t.confirm, { who: "Ivan Petrov" }) })).toBeInTheDocument();
     expect(dropGameInstanceAction).not.toHaveBeenCalled();
   });
 
@@ -143,8 +142,9 @@ describe("the contest's databases", () => {
     show();
 
     await userEvent.click(screen.getByRole("button", { name: t.drop }));
+    await answerYes(t.drop);
 
-    expect(dropGameInstanceAction).toHaveBeenCalled();
+    await vi.waitFor(() => expect(dropGameInstanceAction).toHaveBeenCalled());
     const form = dropGameInstanceAction.mock.calls[0][1];
     expect(form.get("database")).toBe("game_c1_u1");
     expect(form.get("contestId")).toBe(contestId);
@@ -155,6 +155,7 @@ describe("the contest's databases", () => {
     show();
 
     await userEvent.click(screen.getByRole("button", { name: t.drop }));
+    await answerYes(t.drop);
 
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText(en.errors.game_instance_already_dropped)).toBeInTheDocument();

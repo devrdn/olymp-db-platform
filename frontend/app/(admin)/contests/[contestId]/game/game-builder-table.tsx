@@ -23,6 +23,7 @@ import {
 } from "./actions";
 import { knownMessage, messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
@@ -103,6 +104,7 @@ export function GameBuilderTable({
 }) {
   const tb = dict.workspace.game.builder;
   const td = tb.data;
+  const [ask, confirmation] = useConfirm();
   const errors = dict.errors;
   const router = useRouter();
 
@@ -324,7 +326,7 @@ export function GameBuilderTable({
   }
 
   async function cancel() {
-    if (!window.confirm(td.cancelConfirm)) return;
+    if (!(await ask({ title: td.cancelConfirm, answer: td.cancel, cancel: td.keepUploading, danger: true }))) return;
     controllerRef.current?.abort();
     const id = uploadId;
     fileRef.current = null;
@@ -388,7 +390,8 @@ export function GameBuilderTable({
   }
 
   async function removeRow(row: number) {
-    if (!window.confirm(fill(td.deleteRowConfirm, { row }))) return;
+    const question = { title: fill(td.deleteRowConfirm, { row }), answer: td.deleteRow, cancel: dict.chrome.cancel, danger: true };
+    if (!(await ask(question))) return;
     setDeletingRow(row);
     const result = await deleteTableRowAction(contestId, table.name, row);
     setDeletingRow(null);
@@ -670,6 +673,7 @@ export function GameBuilderTable({
           </div>
         </div>
       ) : null}
+      {confirmation}
     </div>
   );
 }

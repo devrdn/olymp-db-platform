@@ -10,6 +10,8 @@ const ro = {
       close: "Închideți meniul",
     },
     helpLabel: "Explicație",
+    /** The button that sends nothing, in every question asked before a step that cannot be taken back. */
+    cancel: "Anulați",
     theme: {
       system: "Urmați tema sistemului",
       light: "Treceți la tema deschisă",
@@ -698,6 +700,7 @@ const ro = {
         eta: "~{time} rămas",
         cancel: "Anulează",
         cancelConfirm: "Anulați această încărcare? Ce a fost primit până acum este șters.",
+        keepUploading: "Continuați încărcarea",
         retry: "Reîncearcă",
         completing: "Se finalizează…",
         done: "Fișierul a fost primit. Construirea a început.",
@@ -795,6 +798,7 @@ const ro = {
           eta: "~{time} rămas",
           cancel: "Anulează",
           cancelConfirm: "Anulați această încărcare? Ce a fost primit până acum este șters.",
+          keepUploading: "Continuați încărcarea",
           retry: "Reîncearcă",
           completing: "Se finalizează…",
           done: "Fișierul a fost primit.",
@@ -1093,7 +1097,8 @@ const ro = {
         remove: "Eliminați",
         disqualify: "Descalificați",
         confirmDisqualify: "Descalificați acest participant? Tot ce a făcut rămâne în evidență.",
-        confirmRemoveEnded: "Olimpiada s-a încheiat. Eliminați totuși participantul {name}? Nu a început lucrul, dar înscrierea va dispărea din evidența olimpiadei.",
+        confirmRemoveEnded: "Eliminați participantul {name} dintr-o olimpiadă încheiată?",
+        confirmRemoveEndedBody: "Nu a început lucrul, dar înscrierea va dispărea din evidența olimpiadei.",
         empty: {
           title: "Nu este încă nimeni înscris",
           body: "Lipiți mai jos o listă de utilizatori sau lăsați înscrierea deschisă și participanții se vor înscrie singuri.",
@@ -1419,8 +1424,11 @@ const ro = {
       unlockSignIn: "Deblocați autentificarea",
       unlockSignInNote:
         "Șterge încercările de autentificare eșuate contorizate pentru acest cont, astfel încât titularul să poată încerca acum, fără să aștepte până la 15 minute. Încercările contorizate pentru o adresă se păstrează.",
-      confirmUnlockSignIn:
-        "Deblocați autentificarea pentru {login}? Faceți acest lucru doar când știți că titularul încearcă să se autentifice: cine ghicește parola primește și el încercările înapoi.",
+      unlockSignInConfirmTitle: "Deblocați autentificarea pentru {login}?",
+      unlockSignInConfirmBody:
+        "Faceți acest lucru doar când știți că titularul încearcă să se autentifice: cine ghicește parola primește și el încercările înapoi.",
+      unlockSignInConfirm: "Deblocați",
+      unlockSignInCancel: "Anulați",
       unlocked: "Autentificarea a fost deblocată",
       created: "Creat",
       back: "← Toate conturile",
@@ -1485,8 +1493,11 @@ const ro = {
           title: "Schimbați rolurile pentru {n} conturi",
           description: "Înlocuiește setul de roluri al fiecărui cont selectat exact cu ce este bifat aici.",
           submit: "Înlocuiți rolurile",
-          confirmEmpty:
-            "Eliminați toate rolurile? Niciun rol nu este bifat. La continuare, vor fi eliminate toate rolurile din toate cele {n} conturi selectate.",
+          confirmEmptyTitle: "Eliminați toate rolurile?",
+          confirmEmptyBody:
+            "Niciun rol nu este bifat. La continuare, vor fi eliminate toate rolurile din toate cele {n} conturi selectate.",
+          confirmEmptySubmit: "Eliminați toate rolurile",
+          back: "Înapoi",
         },
         resetDialog: {
           title: "Resetați parolele pentru {n} conturi",
@@ -1849,6 +1860,7 @@ const ro = {
           newTab: "Filă nouă",
           close: "Închide „{tab}”",
           closeConfirm: "Închideți „{tab}”? Textul scris în ea se pierde.",
+          keep: "Păstrați-o",
           rename: "Redenumește „{tab}”",
           local: "Interogare",
           unsaved: "Filele nu au putut fi încărcate, așa că nimic din ce scrieți aici nu se salvează. Reîncărcați pagina pentru a încerca din nou.",
@@ -2166,8 +2178,11 @@ const ro = {
       copy: "Copiați linkul",
       copied: "Link copiat",
       reveal: "Dezvăluiți rezultatele",
-      confirmReveal: "Dezvăluiți clasamentul final? Toți vor vedea tabelul final, inclusiv răspunsurile date în timpul înghețării. Acțiunea nu poate fi anulată.",
+      revealTitle: "Dezvăluiți clasamentul final?",
+      revealBody: "Toți vor vedea tabelul final, inclusiv răspunsurile date în timpul înghețării. Acțiunea nu poate fi anulată.",
+      revealConfirm: "Dezvăluiți",
       revealing: "Se dezvăluie",
+      cancel: "Anulați",
       revealedAt: "Dezvăluit la {time}",
       export: "Export",
     },

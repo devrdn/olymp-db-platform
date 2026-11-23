@@ -13,6 +13,7 @@ import { runQuery, type ConsoleState } from "./requests";
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
 import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
 import { fill } from "@/lib/i18n/fill";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 /**
  * The SQL editor: always visible, never behind a tab. It is only the input
@@ -114,12 +115,19 @@ export function ConsoleEditor({
   const panelId = useId();
   const tabPrefix = useId();
 
+  const [ask, confirmation] = useConfirm();
   const tabs = useSqlTabs({
     accountId,
     contestId,
     initial: initialTabs,
     localTitle: te.local,
-    confirmClose: (title) => window.confirm(fill(te.closeConfirm, { tab: title })),
+    confirmClose: (title) =>
+      ask({
+        title: fill(te.closeConfirm, { tab: title }),
+        answer: fill(te.close, { tab: title }),
+        cancel: te.keep,
+        danger: true,
+      }),
     // A draft that beat the server copy goes into that tab's document and, if
     // the tab is open, into the field a run is built from.
     onRestore: (id, text) => {
@@ -269,6 +277,7 @@ export function ConsoleEditor({
           errorToken={state}
         />
       </div>
+      {confirmation}
     </form>
   );
 }

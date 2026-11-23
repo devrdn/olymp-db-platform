@@ -1,7 +1,8 @@
 import { Profiler } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
@@ -392,55 +393,63 @@ describe("bulk actions: roles and password reset", () => {
 });
 
 describe("bulk actions: an empty roles submit asks first", () => {
-  test("asks, naming the count, and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const empty = () => ru.accounts.selection.bulk.rolesDialog;
+
+  test("asks, naming the count, and going back returns to the picker without submitting", async () => {
     const roles: Role[] = [{ code: "admin", name: "Administrator" }];
     await renderBar({ selected: ["a", "b"], roles });
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
-    await userEvent.click(
-      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: empty().submit }));
 
-    expect(confirm).toHaveBeenCalledWith(fill(ru.accounts.selection.bulk.rolesDialog.confirmEmpty, { n: 2 }));
+    const question = await screen.findByRole("dialog", { name: empty().confirmEmptyTitle });
+    expect(question).toHaveTextContent(fill(empty().confirmEmptyBody, { n: 2 }));
     expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
-    // Still on the picker, so a role can be ticked instead.
+
+    await userEvent.click(within(question).getAllByRole("button", { name: empty().back })[0]);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: empty().confirmEmptyTitle })).not.toBeInTheDocument(),
+    );
+    expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
     expect(screen.getByRole("checkbox", { name: /Administrator/ })).toBeVisible();
-    confirm.mockRestore();
   });
 
-  test("submits the empty set once the question is answered yes", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  test("holds the answer at first, so a fast double click cannot press it", async () => {
+    const roles: Role[] = [{ code: "admin", name: "Administrator" }];
+    await renderBar({ selected: ["a"], roles });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
+    await userEvent.click(screen.getByRole("button", { name: empty().submit }));
+
+    expect(await screen.findByRole("button", { name: empty().confirmEmptySubmit })).toBeDisabled();
+  });
+
+  test("submits the empty set once the question is answered", async () => {
     bulkReplaceRolesAction.mockResolvedValueOnce({ result: { changed: ["a"], skipped: [] } });
     const roles: Role[] = [{ code: "admin", name: "Administrator" }];
     await renderBar({ selected: ["a"], roles });
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
-    await userEvent.click(
-      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: empty().submit }));
+    await answerYes(empty().confirmEmptySubmit);
 
-    await waitFor(() => expect(bulkReplaceRolesAction).toHaveBeenCalled());
+    await waitFor(() => expect(bulkReplaceRolesAction).toHaveBeenCalledOnce());
     const form = bulkReplaceRolesAction.mock.calls[0]![1] as FormData;
     expect(form.getAll("roles")).toEqual([]);
     expect(form.getAll("ids")).toEqual(["a"]);
-    confirm.mockRestore();
   });
 
   test("asks nothing when a role is ticked", async () => {
-    const confirm = vi.spyOn(window, "confirm");
     const roles: Role[] = [{ code: "admin", name: "Administrator" }];
     await renderBar({ selected: ["a"], roles });
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
     await userEvent.click(screen.getByRole("checkbox", { name: /Administrator/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: empty().submit }));
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: empty().confirmEmptyTitle })).not.toBeInTheDocument();
     await waitFor(() => expect(bulkReplaceRolesAction).toHaveBeenCalled());
-    confirm.mockRestore();
   });
 });
 

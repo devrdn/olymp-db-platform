@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -131,7 +132,6 @@ beforeEach(() => {
   deleteTableRowAction.mockReset();
   request.mockReset();
   refresh.mockClear();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 
   // An active tab fetches its first window on mount; an empty page is the
   // default, and `mockResolvedValueOnce` in a test still wins.
@@ -351,8 +351,8 @@ describe("the table builder's own data panel", () => {
     const cancelButton = await screen.findByRole("button", { name: td.cancel });
     await waitFor(() => expect(chunkSignal).toBeDefined());
     await userEvent.click(cancelButton);
-
-    expect(window.confirm).toHaveBeenCalledWith(td.cancelConfirm);
+    expect(await screen.findByRole("dialog", { name: td.cancelConfirm })).toBeInTheDocument();
+    await answerYes(td.cancel);
     expect(chunkSignal?.aborted).toBe(true);
     await waitFor(() => expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId));
     expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
@@ -436,8 +436,8 @@ describe("the table builder's own data panel", () => {
     await screen.findByText("Ada");
 
     await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
-
-    expect(window.confirm).toHaveBeenCalledWith(fill(td.deleteRowConfirm, { row: "4" }));
+    expect(await screen.findByRole("dialog", { name: fill(td.deleteRowConfirm, { row: "4" }) })).toBeInTheDocument();
+    await answerYes(td.deleteRow);
     await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalledWith(contestId, "suspects", 4));
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
   });
@@ -459,6 +459,7 @@ describe("the table builder's own data panel", () => {
     await screen.findByText("Ada");
 
     await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+    await answerYes(td.deleteRow);
 
     await waitFor(() => expect(onActiveRowCountChange).toHaveBeenCalledWith(2));
     // The follow-up fetch reports 5 again; the delete itself must never report
@@ -493,6 +494,7 @@ describe("the table builder's own data panel", () => {
     await screen.findByText("Ada");
 
     await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+    await answerYes(td.deleteRow);
 
     await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalled());
     await waitFor(() => expect(refresh).toHaveBeenCalled());

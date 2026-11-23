@@ -23,6 +23,7 @@ vi.mock("./requests", () => ({ fetchStaffStandings }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { STAFF_REFRESH_MS, StaffStandingsView } from "./staff-standings";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
 beforeAll(async () => {
@@ -144,16 +145,26 @@ describe("the staff table", () => {
     ).toBeInTheDocument();
   });
 
-  test("asks before revealing, because it cannot be undone, and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  test("asks before revealing, because it cannot be undone, and sends nothing on cancel", async () => {
     const user = userEvent.setup();
     show(board(), "finished");
 
     await user.click(screen.getByRole("button", { name: t().reveal }));
+    const dialog = await screen.findByRole("dialog", { name: t().revealTitle });
+    expect(within(dialog).getByText(t().revealBody)).toBeInTheDocument();
+    await user.click(within(dialog).getAllByRole("button", { name: t().cancel })[0]);
 
-    expect(confirm).toHaveBeenCalledWith(t().confirmReveal);
     expect(revealStandingsAction).not.toHaveBeenCalled();
-    confirm.mockRestore();
+  });
+
+  test("reveals once the question is answered", async () => {
+    const user = userEvent.setup();
+    show(board(), "finished");
+
+    await user.click(screen.getByRole("button", { name: t().reveal }));
+    await answerYes(t().revealConfirm);
+
+    await vi.waitFor(() => expect(revealStandingsAction).toHaveBeenCalledOnce());
   });
 
   test("uses a fixed table layout so a long name truncates rather than growing the table", () => {

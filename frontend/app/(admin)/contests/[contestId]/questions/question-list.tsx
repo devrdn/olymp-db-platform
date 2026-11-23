@@ -263,7 +263,7 @@ function DeleteQuestion({
     <ActionForm
       action={deleteQuestionAction}
       fields={{ contestId, questionId }}
-      confirm={t.confirmRemove}
+      confirm={{ title: t.confirmRemove, answer: t.remove, cancel: dict.chrome.cancel, danger: true }}
       errors={dict.errors}
       className="flex flex-col items-end gap-1"
     >

@@ -21,6 +21,7 @@ vi.mock("./actions", () => ({
 }));
 
 import { ManagerPanel, ParticipantPanel } from "./people-panels";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
 
@@ -175,15 +176,16 @@ describe("ParticipantPanel, disqualifying", () => {
   );
   const name = () => dict.workspace.people.participants.disqualify;
 
-  test("asks first and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  test("asks first and sends nothing on cancel", async () => {
     render(panel());
 
     await userEvent.click(screen.getByRole("button", { name: name() }));
 
-    expect(confirm).toHaveBeenCalledWith(dict.workspace.people.participants.confirmDisqualify);
+    expect(
+      await screen.findByRole("dialog", { name: dict.workspace.people.participants.confirmDisqualify }),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: dict.chrome.cancel })[0]);
     expect(disqualifyParticipantAction).not.toHaveBeenCalled();
-    confirm.mockRestore();
   });
 });
 
@@ -202,27 +204,35 @@ describe("ParticipantPanel, removing a registered participant", () => {
   const name = () => dict.workspace.people.participants.remove;
 
   test("asks nothing while the contest has not ended", async () => {
-    const confirm = vi.spyOn(window, "confirm");
     render(panel(false));
 
     await userEvent.click(screen.getByRole("button", { name: name() }));
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await vi.waitFor(() => expect(removeParticipantAction).toHaveBeenCalledOnce());
-    confirm.mockRestore();
     removeParticipantAction.mockClear();
   });
 
-  test("asks first once the contest has ended, naming the participant, and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  test("asks first once the contest has ended, naming the participant, and sends nothing on cancel", async () => {
     render(panel(true));
 
     await userEvent.click(screen.getByRole("button", { name: name() }));
 
-    expect(confirm).toHaveBeenCalledWith(
-      fill(dict.workspace.people.participants.confirmRemoveEnded, { name: "Q$&A Popescu" }),
-    );
+    const dialog = await screen.findByRole("dialog", {
+      name: fill(dict.workspace.people.participants.confirmRemoveEnded, { name: "Q$&A Popescu" }),
+    });
+    expect(dialog).toHaveTextContent(dict.workspace.people.participants.confirmRemoveEndedBody);
+    await userEvent.click(screen.getAllByRole("button", { name: dict.chrome.cancel })[0]);
     expect(removeParticipantAction).not.toHaveBeenCalled();
-    confirm.mockRestore();
+  });
+
+  test("removes once the question is answered", async () => {
+    render(panel(true));
+
+    await userEvent.click(screen.getByRole("button", { name: name() }));
+    await answerYes(name());
+
+    await vi.waitFor(() => expect(removeParticipantAction).toHaveBeenCalledOnce());
+    removeParticipantAction.mockClear();
   });
 });

@@ -25,6 +25,8 @@ const en = {
     },
     /** The accessible name of every "?" that opens a `help` text. */
     helpLabel: "Hint",
+    /** The button that sends nothing, in every question asked before a step that cannot be taken back. */
+    cancel: "Cancel",
     theme: {
       system: "Follow the system theme",
       light: "Switch to the light theme",
@@ -800,6 +802,7 @@ const en = {
         eta: "~{time} left",
         cancel: "Cancel",
         cancelConfirm: "Cancel this upload? What has been received so far is discarded.",
+        keepUploading: "Keep uploading",
         retry: "Retry",
         completing: "Finishing…",
         done: "File received. The build has started.",
@@ -897,6 +900,7 @@ const en = {
           eta: "~{time} left",
           cancel: "Cancel",
           cancelConfirm: "Cancel this upload? What has been received so far is discarded.",
+          keepUploading: "Keep uploading",
           retry: "Retry",
           completing: "Finishing…",
           done: "File received.",
@@ -1202,7 +1206,8 @@ const en = {
         remove: "Remove",
         disqualify: "Disqualify",
         confirmDisqualify: "Disqualify this participant? Everything they have done stays on the record.",
-        confirmRemoveEnded: "The contest is over. Remove {name} anyway? They never started, but their registration will disappear from the contest's record.",
+        confirmRemoveEnded: "Remove {name} from a contest that is over?",
+        confirmRemoveEndedBody: "They never started, but their registration will disappear from the contest's record.",
         empty: {
           title: "Nobody is enrolled yet",
           body: "Paste a list of logins below, or leave enrolment open and let participants sign themselves up.",
@@ -1529,8 +1534,11 @@ const en = {
       unlockSignIn: "Clear sign-in lockout",
       unlockSignInNote:
         "Forgets the failed sign-in attempts counted against this account, so its owner can try again now instead of waiting up to 15 minutes. Attempts counted against an address are kept.",
-      confirmUnlockSignIn:
-        "Clear the sign-in lockout for {login}? Do this once you know it is the owner trying to sign in: anybody guessing the password gets their attempts back too.",
+      unlockSignInConfirmTitle: "Clear the sign-in lockout for {login}?",
+      unlockSignInConfirmBody:
+        "Do this once you know it is the owner trying to sign in: anybody guessing the password gets their attempts back too.",
+      unlockSignInConfirm: "Clear lockout",
+      unlockSignInCancel: "Cancel",
       unlocked: "Sign-in lockout cleared",
       created: "Created",
       back: "← All accounts",
@@ -1617,8 +1625,11 @@ const en = {
           // Shown only when the submit button is pressed with nothing
           // ticked — a legitimate way to strip every role, but never as an
           // accident behind a button that looks like it is only asking.
-          confirmEmpty:
-            "Remove every role? No role is checked. Continuing will remove every role from all {n} selected accounts.",
+          confirmEmptyTitle: "Remove every role?",
+          confirmEmptyBody:
+            "No role is checked. Continuing will remove every role from all {n} selected accounts.",
+          confirmEmptySubmit: "Remove all roles",
+          back: "Go back",
         },
         resetDialog: {
           title: "Reset passwords for {n} accounts",
@@ -2066,6 +2077,7 @@ const en = {
           newTab: "New tab",
           close: "Close {tab}",
           closeConfirm: "Close “{tab}”? What you typed in it is lost.",
+          keep: "Keep it",
           rename: "Rename {tab}",
           local: "Query",
           unsaved: "Your tabs could not be loaded, so nothing typed here is saved. Reload the page to try again.",
@@ -2399,8 +2411,11 @@ const en = {
       copy: "Copy link",
       copied: "Link copied",
       reveal: "Reveal the results",
-      confirmReveal: "Reveal the final standings? Everybody will see the final table, including every answer given during the freeze. This cannot be undone.",
+      revealTitle: "Reveal the final standings?",
+      revealBody: "Everybody will see the final table, including every answer given during the freeze. This cannot be undone.",
+      revealConfirm: "Reveal",
       revealing: "Revealing",
+      cancel: "Cancel",
       revealedAt: "Revealed at {time}",
       export: "Export",
     },

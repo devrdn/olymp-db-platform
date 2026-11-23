@@ -574,7 +574,15 @@ function RolesForm({
       action={bulkReplaceRolesAction}
       fields={{ ids: frozenIds }}
       confirm={(form) =>
-        form.getAll("roles").length === 0 ? fill(t.rolesDialog.confirmEmpty, { n: frozenIds.length }) : null
+        form.getAll("roles").length === 0
+          ? {
+              title: t.rolesDialog.confirmEmptyTitle,
+              detail: fill(t.rolesDialog.confirmEmptyBody, { n: frozenIds.length }),
+              answer: t.rolesDialog.confirmEmptySubmit,
+              cancel: t.rolesDialog.back,
+              danger: true,
+            }
+          : null
       }
       errors={dict.errors}
       className="flex flex-col gap-5"

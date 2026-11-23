@@ -14,7 +14,7 @@ const t = en.participant.play.workspace.editor;
 type Call = { url: string; init: RequestInit };
 let calls: Call[] = [];
 let answer: (url: string, init: RequestInit) => Response | Promise<Response>;
-let confirmClose: Mock<(title: string) => boolean>;
+let confirmClose: Mock<(title: string) => Promise<boolean>>;
 let restored: [string, string][];
 let dropped: string[];
 
@@ -148,7 +148,7 @@ beforeEach(() => {
   restored = [];
   dropped = [];
   answer = served;
-  confirmClose = vi.fn<(title: string) => boolean>(() => true);
+  confirmClose = vi.fn<(title: string) => Promise<boolean>>(async () => true);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
@@ -308,7 +308,7 @@ describe("the participant's SQL tabs", () => {
 
 describe("closing a tab", () => {
   test("asks before closing a tab that holds text, and does nothing when the answer is no", async () => {
-    confirmClose = vi.fn<(title: string) => boolean>(() => false);
+    confirmClose = vi.fn<(title: string) => Promise<boolean>>(async () => false);
     show();
 
     fireEvent.click(screen.getByRole("button", { name: fill(t.close, { tab: "Suspects" }) }));

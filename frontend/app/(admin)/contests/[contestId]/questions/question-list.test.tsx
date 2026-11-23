@@ -18,6 +18,7 @@ vi.mock("./actions", () => ({
 }));
 
 import { QuestionList } from "./question-list";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
 
@@ -181,26 +182,24 @@ function list(questions: Question[] = [question()]) {
 }
 
 describe("QuestionList, deleting a question", () => {
-  test("asks first and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  test("asks first and sends nothing on cancel", async () => {
     render(list());
 
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
 
-    expect(confirm).toHaveBeenCalledWith(dict.workspace.questions.confirmRemove);
+    expect(await screen.findByRole("dialog", { name: dict.workspace.questions.confirmRemove })).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: dict.chrome.cancel })[0]);
     expect(deleteQuestionAction).not.toHaveBeenCalled();
-    confirm.mockRestore();
   });
 
   test("says why a refused delete did not happen", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     deleteQuestionAction.mockResolvedValueOnce({ code: "question_not_found" });
     render(list());
 
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
+    await answerYes(dict.workspace.questions.remove);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.question_not_found);
-    confirm.mockRestore();
   });
 });
 

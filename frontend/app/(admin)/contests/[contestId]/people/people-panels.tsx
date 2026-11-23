@@ -2,6 +2,7 @@
 
 import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { StateView } from "@/components/product/state-view";
+import type { Question } from "@/components/ui/confirm-dialog";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -266,9 +267,15 @@ export function ParticipantPanel({
                         label={t.participants.remove}
                         confirm={
                           ended
-                            ? fill(t.participants.confirmRemoveEnded, {
-                                name: participant.fullName || participant.login,
-                              })
+                            ? {
+                                title: fill(t.participants.confirmRemoveEnded, {
+                                  name: participant.fullName || participant.login,
+                                }),
+                                detail: t.participants.confirmRemoveEndedBody,
+                                answer: t.participants.remove,
+                                cancel: dict.chrome.cancel,
+                                danger: true,
+                              }
                             : undefined
                         }
                         dict={dict}
@@ -279,7 +286,12 @@ export function ParticipantPanel({
                         contestId={contestId}
                         userId={participant.userId}
                         label={t.participants.disqualify}
-                        confirm={t.participants.confirmDisqualify}
+                        confirm={{
+                          title: t.participants.confirmDisqualify,
+                          answer: t.participants.disqualify,
+                          cancel: dict.chrome.cancel,
+                          danger: true,
+                        }}
                         dict={dict}
                       />
                     )}
@@ -310,7 +322,7 @@ function RowAction({
   contestId: string;
   userId: string;
   label: string;
-  confirm?: string;
+  confirm?: Question;
   dict: Dictionary;
 }) {
   return (

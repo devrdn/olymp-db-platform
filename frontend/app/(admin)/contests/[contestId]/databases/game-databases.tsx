@@ -154,7 +154,7 @@ function DropDatabase({
     <ActionForm
       action={dropGameInstanceAction}
       fields={{ contestId, database: instance.database }}
-      confirm={fill(t.confirm, { who })}
+      confirm={{ title: fill(t.confirm, { who }), answer: t.drop, cancel: dict.chrome.cancel, danger: true }}
       errors={dict.errors}
       className="flex flex-col items-end gap-1"
     >

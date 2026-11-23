@@ -1,17 +1,21 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { ActionState } from "@/lib/api/server";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import { ActionButton, ActionFooter, ActionForm, ActionOutcome } from "./action-form";
 
 let dict: Dictionary;
+let ro: Dictionary;
 
 beforeAll(async () => {
   dict = await getDictionary("en");
+  ro = await getDictionary("ro");
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -30,9 +34,16 @@ function recording(answer: ActionState = { ok: true }) {
   return { action, sent };
 }
 
+const asked = () => ({
+  title: fill(ro.workspace.settings.deleteDraft.confirm, { title: "Spring" }),
+  answer: ro.workspace.settings.deleteDraft.action,
+  cancel: ro.chrome.cancel,
+  danger: true,
+});
+
 function Destructive({ action }: { action: (previous: ActionState, form: FormData) => Promise<ActionState> }) {
   return (
-    <ActionForm action={action} fields={{ contestId: "c1" }} confirm="Delete it?" errors={dict.errors}>
+    <ActionForm action={action} fields={{ contestId: "c1" }} confirm={asked()} errors={ro.errors}>
       <ActionButton>Delete</ActionButton>
       <ActionOutcome />
     </ActionForm>
@@ -40,7 +51,7 @@ function Destructive({ action }: { action: (previous: ActionState, form: FormDat
 }
 
 describe("ActionForm that asks first", () => {
-  test("is disabled in the server's markup", () => {
+  test("is disabled in the server's markup, so nothing is sent before hydration", () => {
     const page = new DOMParser().parseFromString(renderToString(<Destructive action={recording().action} />), "text/html");
 
     expect(page.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true);
@@ -58,35 +69,62 @@ describe("ActionForm that asks first", () => {
     container.remove();
   });
 
-  test("asks first and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  test("asks in the interface's language, with its own answers, before sending", async () => {
     const { action } = recording();
     render(<Destructive action={action} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
-    expect(confirm).toHaveBeenCalledWith("Delete it?");
+    expect(await screen.findByRole("dialog", { name: asked().title })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ro.workspace.settings.deleteDraft.action })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: ro.chrome.cancel }).length).toBeGreaterThan(0);
     expect(action).not.toHaveBeenCalled();
   });
 
-  test("sends its hidden fields on yes", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  test("sends nothing on cancel", async () => {
+    const { action } = recording();
+    render(<Destructive action={action} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click((await screen.findAllByRole("button", { name: ro.chrome.cancel }))[0]);
+
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  test("sends its hidden fields once on the answer", async () => {
     const { action, sent } = recording();
     render(<Destructive action={action} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await answerYes(ro.workspace.settings.deleteDraft.action);
 
     await vi.waitFor(() => expect(sent).toEqual([{ contestId: ["c1"] }]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  test("shows a name with line breaks as text inside the question", async () => {
+    render(
+      <ActionForm action={recording().action} confirm={{ ...asked(), title: "Spring\n\nOK keeps it" }} errors={ro.errors}>
+        <ActionButton>Delete</ActionButton>
+      </ActionForm>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.querySelector("br")).toBeNull();
+    expect(within(dialog).getByText(/OK keeps it/)).toBeInTheDocument();
   });
 
   test("asks only the submissions its question names", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const { action } = recording();
     render(
       <ActionForm
         action={action}
-        confirm={(form) => (form.getAll("roles").length === 0 ? "Remove every role?" : null)}
-        errors={dict.errors}
+        confirm={(form) => (form.getAll("roles").length === 0 ? { ...asked(), title: "Remove every role?" } : null)}
+        errors={ro.errors}
       >
         <input type="checkbox" name="roles" value="admin" aria-label="admin" />
         <ActionButton>Save</ActionButton>
@@ -94,28 +132,28 @@ describe("ActionForm that asks first", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(confirm).toHaveBeenCalledWith("Remove every role?");
+    expect(await screen.findByRole("dialog", { name: "Remove every role?" })).toBeInTheDocument();
     expect(action).not.toHaveBeenCalled();
+    await userEvent.click(screen.getAllByRole("button", { name: ro.chrome.cancel })[0]);
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    confirm.mockClear();
     await userEvent.click(screen.getByRole("checkbox", { name: "admin" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await vi.waitFor(() => expect(action).toHaveBeenCalledOnce());
   });
 
   test("asks nothing when the screen's own check stops the submission", async () => {
-    const confirm = vi.spyOn(window, "confirm");
     const { action } = recording();
     render(
-      <ActionForm action={action} confirm="Delete it?" errors={dict.errors} onSubmit={(event) => event.preventDefault()}>
+      <ActionForm action={action} confirm={asked()} errors={ro.errors} onSubmit={(event) => event.preventDefault()}>
         <ActionButton>Delete</ActionButton>
       </ActionForm>,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(action).not.toHaveBeenCalled();
   });
 });

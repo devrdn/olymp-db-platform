@@ -14,6 +14,7 @@ import { saveGameDefinitionAction, type GameState } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
 import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { labelFor } from "@/lib/i18n/label";
 
 /**
@@ -103,6 +104,7 @@ export function GameBuilder({
   dict: Dictionary;
 }) {
   const tb = dict.workspace.game.builder;
+  const [ask, confirmation] = useConfirm();
   const errors = dict.errors;
   const limits = definition.builderLimits;
 
@@ -129,8 +131,9 @@ export function GameBuilder({
     setTables((prev) => [...prev, { key: nextKey(), originalName: null, name: "", columns: [], primaryKeyKeys: [] }]);
   }
 
-  function removeTable(key: string, name: string) {
-    if (!window.confirm(fill(tb.removeTableConfirm, { name }))) return;
+  async function removeTable(key: string, name: string) {
+    const question = { title: fill(tb.removeTableConfirm, { name }), answer: tb.removeTable, cancel: dict.chrome.cancel, danger: true };
+    if (!(await ask(question))) return;
     setTables((prev) => prev.filter((t) => t.key !== key));
   }
 
@@ -201,7 +204,7 @@ export function GameBuilder({
               limits={limits}
               dict={dict}
               onNameChange={(name) => updateTable(table.key, (t) => ({ ...t, name }))}
-              onRemove={() => removeTable(table.key, table.name)}
+              onRemove={() => void removeTable(table.key, table.name)}
               onAddColumn={() => addColumn(table.key)}
               onRemoveColumn={(columnKey) => removeColumn(table.key, columnKey)}
               onColumnNameChange={(columnKey, name) =>
@@ -287,6 +290,7 @@ export function GameBuilder({
           </Tabs>
         )}
       </div>
+      {confirmation}
     </section>
   );
 }

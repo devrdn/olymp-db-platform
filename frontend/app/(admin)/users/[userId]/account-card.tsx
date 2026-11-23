@@ -102,7 +102,12 @@ function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary })
     <ActionForm
       action={unlockSignInAction}
       fields={{ userId: account.id }}
-      confirm={fill(t.confirmUnlockSignIn, { login: account.login })}
+      confirm={{
+        title: fill(t.unlockSignInConfirmTitle, { login: account.login }),
+        detail: t.unlockSignInConfirmBody,
+        answer: t.unlockSignInConfirm,
+        cancel: t.unlockSignInCancel,
+      }}
       errors={dict.errors}
       className="flex flex-col gap-2.5"
     >

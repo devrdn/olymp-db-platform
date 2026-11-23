@@ -5,14 +5,15 @@ import {
   Fragment,
   useActionState,
   useContext,
+  useRef,
   type ComponentProps,
   type FormEvent,
   type ReactNode,
 } from "react";
 
 import { Button } from "@/components/ui/button";
+import { type Question, useConfirm } from "@/components/ui/confirm-dialog";
 import type { ActionState } from "@/lib/api/server";
-import { confirmed } from "@/lib/confirm";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -25,7 +26,7 @@ type Errors = Pick<Dictionary["errors"], "fallback">;
  * is about to be sent that returns the question, or null when this submission
  * needs none.
  */
-export type Confirmation = string | ((form: FormData) => string | null);
+export type Confirmation = Question | ((form: FormData) => Question | null);
 
 type Bound = {
   state: ActionState;
@@ -84,6 +85,9 @@ export function ActionForm<S extends ActionState>({
   // React replays a submission queued before hydration without `onSubmit`,
   // where the question is asked, so a form that asks cannot be sent until then.
   const locked = confirm !== undefined && !hydrated;
+  const [ask, dialog] = useConfirm();
+  // Set by a yes, for the one submission it lets through.
+  const approved = useRef(false);
 
   return (
     <BoundForm.Provider value={{ state, pending, locked, errors }}>
@@ -94,8 +98,19 @@ export function ActionForm<S extends ActionState>({
         onSubmit={(event) => {
           onSubmit?.(event);
           if (event.defaultPrevented || confirm === undefined) return;
-          const question = typeof confirm === "string" ? confirm : confirm(new FormData(event.currentTarget));
-          if (question !== null && !confirmed(question)) event.preventDefault();
+          if (approved.current) {
+            approved.current = false;
+            return;
+          }
+          const form = event.currentTarget;
+          const question = typeof confirm === "function" ? confirm(new FormData(form)) : confirm;
+          if (question === null) return;
+          event.preventDefault();
+          void ask(question).then((yes) => {
+            if (!yes) return;
+            approved.current = true;
+            form.requestSubmit();
+          });
         }}
       >
         {Object.entries(fields).flatMap(([name, value]) =>
@@ -105,6 +120,7 @@ export function ActionForm<S extends ActionState>({
         )}
         <Fragment key={revision}>{typeof children === "function" ? children(state, pending) : children}</Fragment>
       </form>
+      {dialog}
     </BoundForm.Provider>
   );
 }

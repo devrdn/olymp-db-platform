@@ -91,8 +91,8 @@ export type SqlTabsOptions = {
   initial: WorkspaceTab[] | null;
   /** The title of that local tab. */
   localTitle: string;
-  /** Asked before a tab holding text is closed; `window.confirm` in the browser. */
-  confirmClose: (title: string) => boolean;
+  /** Asked before a tab holding text is closed; true closes it. */
+  confirmClose: (title: string) => Promise<boolean>;
   /** A draft beat the server's copy for this tab; the editor must show it. */
   onRestore: (id: string, text: string) => void;
   /** This tab is gone; the editor may forget its document. */
@@ -281,12 +281,20 @@ export function useSqlTabs({
     [closed, contestId, report, stored],
   );
 
-  const close = useCallback(
-    (id: string) => {
+  // The close as it stands after an answer, which may come after a render.
+  const closeRef = useRef<(id: string, answered: boolean) => void>(() => {});
+  const closeTab = useCallback(
+    (id: string, answered: boolean) => {
       const index = tabs.findIndex((tab) => tab.id === id);
       if (index < 0 || tabs.length <= 1 || closed !== null || busy.current) return;
-      // Asked after the guard, so the answer is never ignored.
-      if ((texts.get(id) ?? "") !== "" && !confirmRef.current(tabs[index].title)) return;
+      // Asked after the guard, and the guard is passed again with the answer,
+      // so a yes is never acted on in a state that would have refused it.
+      if (!answered && (texts.get(id) ?? "") !== "") {
+        void confirmRef.current(tabs[index].title).then((yes) => {
+          if (yes) closeRef.current(id, true);
+        });
+        return;
+      }
 
       const forget = () => {
         const entry = engines.get(id);
@@ -320,6 +328,10 @@ export function useSqlTabs({
     },
     [activeId, choose, closed, contestId, engines, report, stored, tabs, texts],
   );
+  useEffect(() => {
+    closeRef.current = closeTab;
+  });
+  const close = useCallback((id: string) => closeTab(id, false), [closeTab]);
 
   const move = useCallback(
     (id: string, to: number) => {

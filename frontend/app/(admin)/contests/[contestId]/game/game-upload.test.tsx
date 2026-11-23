@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -120,7 +121,6 @@ beforeEach(() => {
   gameUploadWindowAction.mockReset();
   gameStatusAction.mockReset();
   request.mockReset();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -299,9 +299,10 @@ describe("the game upload panel", () => {
     const cancelButton = await screen.findByRole("button", { name: tu.cancel });
     await waitFor(() => expect(chunkSignal).toBeDefined());
     await userEvent.click(cancelButton);
+    expect(await screen.findByRole("dialog", { name: tu.cancelConfirm })).toBeInTheDocument();
+    await answerYes(tu.cancel);
 
-    expect(window.confirm).toHaveBeenCalledWith(tu.cancelConfirm);
-    expect(chunkSignal?.aborted).toBe(true);
+    await waitFor(() => expect(chunkSignal?.aborted).toBe(true));
     await waitFor(() => expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId));
     expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
   });

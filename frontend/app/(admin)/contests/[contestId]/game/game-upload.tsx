@@ -23,6 +23,7 @@ import {
 import { useGamePoll } from "./game-poll";
 import { knownMessage, messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 /**
  * Consecutive out-of-order refusals resynced automatically (this tab's offset
@@ -89,6 +90,7 @@ export function GameUpload({
 }) {
   const t = dict.workspace.game;
   const tu = t.upload;
+  const [ask, confirmation] = useConfirm();
   const errors = dict.errors;
   const router = useRouter();
   const uploadLimits = game.uploadLimits;
@@ -313,7 +315,7 @@ export function GameUpload({
   }
 
   async function cancel() {
-    if (!window.confirm(tu.cancelConfirm)) return;
+    if (!(await ask({ title: tu.cancelConfirm, answer: tu.cancel, cancel: tu.keepUploading, danger: true }))) return;
     controllerRef.current?.abort();
     const id = uploadId;
     fileRef.current = null;
@@ -632,6 +634,7 @@ export function GameUpload({
           </div>
         </div>
       ) : null}
+      {confirmation}
     </section>
   );
 }

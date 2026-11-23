@@ -18,6 +18,7 @@ import { fill } from "@/lib/i18n/fill";
 
 import type { MailOffer } from "../email-delivery";
 import { AccountCard } from "./account-card";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 let en: Dictionary;
 
@@ -179,28 +180,31 @@ describe("AccountCard, clearing a sign-in lockout", () => {
         mail={{ status: "off" }} />,
     );
 
-  test("asks first, naming the login, and sends nothing on no", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  test("asks first, naming the login, and sends nothing when the question is cancelled", async () => {
     renderCard();
 
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
 
-    expect(confirm).toHaveBeenCalledWith(fill(en.accounts.card.confirmUnlockSignIn, { login: "s.popescu" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: fill(en.accounts.card.unlockSignInConfirmTitle, { login: "s.popescu" }),
+    });
+    expect(dialog).toHaveTextContent(en.accounts.card.unlockSignInConfirmBody);
+    fireEvent.click(screen.getAllByRole("button", { name: en.accounts.card.unlockSignInCancel })[0]);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(unlockSignInAction).not.toHaveBeenCalled();
-    confirm.mockRestore();
   });
 
   test("clears the lockout for this account once confirmed, and says so", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderCard();
 
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
+    await answerYes(en.accounts.card.unlockSignInConfirm);
 
     await waitFor(() => expect(unlockSignInAction).toHaveBeenCalledTimes(1));
     const submitted = unlockSignInAction.mock.calls[0][1] as FormData;
     expect(submitted.get("userId")).toBe(account().id);
     expect(await screen.findByText(en.accounts.card.unlocked)).toBeInTheDocument();
-    confirm.mockRestore();
   });
 });
 

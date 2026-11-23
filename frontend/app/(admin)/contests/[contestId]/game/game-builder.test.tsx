@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -88,7 +89,6 @@ beforeEach(() => {
   saved.current = { ok: true };
   saveGameDefinitionAction.mockClear();
   gameTableDataWindowAction.mockClear();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 describe("the table builder's own structure editor", () => {
@@ -162,6 +162,26 @@ describe("the table builder's own structure editor", () => {
     expect(screen.queryByText(fill(tb.lockedTable, { n: "0" }))).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("suspects")).not.toBeDisabled();
     expect(screen.getByRole("button", { name: tb.removeTable })).not.toBeDisabled();
+  });
+
+  test("asks before removing a table, naming it, and keeps it on cancel", async () => {
+    show({ rowCounts: { suspects: 0 } });
+
+    await userEvent.click(screen.getByRole("button", { name: tb.removeTable }));
+    expect(await screen.findByRole("dialog", { name: fill(tb.removeTableConfirm, { name: "suspects" }) })).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: en.chrome.cancel })[0]);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByDisplayValue("suspects")).toBeInTheDocument();
+  });
+
+  test("removes the table once the question is answered", async () => {
+    show({ rowCounts: { suspects: 0 } });
+
+    await userEvent.click(screen.getByRole("button", { name: tb.removeTable }));
+    await answerYes(tb.removeTable);
+
+    await waitFor(() => expect(screen.queryByDisplayValue("suspects")).not.toBeInTheDocument());
   });
 
   test("saves the structure in the server's own wire shape, name/type/nullable and a primary key by column name", async () => {
