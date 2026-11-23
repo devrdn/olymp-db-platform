@@ -12,7 +12,7 @@ import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { EnrollButton } from "./enroll-button";
-import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
+import { CONTEST_STATUS_TONE, hasEnded } from "@/lib/api/contests-terms";
 
 /**
  * A participant's register, shared by `/my` and `/open`: the rows are the
@@ -63,7 +63,7 @@ function canWait(contest: ContestSummary): boolean {
  * it runs, and after. Public, so offered whether enrolled or not.
  */
 function hasTable(contest: ContestSummary): boolean {
-  return contest.status === "running" || contest.status === "finished" || contest.status === "archived";
+  return contest.status === "running" || hasEnded(contest.status);
 }
 
 export function ParticipantRegister({

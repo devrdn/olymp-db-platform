@@ -1,4 +1,4 @@
-import { hasEnded } from "@/lib/api/contests";
+import { hasEnded } from "@/lib/api/contests-terms";
 import { gameInstancesSchema, gameSchema } from "@/lib/api/game";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 

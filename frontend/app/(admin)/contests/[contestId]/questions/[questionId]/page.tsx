@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, questionSchema } from "@/lib/api/content";
-import { contentEditable, sequentialActive } from "@/lib/api/contests";
+import { sequentialActive } from "@/lib/api/contests";
+import { contentEditable } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
 import { activeDictionary } from "@/lib/i18n/server";
 import { fill } from "@/lib/i18n/fill";

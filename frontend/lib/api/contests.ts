@@ -276,32 +276,6 @@ export function titleIn(contest: Contest, lang: string): string {
   return "";
 }
 
-/**
- * Whether the story, the questions and the answers may still change. The line
- * is the start, not publication: once running, a change would alter the task
- * under people answering it. Mirrored from Go so controls can be disabled up
- * front; the API refuses regardless.
- */
-export function contentEditable(status: ContestStatus): boolean {
-  return status === "draft" || status === "published";
-}
-
-/**
- * Whether the contest's own fields may still change. Wider than the content
- * line: a running contest may need its window extended or a network range fixed.
- */
-export function settingsEditable(status: ContestStatus): boolean {
-  return status === "draft" || status === "published" || status === "running";
-}
-
-/**
- * Whether the prize counts may change. They alter only what the standings
- * display, so they stay open after the finish and close with the archive.
- */
-export function prizePlacesEditable(status: ContestStatus): boolean {
-  return status !== "archived";
-}
-
 /** The most places one prize may cover, the column's `CHECK`. */
 const MAX_PRIZE_PLACES = 1000;
 
@@ -325,16 +299,6 @@ export function prizePlacesFromForm(form: FormData): { ok: true; value: PrizePla
   }
   const [first, second, third] = counts;
   return { ok: true, value: { first, second, third } };
-}
-
-/** Whether the contest is over: finished, or archived since. */
-export function hasEnded(status: ContestStatus): boolean {
-  return status === "finished" || status === "archived";
-}
-
-/** Whether the grace period may be extended: only once the contest has ended. */
-export function graceExtendable(status: ContestStatus): boolean {
-  return hasEnded(status);
 }
 
 /**
@@ -366,14 +330,6 @@ export function archiveSettingsFromForm(form: FormData): { ok: true; value: Arch
   const visibility = enumFromForm<Visibility>(form.get("visibility"), VISIBILITIES);
   if (visibility === undefined) return { ok: false };
   return { ok: true, value: { visibility, archiveTasks: form.get("archiveTasks") === "on" } };
-}
-
-/**
- * Whether the question mode, timing model and session length may change.
- * They freeze with the content, not the settings.
- */
-export function shapeEditable(status: ContestStatus): boolean {
-  return status === "draft" || status === "published";
 }
 
 /**

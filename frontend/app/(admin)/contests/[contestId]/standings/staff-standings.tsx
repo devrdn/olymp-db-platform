@@ -10,6 +10,7 @@ import { GridCells, GridHeaderCells, gridTableWidth, ICPC_COLUMN, hasPrize, Init
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import type { ContestStatus } from "@/lib/api/contests";
+import { hasEnded } from "@/lib/api/contests-terms";
 import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -107,7 +108,7 @@ export function StaffStandingsView({
   }, [status, contestId, router]);
 
   const revealable =
-    (status === "finished" || status === "archived") && standings.freezeMin !== null && !standings.revealedAt;
+    hasEnded(status) && standings.freezeMin !== null && !standings.revealedAt;
   const icpc = standings.scoring === "icpc";
   const prizes = hasPrize(standings.rows);
   const gridWidth = gridTableWidth(

@@ -34,6 +34,43 @@ export const CONTEST_STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"
   archived: "mute",
 };
 
+/** Whether the contest is over: finished, or archived since. */
+export function hasEnded(status: ContestStatus): boolean {
+  return status === "finished" || status === "archived";
+}
+
+/**
+ * Whether the story, the questions and the answers may still change. The line
+ * is the start, not publication: once running, a change would alter the task
+ * under people answering it. The question mode, timing model and session
+ * length freeze with it. Mirrored from Go so controls can be disabled up
+ * front; the API refuses regardless.
+ */
+export function contentEditable(status: ContestStatus): boolean {
+  return status === "draft" || status === "published";
+}
+
+/**
+ * Whether the contest's own fields may still change. Wider than the content
+ * line: a running contest may need its window extended or a network range fixed.
+ */
+export function settingsEditable(status: ContestStatus): boolean {
+  return !hasEnded(status);
+}
+
+/**
+ * Whether the prize counts may change. They alter only what the standings
+ * display, so they stay open after the finish and close with the archive.
+ */
+export function prizePlacesEditable(status: ContestStatus): boolean {
+  return status !== "archived";
+}
+
+/** Whether the roster and the activity feed may still move: published, and until the contest ends. */
+export function isLiveActivity(status: ContestStatus): boolean {
+  return status === "published" || status === "running";
+}
+
 /**
  * Mirrors `covers.MaxAttributionLen`, so the field stops at the limit instead
  * of being refused after the fact.

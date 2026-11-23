@@ -7,7 +7,7 @@ import {
   uploadSchema,
   type TableData,
 } from "@/lib/api/game";
-import { contentEditable } from "@/lib/api/contests";
+import { contentEditable } from "@/lib/api/contests-terms";
 import { pathSegment } from "@/lib/api/ids";
 import { activeDictionary } from "@/lib/i18n/server";
 

@@ -1,6 +1,6 @@
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema } from "@/lib/api/content";
-import { contentEditable } from "@/lib/api/contests";
+import { contentEditable } from "@/lib/api/contests-terms";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";

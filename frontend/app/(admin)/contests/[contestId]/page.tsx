@@ -1,9 +1,5 @@
-import {
-  contentEditable,
-  defaultLanguage,
-  NEXT_STATUSES,
-  publishCheckSchema,
-} from "@/lib/api/contests";
+import { defaultLanguage, NEXT_STATUSES, publishCheckSchema } from "@/lib/api/contests";
+import { contentEditable } from "@/lib/api/contests-terms";
 import { ExportMenu } from "@/components/product/export-menu";
 import { API_PREFIX } from "@/lib/api/client";
 import { summarisePublishCheck } from "@/lib/api/publish-gate";

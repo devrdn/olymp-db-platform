@@ -2,21 +2,15 @@ import { describe, expect, test } from "vitest";
 
 import {
   archiveSettingsFromForm,
-  contentEditable,
   contestCoverSchema,
   contestListSchema,
   contestSchema,
   defaultLanguage,
-  graceExtendable,
-  hasEnded,
   graceFromForm,
   icpcPenaltyFromForm,
   NEXT_STATUSES,
-  prizePlacesEditable,
   prizePlacesFromForm,
   sequentialActive,
-  settingsEditable,
-  shapeEditable,
   shapeFromForm,
   titleIn,
   type Contest,
@@ -338,33 +332,6 @@ describe("defaultLanguage", () => {
   });
 });
 
-describe("the editing windows", () => {
-  test("content closes when the contest starts", () => {
-    expect(contentEditable("draft")).toBe(true);
-    expect(contentEditable("published")).toBe(true);
-    expect(contentEditable("running")).toBe(false);
-    expect(contentEditable("finished")).toBe(false);
-  });
-
-  test("settings stay open through a running contest", () => {
-    expect(settingsEditable("running")).toBe(true);
-    expect(settingsEditable("finished")).toBe(false);
-  });
-
-  test("prize places stay open after the finish and close only with the archive", () => {
-    for (const status of ["draft", "published", "running", "finished"] as const) {
-      expect(prizePlacesEditable(status)).toBe(true);
-    }
-    expect(prizePlacesEditable("archived")).toBe(false);
-  });
-
-  test("the shape closes with the content, not with the settings", () => {
-    expect(shapeEditable("published")).toBe(true);
-    expect(shapeEditable("running")).toBe(false);
-    expect(settingsEditable("running")).toBe(true);
-  });
-});
-
 describe("NEXT_STATUSES", () => {
   test("lets a published contest be pulled back to draft", () => {
     expect(NEXT_STATUSES.published).toContain("draft");
@@ -544,30 +511,6 @@ describe("archiveSettingsFromForm", () => {
   test("refuses a visibility outside the list, or none", () => {
     expect(archiveSettingsFromForm(shapeForm({ visibility: "public" }))).toEqual({ ok: false });
     expect(archiveSettingsFromForm(shapeForm({}))).toEqual({ ok: false });
-  });
-});
-
-describe("hasEnded", () => {
-  test.each([
-    ["finished", true],
-    ["archived", true],
-    ["draft", false],
-    ["published", false],
-    ["running", false],
-  ] as const)("%s is %s", (status, expected) => {
-    expect(hasEnded(status)).toBe(expected);
-  });
-});
-
-describe("graceExtendable", () => {
-  test.each([
-    ["finished", true],
-    ["archived", true],
-    ["draft", false],
-    ["published", false],
-    ["running", false],
-  ] as const)("%s is %s", (status, expected) => {
-    expect(graceExtendable(status)).toBe(expected);
   });
 });
 

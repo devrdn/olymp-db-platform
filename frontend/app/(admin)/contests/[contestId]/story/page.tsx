@@ -1,7 +1,8 @@
 import { Tag } from "@/components/ui/tag";
 import { schemaNotesSchema, storySchema } from "@/lib/api/content";
 import { branding } from "@/lib/api/branding";
-import { contentEditable, defaultLanguage, titleIn } from "@/lib/api/contests";
+import { defaultLanguage, titleIn } from "@/lib/api/contests";
+import { contentEditable } from "@/lib/api/contests-terms";
 import { imageHref } from "@/lib/api/settings-terms";
 import { activeDictionary } from "@/lib/i18n/server";
 

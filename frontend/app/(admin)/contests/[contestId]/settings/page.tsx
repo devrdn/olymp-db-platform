@@ -1,13 +1,6 @@
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
-import {
-  contentEditable,
-  contestCoverSchema,
-  graceExtendable,
-  prizePlacesEditable,
-  settingsEditable,
-  shapeEditable,
-  titleIn,
-} from "@/lib/api/contests";
+import { contestCoverSchema, titleIn } from "@/lib/api/contests";
+import { contentEditable, hasEnded, prizePlacesEditable, settingsEditable } from "@/lib/api/contests-terms";
 import { branding } from "@/lib/api/branding";
 import { sqlPolicySchema } from "@/lib/api/policy";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -61,14 +54,14 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
       <ContestPanel
         contest={contest}
         editable={settingsEditable(contest.status)}
-        shapeOpen={shapeEditable(contest.status)}
+        shapeOpen={contentEditable(contest.status)}
         trustedDomain={methods ? methods.trustedEmailDomain : null}
         dict={dict}
       />
 
       <PrizePanel contest={contest} editable={prizePlacesEditable(contest.status)} dict={dict} />
 
-      {graceExtendable(contest.status) ? <GracePanel contest={contest} dict={dict} /> : null}
+      {hasEnded(contest.status) ? <GracePanel contest={contest} dict={dict} /> : null}
 
       <ArchivePanel contest={contest} archiveOn={brand.archive} dict={dict} />
 

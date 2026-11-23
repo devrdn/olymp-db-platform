@@ -4,7 +4,8 @@ import { Tag } from "@/components/ui/tag";
 import { clarificationQueueSchema } from "@/lib/api/clarifications";
 import { questionListSchema } from "@/lib/api/content";
 import { untranslated } from "@/lib/api/content-terms";
-import { contentEditable, publishCheckSchema, titleIn } from "@/lib/api/contests";
+import { publishCheckSchema, titleIn } from "@/lib/api/contests";
+import { contentEditable } from "@/lib/api/contests-terms";
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 

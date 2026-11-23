@@ -7,6 +7,7 @@ import { FeedbackLink } from "@/components/product/feedback-link";
 import { StoryText } from "@/components/product/story-text";
 import { branding } from "@/lib/api/branding";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
+import { hasEnded } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
 import { readPage } from "@/lib/api/page-read";
 import { readIdentity } from "@/lib/auth/identity";
@@ -81,7 +82,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     // draft, finished or archived: none ever becomes `running` while this
     // screen is open, so there is nothing to wait for.
     // A contest that is over offers the feedback link; a draft may still run.
-    const over = contest.status === "finished" || contest.status === "archived";
+    const over = hasEnded(contest.status);
     return (
       <UnavailablePage
         title={contest.title}

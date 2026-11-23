@@ -1,4 +1,5 @@
 import { RefusalNote } from "@/components/product/refusal-note";
+import { isLiveActivity } from "@/lib/api/contests-terms";
 import { feedSchema, rosterSchema } from "@/lib/api/monitor";
 import { MAX_FEED_PAGE, MONITOR_SHOWN } from "@/lib/api/monitor-terms";
 import { Refusal } from "@/lib/api/page-read";
@@ -32,7 +33,7 @@ export default async function MonitorPage(props: PageProps<"/contests/[contestId
   return (
     <MonitorView
       contestId={contest.id}
-      changing={contest.status === "published" || contest.status === "running"}
+      changing={isLiveActivity(contest.status)}
       roster={roster}
       feed={feed}
       // Every prop of a client component is serialised into the page; the

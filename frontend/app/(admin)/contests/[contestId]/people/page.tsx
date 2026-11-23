@@ -1,5 +1,5 @@
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
-import { hasEnded } from "@/lib/api/contests";
+import { hasEnded } from "@/lib/api/contests-terms";
 import { managerListSchema, participantListSchema } from "@/lib/api/people";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
