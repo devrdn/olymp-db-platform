@@ -154,6 +154,30 @@ describe("authRecoveryRedirect, leaving a trace", () => {
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  test("keeps the code and the request id however long the address is", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    authRecoveryRedirect(new ApiError("unauthenticated", 401, "Sign in", "req-42"), `/audit?entity=${"x".repeat(600)}`);
+
+    const line = warn.mock.calls[0].join(" ");
+    expect(line).toContain("unauthenticated");
+    expect(line).toContain("req-42");
+    warn.mockRestore();
+  });
+
+  test("keeps the trace on one line, whatever the address and the request id hold", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    authRecoveryRedirect(
+      new ApiError("unauthenticated", 401, "Sign in", "req-1\nFAKE"),
+      "/contests/x\nFAKE auth redirect: /admin\u2028/play",
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0].join(" ")).not.toMatch(/[\r\n\u2028\u2029]/);
+    warn.mockRestore();
+  });
 });
 
 describe("guardRedirect, resuming the exact view", () => {

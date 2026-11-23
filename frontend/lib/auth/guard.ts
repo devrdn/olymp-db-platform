@@ -5,6 +5,7 @@
  */
 
 import { ApiError } from "@/lib/api/client";
+import { printable } from "@/lib/printable";
 
 /**
  * Reachable without a session, with every path beneath them. Beneath `/`
@@ -87,9 +88,13 @@ export function authRecoveryRedirect(error: unknown, pathname: string): string |
         : null;
 
   if (target) {
+    // The reason first: the address comes from the request and can be long
+    // enough for the bounded line to cut what follows it.
     console.warn(
-      `auth redirect: ${pathname} -> ${target} because the API answered ` +
-        `${error.code} (${error.status}), request ${error.requestId ?? "unknown"}`,
+      printable(
+        `auth redirect: the API answered ${error.code} (${error.status}), ` +
+          `request ${error.requestId ?? "unknown"}, from ${pathname} to ${target}`,
+      ),
     );
   }
 
