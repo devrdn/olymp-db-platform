@@ -143,6 +143,38 @@ func TestARequestWhoseAddressCannotBeReadIsRefused(t *testing.T) {
 	}
 }
 
+// A typed key is one counter per string, and the empty string would be one
+// counter that every request leaving the field out shares.
+func TestAnEmptyTypedKeyIsRefusedWithoutACounter(t *testing.T) {
+	budgets, counter := newBudgets(t)
+	byLogin := httpx.PerTypedKey("forgot:login", 5, time.Minute, codeTestTooOften, "Too many for this login")
+
+	err := budgets.Charge(t.Context(), byLogin.Of(""))
+
+	if !errors.Is(err, httpx.ErrTypedKeyEmpty) || errors.Is(err, httpx.ErrBudgetSpent) {
+		t.Fatalf("Charge() = %v, want ErrTypedKeyEmpty", err)
+	}
+	if got := counter.count(t, "forgot:login:"); got != 0 {
+		t.Errorf("the empty login was charged %d times, want none", got)
+	}
+}
+
+// A resolved key is an identifier the service found, so an empty one is a
+// caller's bug: refused as ours, never one counter every such call shares.
+func TestAnEmptyResolvedKeyIsRefusedAsOursWithoutACounter(t *testing.T) {
+	budgets, counter := newBudgets(t)
+	byAccount := httpx.PerKey("reads:user", 5, time.Minute, codeTestTooOften, "Too many reads")
+
+	err := budgets.Charge(t.Context(), byAccount.Of(""))
+
+	if !errors.Is(err, httpx.ErrBudgetUnavailable) || errors.Is(err, httpx.ErrBudgetSpent) {
+		t.Fatalf("Charge() = %v, want ErrBudgetUnavailable and not a spent budget", err)
+	}
+	if got := counter.count(t, "reads:user:"); got != 0 {
+		t.Errorf("the empty key was charged %d times, want none", got)
+	}
+}
+
 type failingCounter struct{}
 
 var errCacheDown = errors.New("cache down")

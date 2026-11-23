@@ -22,6 +22,11 @@ var ErrBudgetUnavailable = errors.New("request budget could not be counted")
 // it, so it is the deployment's to hear about.
 var ErrAddressUnreadable = errors.New("the client address could not be read")
 
+// ErrTypedKeyEmpty is a typed-key budget charged to the empty string: the
+// field it is keyed by was left out. Refused, so all such requests never share
+// one counter.
+var ErrTypedKeyEmpty = errors.New("the field a request budget is keyed by is empty")
+
 // Counter counts attempts per subject in a fixed window (auth.Limiter). A
 // counter that cannot count answers (false, err).
 type Counter interface {
@@ -80,7 +85,7 @@ func PerKey(name string, limit int, window time.Duration, code Code, message str
 
 // PerTypedKey declares a budget per key the caller typed, such as an email or
 // a login, which Charge spends only once every other budget of the call has
-// admitted the request. Otherwise as PerAddress.
+// admitted the request, and never for an empty key. Otherwise as PerAddress.
 func PerTypedKey(name string, limit int, window time.Duration, code Code, message string) KeyBudget {
 	return KeyBudget{budget: declare(name, keyTyped, limit, window, code, message)}
 }
@@ -133,6 +138,10 @@ func (r *Refusal) RetryAfter() time.Duration { return r.budget.window }
 //     address budget (ErrAddressUnreadable), never let past it nor counted in
 //     one bucket that every such request shares, since an unreadable value may
 //     only make a request stricter;
+//   - a typed key that is empty is refused (ErrTypedKeyEmpty) rather than
+//     counted in one bucket that every request leaving the field out shares,
+//     and an empty resolved key, which only a caller's bug can produce, is
+//     refused as ErrBudgetUnavailable;
 //   - every refusal says to wait out its budget's window, the longest a caller
 //     can have to wait, since a fixed window's start is not known here.
 //
@@ -151,15 +160,23 @@ var chargeOrder = [...]keyKind{keyAddress, keyResolved, keyTyped}
 
 // Charge spends one attempt of each budget, in rule 5's order whatever order
 // they are named in, and stops at the first that refuses. It returns nil, a
-// *Refusal, or an error wrapping ErrAddressUnreadable or ErrBudgetUnavailable.
+// *Refusal, or an error wrapping ErrAddressUnreadable, ErrTypedKeyEmpty or
+// ErrBudgetUnavailable.
 func (b Budgets) Charge(ctx context.Context, charges ...Charge) error {
 	for _, kind := range chargeOrder {
 		for _, c := range charges {
 			if c.budget.kind != kind {
 				continue
 			}
-			if kind == keyAddress && c.key == "" {
-				return fmt.Errorf("%w: budget %s", ErrAddressUnreadable, c.budget.name)
+			if c.key == "" {
+				switch kind {
+				case keyAddress:
+					return fmt.Errorf("%w: budget %s", ErrAddressUnreadable, c.budget.name)
+				case keyTyped:
+					return fmt.Errorf("%w: budget %s", ErrTypedKeyEmpty, c.budget.name)
+				case keyResolved:
+					return fmt.Errorf("%w: budget %s was charged to no key", ErrBudgetUnavailable, c.budget.name)
+				}
 			}
 			allowed, err := b.counter.Allow(ctx, c.budget.name+":"+c.key, c.budget.limit, c.budget.window)
 			if err != nil {

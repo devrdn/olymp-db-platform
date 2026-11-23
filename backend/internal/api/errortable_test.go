@@ -824,6 +824,9 @@ func TestEveryBudgetErrorHasItsAnswer(t *testing.T) {
 		"unavailable": {err: fmt.Errorf("%w: cache down", httpx.ErrBudgetUnavailable),
 			want: answered{status: http.StatusInternalServerError, code: "internal_error",
 				message: "Internal server error", logged: true}},
+		"empty typed key": {err: fmt.Errorf("%w: budget forgot:login", httpx.ErrTypedKeyEmpty),
+			want: answered{status: http.StatusBadRequest, code: "invalid_request",
+				message: "A required field is empty"}},
 		// Logged at Warn, not Error (TestAnUnreadableAddressIsLoggedWithItsRoute).
 		"unreadable address": {err: fmt.Errorf("%w: budget form:ip", httpx.ErrAddressUnreadable),
 			want: answered{status: http.StatusInternalServerError, code: "internal_error",

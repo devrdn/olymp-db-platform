@@ -495,6 +495,18 @@ func TestConfirmSpendsTheAddressBudgetBeforeTheEmailBudget(t *testing.T) {
 	}
 }
 
+// An empty email names no sign-up, and as the confirm budget's key it would be
+// one counter every request leaving it out shares.
+func TestConfirmRefusesAnEmptyEmail(t *testing.T) {
+	f := newSignupFixture(t)
+	for _, email := range []string{"", "   "} {
+		rec := f.confirm("192.0.2.1", email, "123456")
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+			t.Errorf("confirm %q = %d %s, want 400 invalid_request", email, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestConfirmLimitsAnEmailWhateverItsCase(t *testing.T) {
 	f := newSignupFixture(t)
 	for i := range api.ConfirmsPerEmail {

@@ -139,7 +139,7 @@ func TestForgotAnswersTheSameForEveryAccount(t *testing.T) {
 		t.Errorf("body = %s, want %s", real.Body.String(), want)
 	}
 	assertNoStore(t, "real", real)
-	for _, typed := range []string{"nobody", "nobody@example.edu", "organiser", "gone", "held", "held@example.edu", "mailless", ""} {
+	for _, typed := range []string{"nobody", "nobody@example.edu", "organiser", "gone", "held", "held@example.edu", "mailless"} {
 		rec := f.forgot("192.0.2.1", typed)
 		if rec.Code != real.Code || rec.Body.String() != real.Body.String() {
 			t.Errorf("forgot(%q) = %d %s, want the real account's %d %s", typed, rec.Code, rec.Body.String(), real.Code, real.Body.String())
@@ -260,6 +260,19 @@ func TestForgotSpendsTheAddressBudgetFirst(t *testing.T) {
 	if rec.Code != http.StatusAccepted || len(f.Outbox.Queued()) != 1 {
 		t.Errorf("the account from a fresh address = %d with %d queued, want 202 and the link: refusals by address spent its budget",
 			rec.Code, len(f.Outbox.Queued()))
+	}
+}
+
+// An empty identifier names nothing, so refusing it says nothing about any
+// account, and as a budget key it would be one counter shared by every request
+// that leaves it out. The interface refuses it with the same code.
+func TestForgotRefusesAnEmptyIdentifier(t *testing.T) {
+	f := newRecoveryFixture(t)
+	for _, typed := range []string{"", "   "} {
+		rec := f.forgot("192.0.2.1", typed)
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+			t.Errorf("forgot %q = %d %s, want 400 invalid_request", typed, rec.Code, rec.Body.String())
+		}
 	}
 }
 

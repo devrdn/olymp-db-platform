@@ -90,10 +90,14 @@ func joined(tables ...errorTable) errorTable {
 	return all
 }
 
-// budgetErrors answers a request budget whose counter could not be kept:
-// ours, so the cause goes to the log only. A spent budget is answered by
-// answerBudgetError from its own declaration.
+// budgetErrors answers what a request budget refuses with besides a spent
+// budget, which answerBudgetError answers from its own declaration: an empty
+// typed key, the caller's, and a counter that could not be kept, ours, whose
+// cause goes to the log only.
 var budgetErrors = errorTable{
+	// The caller's own request: the field the budget is keyed by was left out.
+	{err: httpx.ErrTypedKeyEmpty, status: http.StatusBadRequest, code: codeInvalidRequest,
+		message: "A required field is empty"},
 	{err: httpx.ErrBudgetUnavailable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a request budget could not be counted"},
