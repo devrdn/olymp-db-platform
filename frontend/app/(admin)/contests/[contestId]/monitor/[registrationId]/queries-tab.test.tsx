@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { MAX_QUERY_SEARCH, type QueriesPage } from "@/lib/api/monitor";
+import { MAX_QUERY_SEARCH } from "@/lib/api/journal-terms";
+import type { QueriesPage } from "@/lib/api/monitor";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 const { fetchQueries, fetchTimeline } = vi.hoisted(() => ({ fetchQueries: vi.fn(), fetchTimeline: vi.fn() }));

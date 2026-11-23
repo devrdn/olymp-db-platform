@@ -2,7 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
-import { MAX_QUERY_SEARCH, type QueriesPage } from "@/lib/api/monitor";
+import { MAX_QUERY_SEARCH } from "@/lib/api/journal-terms";
+import type { QueriesPage } from "@/lib/api/monitor";
 
 const { fetchQueries, fetchTimeline } = vi.hoisted(() => ({ fetchQueries: vi.fn(), fetchTimeline: vi.fn() }));
 vi.mock("@/lib/api/monitor", async (importOriginal) => ({

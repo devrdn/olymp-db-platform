@@ -6,7 +6,8 @@
 
 import type { Content } from "pdfmake";
 
-import type { ResultsCell, ResultsField, ResultsReport, ResultsRow } from "@/lib/api/results";
+import type { ResultsCell, ResultsReport, ResultsRow } from "@/lib/api/results";
+import type { ResultsField } from "@/lib/api/results-terms";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";

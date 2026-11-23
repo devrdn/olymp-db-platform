@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CONTEST_STATUSES } from "./contests";
 import { SCORINGS } from "./contests-terms";
 import { prizeSchema } from "./leaderboard";
+import { RESULTS_DETAILS, RESULTS_FIELDS, type ResultsDetail, type ResultsField } from "./results-terms";
 
 /**
  * The results report the staff preview shows and the export serves
@@ -13,11 +14,6 @@ import { prizeSchema } from "./leaderboard";
 export const REPORT_STATUSES = ["preliminary", "final", "archived"] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
-export const RESULTS_FIELDS = ["full_name", "login", "email"] as const;
-export type ResultsField = (typeof RESULTS_FIELDS)[number];
-
-export const RESULTS_DETAILS = ["summary", "detailed"] as const;
-export type ResultsDetail = (typeof RESULTS_DETAILS)[number];
 
 const contestSchema = z
   .object({

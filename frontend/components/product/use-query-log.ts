@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/lib/api/client";
-import { MAX_QUERY_SEARCH, type LoggedQuery, type QueriesPage, type QueriesParams, type ReadOptions } from "@/lib/api/journal";
+import type { LoggedQuery, QueriesPage, QueriesParams, ReadOptions } from "@/lib/api/journal";
+import { MAX_QUERY_SEARCH } from "@/lib/api/journal-terms";
 
 export const SEARCH_DEBOUNCE_MS = 300;
 

@@ -4,11 +4,8 @@ import { describe, expect, test } from "vitest";
 import en from "@/lib/i18n/dictionaries/en";
 import { getDictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
-import {
-  identityHue,
-  type Standings,
-  type StandingsRow,
-} from "@/lib/api/leaderboard";
+import type { Standings, StandingsRow } from "@/lib/api/leaderboard";
+import { identityHue } from "@/lib/api/leaderboard-terms";
 import { formatTime } from "@/lib/format/datetime";
 
 import { PlaceBadge, PrizeBadge, StandingsView } from "./standings";

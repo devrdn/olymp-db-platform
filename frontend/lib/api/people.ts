@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 
+import { REGISTRATION_STATUSES } from "./people-terms";
+
 export { removable } from "./people-terms";
 
 
@@ -9,14 +11,6 @@ export { removable } from "./people-terms";
 /** The roles a contest's staff hold. */
 export const MANAGER_ROLES = ["owner", "manager"] as const;
 export type ManagerRole = (typeof MANAGER_ROLES)[number];
-
-export const REGISTRATION_STATUSES = [
-  "registered",
-  "active",
-  "finished",
-  "disqualified",
-] as const;
-export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
 
 export const managerSchema = z
   .object({

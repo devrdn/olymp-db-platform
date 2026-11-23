@@ -15,7 +15,7 @@ import {
   shapeFromForm,
 } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
-import { freezeFromForm } from "@/lib/api/leaderboard";
+import { freezeFromForm } from "@/lib/api/leaderboard-terms";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
 import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 import { instantFromWallClock } from "@/lib/format/datetime";

@@ -33,3 +33,31 @@ export const CONTEST_STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"
   finished: "mute",
   archived: "mute",
 };
+
+/**
+ * Mirrors `covers.MaxAttributionLen`, so the field stops at the limit instead
+ * of being refused after the fact.
+ */
+export const MAX_COVER_ATTRIBUTION = 200;
+
+/**
+ * The public address of a cover rendition. The path names the contest, not
+ * the file, so the hash in `v` is what busts the cache when the cover is
+ * replaced (the API caches a hashed address for a year, a plain one for a
+ * minute). 800 is the card; 1600 is the picture above a story.
+ */
+export function coverHref(contestId: string, hash: string, size: 800 | 1600 = 800): string {
+  return `/api/v1/public/contests/${contestId}/cover?size=${size}&v=${hash}`;
+}
+
+/**
+ * The same rendition read as staff. The public address refuses a draft, which
+ * is when a cover is chosen; this one sits behind the session and is answered
+ * `private`. The hash still busts its half-minute cache after a replacement.
+ */
+export function coverStaffHref(contestId: string, hash: string, size: 800 | 1600 = 800): string {
+  return `/api/v1/contests/${contestId}/cover/file?size=${size}&v=${hash}`;
+}
+
+/** Mirrors `maxGracePeriodMin` in `backend/internal/contests/contests.go`: 90 days. */
+export const MAX_GRACE_PERIOD_MIN = 129_600;

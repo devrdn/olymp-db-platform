@@ -1,6 +1,6 @@
 import { ScrollBox } from "@/components/ui/scroll-box";
 import type { Prize, Standings, StandingsCell, StandingsRow } from "@/lib/api/leaderboard";
-import { identityHue } from "@/lib/api/leaderboard";
+import { identityHue } from "@/lib/api/leaderboard-terms";
 import { formatTime } from "@/lib/format/datetime";
 import { initials } from "@/lib/format/initials";
 import type { Dictionary } from "@/lib/i18n/dictionary";

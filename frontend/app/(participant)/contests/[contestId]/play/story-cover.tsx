@@ -1,5 +1,5 @@
 import { DrawnCover } from "@/components/product/drawn-cover";
-import { coverHref } from "@/lib/api/contests";
+import { coverHref } from "@/lib/api/contests-terms";
 
 import type { PlayDictionary } from "./dictionary";
 import { fill } from "@/lib/i18n/fill";

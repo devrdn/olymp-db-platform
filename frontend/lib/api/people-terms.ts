@@ -2,6 +2,14 @@
 
 import type { Participant } from "./people";
 
+export const REGISTRATION_STATUSES = [
+  "registered",
+  "active",
+  "finished",
+  "disqualified",
+] as const;
+export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
+
 /**
  * Whether the participant can be removed rather than disqualified. Once
  * started, their queries and answers are part of the contest's record.

@@ -1,10 +1,5 @@
-import {
-  RESULTS_FIELDS,
-  type ReportStatus,
-  type ResultsDetail,
-  type ResultsExportBody,
-  type ResultsField,
-} from "@/lib/api/results";
+import type { ReportStatus, ResultsExportBody } from "@/lib/api/results";
+import { RESULTS_FIELDS, type ResultsDetail, type ResultsField } from "@/lib/api/results-terms";
 
 export type ExportKind = "csv" | "table" | "protocol";
 

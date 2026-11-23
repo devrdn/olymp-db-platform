@@ -8,7 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MONITOR_FLAGS, type MonitorFlags, type RosterRow } from "@/lib/api/monitor";
-import { REGISTRATION_STATUSES } from "@/lib/api/people";
+import { REGISTRATION_STATUSES } from "@/lib/api/people-terms";
 import { readableDuration } from "@/lib/format/bytes";
 import { formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";

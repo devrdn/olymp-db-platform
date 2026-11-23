@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import type { ResultsField } from "@/lib/api/results";
+import type { ResultsField } from "@/lib/api/results-terms";
 
 import { exportBody, protocolAvailable, resultsFileName, type ExportOptions } from "./request";
 

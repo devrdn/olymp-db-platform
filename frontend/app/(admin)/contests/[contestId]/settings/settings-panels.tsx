@@ -9,7 +9,7 @@ import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
 import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "@/lib/api/contests-terms";
-import { FREEZE_UNITS, freezeForForm } from "@/lib/api/leaderboard";
+import { FREEZE_UNITS, freezeForForm } from "@/lib/api/leaderboard-terms";
 import { type SqlPolicy } from "@/lib/api/policy";
 import { SQL_MODES } from "@/lib/api/policy-terms";
 import { wallClockFromInstant } from "@/lib/format/datetime";
