@@ -107,9 +107,13 @@ function Resend({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
   const resend = () => {
     startSending(async () => {
       const answer = await resendCodeAction();
-      setOutcome(answer);
-      if (answer.ok) wait(RESEND_COOLDOWN_SECONDS);
-      else if (answer.code === "signup_too_soon") wait(answer.retryAfterSeconds ?? RESEND_COOLDOWN_SECONDS);
+      // An update after the await is outside the transition unless wrapped
+      // again, and would show the answer while the button still says sending.
+      startSending(() => {
+        setOutcome(answer);
+        if (answer.ok) wait(RESEND_COOLDOWN_SECONDS);
+        else if (answer.code === "signup_too_soon") wait(answer.retryAfterSeconds ?? RESEND_COOLDOWN_SECONDS);
+      });
     });
   };
 

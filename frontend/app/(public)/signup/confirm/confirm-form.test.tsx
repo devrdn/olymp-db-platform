@@ -136,6 +136,27 @@ describe("ConfirmForm, a new code", () => {
     expect(await screen.findByRole("link", { name: en.auth.confirm.startOver })).toHaveAttribute("href", "/signup");
   });
 
+  test("never shows the answer beside a button that still says it is sending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    resendCodeAction.mockResolvedValue({ code: "too_many_attempts" });
+    const { container } = renderForm();
+    act(() => vi.advanceTimersByTime(60_000));
+    // The same element throughout; only its label changes.
+    const resend = screen.getByRole("button", { name: en.auth.confirm.resend });
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => {
+      if (screen.queryByRole("alert")) seen.push(resend.textContent ?? "");
+    });
+    observer.observe(container, { childList: true, subtree: true, characterData: true, attributes: true });
+
+    await userEvent.click(resend);
+    await screen.findByRole("button", { name: en.auth.confirm.resend });
+    observer.disconnect();
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain(en.auth.confirm.resending);
+  });
+
   test("says why when a new code was refused, and lets the person try again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     resendCodeAction.mockResolvedValue({ code: "too_many_attempts" });
