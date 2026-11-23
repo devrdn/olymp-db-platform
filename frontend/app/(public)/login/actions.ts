@@ -8,7 +8,7 @@ import { browserCookieOptions } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { DEVICE_COOKIE, signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity } from "@/lib/auth/identity";
 import { sessionCookie } from "@/lib/auth/session";
 export type SignInState = { code?: string };
 

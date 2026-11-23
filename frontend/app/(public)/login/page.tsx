@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { Band } from "@/components/layout/band";
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
 import { destinationAfterLogin } from "@/lib/auth/destination";
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity } from "@/lib/auth/identity";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { externalSignInError, signInErrors } from "./codes";

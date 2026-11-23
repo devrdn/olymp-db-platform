@@ -1,4 +1,4 @@
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity } from "@/lib/auth/identity";
 
 import { SelectionProvider } from "./selection";
 

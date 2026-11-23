@@ -22,10 +22,8 @@ vi.mock("react", async (importOriginal) => ({
   },
 }));
 vi.mock("./server", () => ({ serverRequest }));
-const { fetchIdentity } = vi.hoisted(() => ({ fetchIdentity: vi.fn() }));
-vi.mock("@/lib/auth/session", () => ({ fetchIdentity }));
 
-import { bestEffort, readIdentity, readPage, Refusal, type ReadPolicy } from "./page-read";
+import { bestEffort, readPage, Refusal, type ReadPolicy } from "./page-read";
 
 const PATH = "/contests/c1/questions/q1";
 const HERE = "/contests/c1/questions";
@@ -169,14 +167,6 @@ describe("a best-effort read", () => {
 });
 
 describe("one render's reads", () => {
-  test("ask who is signed in once, and log an outage once, however many parts of the screen ask", async () => {
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    fetchIdentity.mockRejectedValue(new Error("/auth/me could not be reached (status 502)"));
-
-    expect(await Promise.all([readIdentity(), readIdentity(), readIdentity()])).toEqual([null, null, null]);
-    expect(fetchIdentity).toHaveBeenCalledTimes(1);
-    expect(logged).toHaveBeenCalledTimes(1);
-  });
 
   test("ask the API once for a path, whatever each caller parses and however each answers a refusal", async () => {
     serverRequest.mockResolvedValue({ problems: [] });

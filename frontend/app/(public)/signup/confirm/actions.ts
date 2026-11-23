@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 
 import { outcome } from "@/lib/api/outcome";
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity } from "@/lib/auth/identity";
 import type { ActionDone, ActionRefused, ActionState } from "@/lib/api/server";
 import { confirmSignup, resendSignup, signupAnswerCode, signupCookieName } from "@/lib/api/signup";
 import { destinationAfterLogin } from "@/lib/auth/destination";

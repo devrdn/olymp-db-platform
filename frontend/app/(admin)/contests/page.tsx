@@ -2,7 +2,7 @@ import { Band } from "@/components/layout/band";
 import { ContestRegister } from "./contest-register";
 import { contestListSchema } from "@/lib/api/contests";
 import { readPage } from "@/lib/api/page-read";
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity } from "@/lib/auth/identity";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 export async function generateMetadata() {

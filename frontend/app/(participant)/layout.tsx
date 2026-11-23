@@ -1,6 +1,6 @@
 import { ProductShell } from "@/components/layout/product-shell";
 import { participantDestinations } from "@/components/layout/destinations";
-import { readIdentity } from "@/lib/api/page-read";
+import { readIdentity } from "@/lib/auth/identity";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
 import { ParticipantDictionaryProvider } from "@/lib/i18n/client";
