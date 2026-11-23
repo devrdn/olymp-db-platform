@@ -185,6 +185,16 @@ describe("an address that leads nowhere", () => {
     expect(notFound).toHaveBeenCalled();
   });
 
+  test("a gateway's 404 page, not the API's answer, is a failed load rather than a missing participant", async () => {
+    serverRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith(base)) throw new ApiError("unreachable", 404, "Unparseable response from the API");
+      return answer(path);
+    });
+
+    await expect(renderPage()).rejects.toMatchObject({ code: "unreachable" });
+    expect(notFound).not.toHaveBeenCalled();
+  });
+
   test("a registration that is not an identifier is not asked about at all", async () => {
     await expect(renderPage(undefined, "not-an-id")).rejects.toThrow("NEXT_NOT_FOUND");
     expect(serverRequest).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
@@ -11,10 +11,8 @@ import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import { ARCHIVE_PAGE_SIZE, ARCHIVE_QUERY_MAX, archivePageSchema, archiveSearch } from "@/lib/api/archive";
 import { branding } from "@/lib/api/branding";
-import { ApiError } from "@/lib/api/client";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { readPage, Refusal } from "@/lib/api/page-read";
 import { messageForCode } from "@/lib/i18n/errors";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { plural } from "@/lib/i18n/plural";
@@ -63,26 +61,20 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
   };
 
   const t = dict.archive;
-  let loaded;
-  try {
-    loaded = archivePageSchema.parse(await serverRequest(`/archive/contests?${search}`));
-  } catch (error: unknown) {
-    // proxy.ts only saw a cookie; this answer says whether the session is alive.
-    const target = authRecoveryRedirect(error, q ? `/archive?${new URLSearchParams({ q })}` : "/archive");
-    if (target) redirect(target);
-    // The switch was turned off since the branding was read.
-    if (error instanceof ApiError && error.status === 404) notFound();
-    if (error instanceof ApiError && error.status === 429) {
-      return (
-        <Band fill className="py-12">
-          <h1 className="text-h2 text-ink">{t.heading}</h1>
-          <p role="status" className="pt-6 text-body text-warn">
-            {messageForCode(error.code, dict.errors)}
-          </p>
-        </Band>
-      );
-    }
-    throw error;
+  // `not_found` here means the switch was turned off since the branding was read.
+  const loaded = await readPage(`/archive/contests?${search}`, (payload) => archivePageSchema.parse(payload), {
+    here: q ? `/archive?${new URLSearchParams({ q })}` : "/archive",
+    shown: ["archive_too_often"],
+  });
+  if (loaded instanceof Refusal) {
+    return (
+      <Band fill className="py-12">
+        <h1 className="text-h2 text-ink">{t.heading}</h1>
+        <p role="status" className="pt-6 text-body text-warn">
+          {messageForCode(loaded.code, dict.errors)}
+        </p>
+      </Band>
+    );
   }
 
   const { items, total } = loaded;

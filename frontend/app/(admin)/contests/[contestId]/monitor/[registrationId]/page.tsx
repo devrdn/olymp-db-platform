@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 
-import { ApiError } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import {
   answersSchema,
@@ -29,7 +28,7 @@ import { WorkspaceTab } from "./workspace-tab";
  * only that tab's data. The API audits each view.
  *
  * Reads go through `loadContestResource`. A registration of another contest is
- * a 404 like a missing one (`monitor_participant_not_found`), so every 404 is
+ * answered like a missing one (`monitor_participant_not_found`), and both are
  * the not-found page.
  */
 export default async function ParticipantPage(
@@ -104,17 +103,9 @@ export default async function ParticipantPage(
   );
 }
 
-/** One monitoring read; any 404 is the not-found page. */
-async function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
-  let value: T | null;
-  try {
-    value = await loadContestResource(contestId, path, parse);
-  } catch (error: unknown) {
-    if (error instanceof ApiError && error.status === 404) notFound();
-    throw error;
-  }
-  if (value === null) notFound();
-  return value;
+/** One monitoring read, of this registration or the roster. */
+function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
+  return loadContestResource(contestId, path, parse, { missing: ["monitor_participant_not_found"] });
 }
 
 function timeline(contestId: string, registrationId: string, kinds: string[] = []): string {

@@ -1,15 +1,13 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { ExportMenu } from "@/components/product/export-menu";
-import { ApiError } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { answersSchema, queriesSchema } from "@/lib/api/journal";
+import { readPage } from "@/lib/api/page-read";
 import { myCsvHref, profileReportSchema, profileWorkspaceSchema } from "@/lib/api/profile";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { MyAnswers } from "./my-answers";
@@ -115,19 +113,15 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
 }
 
 /**
- * One read under `/me/contests/{id}`; any 404 is the not-found page. A dead
- * session or one-time password gets the guard's recovery; anything else is
- * thrown, since the report cannot stand without it.
+ * One read under `/me/contests/{id}`. A contest that is not this reader's
+ * finished one is `profile_contest_not_found`, the not-found page; the report
+ * cannot stand without any of them.
  */
-async function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
-  try {
-    return parse(await serverRequest(`/me/contests/${contestId}${path}`));
-  } catch (error: unknown) {
-    if (error instanceof ApiError && error.status === 404) notFound();
-    const target = authRecoveryRedirect(error, `/profile/contests/${contestId}`);
-    if (target) redirect(target);
-    throw error;
-  }
+function read<T>(contestId: string, path: string, parse: (payload: unknown) => T): Promise<T> {
+  return readPage(`/me/contests/${contestId}${path}`, parse, {
+    here: `/profile/contests/${contestId}`,
+    missing: ["profile_contest_not_found"],
+  });
 }
 
 /** The current tab's data, read on the server. */

@@ -17,7 +17,11 @@ const { serverRequest, branding, notFound, redirect, standings } = vi.hoisted(()
 }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 vi.mock("@/lib/api/branding", () => ({ branding }));
-vi.mock("next/navigation", () => ({ notFound, redirect }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  notFound,
+  redirect,
+}));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");
   return { activeLocale: async () => "en", activeDictionary: async () => getDictionary("en") };
@@ -95,6 +99,12 @@ describe("a contest in the archive", () => {
   test("renders not found for an id the API does not list", async () => {
     serve(new ApiError("not_found", 404, "x"));
     await expect(renderPage()).rejects.toThrow("NEXT_NOT_FOUND");
+  });
+
+  test("is a failed load, not a missing contest, when a gateway's 404 page answered instead of the API", async () => {
+    serve(new ApiError("unreachable", 404, "Unparseable response from the API"));
+    await expect(renderPage()).rejects.toMatchObject({ code: "unreachable" });
+    expect(notFound).not.toHaveBeenCalled();
   });
 
   test("sends a dead session to sign-in, back to this contest", async () => {

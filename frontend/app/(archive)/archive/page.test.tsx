@@ -84,6 +84,12 @@ describe("the archive list", () => {
     await expect(renderPage()).rejects.toThrow("NEXT_NOT_FOUND");
   });
 
+  test("is a failed load, not an archive that is off, when a gateway's 404 page answered instead of the API", async () => {
+    serverRequest.mockRejectedValue(new ApiError("unreachable", 404, "Unparseable response from the API"));
+    await expect(renderPage()).rejects.toMatchObject({ code: "unreachable" });
+    expect(notFound).not.toHaveBeenCalled();
+  });
+
   test("lists each contest with its window, status, participants and a results link", async () => {
     answer({ items: [row()], total: 1 });
     await renderPage();

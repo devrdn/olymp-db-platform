@@ -158,6 +158,15 @@ describe("an address that leads nowhere", () => {
     await expect(renderPage("notes")).rejects.toThrow("NEXT_NOT_FOUND");
   });
 
+  test("a gateway's 404 page, not the API's answer, is a failed load rather than a missing contest", async () => {
+    serverRequest.mockImplementation(async () => {
+      throw new ApiError("unreachable", 404, "Unparseable response from the API");
+    });
+
+    await expect(renderPage()).rejects.toMatchObject({ code: "unreachable" });
+    expect(notFound).not.toHaveBeenCalled();
+  });
+
   test("an identifier that is not one is not asked about at all", async () => {
     await expect(renderPage(undefined, "not-an-id")).rejects.toThrow("NEXT_NOT_FOUND");
     expect(serverRequest).not.toHaveBeenCalled();

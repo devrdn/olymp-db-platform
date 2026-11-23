@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
@@ -7,13 +7,12 @@ import { PublicStandings } from "@/components/product/public-standings";
 import { Tag } from "@/components/ui/tag";
 import { archiveContestSchema, type ArchiveContest } from "@/lib/api/archive";
 import { branding } from "@/lib/api/branding";
-import { ApiError } from "@/lib/api/client";
-import { failureCodeOf } from "@/lib/api/outcome";
+import { outcome } from "@/lib/api/outcome";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
 import { standingsSchema, type Standings } from "@/lib/api/leaderboard";
+import { readPage, Refusal } from "@/lib/api/page-read";
 import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
 import type { Locale } from "@/lib/i18n/config";
 import { messageForCode } from "@/lib/i18n/errors";
 import { plural } from "@/lib/i18n/plural";
@@ -31,24 +30,18 @@ async function load(contestId: string, locale: Locale): Promise<Loaded> {
 
   // Independent, so together, and settled apart: the table is the one the
   // leaderboard page reads, on a budget of its own, and its refusal must not
-  // cost the reader the contest.
-  const [contest, table] = await Promise.all([
-    serverRequest(`/archive/contests/${contestId}?lang=${locale}`).then(
-      (payload) => ({ ok: true as const, contest: archiveContestSchema.parse(payload) }),
-      (error: unknown) => ({ ok: false as const, error }),
-    ),
-    serverRequest(`/contests/${contestId}/leaderboard?lang=${locale}`)
-      .then((payload): Table => ({ kind: "ok", standings: standingsSchema.parse(payload) }))
-      .catch((error: unknown): Table => ({ kind: "refused", code: failureCodeOf(error) })),
+  // cost the reader the contest: every failure of it is shown in its place.
+  const [contest, read] = await Promise.all([
+    readPage(`/archive/contests/${contestId}?lang=${locale}`, (payload) => archiveContestSchema.parse(payload), {
+      here: `/archive/${contestId}`,
+      shown: ["archive_too_often"],
+    }),
+    outcome(async () => standingsSchema.parse(await serverRequest(`/contests/${contestId}/leaderboard?lang=${locale}`))),
   ]);
 
-  if (contest.ok) return { kind: "ok", contest: contest.contest, table };
-  const { error } = contest;
-  const target = authRecoveryRedirect(error, `/archive/${contestId}`);
-  if (target) redirect(target);
-  if (error instanceof ApiError && error.status === 404) notFound();
-  if (error instanceof ApiError && error.status === 429) return { kind: "refused", code: error.code };
-  throw error;
+  if (contest instanceof Refusal) return { kind: "refused", code: contest.code };
+  const table: Table = read.ok ? { kind: "ok", standings: read.value } : { kind: "refused", code: read.code };
+  return { kind: "ok", contest, table };
 }
 
 /**
