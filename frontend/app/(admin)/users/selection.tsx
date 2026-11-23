@@ -10,7 +10,7 @@ import {
 
 import { X } from "lucide-react";
 
-import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
+import { ActionButton, ActionDialogBinding, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -26,6 +26,8 @@ import type { IssuedPassword, Role, SkippedAccount } from "@/lib/api/accounts";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 import { cn } from "@/lib/utils";
 
 import {
@@ -37,8 +39,6 @@ import {
   type BulkState,
 } from "./bulk-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
-import { fill } from "@/lib/i18n/fill";
-import { labelFor } from "@/lib/i18n/label";
 
 export type SelectedAccount = { id: string; display: string };
 
@@ -406,22 +406,6 @@ function ActionDialog({
   );
 }
 
-/** Tells the dialog whether it may be dismissed: not while pending or holding a result. */
-function ReportDismissible({
-  pending,
-  done,
-  report,
-}: {
-  pending: boolean;
-  done: boolean;
-  report: (value: boolean) => void;
-}) {
-  useEffect(() => {
-    report(!pending && !done);
-  }, [pending, done, report]);
-  return null;
-}
-
 /**
  * Block, unblock and delete: one status change. Block and delete require a
  * reason, checked here before the request leaves (the server refuses an empty
@@ -477,7 +461,7 @@ function StatusForm({
     >
       {(state, pending) => (
         <>
-          <ReportDismissible pending={pending} done={state.result !== undefined} report={reportDismissible} />
+          <ActionDialogBinding reportDismissible={reportDismissible} holding={state.result !== undefined} />
           {state.result ? (
             <>
               <DialogHeader>
@@ -589,7 +573,7 @@ function RolesForm({
     >
       {(state, pending) => (
         <>
-          <ReportDismissible pending={pending} done={state.result !== undefined} report={reportDismissible} />
+          <ActionDialogBinding reportDismissible={reportDismissible} holding={state.result !== undefined} />
           {state.result ? (
             <>
               <DialogHeader>
@@ -674,7 +658,7 @@ function ResetPasswordForm({
     >
       {(state, pending) => (
         <>
-          <ReportDismissible pending={pending} done={state.result !== undefined} report={reportDismissible} />
+          <ActionDialogBinding reportDismissible={reportDismissible} holding={state.result !== undefined} />
           {state.result ? (
             <>
               <DialogHeader>

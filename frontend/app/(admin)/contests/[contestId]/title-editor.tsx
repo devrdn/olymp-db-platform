@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import { ActionButton, ActionForm, ActionOutcome, useActionStatus } from "@/components/product/action-form";
+import {
+  ActionButton,
+  ActionDialogBinding,
+  ActionForm,
+  ActionOutcome,
+  useActionStatus,
+} from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,7 +53,8 @@ function TitleForm({
 
   return (
     <ActionForm action={saveTranslationsAction} fields={{ contestId: contest.id }} errors={dict.errors} className="flex flex-col gap-5">
-      <DialogBinding onClose={onClose} reportDismissible={reportDismissible} />
+      {/* A success closes the form: the header shows the saved title. */}
+      <ActionDialogBinding reportDismissible={reportDismissible} onSuccess={onClose} />
 
       <DialogHeader>
         {/* The '?' sits beside the title, so the dialog's name is the title
@@ -115,27 +122,6 @@ function TitleForm({
       </DialogFooter>
     </ActionForm>
   );
-}
-
-/** Only a pending request blocks dismissal; a success closes the form, since the header shows the saved title. */
-function DialogBinding({
-  onClose,
-  reportDismissible,
-}: {
-  onClose: () => void;
-  reportDismissible: (value: boolean) => void;
-}) {
-  const { pending, ok } = useActionStatus();
-
-  useEffect(() => {
-    reportDismissible(!pending);
-  }, [pending, reportDismissible]);
-
-  useEffect(() => {
-    if (ok) onClose();
-  }, [ok, onClose]);
-
-  return null;
 }
 
 function CancelButton({ label, onClose }: { label: string; onClose: () => void }) {

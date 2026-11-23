@@ -6,12 +6,14 @@ import { useRouter } from "next/navigation";
 import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
+import { useConfirm } from "@/components/ui/use-confirm";
 import { browserRequest } from "@/lib/api/browser";
 import { ApiError, isAbortError } from "@/lib/api/client";
-import { failureCodeOf } from "@/lib/api/outcome";
 import type { Game, Upload } from "@/lib/api/game";
+import { failureCodeOf } from "@/lib/api/outcome";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import {
@@ -22,9 +24,6 @@ import {
   gameUploadWindowAction,
 } from "./actions";
 import { useGamePoll } from "./game-poll";
-import { knownMessage } from "@/lib/i18n/errors";
-import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/use-confirm";
 
 /**
  * Consecutive out-of-order refusals resynced automatically (this tab's offset
@@ -383,7 +382,6 @@ export function GameUpload({
     await runLoop(file, id, offset, (fresh?.uploadLimits ?? uploadLimits).chunkBytes);
   }
 
-
   if (!editable) {
     return (
       <section className="flex flex-col gap-3 border-t border-line pt-8">
@@ -623,10 +621,8 @@ export function GameUpload({
               </form>
 
               {windowError ? (
-                <p role="alert" className="text-small text-bad">
-                  {/* Falls back to `tu.windowError`, not the generic "something went wrong". */}
-                  {knownMessage(windowError, errors) ?? tu.windowError}
-                </p>
+                // Falls back to `tu.windowError`, not the generic "something went wrong".
+                <FailureAlert code={windowError} errors={errors} fallback={tu.windowError} />
               ) : windowLoading ? (
                 <p className="text-small text-ink-3">{tu.loading}</p>
               ) : (

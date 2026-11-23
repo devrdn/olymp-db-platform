@@ -8,7 +8,7 @@ import { Tag } from "@/components/ui/tag";
 import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { knownMessage } from "@/lib/i18n/errors";
+import { labelFor } from "@/lib/i18n/label";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
@@ -78,7 +78,7 @@ function ScriptEditor({
   const tooLong = bytes > maxBytes;
   // A refusal the platform names is shown in the reader's language; an
   // unknown code falls back to the words the server stored.
-  const platformRefusal = game.buildErrorCode !== "" ? knownMessage(game.buildErrorCode, dict.errors) : undefined;
+  const platformRefusal = game.buildErrorCode !== "" ? labelFor(dict.errors, game.buildErrorCode) : undefined;
 
   return (
     <>

@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 
 import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/use-confirm";
 import { browserRequest } from "@/lib/api/browser";
 import { ApiError, isAbortError } from "@/lib/api/client";
-import { failureCodeOf } from "@/lib/api/outcome";
 import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
+import { failureCodeOf } from "@/lib/api/outcome";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import {
@@ -22,9 +24,6 @@ import {
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
-import { knownMessage } from "@/lib/i18n/errors";
-import { fill } from "@/lib/i18n/fill";
-import { useConfirm } from "@/components/ui/use-confirm";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
@@ -371,7 +370,6 @@ export function GameBuilderTable({
     await runLoop(file, id, sentBytes, limits.chunkBytes);
   }
 
-
   function updateRowValue(index: number, value: string) {
     setRowValues((prev) => prev.map((v, i) => (i === index ? value : v)));
   }
@@ -480,9 +478,7 @@ export function GameBuilderTable({
         </div>
 
         {windowError ? (
-          <p role="alert" className="text-small text-bad">
-            {knownMessage(windowError, errors) ?? td.windowError}
-          </p>
+          <FailureAlert code={windowError} errors={errors} fallback={td.windowError} />
         ) : windowLoading ? (
           <p className="text-small text-ink-3">{td.loading}</p>
         ) : windowRows.length === 0 ? (

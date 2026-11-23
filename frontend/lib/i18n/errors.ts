@@ -1,12 +1,8 @@
 import type { Dictionary } from "./dictionary";
 import { labelFor } from "./label";
 
-type Errors = Pick<Dictionary["errors"], "fallback">;
-
-/** The dictionary's own sentence for an API code, or undefined for a code this build does not know. */
-export function knownMessage(code: string, errors: Errors): string | undefined {
-  return labelFor(errors, code);
-}
+/** The errors section, or a part of it that keeps the fallback, as screens with a scoped dictionary hold it. */
+export type ErrorSentences = Pick<Dictionary["errors"], "fallback">;
 
 /**
  * The error text for an API code, from the active dictionary. The server's
@@ -14,6 +10,6 @@ export function knownMessage(code: string, errors: Errors): string | undefined {
  * this build) gets the fallback sentence. Takes `dict.errors`, or a part of it
  * that keeps the fallback, so screens with a scoped dictionary can call it.
  */
-export function messageForCode(code: string, errors: Errors): string {
-  return knownMessage(code, errors) ?? errors.fallback;
+export function messageForCode(code: string, errors: ErrorSentences): string {
+  return labelFor(errors, code) ?? errors.fallback;
 }

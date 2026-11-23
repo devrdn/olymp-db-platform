@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
+import { ActionButton, ActionDialogBinding, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,6 +18,9 @@ import { Textarea } from "@/components/ui/textarea";
 import type { Role } from "@/lib/api/accounts";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
+import { labelFor } from "@/lib/i18n/label";
 
 import {
   createAccountAction,
@@ -26,9 +29,6 @@ import {
   type ImportAccountsState,
 } from "./create-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
-import { messageForCode } from "@/lib/i18n/errors";
-import { fill } from "@/lib/i18n/fill";
-import { labelFor } from "@/lib/i18n/label";
 
 /**
  * Creating accounts from the register: one account (`NewAccountForm`) or a
@@ -195,7 +195,13 @@ type FormDialogProps = {
 function NewAccountForm(props: FormDialogProps) {
   return (
     <ActionForm action={createAccountAction} errors={props.dict.errors} className="flex flex-col gap-5">
-      {(state, pending) => <NewAccount {...props} state={state} pending={pending} />}
+      {(state, pending) => (
+        <>
+          {/* While pending or showing a password, only Done may close the dialog. */}
+          <ActionDialogBinding reportDismissible={props.reportDismissible} holding={state.result !== undefined} />
+          <NewAccount {...props} state={state} pending={pending} />
+        </>
+      )}
     </ActionForm>
   );
 }
@@ -207,16 +213,10 @@ function NewAccount({
   locale,
   mail,
   onClose,
-  reportDismissible,
   state,
   pending,
 }: FormDialogProps & { state: CreateAccountState; pending: boolean }) {
   const t = dict.accounts.create;
-
-  // While pending or showing a password, only Done may close the dialog.
-  useEffect(() => {
-    reportDismissible(!pending && !state.result);
-  }, [pending, state.result, reportDismissible]);
 
   if (state.result) {
     return (
@@ -294,7 +294,12 @@ function NewAccount({
 function ImportRosterForm(props: FormDialogProps) {
   return (
     <ActionForm action={importAccountsAction} errors={props.dict.errors} className="flex flex-col gap-5">
-      {(state, pending) => <ImportRoster {...props} state={state} pending={pending} />}
+      {(state, pending) => (
+        <>
+          <ActionDialogBinding reportDismissible={props.reportDismissible} holding={state.result !== undefined} />
+          <ImportRoster {...props} state={state} pending={pending} />
+        </>
+      )}
     </ActionForm>
   );
 }
@@ -306,16 +311,11 @@ function ImportRoster({
   locale,
   mail,
   onClose,
-  reportDismissible,
   state,
   pending,
 }: FormDialogProps & { state: ImportAccountsState; pending: boolean }) {
   const t = dict.accounts.create;
   const [copiedAll, setCopiedAll] = useState(false);
-
-  useEffect(() => {
-    reportDismissible(!pending && !state.result);
-  }, [pending, state.result, reportDismissible]);
 
   if (state.result) {
     const created = state.result.created;

@@ -5,6 +5,7 @@ import {
   Fragment,
   useActionState,
   useContext,
+  useEffect,
   useRef,
   type ComponentProps,
   type FormEvent,
@@ -14,12 +15,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { type Question, useConfirm } from "@/components/ui/use-confirm";
 import type { ActionState } from "@/lib/api/server";
-import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
+import { messageForCode, type ErrorSentences } from "@/lib/i18n/errors";
+import { labelFor } from "@/lib/i18n/label";
 import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
-
-type Errors = Pick<Dictionary["errors"], "fallback">;
 
 /**
  * The question a destructive form asks before it sends, or a function of what
@@ -33,7 +32,7 @@ type Bound = {
   pending: boolean;
   /** The submit cannot be pressed yet: the form asks first and is not hydrated. */
   locked: boolean;
-  errors: Errors;
+  errors: ErrorSentences;
 };
 
 const BoundForm = createContext<Bound | null>(null);
@@ -54,6 +53,33 @@ export function useActionStatus(): { pending: boolean; ok: boolean } {
   return { pending, ok: state.ok === true };
 }
 
+/**
+ * Tells a dialog holding the form whether it may be dismissed: not while the
+ * action runs, nor while `holding` (a result that must be acknowledged).
+ * `onSuccess` runs once a submission worked.
+ */
+export function ActionDialogBinding({
+  reportDismissible,
+  holding = false,
+  onSuccess,
+}: {
+  reportDismissible: (value: boolean) => void;
+  holding?: boolean;
+  onSuccess?: () => void;
+}) {
+  const { pending, ok } = useActionStatus();
+
+  useEffect(() => {
+    reportDismissible(!pending && !holding);
+  }, [pending, holding, reportDismissible]);
+
+  useEffect(() => {
+    if (ok) onSuccess?.();
+  }, [ok, onSuccess]);
+
+  return null;
+}
+
 /** What a submission sends, comparable: the data a yes was given for. */
 function sent(form: FormData): string {
   return JSON.stringify(
@@ -62,6 +88,8 @@ function sent(form: FormData): string {
     ),
   );
 }
+
+const EMPTY = {};
 
 /**
  * A form bound to a server action: the action's state, its hidden `fields`,
@@ -73,6 +101,7 @@ function sent(form: FormData): string {
  */
 export function ActionForm<S extends ActionState>({
   action,
+  initial,
   fields = {},
   confirm,
   errors,
@@ -83,9 +112,11 @@ export function ActionForm<S extends ActionState>({
   children,
 }: {
   action: (previous: Awaited<S>, form: FormData) => Promise<S>;
+  /** The state before anything is sent; empty unless the action's state needs more. */
+  initial?: Awaited<S>;
   fields?: Record<string, string | number | readonly string[]>;
   confirm?: Confirmation;
-  errors: Errors;
+  errors: ErrorSentences;
   /**
    * The version of the server's copy the fields show. A new one remounts the
    * form's contents, so uncontrolled fields take the saved values, while how
@@ -98,8 +129,7 @@ export function ActionForm<S extends ActionState>({
   noValidate?: boolean;
   children: ReactNode | ((state: Awaited<S>, pending: boolean) => ReactNode);
 }) {
-  // Every state starts empty: nothing sent yet.
-  const [state, formAction, pending] = useActionState<S, FormData>(action, {} as Awaited<S>);
+  const [state, formAction, pending] = useActionState<S, FormData>(action, initial ?? (EMPTY as Awaited<S>));
   const hydrated = useHydrated();
   // React replays a submission queued before hydration without `onSubmit`,
   // where the question is asked, so a form that asks cannot be sent until then.
@@ -230,27 +260,31 @@ export function ActionOutcome({
 export function FailureAlert({
   code,
   errors,
+  fallback,
   narrow = false,
   id,
   children,
 }: {
   code: string;
-  errors: Errors;
+  errors: ErrorSentences;
+  /** Said for a code without a sentence, in place of the generic one. */
+  fallback?: string;
   narrow?: boolean;
   id?: string;
   children?: ReactNode;
 }) {
+  const sentence = fallback === undefined ? messageForCode(code, errors) : (labelFor(errors, code) ?? fallback);
   const width = narrow ? "max-w-40 text-balance" : "max-w-body";
   if (children === undefined || children === null || children === false) {
     return (
       <p id={id} role="alert" className={cn("text-small text-bad", width)}>
-        {messageForCode(code, errors)}
+        {sentence}
       </p>
     );
   }
   return (
     <div id={id} role="alert" className={cn("flex flex-col gap-1 text-small", width)}>
-      <p className="text-bad">{messageForCode(code, errors)}</p>
+      <p className="text-bad">{sentence}</p>
       {children}
     </div>
   );
