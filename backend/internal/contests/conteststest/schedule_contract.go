@@ -76,6 +76,17 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		}
 		return ids
 	}
+	// dueOne is the row DueToStart returned for id.
+	dueOne := func(t *testing.T, ctx context.Context, target ScheduleTarget, id uuid.UUID) contests.Contest {
+		t.Helper()
+		for _, c := range due(t, ctx, target) {
+			if c.ID == id {
+				return c
+			}
+		}
+		t.Fatalf("DueToStart() left out %s", id)
+		return contests.Contest{}
+	}
 	finishAll := func(t *testing.T, ctx context.Context, target ScheduleTarget, grace time.Duration) []contests.FinishedContest {
 		t.Helper()
 		finished, err := target.Repo.AdvanceFinished(ctx, grace)
@@ -216,7 +227,7 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			id := target.Seed(contests.StatusPublished, at(target, -time.Hour), nil)
 
-			if _, err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusRunning); err != nil {
+			if _, err := target.Repo.SetStatus(ctx, byID(t, ctx, target, id), contests.StatusRunning); err != nil {
 				t.Fatalf("SetStatus() = %v", err)
 			}
 
@@ -229,12 +240,12 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		// A manual transition got there first; the tick moves on.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
 			id := target.Seed(contests.StatusPublished, at(target, -time.Hour), nil)
-			matched(t, "DueToStart()", dueIDs(t, ctx, target), map[string]uuid.UUID{"due": id}, nil)
-			if _, err := target.Contests.SetStatus(ctx, id, contests.StatusPublished, contests.StatusArchived); err != nil {
+			read := dueOne(t, ctx, target, id)
+			if _, err := target.Contests.SetStatus(ctx, byID(t, ctx, target, id), contests.StatusArchived); err != nil {
 				t.Fatalf("the manual SetStatus() = %v", err)
 			}
 
-			_, err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusRunning)
+			_, err := target.Repo.SetStatus(ctx, read, contests.StatusRunning)
 
 			if !errors.Is(err, contests.ErrStatusChanged) {
 				t.Errorf("SetStatus() error = %v, want ErrStatusChanged", err)
@@ -243,10 +254,31 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		})
 	})
 
+	t.Run("SetStatus refuses a contest an organiser saved after DueToStart read it", func(t *testing.T) {
+		// The gate passed against the row DueToStart returned; the next tick
+		// reads the saved one.
+		each(t, func(ctx context.Context, target ScheduleTarget) {
+			id := target.Seed(contests.StatusPublished, at(target, -time.Hour), nil)
+			read := dueOne(t, ctx, target, id)
+			if _, err := target.Contests.Update(ctx, byID(t, ctx, target, id)); err != nil {
+				t.Fatalf("the organiser's Update() = %v", err)
+			}
+
+			_, err := target.Repo.SetStatus(ctx, read, contests.StatusRunning)
+
+			if !errors.Is(err, contests.ErrContestChanged) {
+				t.Errorf("SetStatus() error = %v, want ErrContestChanged", err)
+			}
+			wantStatus(t, ctx, target, id, contests.StatusPublished, "contest saved by hand")
+		})
+	})
+
 	t.Run("SetStatus of a contest that is not there is ErrNotFound", func(t *testing.T) {
 		// Deleted between the read and the write; the tick moves on.
 		each(t, func(ctx context.Context, target ScheduleTarget) {
-			_, err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusPublished, contests.StatusRunning)
+			missing := contests.Contest{ID: uuid.New(), Status: contests.StatusPublished}
+
+			_, err := target.Repo.SetStatus(ctx, missing, contests.StatusRunning)
 
 			if !errors.Is(err, contests.ErrNotFound) {
 				t.Errorf("SetStatus() error = %v, want ErrNotFound", err)

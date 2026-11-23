@@ -27,6 +27,9 @@ type Contests struct {
 	// order is insertion order, so listings are deterministic.
 	order   []uuid.UUID
 	racesTo string
+	// racesEdit stages an organiser's save before the next conditional
+	// write; see RacesAnEdit.
+	racesEdit bool
 	// Clock stands in for the database's now() in Create, Update and
 	// SetStatus, and in the FinishedAt a move to finished writes. Nil leaves
 	// the timestamps as they are: a finished registration keeps a nil
@@ -317,6 +320,7 @@ func (r *Contests) SetArchiveSettings(_ context.Context, c contests.Contest) (co
 // writeIfUnchanged is every conditional write: set copies the written fields
 // onto the stored row only while that row is still at c.Version.
 func (r *Contests) writeIfUnchanged(c contests.Contest, set func(stored *contests.Contest)) (contests.Contest, error) {
+	r.raceAnEdit(c.ID)
 	stored, ok := r.byID[c.ID]
 	if !ok {
 		return contests.Contest{}, contests.ErrNotFound
@@ -330,7 +334,8 @@ func (r *Contests) writeIfUnchanged(c contests.Contest, set func(stored *contest
 	return r.serve(r.byID[c.ID]), nil
 }
 
-func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
+func (r *Contests) SetStatus(_ context.Context, read contests.Contest, to string) ([]uuid.UUID, error) {
+	id := read.ID
 	// A staged race: a concurrent request committed between the caller's
 	// read and this write.
 	if r.racesTo != "" {
@@ -342,13 +347,17 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) (
 		}
 		r.racesTo = ""
 	}
+	r.raceAnEdit(id)
 
 	c, ok := r.byID[id]
 	if !ok {
 		return nil, contests.ErrNotFound
 	}
-	if c.Status != from {
+	if c.Status != read.Status {
 		return nil, contests.ErrStatusChanged
+	}
+	if c.Version != read.Version {
+		return nil, contests.ErrContestChanged
 	}
 	c.Status = to
 	c.Version++
@@ -375,6 +384,22 @@ func (r *Contests) finishRoster(id uuid.UUID) []uuid.UUID {
 // SetStatusRaces makes the next SetStatus find the contest already moved to
 // status, as a concurrent writer would have left it. It fires once.
 func (r *Contests) SetStatusRaces(status string) { r.racesTo = status }
+
+// RacesAnEdit makes the next conditional write, SetStatus included, find the
+// contest written since the caller read it, in the same status, as an
+// organiser's save committed in between would leave it. It fires once.
+func (r *Contests) RacesAnEdit() { r.racesEdit = true }
+
+func (r *Contests) raceAnEdit(id uuid.UUID) {
+	if !r.racesEdit {
+		return
+	}
+	r.racesEdit = false
+	if c, ok := r.byID[id]; ok {
+		c.Version++
+		r.byID[id] = c
+	}
+}
 
 func (r *Contests) Delete(_ context.Context, id uuid.UUID) error {
 	if _, ok := r.byID[id]; !ok {

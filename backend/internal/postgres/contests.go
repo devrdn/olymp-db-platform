@@ -343,22 +343,21 @@ const finishRoster = `
 		RETURNING r.contest_id, r.user_id
 	)`
 
-// SetStatus moves the contest to status to, only if it is still in status
-// from. The comparison is in the WHERE clause: PostgreSQL locks the row and
-// re-evaluates it against the committed value, so of two concurrent callers
-// with the same stale status only one matches.
+// SetStatus is writeIfUnchanged with the status compared too, so the second
+// read can tell a moved status from any other change, and with the roster
+// finished in the same statement.
 //
 // It reads one row per finished user, or a single row with no user when the
 // move finished nobody; no row at all means nothing matched.
-func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
+func (r *Contests) SetStatus(ctx context.Context, read contests.Contest, to string) ([]uuid.UUID, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH moved AS (
 			UPDATE contests SET status = $3, updated_at = now()
-			WHERE id = $1 AND status = $2
+			WHERE id = $1 AND status = $2 AND version = $4
 			RETURNING id, status
 		),`+finishRoster+`
 		SELECT f.user_id FROM moved m LEFT JOIN finished f ON f.contest_id = m.id`,
-		id, from, to)
+		read.ID, read.Status, to, read.Version)
 	if err != nil {
 		return nil, fmt.Errorf("set contest status: %w", err)
 	}
@@ -383,11 +382,15 @@ func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string)
 	}
 
 	// Nothing matched: a second read tells a missing contest from a moved
-	// status.
-	if _, err := r.ByID(ctx, id); err != nil {
+	// status, and both from a row changed in any other way.
+	current, err := r.ByID(ctx, read.ID)
+	if err != nil {
 		return nil, err
 	}
-	return nil, contests.ErrStatusChanged
+	if current.Status != read.Status {
+		return nil, contests.ErrStatusChanged
+	}
+	return nil, contests.ErrContestChanged
 }
 
 var _ contests.ScheduleRepository = (*Contests)(nil)

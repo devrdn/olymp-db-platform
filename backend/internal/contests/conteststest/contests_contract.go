@@ -153,9 +153,17 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		}
 		return written
 	}
+	// setStatus moves the contest as just read, which must be in status from.
 	setStatus := func(t *testing.T, ctx context.Context, target ContestTarget, id uuid.UUID, from, to string) []uuid.UUID {
 		t.Helper()
-		finished, err := target.Repo.SetStatus(ctx, id, from, to)
+		read, err := target.Repo.ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if read.Status != from {
+			t.Fatalf("status = %s, want %s before SetStatus()", read.Status, from)
+		}
+		finished, err := target.Repo.SetStatus(ctx, read, to)
 		if err != nil {
 			t.Fatalf("SetStatus(%s, %s) = %v", from, to, err)
 		}
@@ -817,7 +825,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			created := create(t, ctx, target, plain(target.NewUser()))
 			setStatus(t, ctx, target, created.ID, contests.StatusDraft, contests.StatusPublished)
 
-			_, err := target.Repo.SetStatus(ctx, created.ID, contests.StatusDraft, contests.StatusRunning)
+			_, err := target.Repo.SetStatus(ctx, created, contests.StatusRunning)
 
 			if !errors.Is(err, contests.ErrStatusChanged) {
 				t.Errorf("SetStatus() error = %v, want ErrStatusChanged", err)
@@ -828,11 +836,32 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
+	t.Run("SetStatus refuses a row written since it was read, in the same status", func(t *testing.T) {
+		// The publish gate passed against the row as read; an organiser's
+		// save since then may have taken away what it checked.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			read := create(t, ctx, target, full(target.NewUser()))
+			saved := read
+			saved.EndsAt = nil
+			saved = update(t, ctx, target, saved)
+
+			_, err := target.Repo.SetStatus(ctx, read, contests.StatusRunning)
+
+			if !errors.Is(err, contests.ErrContestChanged) {
+				t.Errorf("SetStatus() error = %v, want ErrContestChanged", err)
+			}
+			wantFields(t, byID(t, ctx, target, read.ID), saved)
+		})
+	})
+
 	t.Run("SetStatus of a contest that is not there is reported", func(t *testing.T) {
 		// Distinct from a moved status: a contest that moved can be looked
 		// at again, one that is gone cannot.
 		each(t, func(ctx context.Context, target ContestTarget) {
-			_, err := target.Repo.SetStatus(ctx, uuid.New(), contests.StatusDraft, contests.StatusPublished)
+			missing := plain(target.NewUser())
+			missing.ID = uuid.New()
+
+			_, err := target.Repo.SetStatus(ctx, missing, contests.StatusPublished)
 
 			notFound(t, err, "SetStatus()")
 		})
@@ -877,8 +906,10 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		each(t, func(ctx context.Context, target ContestTarget) {
 			id := running(t, ctx, target)
 			roster := seedEndingRoster(t, ctx, target.Registrations, target.NewUser, id, target.Now())
+			stale := byID(t, ctx, target, id)
+			stale.Status = contests.StatusPublished
 
-			finished, err := target.Repo.SetStatus(ctx, id, contests.StatusPublished, contests.StatusFinished)
+			finished, err := target.Repo.SetStatus(ctx, stale, contests.StatusFinished)
 
 			if !errors.Is(err, contests.ErrStatusChanged) {
 				t.Fatalf("SetStatus() error = %v, want ErrStatusChanged", err)

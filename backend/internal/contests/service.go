@@ -656,24 +656,23 @@ func (s *Service) checkPublishable(ctx context.Context, c Contest) error {
 
 // Transition moves a contest along its lifecycle.
 func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, status string) error {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return err
-	}
-	if err := c.CanTransitionTo(status); err != nil {
-		return err
-	}
-	// Checked on start too: content stays editable while published, so the
-	// contest may have lost its story since.
-	if status == StatusPublished || status == StatusRunning {
-		if err := s.checkPublishable(ctx, c); err != nil {
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		c, err := s.contests.ByID(ctx, contestID)
+		if err != nil {
 			return err
 		}
-	}
+		if err := c.CanTransitionTo(status); err != nil {
+			return err
+		}
+		// Checked on start too: content stays editable while published, so
+		// the contest may have lost its story since.
+		if status == StatusPublished || status == StatusRunning {
+			if err := s.checkPublishable(ctx, c); err != nil {
+				return err
+			}
+		}
 
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		// The write refuses if the status is no longer the one checked above.
-		finished, err := s.contests.SetStatus(ctx, contestID, c.Status, status)
+		finished, err := s.contests.SetStatus(ctx, c, status)
 		if err != nil {
 			return err
 		}

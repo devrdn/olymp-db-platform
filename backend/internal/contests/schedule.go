@@ -26,9 +26,8 @@ type ScheduleRepository interface {
 	// by the database clock, in the projection ByID returns, so a tick's cost
 	// scales with contests actually due.
 	DueToStart(ctx context.Context) ([]Contest, error)
-	// SetStatus is Repository.SetStatus: it refuses if a manual Transition
-	// moved the contest first.
-	SetStatus(ctx context.Context, id uuid.UUID, from, to string) (finished []uuid.UUID, err error)
+	// SetStatus is Repository.SetStatus, given the row DueToStart returned.
+	SetStatus(ctx context.Context, read Contest, to string) (finished []uuid.UUID, err error)
 	// AdvanceFinished moves to finished every running contest whose ends_at
 	// plus grace has passed by the database clock, and returns each of them
 	// once. The grace is the gate's, so no request inside it is refused as
@@ -224,10 +223,11 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 				return fmt.Errorf("check publish gate for contest %s: %w", c.ID, gateErr)
 			}
 
-			if _, err := s.repo.SetStatus(ctx, c.ID, StatusPublished, StatusRunning); err != nil {
+			if _, err := s.repo.SetStatus(ctx, c, StatusRunning); err != nil {
 				// A concurrent Transition or delete got there first and
-				// audited it.
-				if errors.Is(err, ErrStatusChanged) || errors.Is(err, ErrNotFound) {
+				// audited it, or an organiser's save did and the next tick
+				// decides again against the row as saved.
+				if errors.Is(err, ErrStatusChanged) || errors.Is(err, ErrContestChanged) || errors.Is(err, ErrNotFound) {
 					continue
 				}
 				return fmt.Errorf("start contest %s: %w", c.ID, err)

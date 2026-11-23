@@ -2702,23 +2702,30 @@ code of its own rather than `invalid_transition`: the caller was right a
 minute ago, and what they need to hear is "look again", not "that is not
 allowed".
 
-**Every other write of the contest row is conditional too.** `Update`,
-`ExtendGrace`, `SetPrizePlaces` and `SetArchiveSettings` read the row inside
-their unit of work, decide every rule in `internal/contests` against it, and
-write with `WHERE id = $1 AND version = $2`. `contests.version` moves on every
-`UPDATE` of the row, by a trigger, so the scheduler's start and finish and an
-organiser's status change move it as surely as a settings save. A decision
-taken against a row that has since moved is refused with `ErrContestChanged`
-→ 409 `contest_changed`: an edit decided against a published contest cannot
-land on the running one the scheduler made of it, and of two organisers
-saving at once the second reloads instead of silently overwriting the first.
-That refusal, and `ErrNotFound`, are all the repository decides; the rules
-(the running-contest locks, an archived contest's prize places, the
+**Every write of the contest row is conditional on the row it was decided
+against.** `Transition`, `Update`, `ExtendGrace`, `SetPrizePlaces` and
+`SetArchiveSettings` read the row inside their unit of work, decide every rule
+in `internal/contests` against it, and write only while `contests.version` is
+still the one they read; the scheduler's start does the same with the row
+`DueToStart` returned. A trigger moves the version on every `UPDATE` of the
+row, so a status change moves it as surely as a settings save. A decision
+taken against a row that has since moved is refused with `ErrContestChanged` →
+409 `contest_changed`: an edit decided against a published contest cannot land
+on the running one the scheduler made of it, and of two organisers saving at
+once the second reloads instead of silently overwriting the first. The
+repository decides only that refusal and `ErrNotFound`; the rules (the
+running-contest locks, an archived contest's prize places, the
 self-registration visibility) are the domain's alone. `updated_at` cannot
 serve as the version: the reclaim sweep measures a finished contest's grace
-from it, and the display-only writes leave it where it was. `SetStatus` keeps
-its compare-and-set on the status, which is what the publication gate was
-decided against.
+from it, and the display-only writes leave it where it was.
+
+`SetStatus` keeps its compare-and-set on the status and adds the version: a
+moved status still answers `status_changed`, and a contest saved in any other
+way since the gate passed answers `contest_changed`. The scheduler skips
+either, and the next tick decides again against the row as it now is. Its
+finish needs no version: `AdvanceFinished` reads no row first, and its
+condition on `ends_at` sits in its own `UPDATE`, which PostgreSQL re-evaluates
+against the committed row.
 
 **A new question's position is allocated under a lock on the contest.**
 `INSERT ... (SELECT MAX(ord)+1)` reads the same number for two simultaneous

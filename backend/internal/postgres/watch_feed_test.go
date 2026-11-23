@@ -531,9 +531,7 @@ func TestAnIndividualParticipantFinishedByTheContestsEndIsBoundedByTheirDeadline
 			f.contest, f.at(-time.Hour))
 		f.exec(`UPDATE registrations SET created_at = $2, started_at = $3, status = 'active' WHERE id = $1`,
 			reg, f.at(-time.Hour), f.at(0))
-		if _, err := NewContests(testPool).SetStatus(ctx, f.contest, "running", "finished"); err != nil {
-			t.Fatalf("SetStatus() = %v", err)
-		}
+		moveStatus(t, ctx, f.contest, "finished")
 		for _, at := range []time.Duration{90 * time.Minute, 2*time.Hour + time.Minute} {
 			f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, created_at)
 			        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, $2)`, user, f.at(at))

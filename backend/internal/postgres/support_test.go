@@ -174,3 +174,17 @@ func (q countingQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchR
 	*q.trips++
 	return q.Querier.SendBatch(ctx, b)
 }
+
+// moveStatus moves a contest from the status it is read in to status to, as
+// a caller deciding against that read would.
+func moveStatus(t *testing.T, ctx context.Context, id uuid.UUID, to string) {
+	t.Helper()
+	repo := NewContests(testPool)
+	read, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if _, err := repo.SetStatus(ctx, read, to); err != nil {
+		t.Fatalf("SetStatus(%s → %s) = %v", read.Status, to, err)
+	}
+}

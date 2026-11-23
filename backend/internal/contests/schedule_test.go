@@ -697,6 +697,36 @@ func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 	}
 }
 
+// An organiser's save landing between DueToStart and the start means the gate
+// passed against a row that no longer exists: the start is refused, and the
+// next tick decides again against the row as saved.
+func TestAdvanceRetriesAStartRacedByAnEditOnTheNextTick(t *testing.T) {
+	f := newScheduler()
+	due := duePublishable(f)
+	f.repo.Contests.RacesAnEdit()
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v, want the race to be skipped rather than fail the tick", err)
+	}
+	if started != 0 || statusOf(t, f, due.ID) != contests.StatusPublished {
+		t.Fatalf("started = %d, status = %s, want 0 and published: the start was decided against a row since changed",
+			started, statusOf(t, f, due.ID))
+	}
+	if len(f.sink.Entries) != 0 || len(f.poolTrigger.Triggered) != 0 {
+		t.Errorf("a refused start left %d audit entries and %d pool triggers, want none",
+			len(f.sink.Entries), len(f.poolTrigger.Triggered))
+	}
+
+	started, _, err = f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("the next Advance() = %v", err)
+	}
+	if started != 1 || statusOf(t, f, due.ID) != contests.StatusRunning {
+		t.Errorf("the next tick started %d, status = %s, want the contest started", started, statusOf(t, f, due.ID))
+	}
+}
+
 func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
 	f := newScheduler()
 	due := duePublishable(f)

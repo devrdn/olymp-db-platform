@@ -127,9 +127,7 @@ func TestProfileSummaryCountsAnEndedContestTheCallerStarted(t *testing.T) {
 		}
 
 		for _, contest := range []uuid.UUID{closedByAnOrganiser, neverStartedIn} {
-			if _, err := repo.SetStatus(ctx, contest, contests.StatusRunning, contests.StatusFinished); err != nil {
-				t.Fatalf("SetStatus() = %v", err)
-			}
+			moveStatus(t, ctx, contest, contests.StatusFinished)
 		}
 		if _, err := repo.AdvanceFinished(ctx, 0); err != nil {
 			t.Fatalf("AdvanceFinished() = %v", err)

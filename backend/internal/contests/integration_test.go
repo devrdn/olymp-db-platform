@@ -270,3 +270,54 @@ func TestATransitionThatWasNotRacedStillLands(t *testing.T) {
 		t.Errorf("status = %q, want published", stored.Status)
 	}
 }
+
+// A write refused because the contest changed since it was read records
+// nothing: the trail says what happened, not what was attempted.
+func TestARefusedConditionalWriteRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	actor := uuid.New()
+	for name, tc := range map[string]struct {
+		status string
+		write  func(f *conteststest.Fixture, id uuid.UUID) error
+	}{
+		"Update": {contests.StatusDraft, func(f *conteststest.Fixture, id uuid.UUID) error {
+			_, err := f.Service.Update(ctx, contests.UpdateCommand{
+				ActorID: actor, ContestID: id, LeaderboardNames: contests.LeaderboardNamesFullName,
+			})
+			return err
+		}},
+		"ExtendGrace": {contests.StatusFinished, func(f *conteststest.Fixture, id uuid.UUID) error {
+			_, err := f.Service.ExtendGrace(ctx, actor, id, conteststest.FixtureDefaultGraceMin+60)
+			return err
+		}},
+		"SetPrizePlaces": {contests.StatusRunning, func(f *conteststest.Fixture, id uuid.UUID) error {
+			_, err := f.Service.SetPrizePlaces(ctx, actor, id, contests.PrizePlaces{First: 1})
+			return err
+		}},
+		"SetArchiveSettings": {contests.StatusFinished, func(f *conteststest.Fixture, id uuid.UUID) error {
+			_, err := f.Service.SetArchiveSettings(ctx, actor, id, contests.ArchiveSettings{
+				Visibility: contests.VisibilityOpen, ArchiveTasks: true,
+			})
+			return err
+		}},
+		"Transition": {contests.StatusFinished, func(f *conteststest.Fixture, id uuid.UUID) error {
+			return f.Service.Transition(ctx, actor, id, contests.StatusArchived)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := f.SeedContest(tc.status)
+			entries := len(f.Audit.Entries)
+			f.Contests.RacesAnEdit()
+
+			err := tc.write(f, c.ID)
+
+			if !errors.Is(err, contests.ErrContestChanged) {
+				t.Fatalf("%s() = %v, want ErrContestChanged", name, err)
+			}
+			if got := len(f.Audit.Entries); got != entries {
+				t.Errorf("audit entries = %d, want %d: a refused write records nothing", got, entries)
+			}
+		})
+	}
+}

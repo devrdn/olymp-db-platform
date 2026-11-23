@@ -793,9 +793,7 @@ func TestArchivingAContestStampsArchivedAt(t *testing.T) {
 			t.Fatalf("finish the contest: %v", err)
 		}
 
-		if _, err := NewContests(testPool).SetStatus(ctx, id, "finished", "archived"); err != nil {
-			t.Fatalf("SetStatus() = %v", err)
-		}
+		moveStatus(t, ctx, id, contests.StatusArchived)
 
 		at := readArchivedAt(t, ctx, id)
 		if now := txNow(t, ctx); at == nil || !at.Equal(now) {
@@ -902,7 +900,12 @@ type startsAfterRead struct {
 func (r *startsAfterRead) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
 	c, err := r.Contests.ByID(ctx, id)
 	r.start.Do(func() {
-		if _, err := r.Contests.SetStatus(context.Background(), id, contests.StatusPublished, contests.StatusRunning); err != nil {
+		due, err := r.Contests.ByID(context.Background(), id)
+		if err != nil {
+			r.t.Errorf("the scheduler's read = %v", err)
+			return
+		}
+		if _, err := r.Contests.SetStatus(context.Background(), due, contests.StatusRunning); err != nil {
 			r.t.Errorf("the scheduler's SetStatus() = %v", err)
 		}
 	})
@@ -943,5 +946,190 @@ func TestAnUpdateDecidedBeforeTheStartIsRefusedOnceTheContestRuns(t *testing.T) 
 	if got.Status != contests.StatusRunning || got.QuestionMode != contests.QuestionModeMulti {
 		t.Errorf("status, question mode = %s, %s, want running, multi: the stale edit landed",
 			got.Status, got.QuestionMode)
+	}
+}
+
+// editedAfterRead is the contest repository with an organiser saving the
+// contest without its end date, on their own connection, right after the
+// first read.
+type editedAfterRead struct {
+	*Contests
+	edit sync.Once
+	t    *testing.T
+}
+
+func (r *editedAfterRead) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
+	c, err := r.Contests.ByID(ctx, id)
+	r.edit.Do(func() {
+		saved, err := r.Contests.ByID(context.Background(), id)
+		if err != nil {
+			r.t.Errorf("the organiser's ByID() = %v", err)
+			return
+		}
+		saved.EndsAt = nil
+		if _, err := r.Contests.Update(context.Background(), saved); err != nil {
+			r.t.Errorf("the organiser's Update() = %v", err)
+		}
+	})
+	return c, err
+}
+
+// A publish whose gate passed against a row an organiser has since saved
+// must not land: here the save took the end date away, and the gate refuses
+// a contest with no schedule.
+func TestAPublishDecidedBeforeAnEditIsRefused(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	repo := NewContests(testPool)
+	if _, err := testPool.Exec(ctx,
+		`UPDATE contests SET starts_at = now() + interval '1 day', ends_at = now() + interval '2 days' WHERE id = $1`,
+		id); err != nil {
+		t.Fatalf("schedule = %v", err)
+	}
+	if err := repo.ReplaceLanguages(ctx, id, []contests.ContestLanguage{{Code: "en", IsDefault: true}}); err != nil {
+		t.Fatalf("ReplaceLanguages() = %v", err)
+	}
+	if err := repo.ReplaceTranslations(ctx, id, []contests.Translation{{Lang: "en", Title: "The Library Murder"}}); err != nil {
+		t.Fatalf("ReplaceTranslations() = %v", err)
+	}
+	stories, questions := NewStories(testPool), NewQuestions(testPool)
+	if _, err := stories.Save(ctx, id, map[string]string{"en": "A body in the stacks."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	if err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+		q, err := questions.Create(ctx, contests.Question{
+			ContestID: id, Ord: 1, Kind: contests.KindFinal, Points: 10, IsVisible: true,
+		})
+		if err != nil {
+			return err
+		}
+		if err := questions.ReplaceTexts(ctx, q.ID, map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}}); err != nil {
+			return err
+		}
+		return questions.ReplaceAnswers(ctx, q.ID, []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}})
+	}); err != nil {
+		t.Fatalf("add the question = %v", err)
+	}
+	// The game cluster is not this test's business: only the contest row's
+	// race is.
+	games := conteststest.NewGames()
+	games.Built(id)
+	service := contests.NewService(contests.ServiceConfig{
+		Contests:      &editedAfterRead{Contests: repo, t: t},
+		Stories:       stories,
+		Questions:     questions,
+		Registrations: NewRegistrations(testPool),
+		Audit:         audit.New(NewAuditSink(testPool)),
+		UnitOfWork:    storage.NewUnitOfWork(testPool),
+		Gate:          contests.NewGate(0),
+		GameReadiness: games,
+		Covers:        NewCovers(testPool),
+		Appointees:    NewUsers(testPool),
+	})
+
+	err := service.Transition(ctx, uuid.Nil, id, contests.StatusPublished)
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("Transition() = %v, want ErrContestChanged", err)
+	}
+	got, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if got.Status != contests.StatusDraft || got.EndsAt != nil {
+		t.Errorf("status = %s with ends_at %v, want a draft without one: the publish landed past the gate",
+			got.Status, got.EndsAt)
+	}
+}
+
+// The scheduler's finish reads no row to go stale: its condition sits in its
+// own UPDATE, which PostgreSQL re-evaluates against the committed row. An
+// extension committed while the finish waits for the row leaves the contest
+// running. The finish rolls back, so no other contest in the shared database
+// is finished by it.
+func TestAFinishWaitingOnAnExtensionLeavesTheContestRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id := contestRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE contests SET status = 'running', starts_at = now() - interval '2 hours', ends_at = now() - interval '1 hour'
+		WHERE id = $1`, id); err != nil {
+		t.Fatalf("run the contest = %v", err)
+	}
+	repo := NewContests(testPool)
+	read, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+
+	extending := make(chan struct{})
+	commit := make(chan struct{})
+	release := sync.OnceFunc(func() { close(commit) })
+	extended := make(chan error, 1)
+	go func() {
+		extended <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			later := time.Now().Add(time.Hour)
+			read.EndsAt = &later
+			if _, err := repo.Update(ctx, read); err != nil {
+				return err
+			}
+			close(extending)
+			<-commit
+			return nil
+		})
+	}()
+	// Registered after contestRow's cleanup, so it runs first: the extension
+	// ends before the cleanup's DELETE needs its row.
+	t.Cleanup(func() {
+		release()
+		<-extended
+	})
+	select {
+	case <-extending:
+	case err := <-extended:
+		extended <- err
+		t.Fatalf("extension = %v before it held the row", err)
+	}
+
+	type outcome struct {
+		finishedOurs bool
+		err          error
+	}
+	finishing := make(chan outcome, 1)
+	go func() {
+		var got outcome
+		err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			finished, err := repo.AdvanceFinished(ctx, 0)
+			if err != nil {
+				return err
+			}
+			for _, c := range finished {
+				got.finishedOurs = got.finishedOurs || c.ID == id
+			}
+			return errRollback
+		})
+		if !errors.Is(err, errRollback) {
+			got.err = err
+		}
+		finishing <- got
+	}()
+	select {
+	case <-finishing:
+		t.Fatal("AdvanceFinished() returned while the extension still held the row, want it to wait")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+	if err := <-extended; err != nil {
+		extended <- err
+		t.Fatalf("extension = %v", err)
+	}
+	extended <- nil
+	got := <-finishing
+	switch {
+	case got.err != nil:
+		t.Fatalf("AdvanceFinished() = %v", got.err)
+	case got.finishedOurs:
+		t.Error("AdvanceFinished() finished the contest its extension had moved past now")
 	}
 }

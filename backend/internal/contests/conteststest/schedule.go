@@ -89,16 +89,16 @@ func (s *Schedule) DueToStart(context.Context) ([]contests.Contest, error) {
 
 // SetStatus is the store's, as postgres.Contests uses one method for both
 // interfaces.
-func (s *Schedule) SetStatus(ctx context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
+func (s *Schedule) SetStatus(ctx context.Context, read contests.Contest, to string) ([]uuid.UUID, error) {
 	s.SetStatusCalls++
 	if s.SetStatusErr != nil {
 		return nil, s.SetStatusErr
 	}
-	finished, err := s.Contests.SetStatus(ctx, id, from, to)
+	finished, err := s.Contests.SetStatus(ctx, read, to)
 	if err != nil {
 		return nil, err
 	}
-	s.Moved = append(s.Moved, id)
+	s.Moved = append(s.Moved, read.ID)
 	return finished, nil
 }
 
