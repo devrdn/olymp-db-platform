@@ -1,15 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
-
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { imageHref, type ImageKind } from "@/lib/api/settings-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { removeImageAction, uploadImageAction, type SettingsState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { removeImageAction, uploadImageAction } from "./actions";
 
 /**
  * One of the installation's marks (bar wordmark, large square, tab icon, and a
@@ -34,16 +32,6 @@ function Slot({
   dict: Dictionary;
 }) {
   const t = dict.settings.images;
-  const [state, upload, uploading] = useActionState<SettingsState, FormData>(uploadImageAction, {});
-  const [removal, remove, removing] = useActionState<SettingsState, FormData>(
-    removeImageAction,
-    {},
-  );
-
-  const failure = [state.code, removal.code].find(Boolean);
-  const message = failure
-    ? (messageForCode(failure, dict.errors))
-    : null;
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-line pt-5">
@@ -71,42 +59,34 @@ function Slot({
           <span className="max-w-body text-small text-ink-3">{dark ? t.noneDark : t.none}</span>
         )}
 
-        <form action={upload}>
-          <input type="hidden" name="kind" value={kind} />
-          <label
-            className={cn(buttonVariants({ variant: "secondary" }), "cursor-pointer")}
-            aria-busy={uploading}
-          >
-            {hash ? t.replace : t.upload}
-            <input
-              type="file"
-              name="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
-              className="sr-only"
-              onChange={(event) => event.currentTarget.form?.requestSubmit()}
-            />
-          </label>
-        </form>
+        <ActionForm action={uploadImageAction} fields={{ kind }} errors={dict.errors} className="flex flex-col gap-2">
+          {(_state, uploading) => (
+            <>
+              <label
+                className={cn(buttonVariants({ variant: "secondary" }), "cursor-pointer")}
+                aria-busy={uploading}
+              >
+                {hash ? t.replace : t.upload}
+                <input
+                  type="file"
+                  name="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  className="sr-only"
+                  onChange={(event) => event.currentTarget.form?.requestSubmit()}
+                />
+              </label>
+              <ActionOutcome />
+            </>
+          )}
+        </ActionForm>
 
         {hash ? (
-          <form action={remove}>
-            <input type="hidden" name="kind" value={kind} />
-            <button
-              type="submit"
-              disabled={removing}
-              className={cn(buttonVariants({ variant: "quiet" }))}
-            >
-              {t.remove}
-            </button>
-          </form>
+          <ActionForm action={removeImageAction} fields={{ kind }} errors={dict.errors} className="flex flex-col gap-2">
+            <ActionButton variant="quiet">{t.remove}</ActionButton>
+            <ActionOutcome />
+          </ActionForm>
         ) : null}
       </div>
-
-      {message ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {message}
-        </p>
-      ) : null}
     </div>
   );
 }

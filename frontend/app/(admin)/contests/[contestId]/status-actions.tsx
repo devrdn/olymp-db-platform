@@ -1,13 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import type { ContestStatus } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
-import { setStatusAction, type StatusState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { setStatusAction } from "./actions";
 
 /**
  * Status transitions as buttons, offered when the mirrored table allows.
@@ -28,46 +25,33 @@ export function StatusActions({
   dict: Dictionary;
 }) {
   const t = dict.workspace;
-  const [state, formAction, pending] = useActionState<StatusState, FormData>(setStatusAction, {});
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
   if (next.length === 0) {
     return <p className="text-small text-ink-3">{t.status.terminal}</p>;
   }
 
   return (
-    <form action={formAction} className="flex flex-col gap-3">
-      <input type="hidden" name="contestId" value={contestId} />
-
+    <ActionForm action={setStatusAction} fields={{ contestId }} errors={dict.errors} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2.5">
         {next.map((status) => {
           const stopped = status === "published" && blocked;
 
           return (
-            <Button
+            <ActionButton
               key={status}
-              type="submit"
               name="status"
               value={status}
-              disabled={pending || stopped}
+              disabled={stopped}
               variant={
                 status === "published" ? "primary" : status === "archived" ? "danger" : "secondary"
               }
             >
               {t.status.move[status]}
-            </Button>
+            </ActionButton>
           );
         })}
       </div>
 
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+      <ActionOutcome />
+    </ActionForm>
   );
 }

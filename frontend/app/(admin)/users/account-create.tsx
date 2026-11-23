@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -182,26 +183,35 @@ function NotImportedRows({ logins, title, why }: { logins: readonly string[]; ti
   );
 }
 
-function NewAccountForm({
-  roles,
-  dict,
-  locale,
-  mail,
-  onClose,
-  reportDismissible,
-}: {
+type FormDialogProps = {
   roles: Role[];
   dict: Dictionary;
   locale: Locale;
   mail: MailOffer;
   onClose: () => void;
   reportDismissible: (value: boolean) => void;
-}) {
-  const t = dict.accounts.create;
-  const [state, formAction, pending] = useActionState<CreateAccountState, FormData>(
-    createAccountAction,
-    {},
+};
+
+function NewAccountForm(props: FormDialogProps) {
+  return (
+    <ActionForm action={createAccountAction} errors={props.dict.errors} className="flex flex-col gap-5">
+      {(state, pending) => <NewAccount {...props} state={state} pending={pending} />}
+    </ActionForm>
   );
+}
+
+/** The form's contents, or the password it produced in place of them. */
+function NewAccount({
+  roles,
+  dict,
+  locale,
+  mail,
+  onClose,
+  reportDismissible,
+  state,
+  pending,
+}: FormDialogProps & { state: CreateAccountState; pending: boolean }) {
+  const t = dict.accounts.create;
 
   // While pending or showing a password, only Done may close the dialog.
   useEffect(() => {
@@ -247,12 +257,8 @@ function NewAccountForm({
     );
   }
 
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
   return (
-    <form action={formAction} className="flex flex-col gap-5">
+    <>
       <DialogHeader>
         <DialogTitle>{t.one.title}</DialogTitle>
       </DialogHeader>
@@ -273,44 +279,38 @@ function NewAccountForm({
 
       <SendByEmailOption mail={mail} dict={dict} />
 
-      {failure ? (
-        <p role="alert" className="text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
+      <ActionOutcome />
 
       <DialogFooter>
         <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
           {t.cancel}
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? t.one.creating : t.one.submit}
-        </Button>
+        <ActionButton pendingLabel={t.one.creating}>{t.one.submit}</ActionButton>
       </DialogFooter>
-    </form>
+    </>
   );
 }
 
-function ImportRosterForm({
+function ImportRosterForm(props: FormDialogProps) {
+  return (
+    <ActionForm action={importAccountsAction} errors={props.dict.errors} className="flex flex-col gap-5">
+      {(state, pending) => <ImportRoster {...props} state={state} pending={pending} />}
+    </ActionForm>
+  );
+}
+
+/** The form's contents, or what the import did in place of them. */
+function ImportRoster({
   roles,
   dict,
   locale,
   mail,
   onClose,
   reportDismissible,
-}: {
-  roles: Role[];
-  dict: Dictionary;
-  locale: Locale;
-  mail: MailOffer;
-  onClose: () => void;
-  reportDismissible: (value: boolean) => void;
-}) {
+  state,
+  pending,
+}: FormDialogProps & { state: ImportAccountsState; pending: boolean }) {
   const t = dict.accounts.create;
-  const [state, formAction, pending] = useActionState<ImportAccountsState, FormData>(
-    importAccountsAction,
-    {},
-  );
   const [copiedAll, setCopiedAll] = useState(false);
 
   useEffect(() => {
@@ -409,12 +409,8 @@ function ImportRosterForm({
     );
   }
 
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
   return (
-    <form action={formAction} className="flex flex-col gap-5">
+    <>
       <DialogHeader>
         <DialogTitle>{t.roster.title}</DialogTitle>
         <DialogDescription>{t.roster.hint}</DialogDescription>
@@ -440,21 +436,15 @@ function ImportRosterForm({
 
       <SendByEmailOption mail={mail} dict={dict} />
 
-      {failure ? (
-        <p role="alert" className="text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
+      <ActionOutcome />
 
       <DialogFooter>
         <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
           {t.cancel}
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? t.roster.importing : t.roster.submit}
-        </Button>
+        <ActionButton pendingLabel={t.roster.importing}>{t.roster.submit}</ActionButton>
       </DialogFooter>
-    </form>
+    </>
   );
 }
 

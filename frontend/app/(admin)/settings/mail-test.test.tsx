@@ -46,7 +46,7 @@ describe("MailTest, the state of mail", () => {
 
 describe("MailTest, sending the test message", () => {
   test("says to which address the message went", async () => {
-    sendTestMailAction.mockResolvedValueOnce({ sentTo: "root@usm.md" });
+    sendTestMailAction.mockResolvedValueOnce({ ok: true, sentTo: "root@usm.md" });
     render(<MailTest mail={on} dict={en} />);
 
     fireEvent.click(sendButton());

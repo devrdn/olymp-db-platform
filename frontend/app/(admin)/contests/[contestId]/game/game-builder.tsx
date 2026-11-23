@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -10,9 +11,8 @@ import type { GameDefinition, TableData } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { saveGameDefinitionAction, type GameState } from "./actions";
+import { saveGameDefinitionAction } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { labelFor } from "@/lib/i18n/label";
@@ -117,8 +117,6 @@ export function GameBuilder({
   const [activeRowCounts, setActiveRowCounts] = useState<Record<string, number>>(initialRowCounts);
   const [activeTable, setActiveTable] = useState(definition.tables[0]?.name ?? "");
 
-  const [state, save, saving] = useActionState<GameState, FormData>(saveGameDefinitionAction, {});
-
   function locked(table: DraftTable): boolean {
     return table.originalName !== null && (rowCounts[table.originalName] ?? 0) > 0;
   }
@@ -169,7 +167,7 @@ export function GameBuilder({
   const wire = toWireDefinition(tables);
   const definitionBytes = new TextEncoder().encode(JSON.stringify(wire)).length;
   const oversized = definitionBytes > limits.maxDefinitionBytes;
-  const canSave = editable && !saving && tables.length > 0 && !oversized;
+  const canSave = editable && tables.length > 0 && !oversized;
 
   return (
     <section className="flex flex-col gap-4 border-t border-line pt-8">
@@ -180,78 +178,83 @@ export function GameBuilder({
 
       {!editable ? <p className="text-small text-ink-2">{dict.workspace.game.frozen}</p> : null}
 
-      <form action={save} className="flex flex-col gap-5">
-        <input type="hidden" name="contestId" value={contestId} />
-        <input type="hidden" name="definition" value={JSON.stringify(wire)} readOnly />
+      <ActionForm
+        action={saveGameDefinitionAction}
+        fields={{ contestId, definition: JSON.stringify(wire) }}
+        errors={errors}
+        className="flex flex-col gap-5"
+      >
+        {(state) => (
+          <>
 
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h4 className="text-control text-ink">{tb.structureHeading}</h4>
-            <span className="text-label text-ink-3">
-              {fill(tb.limitTables, { n: tables.length, max: limits.maxTables })}
-            </span>
-          </div>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h4 className="text-control text-ink">{tb.structureHeading}</h4>
+                <span className="text-label text-ink-3">
+                  {fill(tb.limitTables, { n: tables.length, max: limits.maxTables })}
+                </span>
+              </div>
 
-          {tables.length === 0 ? <p className="text-small text-ink-2">{tb.emptyTables}</p> : null}
+              {tables.length === 0 ? <p className="text-small text-ink-2">{tb.emptyTables}</p> : null}
 
-          {tables.map((table) => (
-            <TableCard
-              key={table.key}
-              table={table}
-              editable={editable}
-              locked={locked(table)}
-              rowCount={table.originalName ? activeRowCounts[table.originalName] ?? 0 : 0}
-              limits={limits}
-              dict={dict}
-              onNameChange={(name) => updateTable(table.key, (t) => ({ ...t, name }))}
-              onRemove={() => void removeTable(table.key, table.name)}
-              onAddColumn={() => addColumn(table.key)}
-              onRemoveColumn={(columnKey) => removeColumn(table.key, columnKey)}
-              onColumnNameChange={(columnKey, name) =>
-                updateColumn(table.key, columnKey, (c) => ({ ...c, name }))
-              }
-              onColumnTypeChange={(columnKey, type) =>
-                updateColumn(table.key, columnKey, (c) => ({ ...c, type }))
-              }
-              onColumnNullableChange={(columnKey, nullable) =>
-                updateColumn(table.key, columnKey, (c) => ({ ...c, nullable }))
-              }
-              onTogglePrimaryKey={(columnKey, checked) => togglePrimaryKey(table.key, columnKey, checked)}
-            />
-          ))}
+              {tables.map((table) => (
+                <TableCard
+                  key={table.key}
+                  table={table}
+                  editable={editable}
+                  locked={locked(table)}
+                  rowCount={table.originalName ? activeRowCounts[table.originalName] ?? 0 : 0}
+                  limits={limits}
+                  dict={dict}
+                  onNameChange={(name) => updateTable(table.key, (t) => ({ ...t, name }))}
+                  onRemove={() => void removeTable(table.key, table.name)}
+                  onAddColumn={() => addColumn(table.key)}
+                  onRemoveColumn={(columnKey) => removeColumn(table.key, columnKey)}
+                  onColumnNameChange={(columnKey, name) =>
+                    updateColumn(table.key, columnKey, (c) => ({ ...c, name }))
+                  }
+                  onColumnTypeChange={(columnKey, type) =>
+                    updateColumn(table.key, columnKey, (c) => ({ ...c, type }))
+                  }
+                  onColumnNullableChange={(columnKey, nullable) =>
+                    updateColumn(table.key, columnKey, (c) => ({ ...c, nullable }))
+                  }
+                  onTogglePrimaryKey={(columnKey, checked) => togglePrimaryKey(table.key, columnKey, checked)}
+                />
+              ))}
 
-          <div>
-            <button
-              type="button"
-              disabled={!editable || tables.length >= limits.maxTables}
-              onClick={addTable}
-              className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
-            >
-              {tb.addTable}
-            </button>
-          </div>
-        </div>
+              <div>
+                <button
+                  type="button"
+                  disabled={!editable || tables.length >= limits.maxTables}
+                  onClick={addTable}
+                  className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+                >
+                  {tb.addTable}
+                </button>
+              </div>
+            </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="submit" disabled={!canSave} className={cn(buttonVariants({ variant: "primary" }))}>
-            {saving ? tb.saving : tb.save}
-          </button>
-          <span className={cn("font-mono text-label", oversized ? "text-bad" : "text-ink-3")}>
-            {fill(tb.sizeHint, { n: definitionBytes, max: limits.maxDefinitionBytes })}
-          </span>
-          {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
-          <span role="status" aria-live="polite" className="text-small text-ink-2">
-            {state.code ? (messageForCode(state.code, errors)) : state.ok ? tb.saved : ""}
-          </span>
-        </div>
-        {/* Validation refusals name the table or column; shown beside the dictionary sentence. */}
-        {state.code && state.detail ? (
-          <div className="flex flex-col gap-1">
-            <p className="text-label text-ink-3">{tb.detailLabel}</p>
-            <pre className="max-w-body overflow-x-auto font-mono text-data text-bad">{state.detail}</pre>
-          </div>
-        ) : null}
-      </form>
+            <div className="flex flex-wrap items-center gap-3">
+              <ActionButton disabled={!canSave} pendingLabel={tb.saving}>
+                {tb.save}
+              </ActionButton>
+              <span className={cn("font-mono text-label", oversized ? "text-bad" : "text-ink-3")}>
+                {fill(tb.sizeHint, { n: definitionBytes, max: limits.maxDefinitionBytes })}
+              </span>
+              {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
+              <ActionOutcome saved={tb.saved} />
+            </div>
+            {/* Validation refusals name the table or column; shown beside the dictionary sentence. */}
+            {state.code && state.detail ? (
+              <div className="flex flex-col gap-1">
+                <p className="text-label text-ink-3">{tb.detailLabel}</p>
+                <pre className="max-w-body overflow-x-auto font-mono text-data text-bad">{state.detail}</pre>
+              </div>
+            ) : null}
+          </>
+        )}
+      </ActionForm>
 
       <div className="flex flex-col gap-4 border-t border-line pt-6">
         <h4 className="text-control text-ink">{tb.data.heading}</h4>

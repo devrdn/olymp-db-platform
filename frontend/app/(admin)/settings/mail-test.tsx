@@ -1,14 +1,11 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import type { MailStatus } from "@/lib/api/settings";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 
-import { sendTestMailAction, type MailTestState } from "./actions";
+import { sendTestMailAction } from "./actions";
 
 /**
  * Whether the installation sends email, and a test message to the
@@ -16,9 +13,6 @@ import { sendTestMailAction, type MailTestState } from "./actions";
  */
 export function MailTest({ mail, dict }: { mail: MailStatus; dict: Dictionary }) {
   const t = dict.settings.mail;
-  const [state, send, pending] = useActionState<MailTestState, FormData>(sendTestMailAction, {});
-
-  const failure = state.code ? messageForCode(state.code, dict.errors) : null;
 
   return (
     <section className="flex max-w-narrative flex-col gap-4 border-t border-line pt-6">
@@ -30,29 +24,24 @@ export function MailTest({ mail, dict }: { mail: MailStatus; dict: Dictionary })
       </div>
 
       {mail.enabled ? (
-        <form action={send} className="flex flex-col gap-3">
-          <p className="max-w-body text-small text-ink-3">{t.hint}</p>
+        <ActionForm action={sendTestMailAction} errors={dict.errors} className="flex flex-col gap-3">
+          {(state) => (
+            <>
+              <p className="max-w-body text-small text-ink-3">{t.hint}</p>
 
-          <div className="flex flex-wrap items-center gap-4">
-            <Button type="submit" variant="secondary" disabled={pending}>
-              {pending ? t.sending : t.send}
-            </Button>
+              <div className="flex flex-wrap items-center gap-4">
+                <ActionButton variant="secondary" pendingLabel={t.sending}>
+                  {t.send}
+                </ActionButton>
 
-            {state.sentTo && !failure ? (
-              <p role="status" className="text-small text-good">
-                {fill(t.sent, { address: state.sentTo })}
-              </p>
-            ) : null}
-
-            {failure ? (
-              <p role="alert" className="max-w-body text-small text-bad">
-                {failure}
-                {/* The relay's own words: what an operator searches for. */}
-                {state.subject ? <span className="ml-1 font-mono text-ink-2">{state.subject}</span> : null}
-              </p>
-            ) : null}
-          </div>
-        </form>
+                <ActionOutcome saved={state.sentTo ? fill(t.sent, { address: state.sentTo }) : undefined}>
+                  {/* The relay's own words: what an operator searches for. */}
+                  {state.subject ? <p className="font-mono text-ink-2">{state.subject}</p> : null}
+                </ActionOutcome>
+              </div>
+            </>
+          )}
+        </ActionForm>
       ) : null}
     </section>
   );

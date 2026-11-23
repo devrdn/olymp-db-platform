@@ -1,18 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 
-import { switchArchiveAction, type SwitchState } from "./actions";
+import { switchArchiveAction } from "./actions";
 
 /** The contest archive's state and the button that turns it off, or back on. */
 export function ArchiveSwitch({ enabled, dict }: { enabled: boolean; dict: Dictionary }) {
   const t = dict.settings.archive;
-  const [state, submit, pending] = useActionState<SwitchState, FormData>(switchArchiveAction, {});
-  const failure = state.code ? messageForCode(state.code, dict.errors) : null;
 
   return (
     <section aria-labelledby="archive-heading" className="flex max-w-narrative flex-col gap-4 border-t border-line pt-6">
@@ -26,19 +21,17 @@ export function ArchiveSwitch({ enabled, dict }: { enabled: boolean; dict: Dicti
         <p className="max-w-body text-body text-ink-2">{t.help}</p>
       </div>
 
-      <form action={submit} className="flex flex-col gap-2">
-        <input type="hidden" name="enabled" value={String(!enabled)} />
+      <ActionForm
+        action={switchArchiveAction}
+        fields={{ enabled: String(!enabled) }}
+        errors={dict.errors}
+        className="flex flex-col gap-2"
+      >
         <div>
-          <Button type="submit" variant="secondary" disabled={pending}>
-            {enabled ? t.switchOff : t.switchOn}
-          </Button>
+          <ActionButton variant="secondary">{enabled ? t.switchOff : t.switchOn}</ActionButton>
         </div>
-        {failure ? (
-          <p role="alert" className="max-w-body text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
-      </form>
+        <ActionOutcome />
+      </ActionForm>
     </section>
   );
 }

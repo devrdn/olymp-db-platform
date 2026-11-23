@@ -1,13 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import type { ProviderId } from "@/lib/auth/external";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 
-import { switchProviderAction, type SwitchState } from "./actions";
+import { switchProviderAction } from "./actions";
 
 /**
  * The button that turns a configured provider off, or back on. `describedBy` is the id of the
@@ -25,23 +22,20 @@ export function ProviderSwitch({
   dict: Dictionary;
 }) {
   const t = dict.settings.integrations;
-  const [state, submit, pending] = useActionState<SwitchState, FormData>(switchProviderAction, {});
-  const failure = state.code ? messageForCode(state.code, dict.errors) : null;
 
   return (
-    <form action={submit} className="flex flex-col gap-2">
-      <input type="hidden" name="provider" value={provider} />
-      <input type="hidden" name="enabled" value={String(!enabled)} />
+    <ActionForm
+      action={switchProviderAction}
+      fields={{ provider, enabled: String(!enabled) }}
+      errors={dict.errors}
+      className="flex flex-col gap-2"
+    >
       <div>
-        <Button type="submit" variant="secondary" disabled={pending} aria-describedby={describedBy}>
+        <ActionButton variant="secondary" aria-describedby={describedBy}>
           {enabled ? t.switchOff : t.switchOn}
-        </Button>
+        </ActionButton>
       </div>
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+      <ActionOutcome />
+    </ActionForm>
   );
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome, useActionStatus } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,8 +17,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { type Contest } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
-import { saveTranslationsAction, type TitleState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { saveTranslationsAction } from "./actions";
 
 type TitleDictionary = Pick<Dictionary, "workspace" | "chrome" | "errors">;
 
@@ -43,30 +43,11 @@ function TitleForm({
   const primary = contest.languages.find((l) => l.isDefault)?.code ?? declared[0];
   const others = declared.filter((code) => code !== primary);
 
-  const [state, formAction, pending] = useActionState<TitleState, FormData>(
-    saveTranslationsAction,
-    {},
-  );
-
-  // Only a pending request blocks dismissal; a success closes the form.
-  useEffect(() => {
-    reportDismissible(!pending);
-  }, [pending, reportDismissible]);
-
-  // The header shows the saved title, so closing is the confirmation.
-  useEffect(() => {
-    if (state.ok) onClose();
-  }, [state.ok, onClose]);
-
   if (!primary) return null;
 
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
-
   return (
-    <form action={formAction} className="flex flex-col gap-5">
-      <input type="hidden" name="contestId" value={contest.id} />
+    <ActionForm action={saveTranslationsAction} fields={{ contestId: contest.id }} errors={dict.errors} className="flex flex-col gap-5">
+      <DialogBinding onClose={onClose} reportDismissible={reportDismissible} />
 
       <DialogHeader>
         {/* The '?' sits beside the title, so the dialog's name is the title
@@ -126,21 +107,43 @@ function TitleForm({
         </details>
       ) : null}
 
-      {failure ? (
-        <p role="alert" className="text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
+      <ActionOutcome />
 
       <DialogFooter>
-        <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
-          {t.cancel}
-        </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? ts.saving : ts.save}
-        </Button>
+        <CancelButton label={t.cancel} onClose={onClose} />
+        <ActionButton pendingLabel={ts.saving}>{ts.save}</ActionButton>
       </DialogFooter>
-    </form>
+    </ActionForm>
+  );
+}
+
+/** Only a pending request blocks dismissal; a success closes the form, since the header shows the saved title. */
+function DialogBinding({
+  onClose,
+  reportDismissible,
+}: {
+  onClose: () => void;
+  reportDismissible: (value: boolean) => void;
+}) {
+  const { pending, ok } = useActionStatus();
+
+  useEffect(() => {
+    reportDismissible(!pending);
+  }, [pending, reportDismissible]);
+
+  useEffect(() => {
+    if (ok) onClose();
+  }, [ok, onClose]);
+
+  return null;
+}
+
+function CancelButton({ label, onClose }: { label: string; onClose: () => void }) {
+  const { pending } = useActionStatus();
+  return (
+    <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
+      {label}
+    </Button>
   );
 }
 

@@ -45,6 +45,16 @@ function useBound(component: string): Bound {
 }
 
 /**
+ * Whether the enclosing ActionForm's action is running, and whether its last
+ * submission worked, for a part that reacts to either (a dialog that closes
+ * on success, or may not be dismissed while pending).
+ */
+export function useActionStatus(): { pending: boolean; ok: boolean } {
+  const { state, pending } = useBound("useActionStatus");
+  return { pending, ok: state.ok === true };
+}
+
+/**
  * A form bound to a server action: the action's state, its hidden `fields`,
  * and, given `confirm`, the destructive form that asks first. Its parts
  * (`ActionButton`, `ActionOutcome`, `ActionFooter`) read the binding, so a
@@ -149,26 +159,35 @@ export function ActionButton({
  * How the last submission went: the refusal's sentence, or `saved` once it
  * worked. Only the dictionary's sentence is ever shown, so a code never
  * reaches the screen. `refusal` is a code the screen refused itself, before
- * anything was sent. `narrow` keeps a sentence in a table cell from widening
- * its column.
+ * anything was sent; `elsewhere` are codes the screen shows by the field they
+ * are about. `narrow` keeps a sentence in a table cell from widening its
+ * column.
  */
 export function ActionOutcome({
   saved,
   refusal,
+  elsewhere = [],
   narrow = false,
+  id,
+  children,
 }: {
   saved?: string;
   refusal?: string;
+  elsewhere?: readonly string[];
   narrow?: boolean;
+  /** For a field that the refusal describes. */
+  id?: string;
+  /** What the screen adds under a refusal's sentence, announced with it. */
+  children?: ReactNode;
 }) {
   const { state, errors } = useBound("ActionOutcome");
   const code = refusal ?? state.code;
 
   if (code) {
-    return (
-      <p role="alert" className={cn("text-small text-bad", narrow ? "max-w-40 text-balance" : "max-w-body")}>
-        {messageForCode(code, errors)}
-      </p>
+    return elsewhere.includes(code) ? null : (
+      <FailureAlert code={code} errors={errors} narrow={narrow} id={id}>
+        {children}
+      </FailureAlert>
     );
   }
   if (state.ok && saved !== undefined) {
@@ -179,6 +198,39 @@ export function ActionOutcome({
     );
   }
   return null;
+}
+
+/**
+ * A refusal's sentence as an alert, the one style every form shows one in;
+ * for a screen whose request is not an action, `ActionOutcome` otherwise.
+ */
+export function FailureAlert({
+  code,
+  errors,
+  narrow = false,
+  id,
+  children,
+}: {
+  code: string;
+  errors: Errors;
+  narrow?: boolean;
+  id?: string;
+  children?: ReactNode;
+}) {
+  const width = narrow ? "max-w-40 text-balance" : "max-w-body";
+  if (children === undefined || children === null || children === false) {
+    return (
+      <p id={id} role="alert" className={cn("text-small text-bad", width)}>
+        {messageForCode(code, errors)}
+      </p>
+    );
+  }
+  return (
+    <div id={id} role="alert" className={cn("flex flex-col gap-1 text-small", width)}>
+      <p className="text-bad">{messageForCode(code, errors)}</p>
+      {children}
+    </div>
+  );
 }
 
 /**

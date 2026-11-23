@@ -1,13 +1,12 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
 
+import { ActionFooter, ActionForm } from "@/components/product/action-form";
 import { StoryText } from "@/components/product/story-text";
-import { Button } from "@/components/ui/button";
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { storedMarkdown } from "@/lib/format/markdown";
-import { messageForCode } from "@/lib/i18n/errors";
 
 import type { TranslationsState } from "./actions";
 import { StoryPdfButton, type StoryPdfLabels } from "./story-pdf-button";
@@ -71,10 +70,6 @@ export function PerLanguageForm({
   /** Offers each language's saved text as a PDF file; omitted offers none. */
   pdf?: PdfOffer;
 }) {
-  const [state, formAction, pending] = useActionState<TranslationsState, FormData>(action, {});
-
-  const failure = state.code ? messageForCode(state.code, errors) : null;
-
   // What each box holds now, once it has been edited; a language never touched is as saved.
   // It is compared with the editor's own writing of the text it loaded, which can differ from it
   // in form alone (`*em*` against `_em_`), for as long as that is the text saved; after a save the
@@ -99,9 +94,7 @@ export function PerLanguageForm({
   };
 
   return (
-    <form action={formAction} className="flex flex-col gap-8">
-      <input type="hidden" name="contestId" value={contestId} />
-
+    <ActionForm action={action} fields={{ contestId }} errors={errors} className="flex flex-col gap-8">
       <div className="grid gap-8 narrow:grid-cols-2">
         {languages.map((lang) => (
           <div key={lang} className="flex flex-col gap-2.5">
@@ -143,24 +136,7 @@ export function PerLanguageForm({
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-4">
-        <Button type="submit" disabled={pending || !editable}>
-          {pending ? labels.saving : labels.save}
-        </Button>
-
-        {/* `status`, not `alert`: a successful save is not an interruption. */}
-        {state.ok ? (
-          <p role="status" className="text-small text-good">
-            {labels.saved}
-          </p>
-        ) : null}
-
-        {failure ? (
-          <p role="alert" className="max-w-body text-small text-bad">
-            {failure}
-          </p>
-        ) : null}
-      </div>
-    </form>
+      <ActionFooter labels={labels} disabled={!editable} />
+    </ActionForm>
   );
 }
