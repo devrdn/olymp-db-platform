@@ -12,7 +12,7 @@ import {
   type Upload,
   type UploadWindow,
 } from "@/lib/api/game";
-import { isId } from "@/lib/api/ids";
+import { isId, pathSegment } from "@/lib/api/ids";
 import type { Failure } from "@/lib/api/outcome";
 import { serverAction, serverOutcome, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
@@ -52,6 +52,12 @@ async function controlNamingFault<T>(
 ): Promise<UploadActionResult<T>> {
   const result = await serverOutcome(call, { revalidate });
   return result.ok ? { ok: true, value: result.value } : withDetail(result);
+}
+
+/** A table's own path, or null for a name that is no path segment. */
+function tablePath(contestId: string, table: string): string | null {
+  const segment = pathSegment(table);
+  return segment === null ? null : `/contests/${contestId}/game/tables/${segment}`;
 }
 
 /** What a read the page already has an answer for gives on any failure: nothing. */
@@ -225,8 +231,10 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
  */
 export async function currentTableUploadAction(contestId: string, table: string): Promise<TableData | null> {
   if (!isId(contestId)) return null;
+  const at = tablePath(contestId, table);
+  if (!at) return null;
   return orNull(async () =>
-    tableDataSchema.parse(await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/current`)),
+    tableDataSchema.parse(await serverRequest(`${at}/data/current`)),
   );
 }
 
@@ -240,11 +248,13 @@ export async function beginTableUploadAction(
   declaredBytes: number,
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
+  const at = tablePath(contestId, table);
+  if (!at) return { code: "invalid_request" };
 
   return control(
     async () =>
       tableDataSchema.parse(
-        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data`, {
+        await serverRequest(`${at}/data`, {
           method: "POST",
           body: { declared_bytes: declaredBytes },
         }),
@@ -264,6 +274,8 @@ export async function completeTableUploadAction(
   id: string,
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId) || !isId(id)) return { code: "game_table_data_not_found" };
+  const at = tablePath(contestId, table);
+  if (!at) return { code: "invalid_request" };
 
   // The file marks the built game out of date on the server, and `page.tsx`
   // renders that notice, so its cached output must be refreshed. The server's
@@ -271,7 +283,7 @@ export async function completeTableUploadAction(
   return controlNamingFault(
     async () =>
       tableDataSchema.parse(
-        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/complete`, {
+        await serverRequest(`${at}/data/${id}/complete`, {
           method: "POST",
         }),
       ),
@@ -286,11 +298,13 @@ export async function abortTableUploadAction(
   id: string,
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId) || !isId(id)) return { code: "game_table_data_not_found" };
+  const at = tablePath(contestId, table);
+  if (!at) return { code: "invalid_request" };
 
   return control(
     async () =>
       tableDataSchema.parse(
-        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/abort`, {
+        await serverRequest(`${at}/data/${id}/abort`, {
           method: "POST",
         }),
       ),
@@ -305,11 +319,13 @@ export async function gameTableDataWindowAction(
   fromRow: number,
 ): Promise<UploadActionResult<TableRowWindow>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
+  const at = tablePath(contestId, table);
+  if (!at) return { code: "invalid_request" };
 
   return control(
     async () =>
       tableRowWindowSchema.parse(
-        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/window?from=${fromRow}`),
+        await serverRequest(`${at}/data/window?from=${fromRow}`),
       ),
     [],
   );
@@ -322,13 +338,15 @@ export async function appendTableRowAction(
   values: string[],
 ): Promise<UploadActionResult<TableData>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
+  const at = tablePath(contestId, table);
+  if (!at) return { code: "invalid_request" };
 
   // The row marks the game out of date, as in `completeTableUploadAction`; the
   // server's row validation names the column at fault.
   return controlNamingFault(
     async () =>
       tableDataSchema.parse(
-        await serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/rows`, {
+        await serverRequest(`${at}/rows`, {
           method: "POST",
           body: { values },
         }),
@@ -344,10 +362,13 @@ export async function deleteTableRowAction(
   row: number,
 ): Promise<UploadActionResult<never>> {
   if (!isId(contestId)) return { code: "invalid_contest_id" };
+  const at = tablePath(contestId, table);
+  // The row comes from the caller as it was serialised, like every argument.
+  if (!at || !Number.isSafeInteger(row) || row < 0) return { code: "invalid_request" };
 
   // Marks the game out of date, like an added row.
   return serverAction(
-    () => serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/rows/${row}`, { method: "DELETE" }),
+    () => serverRequest(`${at}/rows/${row}`, { method: "DELETE" }),
     { revalidate: changed(contestId) },
   );
 }

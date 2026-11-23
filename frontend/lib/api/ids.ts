@@ -10,3 +10,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function isId(value: unknown): value is string {
   return typeof value === "string" && UUID.test(value);
 }
+
+/**
+ * A name (a table, a database) as one segment of a request path, or null for
+ * one that is no segment: `fetch` resolves `.` and `..` before sending, and
+ * `encodeURIComponent` leaves both as they are. A server action's argument is
+ * whatever its caller serialised, and `encodeURIComponent` stringifies, so
+ * anything but a string is refused, as is one it cannot encode.
+ */
+export function pathSegment(name: unknown): string | null {
+  if (typeof name !== "string" || name === "" || name === "." || name === "..") return null;
+  try {
+    return encodeURIComponent(name);
+  } catch {
+    return null;
+  }
+}

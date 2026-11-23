@@ -22,6 +22,7 @@ import {
   completeGameUploadAction,
   completeTableUploadAction,
   currentGameUploadAction,
+  currentTableUploadAction,
   deleteTableRowAction,
   gameStatusAction,
   gameTableDataWindowAction,
@@ -567,6 +568,23 @@ describe("deleteTableRowAction", () => {
     const result = await deleteTableRowAction(contestId, "suspects", 99);
 
     expect(result).toEqual({ code: "game_table_row_not_found" });
+  });
+
+  test("never sends a request for a row or a table that would move the path", async () => {
+    // A server action's arguments are whatever the caller serialised.
+    for (const row of [-1, 1.5, Number.NaN, "../../.." as unknown as number]) {
+      expect(await deleteTableRowAction(contestId, "suspects", row)).toEqual({ code: "invalid_request" });
+    }
+    for (const table of ["..", ".", [".."], 42, {}] as unknown as string[]) {
+      expect(await deleteTableRowAction(contestId, table, 3)).toEqual({ code: "invalid_request" });
+      expect(await appendTableRowAction(contestId, table, ["x"])).toEqual({ code: "invalid_request" });
+      expect(await beginTableUploadAction(contestId, table, 10)).toEqual({ code: "invalid_request" });
+      expect(await completeTableUploadAction(contestId, table, uploadId)).toEqual({ code: "invalid_request" });
+      expect(await abortTableUploadAction(contestId, table, uploadId)).toEqual({ code: "invalid_request" });
+      expect(await gameTableDataWindowAction(contestId, table, 0)).toEqual({ code: "invalid_request" });
+      expect(await currentTableUploadAction(contestId, table)).toBeNull();
+    }
+    expect(serverRequest).not.toHaveBeenCalled();
   });
 
   test("never sends a request for a contest segment that is not an identifier", async () => {

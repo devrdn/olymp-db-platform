@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { isId } from "./ids";
+import { isId, pathSegment } from "./ids";
 
 const REAL = "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01";
 
@@ -37,5 +37,27 @@ describe("isId", () => {
     for (const wrong of [undefined, null, 42, {}, [REAL]]) {
       expect(isId(wrong)).toBe(false);
     }
+  });
+});
+
+describe("pathSegment", () => {
+  test("encodes a name as one segment of a request path", () => {
+    expect(pathSegment("suspects")).toBe("suspects");
+    expect(pathSegment("order lines/2026")).toBe("order%20lines%2F2026");
+    // Escaped dots stay escaped, so `fetch` never reads them as a step up.
+    expect(pathSegment("%2e%2e")).toBe("%252e%252e");
+  });
+
+  test("refuses a name that would move the request to another path, or leave it empty", () => {
+    for (const name of [".", "..", ""]) expect(pathSegment(name)).toBeNull();
+  });
+
+  test("refuses anything a caller serialised that is not a well-formed string", () => {
+    // `encodeURIComponent([".."])` is "..": a one-element array must not pass.
+    for (const name of [[".."], ["."], 42, { toString: () => ".." }, null, undefined]) {
+      expect(pathSegment(name)).toBeNull();
+    }
+    // A lone surrogate makes `encodeURIComponent` throw.
+    expect(pathSegment("\ud800")).toBeNull();
   });
 });

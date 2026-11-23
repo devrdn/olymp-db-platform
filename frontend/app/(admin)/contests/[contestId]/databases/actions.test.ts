@@ -29,6 +29,13 @@ beforeEach(() => {
 });
 
 describe("dropGameInstanceAction", () => {
+  test("never sends a request for a name that would move the path", async () => {
+    for (const database of ["..", "."]) {
+      expect(await dropGameInstanceAction({}, form({ contestId, database }))).toEqual({ code: "invalid_request" });
+    }
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
   test("deletes the named database of the named contest, and revalidates", async () => {
     serverRequest.mockResolvedValueOnce({ database: "game_c1_u1", status: "dropped" });
 
