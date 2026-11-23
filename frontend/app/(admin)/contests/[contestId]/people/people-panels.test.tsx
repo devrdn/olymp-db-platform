@@ -7,15 +7,16 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 
 // The real Server Actions would pull in Next's server runtime.
-const { disqualifyParticipantAction } = vi.hoisted(() => ({
+const { disqualifyParticipantAction, removeParticipantAction } = vi.hoisted(() => ({
   disqualifyParticipantAction: vi.fn(async () => ({})),
+  removeParticipantAction: vi.fn(async () => ({})),
 }));
 vi.mock("./actions", () => ({
   addParticipantAction: vi.fn(async () => ({})),
   disqualifyParticipantAction,
   grantManagerAction: vi.fn(async () => ({})),
   importParticipantsAction: vi.fn(async () => ({})),
-  removeParticipantAction: vi.fn(async () => ({})),
+  removeParticipantAction,
   revokeManagerAction: vi.fn(async () => ({})),
 }));
 
@@ -55,7 +56,7 @@ describe("ParticipantPanel, the score column", () => {
         total={1}
         locale="en"
         scoring="points"
-        dict={dict}
+        ended={false}        dict={dict}
       />,
     );
 
@@ -71,7 +72,7 @@ describe("ParticipantPanel, the score column", () => {
         total={1}
         locale="en"
         scoring="icpc"
-        dict={dict}
+        ended={false}        dict={dict}
       />,
     );
 
@@ -94,7 +95,7 @@ describe("ParticipantPanel, an address outside the site's domain", () => {
         scoring="points"
         trustedDomain={trustedDomain}
         trustedDomainOnly={trustedDomainOnly}
-        dict={dict}
+        ended={false}        dict={dict}
       />,
     );
 
@@ -141,7 +142,7 @@ describe("the people tables on a phone", () => {
         total={1}
         locale="en"
         scoring="points"
-        dict={dict}
+        ended={false}        dict={dict}
       />,
     );
 
@@ -169,7 +170,7 @@ describe("ParticipantPanel, disqualifying", () => {
       total={1}
       locale="en"
       scoring="points"
-      dict={dict}
+      ended={false}      dict={dict}
     />
   );
   const name = () => dict.workspace.people.participants.disqualify;
@@ -182,6 +183,46 @@ describe("ParticipantPanel, disqualifying", () => {
 
     expect(confirm).toHaveBeenCalledWith(dict.workspace.people.participants.confirmDisqualify);
     expect(disqualifyParticipantAction).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+});
+
+describe("ParticipantPanel, removing a registered participant", () => {
+  const panel = (ended: boolean) => (
+    <ParticipantPanel
+      contestId="c1"
+      participants={[participant({ status: "registered", startedAt: undefined, fullName: "Q$&A Popescu" })]}
+      total={1}
+      locale="en"
+      scoring="points"
+      ended={ended}
+      dict={dict}
+    />
+  );
+  const name = () => dict.workspace.people.participants.remove;
+
+  test("asks nothing while the contest has not ended", async () => {
+    const confirm = vi.spyOn(window, "confirm");
+    render(panel(false));
+
+    await userEvent.click(screen.getByRole("button", { name: name() }));
+
+    expect(confirm).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(removeParticipantAction).toHaveBeenCalledOnce());
+    confirm.mockRestore();
+    removeParticipantAction.mockClear();
+  });
+
+  test("asks first once the contest has ended, naming the participant, and sends nothing on no", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(panel(true));
+
+    await userEvent.click(screen.getByRole("button", { name: name() }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      fill(dict.workspace.people.participants.confirmRemoveEnded, { name: "Q$&A Popescu" }),
+    );
+    expect(removeParticipantAction).not.toHaveBeenCalled();
     confirm.mockRestore();
   });
 });

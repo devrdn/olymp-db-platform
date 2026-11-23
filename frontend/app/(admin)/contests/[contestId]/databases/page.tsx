@@ -1,3 +1,4 @@
+import { hasEnded } from "@/lib/api/contests";
 import { gameInstancesSchema, gameSchema } from "@/lib/api/game";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -51,7 +52,7 @@ export default async function DatabasesPage(props: PageProps<"/contests/[contest
         <GameDatabases
           contestId={contest.id}
           databases={databases}
-          ended={contest.status === "finished" || contest.status === "archived"}
+          ended={hasEnded(contest.status)}
           locale={locale}
           dict={dict}
         />

@@ -1,4 +1,5 @@
 import { fetchAuthMethods } from "@/lib/api/auth-methods";
+import { hasEnded } from "@/lib/api/contests";
 import { managerListSchema, participantListSchema } from "@/lib/api/people";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -51,6 +52,7 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
           total={participants.total}
           locale={locale}
           scoring={contest.scoring}
+          ended={hasEnded(contest.status)}
           trustedDomain={methods?.trustedEmailDomain}
           trustedDomainOnly={contest.settings.trustedDomainOnly}
           dict={dict}

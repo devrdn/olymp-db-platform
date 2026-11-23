@@ -347,9 +347,14 @@ export function prizePlacesFromForm(form: FormData): { ok: true; value: PrizePla
   return { ok: true, value: { first, second, third } };
 }
 
+/** Whether the contest is over: finished, or archived since. */
+export function hasEnded(status: ContestStatus): boolean {
+  return status === "finished" || status === "archived";
+}
+
 /** Whether the grace period may be extended: only once the contest has ended. */
 export function graceExtendable(status: ContestStatus): boolean {
-  return status === "finished" || status === "archived";
+  return hasEnded(status);
 }
 
 /** Mirrors `maxGracePeriodMin` in `backend/internal/contests/contests.go`: 90 days. */

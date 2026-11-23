@@ -1093,6 +1093,7 @@ const ro = {
         remove: "Eliminați",
         disqualify: "Descalificați",
         confirmDisqualify: "Descalificați acest participant? Tot ce a făcut rămâne în evidență.",
+        confirmRemoveEnded: "Olimpiada s-a încheiat. Eliminați totuși participantul {name}? Nu a început lucrul, dar înscrierea va dispărea din evidența olimpiadei.",
         empty: {
           title: "Nu este încă nimeni înscris",
           body: "Lipiți mai jos o listă de utilizatori sau lăsați înscrierea deschisă și participanții se vor înscrie singuri.",

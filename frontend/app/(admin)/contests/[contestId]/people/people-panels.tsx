@@ -141,7 +141,9 @@ function GrantManager({ contestId, dict }: { contestId: string; dict: Dictionary
 
 /**
  * Who takes part. Someone who has not started can be removed; someone who has
- * can only be disqualified, since their work is part of the record.
+ * can only be disqualified, since their work is part of the record. Once the
+ * contest has ended a removal asks first, since the roster is then part of
+ * the record too.
  */
 export function ParticipantPanel({
   contestId,
@@ -149,6 +151,7 @@ export function ParticipantPanel({
   total,
   locale,
   scoring,
+  ended,
   trustedDomain = "",
   trustedDomainOnly = false,
   dict,
@@ -167,6 +170,8 @@ export function ParticipantPanel({
   // ICPC ranks by solved count, then penalty (docs/ARCHITECTURE.md §6.1.1);
   // `total_score` is always 0 there, so its column is hidden.
   scoring: Scoring;
+  /** The contest is finished or archived. */
+  ended: boolean;
   dict: Dictionary;
 }) {
   const t = dict.workspace.people;
@@ -258,6 +263,13 @@ export function ParticipantPanel({
                         contestId={contestId}
                         userId={participant.userId}
                         label={t.participants.remove}
+                        confirm={
+                          ended
+                            ? fill(t.participants.confirmRemoveEnded, {
+                                name: participant.fullName || participant.login,
+                              })
+                            : undefined
+                        }
                         dict={dict}
                       />
                     ) : participant.status === "disqualified" ? null : (

@@ -1202,6 +1202,7 @@ const en = {
         remove: "Remove",
         disqualify: "Disqualify",
         confirmDisqualify: "Disqualify this participant? Everything they have done stays on the record.",
+        confirmRemoveEnded: "The contest is over. Remove {name} anyway? They never started, but their registration will disappear from the contest's record.",
         empty: {
           title: "Nobody is enrolled yet",
           body: "Paste a list of logins below, or leave enrolment open and let participants sign themselves up.",

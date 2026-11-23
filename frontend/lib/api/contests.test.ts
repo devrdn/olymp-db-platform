@@ -9,6 +9,7 @@ import {
   coverHref,
   defaultLanguage,
   graceExtendable,
+  hasEnded,
   graceFromForm,
   MAX_GRACE_PERIOD_MIN,
   icpcPenaltyFromForm,
@@ -560,6 +561,18 @@ describe("archiveSettingsFromForm", () => {
   test("refuses a visibility outside the list, or none", () => {
     expect(archiveSettingsFromForm(shapeForm({ visibility: "public" }))).toEqual({ ok: false });
     expect(archiveSettingsFromForm(shapeForm({}))).toEqual({ ok: false });
+  });
+});
+
+describe("hasEnded", () => {
+  test.each([
+    ["finished", true],
+    ["archived", true],
+    ["draft", false],
+    ["published", false],
+    ["running", false],
+  ] as const)("%s is %s", (status, expected) => {
+    expect(hasEnded(status)).toBe(expected);
   });
 });
 
