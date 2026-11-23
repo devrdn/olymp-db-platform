@@ -54,6 +54,15 @@ export function useActionStatus(): { pending: boolean; ok: boolean } {
   return { pending, ok: state.ok === true };
 }
 
+/** What a submission sends, comparable: the data a yes was given for. */
+function sent(form: FormData): string {
+  return JSON.stringify(
+    [...form.entries()].map(([name, value]) =>
+      typeof value === "string" ? [name, value] : [name, value.name, value.size, value.lastModified],
+    ),
+  );
+}
+
 /**
  * A form bound to a server action: the action's state, its hidden `fields`,
  * and, given `confirm`, the destructive form that asks first. Its parts
@@ -96,8 +105,8 @@ export function ActionForm<S extends ActionState>({
   // where the question is asked, so a form that asks cannot be sent until then.
   const locked = confirm !== undefined && !hydrated;
   const [ask, dialog] = useConfirm(confirm !== undefined);
-  // Set by a yes, for the one submission it lets through.
-  const approved = useRef(false);
+  // What a yes was given for, set only while its own submission is dispatched.
+  const approved = useRef<string | null>(null);
 
   return (
     <BoundForm.Provider value={{ state, pending, locked, errors }}>
@@ -106,20 +115,34 @@ export function ActionForm<S extends ActionState>({
         className={className}
         noValidate={noValidate}
         onSubmit={(event) => {
+          // Read and spent before anything can stop this submission, so a yes
+          // never carries over to a later one.
+          const yesFor = approved.current;
+          approved.current = null;
           onSubmit?.(event);
           if (event.defaultPrevented || confirm === undefined) return;
-          if (approved.current) {
-            approved.current = false;
-            return;
-          }
+
           const form = event.currentTarget;
-          const question = typeof confirm === "function" ? confirm(new FormData(form)) : confirm;
+          const submitter = (event.nativeEvent as SubmitEvent).submitter;
+          const data = new FormData(form, submitter);
+          // A yes covers the data it was asked about; anything else asks again.
+          if (yesFor !== null && yesFor === sent(data)) return;
+          const question = typeof confirm === "function" ? confirm(data) : confirm;
           if (question === null) return;
+
           event.preventDefault();
+          const asked = sent(data);
           void ask(question).then((yes) => {
-            if (!yes) return;
-            approved.current = true;
-            form.requestSubmit();
+            // The button that was pressed went away while the question was open.
+            if (!yes || (submitter !== null && !form.contains(submitter))) return;
+            approved.current = asked;
+            // Dispatched at once, or not at all when the browser's validation
+            // stops it; either way the approval ends here.
+            try {
+              form.requestSubmit(submitter);
+            } finally {
+              approved.current = null;
+            }
           });
         }}
       >

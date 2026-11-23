@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
@@ -158,8 +158,130 @@ describe("ActionForm that asks first", () => {
   });
 });
 
+describe("ActionForm's yes", () => {
+  test("is spent when the browser's validation stops the submission it was given for", async () => {
+    const { action } = recording();
+    render(
+      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+        <input aria-label="reason" name="reason" required defaultValue="typo" />
+        <ActionButton>Delete</ActionButton>
+      </ActionForm>,
+    );
+    const reason = screen.getByRole("textbox", { name: "reason" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByRole("dialog");
+    fireEvent.change(reason, { target: { value: "" } });
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+    expect(action).not.toHaveBeenCalled();
+
+    fireEvent.change(reason, { target: { value: "typo" } });
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  test("is spent when the screen's own check stops the submission it was given for", async () => {
+    const { action } = recording();
+    let refuse = false;
+    render(
+      <ActionForm
+        action={action}
+        confirm={asked()}
+        errors={ro.errors}
+        onSubmit={(event) => {
+          if (refuse) event.preventDefault();
+        }}
+      >
+        <ActionButton>Delete</ActionButton>
+      </ActionForm>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByRole("dialog");
+    refuse = true;
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+    expect(action).not.toHaveBeenCalled();
+
+    refuse = false;
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  test("covers only the data it was asked about: a form changed meanwhile asks again", async () => {
+    const { action, sent } = recording();
+    render(
+      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+        <input aria-label="who" name="who" defaultValue="Ana" />
+        <ActionButton>Delete</ActionButton>
+      </ActionForm>,
+    );
+    const who = screen.getByRole("textbox", { name: "who" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByRole("dialog");
+    fireEvent.change(who, { target: { value: "Ion" } });
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(action).not.toHaveBeenCalled();
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+    await vi.waitFor(() => expect(sent).toEqual([{ who: ["Ion"] }]));
+  });
+
+  test("sends the button that was pressed", async () => {
+    const { action, sent } = recording();
+    render(
+      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+        <ActionButton name="status" value="finished">
+          Finish
+        </ActionButton>
+        <ActionButton name="status" value="archived">
+          Archive
+        </ActionButton>
+      </ActionForm>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+
+    await vi.waitFor(() => expect(sent).toEqual([{ status: ["archived"] }]));
+  });
+
+  test("sends nothing when the pressed button went away while asking, and asks the next time", async () => {
+    const { action } = recording();
+    const form = (archive: boolean) => (
+      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+        {archive ? (
+          <ActionButton name="status" value="archived">
+            Archive
+          </ActionButton>
+        ) : null}
+        <ActionButton>Other</ActionButton>
+      </ActionForm>
+    );
+    const { rerender } = render(form(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await screen.findByRole("dialog");
+    rerender(form(false));
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+    expect(action).not.toHaveBeenCalled();
+
+    rerender(form(true));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(action).not.toHaveBeenCalled();
+  });
+});
+
 describe("ActionForm that does not ask", () => {
-  test("is not held back before hydration: React sends a queued submission once hydrated", () => {
+  test("is not disabled in the server's markup, so a submission made before hydration is queued", () => {
     const html = renderToString(
       <ActionForm action={recording().action} errors={dict.errors}>
         <ActionButton>Save</ActionButton>
