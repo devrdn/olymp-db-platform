@@ -3,13 +3,11 @@ package api
 import (
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/i18n"
 	"github.com/devrdn/olymp-db-platform/backend/internal/showcase"
@@ -21,7 +19,6 @@ const (
 	// hundred browsers behind one address. The database is protected by
 	// showcase.Service's minute of cache; this protects the API.
 	PublicReadsPerMinute = 120
-	publicWindow         = time.Minute
 	// maxLangLength bounds the stated language preference (CLAUDE.md rule 2):
 	// it is matched against every translation on the list, on a page that needs
 	// no sign-in. A well-formed BCP 47 tag with language, script, region and
@@ -29,21 +26,25 @@ const (
 	maxLangLength = 35
 )
 
+// publicReads is spent before any database work.
+var publicReads = httpx.PerAddress("public:ip", PublicReadsPerMinute, time.Minute, codePublicTooOften,
+	"The landing page is being asked for too often; wait before asking again")
+
 // PublicHandler serves what a visitor with no session may read: the
 // installation's numbers and its recent contests.
 type PublicHandler struct {
 	service       *showcase.Service
-	limiter       *auth.Limiter
+	budgets       budgets
 	log           *slog.Logger
 	defaultLocale string
 }
 
 // NewPublicHandler returns the handler.
-func NewPublicHandler(service *showcase.Service, limiter *auth.Limiter, log *slog.Logger, defaultLocale string) *PublicHandler {
+func NewPublicHandler(service *showcase.Service, limiter httpx.Counter, log *slog.Logger, defaultLocale string) *PublicHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &PublicHandler{service: service, limiter: limiter, log: log, defaultLocale: defaultLocale}
+	return &PublicHandler{service: service, budgets: newBudgets(limiter, log), log: log, defaultLocale: defaultLocale}
 }
 
 // Mount registers the two reads a visitor without a session may make, under
@@ -61,9 +62,7 @@ type publicNumbersResponse struct {
 }
 
 func (h *PublicHandler) stats(w http.ResponseWriter, r *http.Request) {
-	// Before any database work; a refused caller still spends its budget
-	// (CLAUDE.md rule 13).
-	if !h.admit(w, r) {
+	if !h.budgets.spend(w, r, publicReads.Of(r)) {
 		return
 	}
 	numbers, err := h.service.Numbers(r.Context())
@@ -103,7 +102,7 @@ type publicContestsResponse struct {
 }
 
 func (h *PublicHandler) contests(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r) {
+	if !h.budgets.spend(w, r, publicReads.Of(r)) {
 		return
 	}
 	list, err := h.service.Recent(r.Context(), visitorLang(r, h.defaultLocale))
@@ -142,22 +141,6 @@ func visitorLang(r *http.Request, fallback string) string {
 		}
 	}
 	return fallback
-}
-
-func (h *PublicHandler) admit(w http.ResponseWriter, r *http.Request) bool {
-	allowed, err := h.limiter.Allow(r.Context(), "public:ip:"+addressKey(r), PublicReadsPerMinute, publicWindow)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the public read rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(publicWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codePublicTooOften,
-			"The landing page is being asked for too often; wait before asking again")
-		return false
-	}
-	return true
 }
 
 // fail answers a failed read. showcase refuses nothing, so the only cases are

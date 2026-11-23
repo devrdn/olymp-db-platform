@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,20 +28,29 @@ const (
 	registrationEmailWindow = time.Hour
 )
 
+const tooManyRegistrations = "Too many registrations from this address or for this email; wait before trying again"
+
+var (
+	registrationsByAddress = httpx.PerAddress("registration:ip", RegistrationsPerAddress, registrationAddressWindow,
+		codeTooManyAttempts, tooManyRegistrations)
+	registrationsByEmail = httpx.PerTypedKey("registration:email", RegistrationsPerEmail, registrationEmailWindow,
+		codeTooManyAttempts, tooManyRegistrations)
+)
+
 const eventRegistrationIDParam = "registrationID"
 
 // RegistrationsHandler serves the event's public registration form and the
 // organizers' list with its arrival mark.
 type RegistrationsHandler struct {
 	service  *registrations.Service
-	limiter  *auth.Limiter
+	budgets  budgets
 	mw       *auth.Middleware
 	log      *slog.Logger
 	formOpen bool
 }
 
-func NewRegistrationsHandler(service *registrations.Service, limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger) *RegistrationsHandler {
-	return &RegistrationsHandler{service: service, limiter: limiter, mw: mw, log: log}
+func NewRegistrationsHandler(service *registrations.Service, limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger) *RegistrationsHandler {
+	return &RegistrationsHandler{service: service, budgets: newBudgets(limiter, log), mw: mw, log: log}
 }
 
 // WithPublicForm mounts the public form; without it only the organizers'
@@ -104,7 +112,7 @@ type registerExistingResponse struct {
 func (h *RegistrationsHandler) register(w http.ResponseWriter, r *http.Request) {
 	// The address before the body is even read, and the email, an unbounded
 	// key, only for a caller the address admitted (CLAUDE.md rule 5).
-	if !h.admit(w, r, "registration:ip:"+addressKey(r), RegistrationsPerAddress, registrationAddressWindow) {
+	if !h.budgets.spend(w, r, registrationsByAddress.Of(r)) {
 		return
 	}
 	var req registerRequest
@@ -116,7 +124,7 @@ func (h *RegistrationsHandler) register(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, r, err)
 		return
 	}
-	if !h.admit(w, r, "registration:email:"+applicant.EmailKey, RegistrationsPerEmail, registrationEmailWindow) {
+	if !h.budgets.spend(w, r, registrationsByEmail.Of(applicant.EmailKey)) {
 		return
 	}
 
@@ -226,22 +234,6 @@ func (h *RegistrationsHandler) checkIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, toRegistrationResponse(updated))
-}
-
-func (h *RegistrationsHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int, window time.Duration) bool {
-	allowed, err := h.limiter.Allow(r.Context(), subject, limit, window)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the registration rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
-			"Too many registrations from this address or for this email; wait before trying again")
-		return false
-	}
-	return true
 }
 
 func (h *RegistrationsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {

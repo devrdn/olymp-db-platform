@@ -88,6 +88,28 @@ func joined(tables ...errorTable) errorTable {
 	return all
 }
 
+// budgetErrors answers a request budget whose counter could not be kept:
+// ours, so the cause goes to the log only. A spent budget is answered by
+// answerBudgetError from its own declaration.
+var budgetErrors = errorTable{
+	{err: httpx.ErrBudgetUnavailable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
+		message: "Internal server error",
+		logAs:   "a request budget could not be counted"},
+}
+
+// answerBudgetError answers what httpx.Budgets.Charge returns, wherever a
+// budget is charged: a spent budget as 429 under the code and text it was
+// declared with and Retry-After its window, anything else from budgetErrors.
+// TestEveryBudgetErrorHasItsAnswer walks both.
+func answerBudgetError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) bool {
+	var spent *httpx.Refusal
+	if errors.As(err, &spent) {
+		return errorTable{{err: httpx.ErrBudgetSpent, status: http.StatusTooManyRequests,
+			code: spent.Code(), message: spent.Message(), retryAfter: spent.RetryAfter()}}.answer(w, r, log, err)
+	}
+	return budgetErrors.answer(w, r, log, err)
+}
+
 // standingErrors answers the participation gate's refusals
 // (contests.Gate.StandingOf), which the console, play screen, events channel
 // and answer route all meet. Composed into participationErrors and

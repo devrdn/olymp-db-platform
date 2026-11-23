@@ -3,7 +3,6 @@ package api
 import (
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,24 +24,34 @@ const (
 	LeaderboardPublicPerMinute = 120
 	// leaderboardParticipantPerMinute is per account.
 	leaderboardParticipantPerMinute = 60
-	leaderboardWindow               = time.Minute
 )
+
+// Both budgets are spent before the identifier is parsed, so nothing below
+// reads the database for free.
+var (
+	publicLeaderboardReads = httpx.PerAddress("leaderboard:ip", LeaderboardPublicPerMinute, time.Minute,
+		codeLeaderboardTooOften, leaderboardTooOften)
+	participantLeaderboardReads = httpx.PerKey("leaderboard:user", leaderboardParticipantPerMinute, time.Minute,
+		codeLeaderboardTooOften, leaderboardTooOften)
+)
+
+const leaderboardTooOften = "The leaderboard is being asked for too often; wait before asking again"
 
 // LeaderboardHandler serves the contest's table to its three audiences.
 type LeaderboardHandler struct {
 	service       *leaderboard.Service
-	limiter       *auth.Limiter
+	budgets       budgets
 	mw            *auth.Middleware
 	log           *slog.Logger
 	defaultLocale string
 }
 
 // NewLeaderboardHandler returns the handler.
-func NewLeaderboardHandler(service *leaderboard.Service, limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *LeaderboardHandler {
+func NewLeaderboardHandler(service *leaderboard.Service, limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *LeaderboardHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &LeaderboardHandler{service: service, limiter: limiter, mw: mw, log: log, defaultLocale: defaultLocale}
+	return &LeaderboardHandler{service: service, budgets: newBudgets(limiter, log), mw: mw, log: log, defaultLocale: defaultLocale}
 }
 
 // Mount registers the routes. The public table needs no authentication: the
@@ -117,9 +126,7 @@ type leaderboardResponse struct {
 }
 
 func (h *LeaderboardHandler) public(w http.ResponseWriter, r *http.Request) {
-	// Before the identifier is parsed: a refused caller still spends its
-	// budget, and nothing below reads the database for free.
-	if !h.admit(w, r, "leaderboard:ip:"+addressKey(r), LeaderboardPublicPerMinute) {
+	if !h.budgets.spend(w, r, publicLeaderboardReads.Of(r)) {
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
@@ -137,10 +144,10 @@ func (h *LeaderboardHandler) public(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LeaderboardHandler) participant(w http.ResponseWriter, r *http.Request) {
-	identity, _ := auth.IdentityFrom(r.Context())
-	if !h.admit(w, r, "leaderboard:user:"+identity.UserID.String(), leaderboardParticipantPerMinute) {
+	if !h.budgets.spend(w, r, ofAccount(r, participantLeaderboardReads)) {
 		return
 	}
+	identity, _ := auth.IdentityFrom(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
 		h.notFound(w, r)
@@ -332,32 +339,6 @@ func prize(row leaderboard.Row) *int {
 	}
 	p := row.Prize
 	return &p
-}
-
-func (h *LeaderboardHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int) bool {
-	allowed, err := h.limiter.Allow(r.Context(), subject, limit, leaderboardWindow)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the leaderboard rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(leaderboardWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeLeaderboardTooOften,
-			"The leaderboard is being asked for too often; wait before asking again")
-		return false
-	}
-	return true
-}
-
-// addressKey is the caller's address as a rate-limit subject (an IPv6 /64 is
-// one caller), or one shared bucket when unreadable, so an unreadable address
-// is no way around the limit.
-func addressKey(r *http.Request) string {
-	if addr := httpx.ClientSubject(r); addr != "" {
-		return addr
-	}
-	return "unknown"
 }
 
 // noIndex keeps a table of names out of search engines.

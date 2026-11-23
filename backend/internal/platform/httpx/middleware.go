@@ -1,7 +1,8 @@
 // Package httpx provides the HTTP building blocks shared by every route:
 // request correlation, panic recovery, access logging, JSON responses, the
-// Origin check and the one trust boundary for forwarded headers. It imports
-// no domain package.
+// Origin check, the one trust boundary for forwarded headers, and request
+// budgets (Budgets), the per-address and per-key rate limits charged before a
+// route's expensive step. It imports no domain package.
 package httpx
 
 import (

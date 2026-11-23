@@ -18,31 +18,32 @@ import (
 // ArchiveReadsPerMinute is one account's budget for both archive reads. The
 // archive does not change from one minute to the next, so a person browsing
 // it never needs more.
-const (
-	ArchiveReadsPerMinute = 60
-	archiveWindow         = time.Minute
-)
+const ArchiveReadsPerMinute = 60
+
+// archiveReads is charged before any parsing or storage read.
+var archiveReads = httpx.PerKey("archive:user", ArchiveReadsPerMinute, time.Minute, codeArchiveTooOften,
+	"The archive is being asked for too often; wait before asking again")
 
 // ArchiveHandler serves the archive of finished contests to signed-in
 // readers. Results are not here: they stay on the leaderboard route.
 type ArchiveHandler struct {
 	service       *archive.Service
-	limiter       *auth.Limiter
+	budgets       budgets
 	mw            *auth.Middleware
 	log           *slog.Logger
 	defaultLocale string
 }
 
 // NewArchiveHandler returns the handler.
-func NewArchiveHandler(service *archive.Service, limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ArchiveHandler {
+func NewArchiveHandler(service *archive.Service, limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ArchiveHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ArchiveHandler{service: service, limiter: limiter, mw: mw, log: log, defaultLocale: defaultLocale}
+	return &ArchiveHandler{service: service, budgets: newBudgets(limiter, log), mw: mw, log: log, defaultLocale: defaultLocale}
 }
 
 // Mount registers the routes. The gate runs before authentication and the
-// limiter, so while the archive is off every request to it, signed in or
+// budget, so while the archive is off every request to it, signed in or
 // not, whatever the method or the identifier, meets the router's own 404 and
 // spends nothing.
 func (h *ArchiveHandler) Mount(r chi.Router) {
@@ -114,7 +115,7 @@ func (h *ArchiveHandler) gate(next http.Handler) http.Handler {
 }
 
 func (h *ArchiveHandler) list(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r) {
+	if !h.budgets.spend(w, r, ofAccount(r, archiveReads)) {
 		return
 	}
 	query := r.URL.Query()
@@ -139,7 +140,7 @@ func (h *ArchiveHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ArchiveHandler) contest(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r) {
+	if !h.budgets.spend(w, r, ofAccount(r, archiveReads)) {
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
@@ -188,25 +189,6 @@ func toArchiveTasks(t *archive.Tasks) *archiveTasksResponse {
 		})
 	}
 	return out
-}
-
-// admit charges the account before any parsing or storage read, and a
-// refusal is charged like a success.
-func (h *ArchiveHandler) admit(w http.ResponseWriter, r *http.Request) bool {
-	identity, _ := auth.IdentityFrom(r.Context())
-	allowed, err := h.limiter.Allow(r.Context(), "archive:user:"+identity.UserID.String(), ArchiveReadsPerMinute, archiveWindow)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the archive rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(archiveWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeArchiveTooOften,
-			"The archive is being asked for too often; wait before asking again")
-		return false
-	}
-	return true
 }
 
 // fail answers a switched-off archive and a contest outside it with the

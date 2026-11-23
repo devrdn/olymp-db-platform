@@ -4,13 +4,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/password"
 	"github.com/devrdn/olymp-db-platform/backend/internal/recovery"
@@ -31,6 +29,17 @@ const (
 	recoveryAccountWindow = time.Hour
 )
 
+const tooManyRecoveries = "Too many password recovery attempts from this address or for this account; wait before trying again"
+
+var (
+	forgotsByAddress = httpx.PerAddress("password_forgot:ip", RecoveriesPerAddress, recoveryAddressWindow,
+		codeTooManyAttempts, tooManyRecoveries)
+	forgotsByAccount = httpx.PerTypedKey("password_forgot:account", RecoveriesPerAccount, recoveryAccountWindow,
+		codeTooManyAttempts, tooManyRecoveries)
+	resetsByAddress = httpx.PerAddress("password_reset:ip", RecoveriesPerAddress, recoveryAddressWindow,
+		codeTooManyAttempts, tooManyRecoveries)
+)
+
 // recoveryBodyBytes bounds a recovery body as it arrives: the largest field
 // is a password, at most password.MaxLength bytes even escaped as \u00XX.
 const recoveryBodyBytes = 8 << 10
@@ -40,12 +49,12 @@ const recoveryBodyBytes = 8 << 10
 // session, and the reset does not open one.
 type RecoveryHandler struct {
 	recoveries *recovery.Service
-	limiter    *auth.Limiter
+	budgets    budgets
 	log        *slog.Logger
 }
 
-func NewRecoveryHandler(recoveries *recovery.Service, limiter *auth.Limiter, log *slog.Logger) *RecoveryHandler {
-	return &RecoveryHandler{recoveries: recoveries, limiter: limiter, log: log}
+func NewRecoveryHandler(recoveries *recovery.Service, limiter httpx.Counter, log *slog.Logger) *RecoveryHandler {
+	return &RecoveryHandler{recoveries: recoveries, budgets: newBudgets(limiter, log), log: log}
 }
 
 // Mount registers the routes under /public/ only while mail is on, whatever
@@ -84,7 +93,7 @@ type forgotResponse struct {
 // the answer, so neither its time nor a failure tells whether an account was
 // reached.
 func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r, "password_forgot:ip:"+addressKey(r), RecoveriesPerAddress, recoveryAddressWindow) {
+	if !h.budgets.spend(w, r, forgotsByAddress.Of(r)) {
 		return
 	}
 	var req forgotRequest
@@ -96,12 +105,12 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 	if !withinBounds(w, r, fieldBound{"login", typed, users.MaxEmailLength}) {
 		return
 	}
-	if !h.admit(w, r, "password_forgot:account:"+typed, RecoveriesPerAccount, recoveryAccountWindow) {
+	if !h.budgets.spend(w, r, forgotsByAccount.Of(typed)) {
 		return
 	}
 
 	if _, err := h.recoveries.Submit(r.Context(), recovery.RequestCommand{
-		LoginOrEmail: req.Login, Lang: readerMailLanguage(r), Sender: addressKey(r),
+		LoginOrEmail: req.Login, Lang: readerMailLanguage(r), Sender: httpx.ClientSubject(r),
 	}); err != nil {
 		h.fail(w, r, err)
 		return
@@ -112,7 +121,7 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 // reset spends the address before the body is read and so before the
 // password hash, which runs on whatever an unauthenticated caller sends.
 func (h *RecoveryHandler) reset(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r, "password_reset:ip:"+addressKey(r), RecoveriesPerAddress, recoveryAddressWindow) {
+	if !h.budgets.spend(w, r, resetsByAddress.Of(r)) {
 		return
 	}
 	var req linkResetRequest
@@ -131,22 +140,6 @@ func (h *RecoveryHandler) reset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *RecoveryHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int, window time.Duration) bool {
-	allowed, err := h.limiter.Allow(r.Context(), subject, limit, window)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the password recovery rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
-			"Too many password recovery attempts from this address or for this account; wait before trying again")
-		return false
-	}
-	return true
 }
 
 // recoveryAnswers is what forgot and the reset answer from: the budgets'

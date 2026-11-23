@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,6 +40,11 @@ const ProfileReadsPerMinute = 120
 
 const profileWindow = time.Minute
 
+// profileReads is spent before anything else, keyed by account only, so the
+// key space is bounded (CLAUDE.md rule 5).
+var profileReads = httpx.PerKey("profile:user", ProfileReadsPerMinute, profileWindow, codeProfileTooOften,
+	"Too many profile reads this minute; wait before asking again")
+
 // ProfileWatch is the slice of monitor.WatchService these routes need: the same
 // reads staff make of a registration, with a different admission and a narrower
 // response.
@@ -50,17 +54,12 @@ type ProfileWatch interface {
 	Workspace(ctx context.Context, contest, registration uuid.UUID) (monitor.Workspace, error)
 }
 
-// ProfileLimiter is the slice of auth.Limiter the read budget needs.
-type ProfileLimiter interface {
-	Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error)
-}
-
 // ProfileHandler serves a participant's own profile.
 type ProfileHandler struct {
 	profile *profile.Service
 	watch   ProfileWatch
 	history QueryLogExport
-	limiter ProfileLimiter
+	budgets budgets
 	mw      *auth.Middleware
 	log     *slog.Logger
 	// defaultLocale answers when neither the request nor the contest decides
@@ -76,11 +75,11 @@ type ProfileHandler struct {
 
 // NewProfileHandler returns the handler.
 func NewProfileHandler(service *profile.Service, watch ProfileWatch, history QueryLogExport,
-	limiter ProfileLimiter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ProfileHandler {
+	limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ProfileHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ProfileHandler{profile: service, watch: watch, history: history, limiter: limiter,
+	return &ProfileHandler{profile: service, watch: watch, history: history, budgets: newBudgets(limiter, log),
 		mw: mw, log: log, defaultLocale: defaultLocale,
 		exports: NewExportGate(), exportSlots: NewExportSlots(0)}
 }
@@ -106,7 +105,7 @@ func (h *ProfileHandler) WithExportSlots(slots *ExportSlots) *ProfileHandler {
 // Mount registers the routes.
 func (h *ProfileHandler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
-		r.Use(h.mw.Authenticate, h.budget)
+		r.Use(h.mw.Authenticate, h.budgets.perAccount(profileReads))
 		r.Get("/me/summary", h.summary)
 		r.Get("/me/contests", h.contests)
 		one := "/me/contests/{" + contestIDParam + "}"
@@ -117,29 +116,6 @@ func (h *ProfileHandler) Mount(r chi.Router) {
 		// A separate path rather than ?format=, as for the play screen's
 		// download.
 		r.Get(one+"/log.csv", h.logCSV)
-	})
-}
-
-// budget spends one read of the caller's budget before anything else, refusals
-// included (CLAUDE.md rule 13). Keyed by account only, so the key space is
-// bounded (rule 5).
-func (h *ProfileHandler) budget(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, _ := auth.IdentityFrom(r.Context())
-		allowed, err := h.limiter.Allow(r.Context(), "profile:user:"+identity.UserID.String(),
-			ProfileReadsPerMinute, profileWindow)
-		if err != nil {
-			h.log.ErrorContext(r.Context(), "could not check the profile read budget", "error", err)
-			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-			return
-		}
-		if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(profileWindow/time.Second)))
-			httpx.Error(w, r, http.StatusTooManyRequests, codeProfileTooOften,
-				"Too many profile reads this minute; wait before asking again")
-			return
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

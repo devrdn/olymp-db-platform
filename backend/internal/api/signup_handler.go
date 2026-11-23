@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +35,19 @@ const (
 	confirmEmailWindow = time.Hour
 )
 
+const tooManySignups = "Too many sign-up attempts from this address or for this email; wait before trying again"
+
+var (
+	signupsByAddress = httpx.PerAddress("signup:ip", SignupsPerAddress, signupAddressWindow,
+		codeTooManyAttempts, tooManySignups)
+	confirmsByAddress = httpx.PerAddress("signup_confirm:ip", SignupsPerAddress, signupAddressWindow,
+		codeTooManyAttempts, tooManySignups)
+	confirmsByEmail = httpx.PerTypedKey("signup_confirm:email", ConfirmsPerEmail, confirmEmailWindow,
+		codeTooManyAttempts, tooManySignups)
+	resendsByAddress = httpx.PerAddress("signup_resend:ip", SignupsPerAddress, signupAddressWindow,
+		codeTooManyAttempts, tooManySignups)
+)
+
 // signupBodyBytes bounds a sign-up body as it arrives. The password is at
 // most password.MaxLength bytes even escaped as \u00XX; the other fields
 // refuse control characters, so a legitimate body fits with room to spare.
@@ -51,14 +63,14 @@ var signupTokenLength = base64.RawURLEncoding.EncodedLen(signup.TokenBytes)
 type SignupHandler struct {
 	signups *signup.Service
 	auth    *auth.Service
-	limiter *auth.Limiter
+	budgets budgets
 	mw      *auth.Middleware
 	cookies auth.CookieWriter
 	log     *slog.Logger
 }
 
-func NewSignupHandler(signups *signup.Service, authService *auth.Service, limiter *auth.Limiter, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *SignupHandler {
-	return &SignupHandler{signups: signups, auth: authService, limiter: limiter, mw: mw, cookies: cookies, log: log}
+func NewSignupHandler(signups *signup.Service, authService *auth.Service, limiter httpx.Counter, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *SignupHandler {
+	return &SignupHandler{signups: signups, auth: authService, budgets: newBudgets(limiter, log), mw: mw, cookies: cookies, log: log}
 }
 
 // Mount registers the routes under /public/, which needs no session, only
@@ -106,7 +118,7 @@ type signupConfirmedResponse struct {
 // hash; the mail budgets are spent by the service once the form is known to
 // be one it would mail for.
 func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r, "signup:ip:"+addressKey(r), SignupsPerAddress, signupAddressWindow) {
+	if !h.budgets.spend(w, r, signupsByAddress.Of(r)) {
 		return
 	}
 	var req signupStartRequest
@@ -125,7 +137,7 @@ func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 
 	started, err := h.signups.Start(r.Context(), signup.StartCommand{
 		FullName: req.FullName, Login: req.Login, Email: req.Email, Password: req.Password,
-		Lang: readerMailLanguage(r), Sender: addressKey(r),
+		Lang: readerMailLanguage(r), Sender: httpx.ClientSubject(r),
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -138,7 +150,7 @@ func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 // confirm makes the account and signs it in. SignInAs does not throttle, so
 // both budgets are spent before the code is checked.
 func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r, "signup_confirm:ip:"+addressKey(r), SignupsPerAddress, signupAddressWindow) {
+	if !h.budgets.spend(w, r, confirmsByAddress.Of(r)) {
 		return
 	}
 	var req signupConfirmRequest
@@ -152,7 +164,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 	) {
 		return
 	}
-	if !h.admit(w, r, "signup_confirm:email:"+email, ConfirmsPerEmail, confirmEmailWindow) {
+	if !h.budgets.spend(w, r, confirmsByEmail.Of(email)) {
 		return
 	}
 
@@ -183,7 +195,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SignupHandler) resend(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r, "signup_resend:ip:"+addressKey(r), SignupsPerAddress, signupAddressWindow) {
+	if !h.budgets.spend(w, r, resendsByAddress.Of(r)) {
 		return
 	}
 	var req signupResendRequest
@@ -197,7 +209,7 @@ func (h *SignupHandler) resend(w http.ResponseWriter, r *http.Request) {
 
 	token := h.signupToken(r)
 	if err := h.signups.Resend(r.Context(), signup.ResendCommand{
-		Email: req.Email, Token: token, Lang: readerMailLanguage(r), Sender: addressKey(r),
+		Email: req.Email, Token: token, Lang: readerMailLanguage(r), Sender: httpx.ClientSubject(r),
 	}); err != nil {
 		h.fail(w, r, err)
 		return
@@ -219,8 +231,8 @@ func (h *SignupHandler) signupToken(r *http.Request) string {
 	return cookie.Value
 }
 
-// signupEmail is the address as the service keys a sign-up, and so as the
-// limiter does.
+// signupEmail is the address as the service keys a sign-up, and so as its
+// budget does.
 func signupEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
@@ -262,22 +274,6 @@ func readerMailLanguage(r *http.Request) string {
 	// Match answers its fallback when no preference is available; the empty
 	// entry is that fallback, so nothing preferred means "".
 	return i18n.Match(preferred, append(available, ""), "")
-}
-
-func (h *SignupHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int, window time.Duration) bool {
-	allowed, err := h.limiter.Allow(r.Context(), subject, limit, window)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the sign-up rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(window/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
-			"Too many sign-up attempts from this address or for this email; wait before trying again")
-		return false
-	}
-	return true
 }
 
 // signupAnswers is what Start and Resend answer from.

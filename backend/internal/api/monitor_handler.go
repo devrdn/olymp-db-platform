@@ -27,12 +27,11 @@ import (
 // that order, so only permitted accounts create budget keys. A registration
 // from another contest and one that does not exist are the same 404.
 
-// monitorReadsPerMinute is one organiser's budget across every route here. A
-// screen polls feed and table every five seconds (24 a minute); 240 allows a
-// few open screens, not a script walking the journals.
-const monitorReadsPerMinute = 240
-
-const monitorWindow = time.Minute
+// monitorReads is one organiser's budget across every route here, spent
+// before anything else. A screen polls feed and table every five seconds (24
+// a minute); 240 allows a few open screens, not a script walking the journals.
+var monitorReads = httpx.PerKey("monitor:user", 240, time.Minute, codeMonitorTooOften,
+	"Too many monitoring reads this minute; wait before asking again")
 
 // monitorTimeLayout keeps milliseconds because the feed orders events within
 // one second.
@@ -59,15 +58,10 @@ type MonitorReader interface {
 	RecordExport(ctx context.Context, viewer, contest, registration uuid.UUID) error
 }
 
-// MonitorLimiter is the slice of auth.Limiter the read budget needs.
-type MonitorLimiter interface {
-	Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error)
-}
-
 // MonitorHandler serves the organiser's monitoring routes.
 type MonitorHandler struct {
 	watch   MonitorReader
-	limiter MonitorLimiter
+	budgets budgets
 	mw      *auth.Middleware
 	log     *slog.Logger
 	// exports keeps one account to one CSV download at a time. Not the gate the
@@ -83,8 +77,8 @@ type MonitorHandler struct {
 }
 
 // NewMonitorHandler returns the handler.
-func NewMonitorHandler(watch MonitorReader, limiter MonitorLimiter, mw *auth.Middleware, log *slog.Logger) *MonitorHandler {
-	return &MonitorHandler{watch: watch, limiter: limiter, mw: mw, log: log,
+func NewMonitorHandler(watch MonitorReader, limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger) *MonitorHandler {
+	return &MonitorHandler{watch: watch, budgets: newBudgets(limiter, log), mw: mw, log: log,
 		exportSlots: NewExportSlots(0), exportRows: maxMonitorExportRows, exportBytes: maxMonitorExportBytes}
 }
 
@@ -106,7 +100,7 @@ func (h *MonitorHandler) WithExportLimits(rows, bytes int) *MonitorHandler {
 // Mount registers the routes.
 func (h *MonitorHandler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
-		r.Use(h.mw.Authenticate, h.mw.RequireContestPermission(rbac.PermissionContestMonitor), h.budget)
+		r.Use(h.mw.Authenticate, h.mw.RequireContestPermission(rbac.PermissionContestMonitor), h.budgets.perAccount(monitorReads))
 		base := "/contests/{" + contestIDParam + "}/monitor"
 		one := base + "/participants/{" + registrationIDParam + "}"
 		r.Get(base+"/participants", h.participants)
@@ -119,27 +113,6 @@ func (h *MonitorHandler) Mount(r chi.Router) {
 		r.Get(one+"/workspace/revisions/{"+revisionIDParam+"}", h.revision)
 		r.Get(base+"/export.csv", h.contestCSV)
 		r.Get(one+"/export.csv", h.participantCSV)
-	})
-}
-
-// budget spends one read of the organiser's budget before anything else,
-// refusals included (CLAUDE.md rule 13).
-func (h *MonitorHandler) budget(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, _ := auth.IdentityFrom(r.Context())
-		allowed, err := h.limiter.Allow(r.Context(), "monitor:user:"+identity.UserID.String(), monitorReadsPerMinute, monitorWindow)
-		if err != nil {
-			h.log.ErrorContext(r.Context(), "could not check the monitoring read budget", "error", err)
-			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-			return
-		}
-		if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(monitorWindow/time.Second)))
-			httpx.Error(w, r, http.StatusTooManyRequests, codeMonitorTooOften,
-				"Too many monitoring reads this minute; wait before asking again")
-			return
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

@@ -70,11 +70,6 @@ type QueryLogExport interface {
 	ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) (truncated bool, err error)
 }
 
-// AnswerLimiter is the slice of auth.Limiter the answer endpoint needs.
-type AnswerLimiter interface {
-	Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error)
-}
-
 // AnswerRate is the answer endpoint's own throttle: PerMinute answers per
 // registration.
 //
@@ -83,12 +78,9 @@ type AnswerLimiter interface {
 // registration admission resolved, so the key space is bounded by the roster
 // (CLAUDE.md rule 5), and a non-participant never creates a counter here.
 type AnswerRate struct {
-	Limiter   AnswerLimiter
+	Limiter   httpx.Counter
 	PerMinute int
 }
-
-// answerWindow is the answer throttle's fixed window.
-const answerWindow = time.Minute
 
 // ParticipantHandler serves a participant's own view of, and actions on, a
 // running contest.
@@ -99,9 +91,12 @@ type ParticipantHandler struct {
 	reader    *contests.Reader
 	history   QueryHistory
 	submitter Submitter
-	answers   AnswerRate
-	mw        *auth.Middleware
-	log       *slog.Logger
+	// answers is charged to the registration admission resolved, before the
+	// gate, through answerBudget.
+	answers httpx.KeyBudget
+	budgets budgets
+	mw      *auth.Middleware
+	log     *slog.Logger
 	// defaultLocale answers when neither the request nor the contest decides
 	// the language (§6.2).
 	defaultLocale string
@@ -132,7 +127,10 @@ func NewParticipantHandler(admission Participation, reader *contests.Reader, his
 		defaultLocale = "en"
 	}
 	return &ParticipantHandler{participation: admission, reader: reader, history: history, submitter: submitter,
-		answers: answers, mw: mw, log: log, defaultLocale: defaultLocale,
+		answers: httpx.PerKey("answer:reg", answers.PerMinute, time.Minute, codeAnswerTooOften,
+			"Too many answers this minute; wait before answering again"),
+		budgets: newBudgets(answers.Limiter, log),
+		mw:      mw, log: log, defaultLocale: defaultLocale,
 		exports: NewExportGate(), exportSlots: NewExportSlots(0)}
 }
 
@@ -475,7 +473,7 @@ type answerResponse struct {
 }
 
 func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
-	admission, ok := h.participation.admit(w, r, h.mw, answerBudget{reads: h.participation.Reads, rate: h.answers}, h.fail)
+	admission, ok := h.participation.admit(w, r, h.mw, answerBudget{reads: h.participation.Reads, answers: h.answers, budgets: h.budgets}, h.fail)
 	if !ok {
 		return
 	}
@@ -511,18 +509,15 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// errAnswerTooOften is a registration past its answers for this minute; only
-// the answer route meets it, so its fail answers it.
-var errAnswerTooOften = errors.New("too many answers this minute")
-
 // answerBudget is what an answer spends, both before anything is parsed or
 // graded, since a malformed or refused answer is an attempt too (CLAUDE.md
 // rule 13): a read of the play screen per account before the lookup, then one
 // of the registration's answers before the gate. A counter that cannot be kept
 // refuses: grading unthrottled is what this exists to prevent.
 type answerBudget struct {
-	reads participation.Budget
-	rate  AnswerRate
+	reads   participation.Budget
+	answers httpx.KeyBudget
+	budgets budgets
 }
 
 func (b answerBudget) Charge(ctx context.Context, account uuid.UUID) error {
@@ -530,14 +525,7 @@ func (b answerBudget) Charge(ctx context.Context, account uuid.UUID) error {
 }
 
 func (b answerBudget) ChargeRegistration(ctx context.Context, participant contests.Participant, _ contests.Contest) error {
-	allowed, err := b.rate.Limiter.Allow(ctx, "answer:reg:"+participant.ID.String(), b.rate.PerMinute, answerWindow)
-	if err != nil {
-		return fmt.Errorf("check the answer rate limit: %w", err)
-	}
-	if !allowed {
-		return errAnswerTooOften
-	}
-	return nil
+	return b.budgets.Charge(ctx, b.answers.Of(participant.ID.String()))
 }
 
 // participantContestsErrors is contestsErrors as a participant hears it. A
@@ -550,8 +538,8 @@ var participantContestsErrors = contestsErrors.with(
 )
 
 // fail maps errors from admission, Schema, the reader, Submit, the answer rate
-// and the export slots (CLAUDE.md rule 1). All but the last two are answered
-// from errortable.go.
+// and the export slots (CLAUDE.md rule 1). All but the last are answered from
+// errortable.go.
 func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if h.answered(w, r, err) {
 		return
@@ -559,11 +547,6 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 	switch {
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
-	case errors.Is(err, errAnswerTooOften):
-		// The whole window, since the window's start is not known here.
-		w.Header().Set("Retry-After", strconv.Itoa(int(answerWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeAnswerTooOften,
-			"Too many answers this minute; wait before answering again")
 	default:
 		h.log.ErrorContext(r.Context(), "participant content could not be read", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
@@ -574,7 +557,7 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 // admission's, the console's and the contests', as a participant hears them.
 func (h *ParticipantHandler) answered(w http.ResponseWriter, r *http.Request, err error) bool {
 	return queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) ||
-		participantContestsErrors.answer(w, r, h.log, err)
+		participantContestsErrors.answer(w, r, h.log, err) || answerBudgetError(w, r, h.log, err)
 }
 
 // schemaResponse is the game's shape, as the console's schema panel and

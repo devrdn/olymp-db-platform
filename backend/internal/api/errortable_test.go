@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/clarifications"
@@ -20,6 +21,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/microsoft"
 	"github.com/devrdn/olymp-db-platform/backend/internal/monitor"
 	"github.com/devrdn/olymp-db-platform/backend/internal/participation"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/cache"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryproxy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
@@ -41,12 +43,18 @@ type answered struct {
 
 func answer(t *testing.T, table errorTable, err error) (answered, bool) {
 	t.Helper()
+	return answerBy(t, table.answer, err)
+}
+
+// answerBy is answer for a function that answers like a table.
+func answerBy(t *testing.T, answerer func(http.ResponseWriter, *http.Request, *slog.Logger, error) bool, err error) (answered, bool) {
+	t.Helper()
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelError}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	if !table.answer(rec, req, log, err) {
+	if !answerer(rec, req, log, err) {
 		return answered{}, false
 	}
 	var body struct {
@@ -791,6 +799,42 @@ func TestEveryRecoveryErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
 			}
 		})
+	}
+}
+
+// A spent budget answers under the code and text it was declared with, after
+// its window, so no route can leave Retry-After out; a counter that cannot be
+// kept is ours.
+func TestEveryBudgetErrorHasItsAnswer(t *testing.T) {
+	budgets := httpx.NewBudgets(auth.NewLimiter(cache.NewMemory(10)))
+	reads := httpx.PerKey("test:user", 1, 10*time.Minute, codeArchiveTooOften, "Asked for too often")
+	if err := budgets.Charge(t.Context(), reads.Of("ana")); err != nil {
+		t.Fatal(err)
+	}
+	spent := budgets.Charge(t.Context(), reads.Of("ana"))
+
+	for name, tc := range map[string]struct {
+		err  error
+		want answered
+	}{
+		"spent": {err: spent, want: answered{status: http.StatusTooManyRequests, code: "archive_too_often",
+			message: "Asked for too often", retryAfter: "600"}},
+		"unavailable": {err: fmt.Errorf("%w: cache down", httpx.ErrBudgetUnavailable),
+			want: answered{status: http.StatusInternalServerError, code: "internal_error",
+				message: "Internal server error", logged: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := answerBy(t, answerBudgetError, tc.err)
+			if !ok {
+				t.Fatal("no answer, so it would reach the client as an empty response")
+			}
+			if got != tc.want {
+				t.Errorf("answered %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	if _, ok := answerBy(t, answerBudgetError, errors.New("something else")); ok {
+		t.Error("an error that is not a budget's was answered as one")
 	}
 }
 

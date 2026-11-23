@@ -49,20 +49,25 @@ type SettingsAccounts interface {
 // school's one address, and repeat visits hit the immutable cache.
 const SettingsImageReadsPerMinute = PublicCoverReadsPerMinute
 
+// settingsImageReads is spent before the database, which hands over the whole
+// picture even for a request that ends in 304.
+var settingsImageReads = httpx.PerAddress("settings_image:ip", SettingsImageReadsPerMinute, time.Minute,
+	codePublicTooOften, "The installation's pictures are being asked for too often; wait before asking again")
+
 // SettingsHandler serves what the installation calls itself.
 type SettingsHandler struct {
 	settings SettingsStore
 	mail     SettingsMail
 	accounts SettingsAccounts
-	limiter  *auth.Limiter
+	budgets  budgets
 	mw       *auth.Middleware
 	log      *slog.Logger
 }
 
 // NewSettingsHandler assembles the settings endpoints.
 func NewSettingsHandler(store SettingsStore, mail SettingsMail, accounts SettingsAccounts,
-	limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger) *SettingsHandler {
-	return &SettingsHandler{settings: store, mail: mail, accounts: accounts, limiter: limiter, mw: mw, log: log}
+	limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger) *SettingsHandler {
+	return &SettingsHandler{settings: store, mail: mail, accounts: accounts, budgets: newBudgets(limiter, log), mw: mw, log: log}
 }
 
 // Mount registers the routes under /settings. The read is open because the
@@ -184,18 +189,7 @@ func (h *SettingsHandler) switchArchive(w http.ResponseWriter, r *http.Request) 
 //     lock.
 //   - immutable caching, safe because the address carries the hash.
 func (h *SettingsHandler) image(w http.ResponseWriter, r *http.Request) {
-	// Before the database, which hands over the whole picture even for a
-	// request that ends in 304.
-	allowed, err := h.limiter.Allow(r.Context(), "settings_image:ip:"+addressKey(r), SettingsImageReadsPerMinute, time.Minute)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the installation image rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", "60")
-		httpx.Error(w, r, http.StatusTooManyRequests, codePublicTooOften,
-			"The installation's pictures are being asked for too often; wait before asking again")
+	if !h.budgets.spend(w, r, settingsImageReads.Of(r)) {
 		return
 	}
 

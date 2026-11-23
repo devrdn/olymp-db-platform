@@ -179,10 +179,10 @@ func answerRate(c cache.Cache, perMinute int) api.AnswerRate {
 	return api.AnswerRate{Limiter: auth.NewLimiter(c), PerMinute: perMinute}
 }
 
-// failingLimiter is an answer throttle whose counter cannot be kept.
-type failingLimiter struct{}
+// failingCounter is an answer rate whose counter cannot be kept.
+type failingCounter struct{}
 
-func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, error) {
+func (failingCounter) Allow(context.Context, string, int, time.Duration) (bool, error) {
 	return false, errors.New("cache unreachable")
 }
 
@@ -1613,7 +1613,7 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	submitter := &fakeSubmitter{}
 	router := chi.NewRouter()
 	api.NewParticipantHandler(admission, contests.NewReader(conteststest.NewStories(), conteststest.NewSchemaNotes(), conteststest.NewQuestions(), conteststest.NewAttempts(conteststest.NewSubmissions()), nil),
-		&fakeHistory{}, submitter, api.AnswerRate{Limiter: failingLimiter{}, PerMinute: 6}, mw, log, "en").Mount(router)
+		&fakeHistory{}, submitter, api.AnswerRate{Limiter: failingCounter{}, PerMinute: 6}, mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer",
 		strings.NewReader(`{"value":"x"}`))

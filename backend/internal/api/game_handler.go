@@ -66,13 +66,6 @@ type Games interface {
 	TableDataLimits() (gamefile.Limits, bool)
 }
 
-// UploadLimiter is the slice of auth.Limiter this handler needs. It has no
-// Reset: starting an upload has no success that should forgive earlier
-// attempts.
-type UploadLimiter interface {
-	Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error)
-}
-
 // GameDatabases is the slice of provisioning.Service this handler needs: a
 // contest's existing databases, and dropping one. Separate from Games because
 // another service owns the copies.
@@ -89,10 +82,10 @@ type GameHandler struct {
 	databases GameDatabases
 	mw        *auth.Middleware
 	log       *slog.Logger
-	// limiter paces BeginUpload. It is backed by the shared cache, not an
+	// budgets pace BeginUpload. They are kept in the shared cache, not an
 	// in-process map: an upload spans requests that may reach different
 	// replicas, and the disk it reserves is a cluster-wide resource.
-	limiter UploadLimiter
+	budgets budgets
 	// maxChunkBody bounds one chunk's HTTP body; a field so a test can shrink
 	// it.
 	maxChunkBody int64
@@ -102,10 +95,10 @@ type GameHandler struct {
 }
 
 // NewGameHandler assembles the endpoints.
-func NewGameHandler(games Games, databases GameDatabases, mw *auth.Middleware, log *slog.Logger, limiter UploadLimiter) *GameHandler {
+func NewGameHandler(games Games, databases GameDatabases, mw *auth.Middleware, log *slog.Logger, limiter httpx.Counter) *GameHandler {
 	return &GameHandler{
 		games: games, databases: databases, mw: mw, log: log,
-		limiter: limiter, maxChunkBody: defaultMaxGameChunkBodyBytes,
+		budgets: newBudgets(limiter, log), maxChunkBody: defaultMaxGameChunkBodyBytes,
 		maxTableChunkBody: defaultMaxGameChunkBodyBytes,
 	}
 }
@@ -623,53 +616,22 @@ type beginUploadRequest struct {
 	DeclaredBytes int64 `json:"declared_bytes"`
 }
 
-// These bound allowUploadBegin. An honest browser begins once per file (a
-// reloaded page resumes through CurrentUpload), so a few attempts in ten
-// minutes covers picking the wrong file and starting over.
-const (
-	uploadBeginWindow         = 10 * time.Minute
-	maxUploadBeginsPerAddress = 20
-	maxUploadBeginsPerContest = 8
+// The budgets of starting an upload, which reserves disk and a game_uploads
+// row before any byte arrives; chunks spend neither. An honest browser begins
+// once per file (a reloaded page resumes through CurrentUpload), so a few
+// attempts in ten minutes covers picking the wrong file and starting over.
+// Both keys name something already authenticated and authorised, so neither
+// lets a caller mint counters freely.
+var (
+	uploadBeginsByAddress = httpx.PerAddress("game_upload_begin:ip", 20, 10*time.Minute, codeGameUploadTooOften,
+		"Too many uploads have been started from this address; wait before trying again")
+	uploadBeginsByContest = httpx.PerKey("game_upload_begin:contest", 8, 10*time.Minute, codeGameUploadTooOften,
+		"Too many uploads have been started for this contest; wait before trying again")
 )
 
-// allowUploadBegin paces BeginUpload, which reserves disk and a game_uploads
-// row before any byte arrives. Chunks are never checked here.
-//
-// The address key is checked first (CLAUDE.md rule 5). Both keys here name
-// something already authenticated and authorised, so neither lets a caller mint
-// counters freely.
-func (h *GameHandler) allowUploadBegin(w http.ResponseWriter, r *http.Request, contestID uuid.UUID) bool {
-	ctx := r.Context()
-
-	// The address as a rate-limit subject: an IPv6 /64 is one caller.
-	if addr := httpx.ClientSubject(r); addr != "" {
-		allowed, err := h.limiter.Allow(ctx, "game_upload_begin:ip:"+addr, maxUploadBeginsPerAddress, uploadBeginWindow)
-		if err != nil {
-			h.log.ErrorContext(ctx, "could not check the upload rate limit", "error", err)
-			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-			return false
-		}
-		if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(int(uploadBeginWindow/time.Second)))
-			httpx.Error(w, r, http.StatusTooManyRequests, codeGameUploadTooOften,
-				"Too many uploads have been started from this address; wait before trying again")
-			return false
-		}
-	}
-
-	allowed, err := h.limiter.Allow(ctx, "game_upload_begin:contest:"+contestID.String(), maxUploadBeginsPerContest, uploadBeginWindow)
-	if err != nil {
-		h.log.ErrorContext(ctx, "could not check the upload rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(uploadBeginWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeGameUploadTooOften,
-			"Too many uploads have been started for this contest; wait before trying again")
-		return false
-	}
-	return true
+// spendUploadBegin charges a dump's or a table's start to both budgets.
+func (h *GameHandler) spendUploadBegin(w http.ResponseWriter, r *http.Request, contestID uuid.UUID) bool {
+	return h.budgets.spend(w, r, uploadBeginsByAddress.Of(r), uploadBeginsByContest.Of(contestID.String()))
 }
 
 // beginUpload reserves a new upload for this contest's game. 201: a row now
@@ -679,7 +641,7 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.allowUploadBegin(w, r, contestID) {
+	if !h.spendUploadBegin(w, r, contestID) {
 		return
 	}
 
@@ -1101,7 +1063,7 @@ func (h *GameHandler) beginTableUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.allowUploadBegin(w, r, contestID) {
+	if !h.spendUploadBegin(w, r, contestID) {
 		return
 	}
 

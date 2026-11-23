@@ -505,7 +505,7 @@ func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
 	}
 }
 
-// Copies of allowUploadBegin's unexported budgets.
+// Copies of the upload-begin budgets' limits, which are unexported.
 const (
 	maxUploadBeginsPerAddressInTest = 20
 	maxUploadBeginsPerContestInTest = 8
@@ -515,7 +515,7 @@ const (
 // RemoteAddr), spelled out because these tests are about which key refused.
 const oneOffice = "192.0.2.1:1234"
 
-// beginUploadFrom varies the two keys allowUploadBegin bounds independently, so
+// beginUploadFrom varies the two keys starting an upload is charged to, so
 // a test can tell which one refused.
 func (f *gameFixture) beginUploadFrom(remoteAddr, contestID string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID+"/game/uploads",

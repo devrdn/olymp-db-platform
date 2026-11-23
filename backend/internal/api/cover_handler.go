@@ -36,8 +36,6 @@ const (
 	// behind one address, and repeat visits hit the immutable cache.
 	PublicCoverReadsPerMinute = 300
 
-	coverWindow = time.Minute
-
 	// coverBusyRetry is what an upload that found no decode slot is told to
 	// wait: a slot is held for the decode and the write, which take seconds at
 	// the pixel bound, not for the body's arrival.
@@ -57,6 +55,17 @@ const (
 	maxSizeParamLen = 8
 )
 
+// coverUploads is keyed by account, not address: the caller is a known
+// organiser, and an address key would let one person's mistake block a whole
+// university's staff. It is charged before the body is touched: reading and
+// decoding a photograph only to refuse it is what it prevents.
+var coverUploads = httpx.PerKey("cover_upload:user", CoverUploadsPerMinute, time.Minute, codeCoverTooOften,
+	"This account has uploaded covers too often; wait before trying again")
+
+// publicCoverReads is charged before the database and the volume.
+var publicCoverReads = httpx.PerAddress("cover_read:ip", PublicCoverReadsPerMinute, time.Minute, codePublicTooOften,
+	"Covers are being asked for too often; wait before asking again")
+
 // CoverStore is the slice of the covers service these endpoints need.
 type CoverStore interface {
 	Upload(ctx context.Context, contestID uuid.UUID, actorID uuid.UUID, src io.Reader, attribution string) (covers.Cover, error)
@@ -71,7 +80,7 @@ type CoverStore interface {
 // and the visitor's one read.
 type CoverHandler struct {
 	covers  CoverStore
-	limiter *auth.Limiter
+	budgets budgets
 	mw      *auth.Middleware
 	log     *slog.Logger
 	// decoding holds one token per upload from its parsed form to its answer.
@@ -79,9 +88,9 @@ type CoverHandler struct {
 }
 
 // NewCoverHandler assembles the cover endpoints.
-func NewCoverHandler(store CoverStore, limiter *auth.Limiter, mw *auth.Middleware, log *slog.Logger) *CoverHandler {
+func NewCoverHandler(store CoverStore, limiter httpx.Counter, mw *auth.Middleware, log *slog.Logger) *CoverHandler {
 	return &CoverHandler{
-		covers: store, limiter: limiter, mw: mw, log: log,
+		covers: store, budgets: newBudgets(limiter, log), mw: mw, log: log,
 		decoding: make(chan struct{}, CoverDecodeSlots),
 	}
 }
@@ -130,13 +139,10 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	identity, _ := auth.IdentityFrom(r.Context())
-
-	// Before the body is touched: reading and decoding a photograph only to
-	// refuse it is what this budget prevents.
-	if !h.admitUpload(w, r, identity.UserID) {
+	if !h.budgets.spend(w, r, ofAccount(r, coverUploads)) {
 		return
 	}
+	identity, _ := auth.IdentityFrom(r.Context())
 
 	// The ceiling is on the socket, because a declared length is only a claim
 	// (CLAUDE.md rule 12). This bounds the envelope; covers.Process bounds the
@@ -264,8 +270,7 @@ func (h *CoverHandler) staffFile(w http.ResponseWriter, r *http.Request) {
 // set: the bytes are always a JPEG this process encoded, and a cover is
 // legitimately opened by its own address.
 func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
-	// Before the database and the volume, counting refusals.
-	if !h.admitPublic(w, r) {
+	if !h.budgets.spend(w, r, publicCoverReads.Of(r)) {
 		return
 	}
 	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
@@ -341,34 +346,6 @@ func requestedCoverSize(r *http.Request) int {
 		return -1
 	}
 	return size
-}
-
-// admitUpload spends one upload of the account's budget. Keyed by account, not
-// address: the caller is a known organiser, and an address key would let one
-// person's mistake block a whole university's staff.
-func (h *CoverHandler) admitUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID) bool {
-	return h.admit(w, r, "cover_upload:user:"+userID.String(), CoverUploadsPerMinute, codeCoverTooOften,
-		"This account has uploaded covers too often; wait before trying again")
-}
-
-func (h *CoverHandler) admitPublic(w http.ResponseWriter, r *http.Request) bool {
-	return h.admit(w, r, "cover_read:ip:"+addressKey(r), PublicCoverReadsPerMinute, codePublicTooOften,
-		"Covers are being asked for too often; wait before asking again")
-}
-
-func (h *CoverHandler) admit(w http.ResponseWriter, r *http.Request, subject string, limit int, code httpx.Code, message string) bool {
-	allowed, err := h.limiter.Allow(r.Context(), subject, limit, coverWindow)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not check the cover rate limit", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return false
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(coverWindow/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, code, message)
-		return false
-	}
-	return true
 }
 
 func (h *CoverHandler) notFound(w http.ResponseWriter, r *http.Request) {

@@ -64,7 +64,7 @@ type ExternalSignIn struct {
 	Providers  []SignInProvider
 	Accounts   *federation.Service
 	Auth       *auth.Service
-	Limiter    *auth.Limiter
+	Limiter    httpx.Counter
 	Middleware *auth.Middleware
 	Cookies    auth.CookieWriter
 	Switches   SignInSwitches
@@ -110,21 +110,29 @@ func (h *ExternalSignInHandler) Mount(r chi.Router) {
 			if p.Connector == nil {
 				continue
 			}
-			flow := signInFlow{cfg: h.cfg, provider: p}
+			flow := signInFlow{cfg: h.cfg, provider: p, budgets: newBudgets(h.cfg.Limiter, h.cfg.Log),
+				starts:    httpx.PerAddress(p.ID+"_start:ip", ExternalSignInsPerAddress, externalAddressWindow, codeExternalSignInFailed, tooManySignIns),
+				callbacks: httpx.PerAddress(p.ID+"_callback:ip", ExternalSignInsPerAddress, externalAddressWindow, codeExternalSignInFailed, tooManySignIns),
+			}
 			r.Get("/auth/"+p.ID+"/start", flow.start)
 			r.Get("/auth/"+p.ID+"/callback", flow.callback)
 		}
 	})
 }
 
-// signInFlow is the handler bound to one provider.
+const tooManySignIns = "Too many sign-ins from this address; wait before trying again"
+
+// signInFlow is the handler bound to one provider, with that provider's own
+// budget for each route.
 type signInFlow struct {
-	cfg      ExternalSignIn
-	provider SignInProvider
+	cfg               ExternalSignIn
+	provider          SignInProvider
+	budgets           budgets
+	starts, callbacks httpx.AddressBudget
 }
 
 func (h signInFlow) start(w http.ResponseWriter, r *http.Request) {
-	if !h.admit(w, r, h.provider.ID+"_start:ip:"+addressKey(r)) {
+	if !h.spend(w, r, h.starts) {
 		return
 	}
 	if !h.switchedOn(w, r) {
@@ -144,7 +152,7 @@ func (h signInFlow) start(w http.ResponseWriter, r *http.Request) {
 // every outcome spends it.
 func (h signInFlow) callback(w http.ResponseWriter, r *http.Request) {
 	h.cfg.Cookies.ClearState(w, h.provider.ID)
-	if !h.admit(w, r, h.provider.ID+"_callback:ip:"+addressKey(r)) {
+	if !h.spend(w, r, h.callbacks) {
 		return
 	}
 	if !h.switchedOn(w, r) {
@@ -219,18 +227,19 @@ func (h signInFlow) state(r *http.Request, returned string) (connector.State, er
 	return st, nil
 }
 
-// admit spends the address budget. A refusal, or a limiter that cannot
-// count, sends the browser to the sign-in page.
-func (h signInFlow) admit(w http.ResponseWriter, r *http.Request, subject string) bool {
-	allowed, err := h.cfg.Limiter.Allow(r.Context(), subject, ExternalSignInsPerAddress, externalAddressWindow)
-	if err != nil {
+// spend charges the address to budget. The routes are navigations, so a
+// refusal, or a counter that cannot be kept, sends the browser to the sign-in
+// page as a failed sign-in rather than answering 429.
+func (h signInFlow) spend(w http.ResponseWriter, r *http.Request, budget httpx.AddressBudget) bool {
+	err := h.budgets.Charge(r.Context(), budget.Of(r))
+	if err == nil {
+		return true
+	}
+	if !errors.Is(err, httpx.ErrBudgetSpent) {
 		h.cfg.Log.ErrorContext(r.Context(), "could not check the sign-in rate limit", "provider", h.provider.ID, "error", err)
 	}
-	if !allowed {
-		redirect(w, signInPage(codeExternalSignInFailed))
-		return false
-	}
-	return true
+	redirect(w, signInPage(codeExternalSignInFailed))
+	return false
 }
 
 // switchedOn reads the switches uncached, so a switch-off holds at the next
