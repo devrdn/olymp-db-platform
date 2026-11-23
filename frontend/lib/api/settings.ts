@@ -2,16 +2,6 @@ import { z } from "zod";
 
 import { SETTING_KEYS, type ImageKind } from "./settings-terms";
 
-export {
-  FEEDBACK_URL_MAX,
-  IMAGE_KINDS,
-  MAIL_LANGUAGES,
-  SETTING_KEYS,
-  feedbackHref,
-  imageHref,
-  type ImageKind,
-} from "./settings-terms";
-
 /**
  * The installation's name, contact, feedback address, mail language and images. Settings
  * are rows keyed by dotted strings, so adding one is data rather than a

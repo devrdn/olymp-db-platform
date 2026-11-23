@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-
 import { MATCH_KINDS, QUESTION_KINDS } from "./content-terms";
-
-export { MATCH_KINDS, QUESTION_KINDS, answerable, untranslated } from "./content-terms";
-
 
 /**
  * The wire shapes of what an author writes: the story and the questions.

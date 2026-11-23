@@ -4,10 +4,10 @@ import {
   bulkReplaceRoles,
   bulkResetPassword,
   bulkSetStatus,
-  type AccountStatus,
   type BulkPasswordResetResult,
   type BulkResult,
 } from "@/lib/api/accounts";
+import type { AccountStatus } from "@/lib/api/accounts-terms";
 import { isId } from "@/lib/api/ids";
 import { serverAction, type ActionState, type Revalidation } from "@/lib/api/server";
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { answerable, questionSchema, schemaNotesSchema, storySchema, untranslated } from "./content";
+import { questionSchema, schemaNotesSchema, storySchema } from "./content";
+import { answerable, untranslated } from "./content-terms";
 
 const question = {
   id: "5f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",

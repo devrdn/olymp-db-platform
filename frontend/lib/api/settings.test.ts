@@ -3,14 +3,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import {
-  FEEDBACK_URL_MAX,
-  MAIL_LANGUAGES,
-  SETTING_KEYS,
-  feedbackHref,
-  mailStatusSchema,
-  settingsSchema,
-} from "./settings";
+import { mailStatusSchema, settingsSchema } from "./settings";
+import { FEEDBACK_URL_MAX, MAIL_LANGUAGES, SETTING_KEYS, feedbackHref } from "./settings-terms";
 
 describe("the settings payload", () => {
   test("carries the feedback address under its own name", () => {

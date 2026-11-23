@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-
 import { REGISTRATION_STATUSES } from "./people-terms";
-
-export { removable } from "./people-terms";
-
 
 /** The wire shapes of who runs a contest and who takes part in it. */
 

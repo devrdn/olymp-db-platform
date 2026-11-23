@@ -2,9 +2,6 @@ import { z } from "zod";
 
 import { SQL_MODES } from "./policy-terms";
 
-export { SQL_MODES } from "./policy-terms";
-
-
 /**
  * The wire shape of a contest's SQL access policy, which the game loop turns
  * into GRANTs for a participant's database.

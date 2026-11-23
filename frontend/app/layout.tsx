@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { branding } from "@/lib/api/branding";
-import { imageHref } from "@/lib/api/settings";
+import { imageHref } from "@/lib/api/settings-terms";
 import { AppDictionaryProvider } from "@/lib/i18n/client";
 import { selectApp } from "@/lib/i18n/scopes";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";

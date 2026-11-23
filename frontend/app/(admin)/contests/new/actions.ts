@@ -2,7 +2,8 @@
 
 import { redirect } from "next/navigation";
 
-import { contestSchema, type Enrollment, ENROLLMENTS, enumFromForm, QUESTION_MODES, type QuestionMode, type Timing, TIMINGS } from "@/lib/api/contests";
+import { contestSchema, type Enrollment, enumFromForm, type QuestionMode, type Timing } from "@/lib/api/contests";
+import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "@/lib/api/contests-terms";
 import { serverOutcome, serverRequest, type ActionState } from "@/lib/api/server";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 

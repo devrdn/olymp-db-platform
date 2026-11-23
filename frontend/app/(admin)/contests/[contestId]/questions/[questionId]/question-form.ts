@@ -1,4 +1,5 @@
-import { MATCH_KINDS, QUESTION_KINDS, type MatchKind } from "@/lib/api/content";
+import type { MatchKind } from "@/lib/api/content";
+import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
 
 /**
  * Reads the whole editor form into one request, which the API writes in one

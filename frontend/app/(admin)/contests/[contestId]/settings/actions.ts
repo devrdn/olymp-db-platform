@@ -7,16 +7,17 @@ import {
   type ContestCover,
   contestCoverSchema,
   type Enrollment,
-  ENROLLMENTS,
   enumFromForm,
   graceFromForm,
   icpcPenaltyFromForm,
   prizePlacesFromForm,
   shapeFromForm,
 } from "@/lib/api/contests";
+import { ENROLLMENTS } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard-terms";
-import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
+import { parseTables, type SqlMode } from "@/lib/api/policy";
+import { SQL_MODES } from "@/lib/api/policy-terms";
 import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 import { instantFromWallClock } from "@/lib/format/datetime";
 import { LOCALES, type Locale } from "@/lib/i18n/config";

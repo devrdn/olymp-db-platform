@@ -11,9 +11,6 @@ import {
 } from "./contests-terms";
 import { SQL_MODES } from "./policy-terms";
 
-export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "./contests-terms";
-
-
 /**
  * The wire shapes of the contest itself: its languages, schedule, and the rules
  * about when it may still change. Parsing at the boundary surfaces a contract

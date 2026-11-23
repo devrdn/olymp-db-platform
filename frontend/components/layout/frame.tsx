@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { branding } from "@/lib/api/branding";
-import { imageHref } from "@/lib/api/settings";
+import { imageHref } from "@/lib/api/settings-terms";
 import { homeFor } from "@/lib/auth/destination";
 import { readIdentity } from "@/lib/auth/identity";
 import { fetchIdentity, type CurrentIdentity } from "@/lib/auth/session";

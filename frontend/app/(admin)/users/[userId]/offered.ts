@@ -1,4 +1,4 @@
-import type { AccountStatus } from "@/lib/api/accounts";
+import type { AccountStatus } from "@/lib/api/accounts-terms";
 
 /**
  * What the screen offers for this account. A control that exists only to be

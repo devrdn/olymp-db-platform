@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { forgetBranding } from "@/lib/api/branding";
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
-import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings";
+import { IMAGE_KINDS, SETTING_KEYS, feedbackHref } from "@/lib/api/settings-terms";
 
 export type SettingsState = ActionState;
 

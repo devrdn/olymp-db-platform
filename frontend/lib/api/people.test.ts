@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { importResultSchema, parseLogins, participantSchema, removable } from "./people";
+import { importResultSchema, parseLogins, participantSchema } from "./people";
+import { removable } from "./people-terms";
 
 const participant = (status: string) =>
   participantSchema.parse({

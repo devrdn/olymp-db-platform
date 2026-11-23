@@ -9,7 +9,7 @@ import { Tag } from "@/components/ui/tag";
 import { branding } from "@/lib/api/branding";
 import { profileContestsSchema, profileSummarySchema } from "@/lib/api/profile";
 import { readPage } from "@/lib/api/page-read";
-import { feedbackHref } from "@/lib/api/settings";
+import { feedbackHref } from "@/lib/api/settings-terms";
 import { fetchIdentity } from "@/lib/auth/session";
 import { initials } from "@/lib/format/initials";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
