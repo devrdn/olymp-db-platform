@@ -8,6 +8,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { enrollAction, type EnrollState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * The join control in one register row. Each row owns its state, so one
@@ -33,7 +34,7 @@ export function EnrollButton({ contestId, dict }: { contestId: string; dict: Pic
   // Only this refusal is about the domain. A replacer function, so a `$` in
   // the domain is not read as a pattern.
   const domain = state.code === "contest_trusted_email_required" ? state.domain : undefined;
-  const accepted = domain ? t.trustedDomain.replace("{domain}", () => domain) : null;
+  const accepted = domain ? fill(t.trustedDomain, { domain }) : null;
   // A staff-made account may hold such an address unconfirmed; following a
   // reset link confirms it.
   const confirmByReset = state.code === "contest_trusted_email_required" && state.confirmByReset;

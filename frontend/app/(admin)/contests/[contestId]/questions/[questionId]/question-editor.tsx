@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 import { saveQuestionAction, type QuestionState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * One question in one form with one save, so a partial failure cannot leave
@@ -341,9 +342,7 @@ function ShapeSection({
                (docs/ARCHITECTURE.md §6.1.1); not used for a bonus. */}
             {!penaltyUnused ? (
               <p className="-mt-3 max-w-body text-small text-ink-3">
-                {t.shape.penaltyPreview
-                  .replace("{n}", String(penaltyPerAttempt))
-                  .replace("{points}", String(points))}
+                {fill(t.shape.penaltyPreview, { n: penaltyPerAttempt, points })}
               </p>
             ) : null}
           </>
@@ -545,7 +544,7 @@ function TitleField({
             count >= MAX_TITLE_CHARS ? "text-bad" : "text-ink-3",
           )}
         >
-          {t.titleCounter.replace("{n}", String(count)).replace("{max}", String(MAX_TITLE_CHARS))}
+          {fill(t.titleCounter, { n: count, max: MAX_TITLE_CHARS })}
         </p>
       </div>
     </div>

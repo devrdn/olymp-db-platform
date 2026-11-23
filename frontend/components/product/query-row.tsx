@@ -7,6 +7,7 @@ import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import { cn } from "@/lib/utils";
 
 import { CopyButton, SqlBlock } from "./sql-block";
+import { fill } from "@/lib/i18n/fill";
 
 /** Status colours; running is the one live tone. */
 export const QUERY_TONE: Record<string, string> = {
@@ -76,12 +77,12 @@ export const QueryRow = memo(function QueryRow({
         </span>
         {query.durationMs !== null ? (
           <span className="font-mono text-label text-ink-2 tabular-nums">
-            {labels.durationMs.replace("{n}", String(query.durationMs))}
+            {fill(labels.durationMs, { n: query.durationMs })}
           </span>
         ) : null}
         {query.rowCount !== null ? (
           <span className="font-mono text-label text-ink-2 tabular-nums">
-            {labels.rows.replace("{n}", String(query.rowCount))}
+            {fill(labels.rows, { n: query.rowCount })}
           </span>
         ) : null}
         {address ? (

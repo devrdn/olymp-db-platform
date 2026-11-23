@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { ParticipantsTable, ROSTER_ROW_REM } from "./participants-table";
 import { NO_FLAGS, rosterRow } from "./test-fixtures";
@@ -126,7 +127,7 @@ describe("filters", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: t().filters.flaggedOnly }));
 
     expect(bodyNames()).toEqual(["Ivan Ivanov"]);
-    expect(screen.getByText(t().count.replace("{shown}", "1").replace("{total}", "3"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().count, { shown: "1", total: "3" }))).toBeInTheDocument();
   });
 
   test("by status", async () => {
@@ -153,7 +154,7 @@ describe("filters", () => {
 
 test("says when the table is cut short", () => {
   renderTable({ truncated: true });
-  expect(screen.getByText(dict.workspace.monitor.table.truncated.replace("{n}", "3"))).toBeInTheDocument();
+  expect(screen.getByText(fill(dict.workspace.monitor.table.truncated, { n: "3" }))).toBeInTheDocument();
 });
 
 describe("a long roster", () => {
@@ -249,7 +250,7 @@ describe("a long roster", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: dict.workspace.monitor.table.filters.flaggedOnly }));
 
     const t = dict.workspace.monitor.table;
-    expect(screen.getByText(t.count.replace("{shown}", "200").replace("{total}", String(TOTAL)))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.count, { shown: "200", total: TOTAL }))).toBeInTheDocument();
     expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "201");
     expect(bodyNames().slice(0, 3)).toEqual(["Person 0000", "Person 0010", "Person 0020"]);
     expect(bodyRows().length).toBeLessThanOrEqual(12 + 2 * 8 + 1);

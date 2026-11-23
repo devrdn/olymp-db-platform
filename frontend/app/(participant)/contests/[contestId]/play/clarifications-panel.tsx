@@ -15,6 +15,7 @@ import {
 import { formatTime } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { useClarificationSignal } from "./clarification-signal";
@@ -256,7 +257,7 @@ export function ClarificationsPanel({
               {announcements.map((item) => (
                 <article key={item.id} className="flex flex-col gap-2 border-l-2 border-accent pl-3">
                   <p className="text-small text-ink-3">
-                    {t.postedAt.replace("{time}", formatTime(item.postedAt, { locale }))}
+                    {fill(t.postedAt, { time: formatTime(item.postedAt, { locale }) })}
                   </p>
                   <OrganiserText markdown={item.body} />
                 </article>
@@ -293,8 +294,8 @@ function questionLabels(entries: QuestionEntry[], t: Labels): QuestionLabel[] {
     const title = entry.question.title.trim();
     labels.push({
       id: entry.question.id,
-      option: title ? t.questionOptionTitled.replace("{n}", n).replace("{title}", title) : t.questionOption.replace("{n}", n),
-      about: title ? t.aboutQuestionTitled.replace("{n}", n).replace("{title}", title) : t.aboutQuestion.replace("{n}", n),
+      option: title ? fill(t.questionOptionTitled, { n, title }) : fill(t.questionOption, { n }),
+      about: title ? fill(t.aboutQuestionTitled, { n, title }) : fill(t.aboutQuestion, { n }),
     });
   }
   return labels;
@@ -404,10 +405,10 @@ function AskForm({
         />
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-small text-ink-2">
           <span id={counterId} className="tabular-nums">
-            {t.counter.replace("{n}", String(text.length)).replace("{max}", String(QUESTION_MAX_CHARS))}
+            {fill(t.counter, { n: text.length, max: QUESTION_MAX_CHARS })}
           </span>
           <span className="tabular-nums">
-            {t.open.replace("{n}", String(open)).replace("{max}", String(MAX_OPEN_QUESTIONS))}
+            {fill(t.open, { n: open, max: MAX_OPEN_QUESTIONS })}
           </span>
         </div>
         <p id={hintId} className="text-small text-ink-3">
@@ -462,7 +463,7 @@ function ClarificationItem({
       <div className="flex flex-wrap items-center gap-2">
         {item.mine ? <Tag tone="mute">{t.mine}</Tag> : <Tag tone="live">{t.public}</Tag>}
         {item.mine && answer?.visibility === "public" ? <Tag tone="good">{t.published}</Tag> : null}
-        <span className="text-small text-ink-3">{t.askedAt.replace("{time}", formatTime(item.askedAt, { locale }))}</span>
+        <span className="text-small text-ink-3">{fill(t.askedAt, { time: formatTime(item.askedAt, { locale }) })}</span>
       </div>
       {about ? <p className="text-small text-ink-2">{about}</p> : null}
       <p className="whitespace-pre-wrap break-words text-body text-ink">{item.body}</p>
@@ -471,7 +472,7 @@ function ClarificationItem({
       ) : (
         <div className="flex min-w-0 flex-col gap-1.5 bg-sunk p-3">
           <p className="flex flex-wrap items-center gap-2 text-small text-ink-3">
-            <span>{t.answeredAt.replace("{time}", formatTime(answer.answeredAt, { locale }))}</span>
+            <span>{fill(t.answeredAt, { time: formatTime(answer.answeredAt, { locale }) })}</span>
             {answer.editedAt ? <Tag tone="mute">{t.edited}</Tag> : null}
           </p>
           {answer.declined ? <p className="text-body text-ink">{t.declined}</p> : null}

@@ -22,6 +22,7 @@ import {
   type QuestionListState,
 } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -137,7 +138,7 @@ export function QuestionList({
                       {question.isBonus ? <Tag tone="good">{t.bonus}</Tag> : null}
                       {!answerable(question) ? <Tag tone="warn">{t.noAnswer}</Tag> : null}
                       {missing.length > 0 ? (
-                        <Tag tone="warn">{t.missingText.replace("{n}", String(missing.length))}</Tag>
+                        <Tag tone="warn">{fill(t.missingText, { n: missing.length })}</Tag>
                       ) : null}
                     </div>
                   </td>

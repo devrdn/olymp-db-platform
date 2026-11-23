@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { getDictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import {
   identityHue,
   type Standings,
@@ -329,7 +330,7 @@ describe("the standings", () => {
     const steps = within(screen.getByTestId("podium")).getAllByTestId("podium-step");
     expect(steps.map((step) => step.dataset.tier ?? "")).toEqual(["", "1", ""]);
     expect(within(steps[1]).getByText("alpha")).toBeInTheDocument();
-    expect(within(steps[1]).getByText(t.podiumMore.replace("{count}", "2"))).toBeInTheDocument();
+    expect(within(steps[1]).getByText(fill(t.podiumMore, { count: "2" }))).toBeInTheDocument();
     expect(within(screen.getByTestId("podium")).queryByText("beta")).not.toBeInTheDocument();
   });
 
@@ -352,7 +353,7 @@ describe("the standings", () => {
     const { unmount } = show(standings({ state: "frozen", frozenAt }));
     const time = formatTime(frozenAt, { locale: "en" });
     expect(screen.getByRole("status")).toHaveTextContent(
-      t.frozen.replace("{time}", time),
+      fill(t.frozen, { time }),
     );
     expect(screen.getByRole("status")).toHaveTextContent(t.frozenBody);
     unmount();
@@ -377,7 +378,7 @@ describe("the standings", () => {
 
     show(standings({ truncated: true }));
     expect(
-      screen.getByText(t.truncated.replace("{count}", "4")),
+      screen.getByText(fill(t.truncated, { count: "4" })),
     ).toBeInTheDocument();
   });
 

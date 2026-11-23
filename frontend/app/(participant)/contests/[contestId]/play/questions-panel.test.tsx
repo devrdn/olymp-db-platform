@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import ro from "@/lib/i18n/dictionaries/ro";
+import { fill } from "@/lib/i18n/fill";
 import type { OpenPlayQuestion } from "@/lib/api/play";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
@@ -179,7 +180,7 @@ describe("the questions panel", () => {
     expect(screen.getByRole("textbox")).toBeEnabled();
     expect(within(lockedList()).getAllByRole("listitem")).toHaveLength(1);
     expect(within(lockedList()).getByRole("listitem")).toHaveTextContent(
-      en.participant.play.questions.lockedItem.replace("{n}", "3").replace("{m}", "2"),
+      fill(en.participant.play.questions.lockedItem, { n: "3", m: "2" }),
     );
     expect(refresh.calls).toBe(1);
   });
@@ -228,7 +229,7 @@ describe("the questions panel", () => {
 
     await screen.findByTestId("opened-body");
     expect(within(lockedList()).getByRole("listitem")).toHaveTextContent(
-      en.participant.play.questions.lockedItem.replace("{n}", "7").replace("{m}", "6"),
+      fill(en.participant.play.questions.lockedItem, { n: "7", m: "6" }),
     );
   });
 
@@ -630,7 +631,7 @@ describe("the questions panel, ICPC scoring", () => {
 
     expect(screen.queryByText("10 pts")).not.toBeInTheDocument();
     expect(
-      screen.getByText(en.participant.play.questions.icpcPenalty.replace("{n}", "20")),
+      screen.getByText(fill(en.participant.play.questions.icpcPenalty, { n: "20" })),
     ).toBeInTheDocument();
   });
 
@@ -638,7 +639,7 @@ describe("the questions panel, ICPC scoring", () => {
     render(<QuestionsPanel locale="en" contestId="c1" items={[entry()]} scoring="points" icpcPenaltyMin={20} dict={en} />);
 
     expect(
-      screen.queryByText(en.participant.play.questions.icpcPenalty.replace("{n}", "20")),
+      screen.queryByText(fill(en.participant.play.questions.icpcPenalty, { n: "20" })),
     ).not.toBeInTheDocument();
   });
 
@@ -694,8 +695,8 @@ describe("a bonus question", () => {
     );
 
     expect(screen.getAllByText(t.bonus)).toHaveLength(1);
-    expect(screen.getByText(t.bonusPoints.replace("{n}", "4"))).toBeInTheDocument();
-    expect(screen.getByText(t.bonusHint.replace("{n}", "4"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.bonusPoints, { n: "4" }))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.bonusHint, { n: "4" }))).toBeInTheDocument();
     expect(screen.queryByText("4 pts")).not.toBeInTheDocument();
     // The regular question beside it keeps its plain points.
     expect(screen.getByText("10 pts")).toBeInTheDocument();
@@ -707,7 +708,7 @@ describe("a bonus question", () => {
 
     await submit();
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.correctBonus.replace("{n}", "4")));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(fill(t.correctBonus, { n: "4" })));
     expect(screen.queryByText(/\+0 points/)).not.toBeInTheDocument();
   });
 
@@ -721,9 +722,9 @@ describe("a bonus question", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent(t.correctBonus.replace("{n}", "4"));
+    expect(screen.getByRole("status")).toHaveTextContent(fill(t.correctBonus, { n: "4" }));
     // The invitation to answer is for an open question only.
-    expect(screen.queryByText(t.bonusHint.replace("{n}", "4"))).not.toBeInTheDocument();
+    expect(screen.queryByText(fill(t.bonusHint, { n: "4" }))).not.toBeInTheDocument();
     expect(screen.getByText(t.bonus)).toBeInTheDocument();
   });
 
@@ -755,7 +756,7 @@ describe("a bonus question", () => {
   test("keeps the bonus line wrapping inside a narrow panel", () => {
     render(<QuestionsPanel locale="en" contestId="c1" items={[entry({ isBonus: true, points: 4 })]} dict={en} />);
 
-    expect(screen.getByText(t.bonusHint.replace("{n}", "4"))).toHaveClass("[overflow-wrap:anywhere]");
+    expect(screen.getByText(fill(t.bonusHint, { n: "4" }))).toHaveClass("[overflow-wrap:anywhere]");
   });
 });
 
@@ -937,8 +938,8 @@ describe("a locked question", () => {
 
     const items = within(lockedList()).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
-      t.lockedItem.replace("{n}", "3").replace("{m}", "2"),
-      t.lockedItem.replace("{n}", "4").replace("{m}", "3"),
+      fill(t.lockedItem, { n: "3", m: "2" }),
+      fill(t.lockedItem, { n: "4", m: "3" }),
     ]);
     // Below the current question, not among the open ones.
     const current = document.querySelector('[aria-current="step"]')!;
@@ -991,8 +992,8 @@ describe("a locked question", () => {
     render(<QuestionsPanel locale="en" contestId="c1" items={[lockedEntry(1), lockedEntry(2)]} dict={en} />);
 
     expect(within(lockedList()).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      t.lockedNotYet.replace("{n}", "1"),
-      t.lockedItem.replace("{n}", "2").replace("{m}", "1"),
+      fill(t.lockedNotYet, { n: "1" }),
+      fill(t.lockedItem, { n: "2", m: "1" }),
     ]);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByText(t.empty)).not.toBeInTheDocument();
@@ -1004,7 +1005,7 @@ describe("a locked question", () => {
 
     expect(within(lockedList()).getAllByRole("listitem")).toHaveLength(40);
     expect(within(lockedList()).getAllByRole("listitem")[39]).toHaveTextContent(
-      t.lockedItem.replace("{n}", "41").replace("{m}", "40"),
+      fill(t.lockedItem, { n: "41", m: "40" }),
     );
   });
 });

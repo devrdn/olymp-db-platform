@@ -10,6 +10,7 @@ import { displayCode, matchesRegistration, type Registration } from "@/lib/api/r
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { checkInAction } from "./actions";
@@ -137,7 +138,7 @@ export function RegistrationDesk({
 
           {matches.length > shown.length ? (
             <p className="text-small text-ink-3">
-              {t.shown.replace("{shown}", String(shown.length)).replace("{count}", String(matches.length))}
+              {fill(t.shown, { shown: shown.length, count: matches.length })}
             </p>
           ) : null}
         </>
@@ -189,7 +190,7 @@ function DeskRow({
           type="button"
           variant={here ? "primary" : "secondary"}
           aria-pressed={here}
-          aria-label={t.hereFor.replace("{name}", name)}
+          aria-label={fill(t.hereFor, { name })}
           disabled={busy}
           onClick={onToggle}
         >

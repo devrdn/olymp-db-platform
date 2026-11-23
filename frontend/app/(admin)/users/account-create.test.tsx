@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { plural } from "@/lib/i18n/plural";
+import { fill } from "@/lib/i18n/fill";
 import type { Role } from "@/lib/api/accounts";
 
 // The real Server Actions would pull in Next's server runtime.
@@ -219,7 +220,7 @@ describe("import a roster: skipped rows are named, not hidden", () => {
     await userEvent.click(screen.getByRole("button", { name: en.accounts.create.roster.submit }));
 
     expect(await screen.findByText("swordfish-1")).toBeVisible();
-    expect(screen.getByText(en.accounts.create.roster.notImported.replace("{n}", "2"))).toBeVisible();
+    expect(screen.getByText(fill(en.accounts.create.roster.notImported, { n: "2" }))).toBeVisible();
     expect(screen.getByText(en.errors.sign_in_busy)).toBeVisible();
     expect(screen.getByText("i.ivanov")).toBeVisible();
     expect(screen.getByText("a.rusu")).toBeVisible();
@@ -351,9 +352,7 @@ describe("sign-in details by email", () => {
     expect(screen.getByText(plural(ru.accounts.signInMail.queued, 1, "ru"))).toBeVisible();
     expect(
       screen.getByText(
-        ru.accounts.signInMail.group
-          .replace("{n}", "1")
-          .replace("{reason}", ru.accounts.emailSkipped.no_address),
+        fill(ru.accounts.signInMail.group, { n: "1", reason: ru.accounts.emailSkipped.no_address }),
       ),
     ).toBeVisible();
   });

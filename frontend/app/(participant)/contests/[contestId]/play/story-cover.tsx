@@ -2,6 +2,7 @@ import { DrawnCover } from "@/components/product/drawn-cover";
 import { coverHref } from "@/lib/api/contests";
 
 import type { PlayDictionary } from "./dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * The picture above the crime story (SPEC.md §10), where atmosphere is
@@ -47,7 +48,7 @@ export function StoryCover({
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={coverHref(contestId, coverHash, STORY_COVER.size)}
-            alt={t.coverOf.replace("{title}", title)}
+            alt={fill(t.coverOf, { title })}
             loading="lazy"
             decoding="async"
             width={STORY_COVER.size}

@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 const { jar } = vi.hoisted(() => ({ jar: { get: vi.fn() } }));
 vi.mock("next/headers", () => ({ cookies: async () => jar }));
@@ -36,7 +37,7 @@ describe("the confirmation page", () => {
     browserHoldsAddress("ana@example.com");
     render(await ConfirmPage());
 
-    expect(screen.getByText(en.auth.confirm.lede.replace("{email}", "ana@example.com"))).toBeInTheDocument();
+    expect(screen.getByText(fill(en.auth.confirm.lede, { email: "ana@example.com" }))).toBeInTheDocument();
     expect(screen.getByLabelText(en.auth.confirm.code)).toBeInTheDocument();
   });
 

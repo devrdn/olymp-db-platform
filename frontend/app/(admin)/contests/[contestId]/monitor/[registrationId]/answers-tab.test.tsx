@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 
 import type { Answers, Attempt } from "@/lib/api/monitor";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { AnswersTab } from "./answers-tab";
 import { loggedQuery } from "./test-fixtures";
@@ -73,7 +74,7 @@ describe("the answers tab", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("SELECT a")).toBeInTheDocument();
     expect(screen.getByText("SELECT b")).toBeInTheDocument();
-    expect(screen.getByText(t().moreQueries.replace("{n}", "3"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().moreQueries, { n: "3" }))).toBeInTheDocument();
   });
 
   test("an attempt with no query before it says so", () => {
@@ -87,6 +88,6 @@ describe("the answers tab", () => {
     expect(screen.getByText(t().empty)).toBeInTheDocument();
 
     renderTab({ ...answers, truncated: true });
-    expect(screen.getByText(t().truncated.replace("{n}", "3"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().truncated, { n: "3" }))).toBeInTheDocument();
   });
 });

@@ -6,6 +6,7 @@ import { cuedEdges, measureScroller } from "@/components/ui/scroll-cue-test-supp
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import { MAX_TABS } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { SqlTabStatus, SqlTabStrip, type SqlTabView } from "./sql-tabs";
 
@@ -184,7 +185,7 @@ describe("the SQL tab strip", () => {
 
     for (const name of ["Query 1", "Suspects", "Alibis"]) expectTouchTarget(tab(name), "pointer-coarse:min-h-11");
     expectTouchTarget(
-      screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") }),
+      screen.getByRole("button", { name: fill(t.close, { tab: "Suspects" }) }),
       "pointer-coarse:min-w-11",
       "pointer-coarse:self-stretch",
     );
@@ -223,7 +224,7 @@ describe("the SQL tab strip", () => {
   test("closes a tab from its ✕", async () => {
     const { onClose } = show();
 
-    await userEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") }));
+    await userEvent.click(screen.getByRole("button", { name: fill(t.close, { tab: "Suspects" }) }));
 
     expect(onClose).toHaveBeenCalledWith("t2");
   });
@@ -247,7 +248,7 @@ describe("the SQL tab strip", () => {
 
 describe("renaming a tab", () => {
   function field(title: string) {
-    return screen.getByRole("textbox", { name: t.rename.replace("{tab}", title) });
+    return screen.getByRole("textbox", { name: fill(t.rename, { tab: title }) });
   }
 
   test("opens the name for editing on a double click, and Enter saves it", async () => {

@@ -8,6 +8,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { saveGameScriptAction, type GameState } from "./actions";
@@ -125,9 +126,7 @@ export function GameEditor({
           {saving ? t.saving : t.save}
         </button>
         <span className={cn("font-mono text-label", tooLong ? "text-bad" : "text-ink-3")}>
-          {t.size
-            .replace("{n}", String(Math.ceil(bytes / 1024)))
-            .replace("{max}", String(Math.floor(maxBytes / 1024)))}
+          {fill(t.size, { n: Math.ceil(bytes / 1024), max: Math.floor(maxBytes / 1024) })}
         </span>
         {tooLong ? <span className="text-small text-bad">{t.tooLong}</span> : null}
         {!editable ? <span className="text-small text-ink-2">{t.frozen}</span> : null}

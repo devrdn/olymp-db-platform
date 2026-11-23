@@ -7,6 +7,7 @@ const sendTestMailAction = vi.hoisted(() => vi.fn(async (): Promise<MailTestStat
 vi.mock("./actions", () => ({ sendTestMailAction }));
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { MailTest } from "./mail-test";
 
@@ -31,7 +32,7 @@ describe("MailTest, the state of mail", () => {
   test("says mail is on and the address it is sent as", () => {
     render(<MailTest mail={on} dict={en} />);
 
-    expect(screen.getByText(en.settings.mail.on.replace("{address}", "noreply@usm.md"))).toBeVisible();
+    expect(screen.getByText(fill(en.settings.mail.on, { address: "noreply@usm.md" }))).toBeVisible();
     expect(sendButton()).toBeEnabled();
   });
 
@@ -51,7 +52,7 @@ describe("MailTest, sending the test message", () => {
     fireEvent.click(sendButton());
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      en.settings.mail.sent.replace("{address}", "root@usm.md"),
+      fill(en.settings.mail.sent, { address: "root@usm.md" }),
     );
     expect(sendTestMailAction).toHaveBeenCalledTimes(1);
   });

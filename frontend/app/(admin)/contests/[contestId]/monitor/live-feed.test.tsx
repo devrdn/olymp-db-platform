@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { FeedDetail, FeedItem } from "@/lib/api/monitor";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { FEED_LIMIT, type FeedState } from "./feed-list";
 import { FEED_ROW_REM, LiveFeed } from "./live-feed";
@@ -82,14 +83,14 @@ describe("what each line says", () => {
 
     expect(within(list).getByText("SELECT *")).toBeInTheDocument();
     expect(within(list).getByText(dict.workspace.monitor.feed.queryStatus.error)).toBeInTheDocument();
-    expect(within(list).getByText(d.answerCorrect.replace("{n}", "2").replace("{attempt}", "3"))).toBeInTheDocument();
-    expect(within(list).getByText(d.pageLeft.replace("{duration}", "1:35"))).toBeInTheDocument();
+    expect(within(list).getByText(fill(d.answerCorrect, { n: "2", attempt: "3" }))).toBeInTheDocument();
+    expect(within(list).getByText(fill(d.pageLeft, { duration: "1:35" }))).toBeInTheDocument();
     expect(
-      within(list).getByText(d.paste.replace("{chars}", "812").replace("{target}", d.pasteTarget.editor)),
+      within(list).getByText(fill(d.paste, { chars: "812", target: d.pasteTarget.editor })),
     ).toBeInTheDocument();
-    expect(within(list).getByText(d.ipChanged.replace("{from}", "10.0.0.1").replace("{to}", "10.0.0.2"))).toBeInTheDocument();
-    expect(within(list).getByText(d.parallelSession.replace("{ip}", "10.0.0.9"))).toBeInTheDocument();
-    expect(within(list).getByText(d.signInFrom.replace("{ip}", "10.0.0.1"))).toBeInTheDocument();
+    expect(within(list).getByText(fill(d.ipChanged, { from: "10.0.0.1", to: "10.0.0.2" }))).toBeInTheDocument();
+    expect(within(list).getByText(fill(d.parallelSession, { ip: "10.0.0.9" }))).toBeInTheDocument();
+    expect(within(list).getByText(fill(d.signInFrom, { ip: "10.0.0.1" }))).toBeInTheDocument();
     expect(within(list).getAllByRole("link", { name: "Ivan Ivanov" })[0]).toHaveAttribute(
       "href",
       `/contests/${CONTEST}/monitor/a`,
@@ -104,7 +105,7 @@ describe("what each line says", () => {
 
     expect(
       within(list).getByText(
-        d.pasteRepeated.replace("{chars}", "3").replace("{target}", d.pasteTarget.notes).replace("{count}", "4"),
+        fill(d.pasteRepeated, { chars: "3", target: d.pasteTarget.notes, count: "4" }),
       ),
     ).toBeInTheDocument();
   });
@@ -112,7 +113,7 @@ describe("what each line says", () => {
   /** The server creates every first SQL tab, so those events are muted. */
   test("de-emphasises tab events", () => {
     renderFeed(state([withDetail("h", "tab_created", { type: "tab", title: "Query 1" })]));
-    const line = screen.getByText(dict.workspace.monitor.feed.describe.tabCreated.replace("{title}", "Query 1"));
+    const line = screen.getByText(fill(dict.workspace.monitor.feed.describe.tabCreated, { title: "Query 1" }));
 
     expect(line.closest("li")).toHaveAttribute("data-quiet", "true");
   });
@@ -165,7 +166,7 @@ describe("following the newest item", () => {
     rerenderWith({ feed: state(many(1, 23)) });
 
     expect(box.scrollTop).toBe(2 * ROW_PX);
-    const jump = screen.getByRole("button", { name: dict.workspace.monitor.feed.newItems.replace("{n}", "3") });
+    const jump = screen.getByRole("button", { name: fill(dict.workspace.monitor.feed.newItems, { n: "3" }) });
 
     await userEvent.click(jump);
     expect(box.scrollTop).toBe(23 * ROW_PX - VIEW_PX);
@@ -198,7 +199,7 @@ describe("following the newest item", () => {
     const t = dict.workspace.monitor.feed;
 
     const back = screen.getByRole("button", { name: new RegExp(t.toLatest) });
-    expect(back).toHaveTextContent(t.newItems.replace("{n}", "7"));
+    expect(back).toHaveTextContent(fill(t.newItems, { n: "7" }));
     await userEvent.click(back);
     expect(onToLatest).toHaveBeenCalled();
   });
@@ -231,7 +232,7 @@ describe("following the newest item", () => {
 
   test("says how much was skipped after a long absence", () => {
     renderFeed(state(many(1, 3), { gap: 1200 }));
-    expect(screen.getByText(dict.workspace.monitor.feed.gap.replace("{n}", "1200"))).toBeInTheDocument();
+    expect(screen.getByText(fill(dict.workspace.monitor.feed.gap, { n: "1200" }))).toBeInTheDocument();
   });
 });
 

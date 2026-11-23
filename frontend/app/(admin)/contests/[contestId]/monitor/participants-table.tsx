@@ -12,6 +12,7 @@ import { REGISTRATION_STATUSES } from "@/lib/api/people";
 import { readableDuration } from "@/lib/format/bytes";
 import { formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import {
@@ -197,7 +198,7 @@ export function ParticipantsTable({
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="font-mono text-data text-ink-3">
-          {t.table.count.replace("{shown}", String(shown.length)).replace("{total}", String(rows.length))}
+          {fill(t.table.count, { shown: shown.length, total: rows.length })}
         </p>
         {/* Above the table: inside its scroll box the explanation would be clipped. */}
         <span className="inline-flex items-center gap-1 text-small text-ink-3">
@@ -205,7 +206,7 @@ export function ParticipantsTable({
           <FlagsHelp t={t} />
         </span>
         {truncated ? (
-          <p className="text-small text-warn">{t.table.truncated.replace("{n}", String(rows.length))}</p>
+          <p className="text-small text-warn">{fill(t.table.truncated, { n: rows.length })}</p>
         ) : null}
       </div>
 
@@ -250,7 +251,7 @@ export function ParticipantsTable({
                           type="button"
                           onClick={() => sortBy(key, numeric)}
                           aria-label={label(key)}
-                          title={t.table.sortBy.replace("{column}", label(key))}
+                          title={fill(t.table.sortBy, { column: label(key) })}
                           className={cn(
                             "max-w-24 text-left uppercase transition-colors duration-(--t-input) ease-standard hover:text-ink",
                             sorted && "text-ink",

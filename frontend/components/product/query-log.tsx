@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 import { QueryRow, type QueryRowLabels } from "./query-row";
 import type { QueryLogState } from "./use-query-log";
+import { fill } from "@/lib/i18n/fill";
 
 const CONTROL = "h-(--control-h) w-full min-w-0 border border-edge bg-bg px-2.5 text-control text-ink";
 
@@ -56,7 +57,7 @@ export function QueryLog({
     : log.problem.kind === "forbidden"
       ? problems.forbidden
       : log.problem.kind === "tooOften"
-        ? problems.tooOften.replace("{seconds}", String(log.problem.seconds))
+        ? fill(problems.tooOften, { seconds: log.problem.seconds })
         : problems.failed;
 
   return (
@@ -97,7 +98,7 @@ export function QueryLog({
         </div>
       </div>
       <p id={`${ids}-search-note`} className="-mt-2 text-small text-ink-3 empty:hidden">
-        {log.search.length >= MAX_QUERY_SEARCH ? labels.searchTooLong.replace("{n}", String(MAX_QUERY_SEARCH)) : ""}
+        {log.search.length >= MAX_QUERY_SEARCH ? fill(labels.searchTooLong, { n: MAX_QUERY_SEARCH }) : ""}
       </p>
 
       {/* Collapsed when empty rather than hidden, so the live region stays in

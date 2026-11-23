@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Revision, RevisionInfo, Workspace } from "@/lib/api/monitor";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 const { fetchRevision } = vi.hoisted(() => ({ fetchRevision: vi.fn() }));
 vi.mock("@/lib/api/monitor", async (importOriginal) => ({
@@ -113,8 +114,8 @@ describe("the history", () => {
     renderTab();
     await pick(t().notes, 0);
 
-    expect(screen.getByText(t().removed.replace("{n}", "2"))).toHaveClass("sr-only");
-    expect(screen.getByText(t().added.replace("{n}", "2"))).toHaveClass("sr-only");
+    expect(screen.getByText(fill(t().removed, { n: "2" }))).toHaveClass("sr-only");
+    expect(screen.getByText(fill(t().added, { n: "2" }))).toHaveClass("sr-only");
     expect(t().added).toContain("{n}");
   });
 

@@ -10,6 +10,7 @@ import { ProviderLogo } from "@/components/product/provider-logo";
 import { externalStartHref, PROVIDER_NAMES, type ProviderId } from "@/lib/auth/external";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 import { signInAction, type SignInState } from "./actions";
 import type { SignInErrors } from "./codes";
@@ -112,7 +113,7 @@ export function SignInForm({
                 className={buttonVariants({ variant: "secondary", className: "w-full" })}
               >
                 <ProviderLogo provider={id} />
-                {t.continueWith.replace("{name}", PROVIDER_NAMES[id])}
+                {fill(t.continueWith, { name: PROVIDER_NAMES[id] })}
               </a>
             ))}
           </div>

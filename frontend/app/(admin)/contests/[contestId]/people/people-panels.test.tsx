@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { Participant } from "@/lib/api/people";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real Server Actions would pull in Next's server runtime.
 const { disqualifyParticipantAction } = vi.hoisted(() => ({
@@ -82,7 +83,7 @@ describe("ParticipantPanel, the score column", () => {
 
 describe("ParticipantPanel, an address outside the site's domain", () => {
   const mark = (domain: string) =>
-    dict.workspace.people.participants.untrustedEmail.replace("{domain}", () => domain);
+    fill(dict.workspace.people.participants.untrustedEmail, { domain });
 
   const panel = (participants: Participant[], trustedDomain?: string, trustedDomainOnly = true) =>
     render(

@@ -7,6 +7,7 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
 import type { Role } from "@/lib/api/accounts";
 import { plural } from "@/lib/i18n/plural";
+import { fill } from "@/lib/i18n/fill";
 
 import type { MailOffer } from "./email-delivery";
 
@@ -244,7 +245,7 @@ describe("SelectionBar", () => {
 
     expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.block })).toBeDisabled();
     expect(
-      screen.getByText(ru.accounts.selection.bulk.tooMany.replace("{n}", String(MAX_BULK_ACCOUNTS))),
+      screen.getByText(fill(ru.accounts.selection.bulk.tooMany, { n: MAX_BULK_ACCOUNTS })),
     ).toBeVisible();
   });
 });
@@ -292,7 +293,7 @@ describe("bulk actions: block and delete require a reason", () => {
     await userEvent.type(screen.getByLabelText(ru.accounts.selection.bulk.reasonLabel), "cheating");
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
 
-    expect(await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"))).toBeVisible();
+    expect(await screen.findByText(fill(ru.accounts.selection.bulk.changed, { n: "1" }))).toBeVisible();
     const form = bulkBlockAction.mock.calls[0]![1] as FormData;
     expect(form.get("reason")).toBe("cheating");
     expect(form.getAll("ids")).toEqual(["a"]);
@@ -406,7 +407,7 @@ describe("bulk actions: an empty roles submit needs a second, explicit step", ()
       screen.getByText(ru.accounts.selection.bulk.rolesDialog.confirmEmptyTitle),
     ).toBeVisible();
     expect(
-      screen.getByText(ru.accounts.selection.bulk.rolesDialog.confirmEmptyBody.replace("{n}", "2")),
+      screen.getByText(fill(ru.accounts.selection.bulk.rolesDialog.confirmEmptyBody, { n: "2" })),
     ).toBeVisible();
   });
 
@@ -491,7 +492,7 @@ describe("bulk dialogs: dismissal is blocked while pending or holding a result",
     expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.close })).toBeDisabled();
 
     resolveAction({ result: { changed: ["a"], skipped: [] } });
-    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+    await screen.findByText(fill(ru.accounts.selection.bulk.changed, { n: "1" }));
   });
 
   test("Escape does not close the dialog while a result is on screen", async () => {
@@ -500,11 +501,11 @@ describe("bulk dialogs: dismissal is blocked while pending or holding a result",
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
-    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+    await screen.findByText(fill(ru.accounts.selection.bulk.changed, { n: "1" }));
 
     await userEvent.keyboard("{Escape}");
 
-    expect(screen.getByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"))).toBeVisible();
+    expect(screen.getByText(fill(ru.accounts.selection.bulk.changed, { n: "1" }))).toBeVisible();
     expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.close })).toBeDisabled();
   });
 
@@ -514,12 +515,12 @@ describe("bulk dialogs: dismissal is blocked while pending or holding a result",
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
-    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+    await screen.findByText(fill(ru.accounts.selection.bulk.changed, { n: "1" }));
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.done }));
 
     expect(
-      screen.queryByText(ru.accounts.selection.bulk.changed.replace("{n}", "1")),
+      screen.queryByText(fill(ru.accounts.selection.bulk.changed, { n: "1" })),
     ).not.toBeInTheDocument();
   });
 });
@@ -577,7 +578,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
-    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+    await screen.findByText(fill(ru.accounts.selection.bulk.changed, { n: "1" }));
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.done }));
 
     expect(screen.getByRole("checkbox", { name: "a" })).not.toBeChecked();
@@ -598,7 +599,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
 
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
-    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "0"));
+    await screen.findByText(fill(ru.accounts.selection.bulk.changed, { n: "0" }));
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.done }));
 
     expect(screen.getByRole("checkbox", { name: "a" })).toBeChecked();
@@ -637,8 +638,8 @@ describe("SelectionBar: honest about a selection that spans more than the curren
     // Only "a" is on this page; the count and the off-page note are sibling
     // text nodes in one paragraph, so the element is checked as a whole.
     const status = screen.getByRole("status");
-    expect(status).toHaveTextContent(ru.accounts.selection.count.replace("{n}", "2"));
-    expect(status).toHaveTextContent(ru.accounts.selection.offPage.replace("{n}", "1"));
+    expect(status).toHaveTextContent(fill(ru.accounts.selection.count, { n: "2" }));
+    expect(status).toHaveTextContent(fill(ru.accounts.selection.offPage, { n: "1" }));
   });
 
   test("says nothing extra when the whole pick is on this page", async () => {
@@ -667,7 +668,7 @@ describe("SelectionBar: seeing exactly who is selected", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: ru.accounts.selection.unpick.replace("{name}", "petrov"),
+        name: fill(ru.accounts.selection.unpick, { name: "petrov" }),
       }),
     );
     expect(screen.queryByText("petrov")).not.toBeInTheDocument();
@@ -841,12 +842,12 @@ describe("bulk password reset: sign-in details by email", () => {
     const t = ru.accounts.signInMail;
     expect(screen.getByText(plural(t.queued, 1, "ru"))).toBeVisible();
     expect(screen.getByText(/^Оно уйдёт в течение 1 минуты/)).toBeVisible();
-    expect(screen.getByText(t.notEmailed.replace("{n}", "2"))).toBeVisible();
+    expect(screen.getByText(fill(t.notEmailed, { n: "2" }))).toBeVisible();
     expect(
-      screen.getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.not_active)),
+      screen.getByText(fill(t.group, { n: "1", reason: ru.accounts.emailSkipped.not_active })),
     ).toBeVisible();
     expect(
-      screen.getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.no_address)),
+      screen.getByText(fill(t.group, { n: "1", reason: ru.accounts.emailSkipped.no_address })),
     ).toBeVisible();
   });
 

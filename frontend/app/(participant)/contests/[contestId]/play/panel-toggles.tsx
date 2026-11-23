@@ -16,6 +16,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import type { PlayDictionary } from "./dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * Which workspace panels are collapsed, the header toggles, and the
@@ -501,7 +502,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
       {hasSchema ? (
         <Toggle
           name={t.schema}
-          tooltip={t.shortcut.replace("{name}", t.schema).replace("{keys}", t.keys.schema)}
+          tooltip={fill(t.shortcut, { name: t.schema, keys: t.keys.schema })}
           showing={!collapsed.schema}
           buttonRef={refSchema}
           onClick={() => toggle("schema")}
@@ -511,7 +512,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
       ) : null}
       <Toggle
         name={t.side}
-        tooltip={t.shortcut.replace("{name}", t.side).replace("{keys}", t.keys.side)}
+        tooltip={fill(t.shortcut, { name: t.side, keys: t.keys.side })}
         showing={!collapsed.side}
         buttonRef={refSide}
         onClick={() => toggle("side")}
@@ -521,7 +522,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
       </Toggle>
       <Toggle
         name={t.bottom}
-        tooltip={t.shortcut.replace("{name}", t.bottom).replace("{keys}", t.keys.bottom)}
+        tooltip={fill(t.shortcut, { name: t.bottom, keys: t.keys.bottom })}
         showing={!collapsed.bottom}
         buttonRef={refBottom}
         onClick={() => toggle("bottom")}

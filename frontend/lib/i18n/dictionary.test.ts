@@ -53,6 +53,30 @@ describe("getDictionary", () => {
     }
   });
 
+  test("every sentence fills the same placeholders in every locale, so none drops a value", async () => {
+    const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
+
+    const placeholders = (value: unknown, path = ""): Array<[string, string]> => {
+      if (typeof value === "string") {
+        const names = [...new Set([...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]))].sort();
+        return [[path, names.join(", ")]];
+      }
+      if (typeof value === "object" && value !== null) {
+        return Object.entries(value).flatMap(([k, v]) => placeholders(v, path ? `${path}.${k}` : k));
+      }
+      return [];
+    };
+
+    const [reference, ...rest] = dictionaries.map((d) => new Map(placeholders(d)));
+    const mismatches = rest.flatMap((other, index) =>
+      [...other].flatMap(([path, names]) =>
+        names === reference.get(path) ? [] : [{ locale: LOCALES[index + 1], path, names, expected: reference.get(path) }],
+      ),
+    );
+
+    expect(mismatches).toEqual([]);
+  });
+
   test("every action the server can record has a translation in every locale", async () => {
     // Parity alone would pass an action missing from every locale at once.
     const actions = contractActions();

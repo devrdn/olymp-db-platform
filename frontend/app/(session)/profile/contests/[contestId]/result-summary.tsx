@@ -5,6 +5,7 @@ import { readableDuration } from "@/lib/format/bytes";
 import { formatTime } from "@/lib/format/datetime";
 
 import type { ReportDict } from "./report-tabs";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * The report's first tab: the participant's numbers, then the place only when
@@ -83,7 +84,7 @@ function Place({ result, t }: { result: ProfileReportResult | null; t: ReportDic
         <span className="font-mono text-h3 text-ink tabular-nums">{result.place}</span>
         {result.participants !== null ? (
           <span className="font-mono text-data text-ink-3 tabular-nums">
-            {t.result.placeOf.replace("{n}", String(result.participants))}
+            {fill(t.result.placeOf, { n: result.participants })}
           </span>
         ) : null}
       </dd>
@@ -111,7 +112,7 @@ function Standing({ result, t }: { result: ProfileReportResult | null; t: Report
   if (result.truncated) {
     return (
       <p className="max-w-body text-small text-warn">
-        {t.result.truncated.replace("{n}", String(result.participants ?? 0))}
+        {fill(t.result.truncated, { n: result.participants ?? 0 })}
       </p>
     );
   }
@@ -187,10 +188,7 @@ function Questions({
           {truncated ? (
             <p className="max-w-body text-small text-warn">
               {/* Counts attempts, since the report is cut at a number of attempts. */}
-              {t.questions.truncated.replace(
-                "{n}",
-                String(questions.reduce((sum, question) => sum + question.attempts, 0)),
-              )}
+              {fill(t.questions.truncated, { n: questions.reduce((sum, question) => sum + question.attempts, 0) })}
             </p>
           ) : null}
         </>

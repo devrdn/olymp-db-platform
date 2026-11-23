@@ -9,6 +9,7 @@ import { coverHref } from "@/lib/api/contests";
 import type { PublicContest } from "@/lib/api/showcase";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 /**
@@ -125,7 +126,7 @@ function Card({
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={coverHref(contest.id, contest.coverHash, CARD_COVER.size)}
-            alt={t.coverOf.replace("{title}", title)}
+            alt={fill(t.coverOf, { title })}
             loading="lazy"
             decoding="async"
             width={CARD_COVER.size}
@@ -174,7 +175,7 @@ function Card({
              * The accessible name carries the contest, so repeated "Results"
              * links are distinguishable.
              */
-            aria-label={t.tableOf.replace("{title}", contest.title)}
+            aria-label={fill(t.tableOf, { title: contest.title })}
             className="text-control text-ink-2 underline decoration-line-2 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:decoration-ink"
           >
             {t.table}

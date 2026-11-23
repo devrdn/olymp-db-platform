@@ -18,6 +18,7 @@ import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { messageForCode } from "@/lib/i18n/errors";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { plural } from "@/lib/i18n/plural";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 const HEAD = "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -197,7 +198,7 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
                       <Link
                         href={`/archive/${contest.id}#results`}
                         prefetch={false}
-                        aria-label={t.resultsOf.replace("{title}", () => contest.title)}
+                        aria-label={fill(t.resultsOf, { title: contest.title })}
                         className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
                       >
                         {t.columns.results}
@@ -211,10 +212,7 @@ export default async function ArchivePage(props: PageProps<"/archive">) {
 
           <nav aria-label={t.heading} className="flex flex-wrap items-center justify-between gap-3">
             <span className="font-mono text-data text-ink-3">
-              {t.pagination.range
-                .replace("{from}", String(offset + 1))
-                .replace("{to}", String(offset + items.length))
-                .replace("{total}", String(total))}
+              {fill(t.pagination.range, { from: offset + 1, to: offset + items.length, total })}
             </span>
             <span className="flex gap-2">
               {hasPrevious ? (

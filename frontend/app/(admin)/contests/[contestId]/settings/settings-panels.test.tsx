@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { Contest } from "@/lib/api/contests";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real actions run in one test below, against a faked API.
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
@@ -592,7 +593,7 @@ describe.each(["en", "ro", "ru"] as const)("the prize places' rule in %s", (loca
 
 describe("ContestPanel, the trusted-domain limit", () => {
   const t = () => dict.workspace.settings.access;
-  const label = (domain: string) => t().trustedDomainOnly.replace("{domain}", () => domain);
+  const label = (domain: string) => fill(t().trustedDomainOnly, { domain });
   const limited = (on: boolean) =>
     contest({
       settings: { enrollmentDeadline: undefined, queryRateLimitPerMin: 0, gracePeriodMin: 0, trustedDomainOnly: on },

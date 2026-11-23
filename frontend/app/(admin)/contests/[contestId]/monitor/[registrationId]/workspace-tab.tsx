@@ -8,6 +8,7 @@ import { fetchRevision, NOTES_DOCUMENT, type RevisionInfo, type Workspace } from
 import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { SqlBlock } from "@/components/product/sql-block";
@@ -184,7 +185,7 @@ export function WorkspaceTab({
           {t.history}
         </h3>
         {workspace.truncated ? (
-          <p className="text-small text-warn">{t.truncated.replace("{n}", String(workspace.revisions.length))}</p>
+          <p className="text-small text-warn">{fill(t.truncated, { n: workspace.revisions.length })}</p>
         ) : null}
         {history.length === 0 ? (
           <p className="text-body text-ink-2">{t.noHistory}</p>
@@ -212,7 +213,7 @@ export function WorkspaceTab({
               ) : selected.state === "failed" ? (
                 <p role="alert" className="text-body text-bad">
                   {selected.tooOften
-                    ? dict.workspace.monitor.problems.tooOften.replace("{seconds}", String(selected.tooOften))
+                    ? fill(dict.workspace.monitor.problems.tooOften, { seconds: selected.tooOften })
                     : t.failed}
                 </p>
               ) : (
@@ -320,10 +321,7 @@ const RevisionRow = memo(function RevisionRow({
           selected ? "border-ink text-ink" : "border-transparent text-ink-2 hover:border-line-2 hover:text-ink",
         )}
       >
-        {t.revision
-          .replace("{from}", formatTime(revision.startedAt, { locale }))
-          .replace("{to}", formatTime(revision.updatedAt, { locale }))
-          .replace("{size}", readableBytes(revision.size))}
+        {fill(t.revision, { from: formatTime(revision.startedAt, { locale }), to: formatTime(revision.updatedAt, { locale }), size: readableBytes(revision.size) })}
       </button>
     </li>
   );
@@ -360,7 +358,7 @@ const RevisionDiff = memo(function RevisionDiff({
           <span>{t.identical}</span>
         ) : (
           <span className="font-mono tabular-nums">
-            {t.summary.replace("{added}", String(diff.added)).replace("{removed}", String(diff.removed))}
+            {fill(t.summary, { added: diff.added, removed: diff.removed })}
           </span>
         )}
         {diff.exact ? null : <span className="text-warn">{t.notExact}</span>}
@@ -372,7 +370,7 @@ const RevisionDiff = memo(function RevisionDiff({
         {rows.slice(0, shown).map((row, index) =>
           row.type === "skip" ? (
             <li key={index} data-type="skip" className="px-3 py-1 font-sans text-small text-ink-3">
-              {t.unchanged.replace("{n}", String(row.count))}
+              {fill(t.unchanged, { n: row.count })}
             </li>
           ) : (
             <li
@@ -393,8 +391,8 @@ const RevisionDiff = memo(function RevisionDiff({
               {row.type === "same" ? null : (
                 <span className="sr-only">
                   {row.type === "added"
-                    ? t.added.replace("{n}", String(row.after))
-                    : t.removed.replace("{n}", String(row.before))}
+                    ? fill(t.added, { n: row.after })
+                    : fill(t.removed, { n: row.before })}
                 </span>
               )}
               <span data-text>{row.text}</span>

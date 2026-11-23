@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import type { Contest } from "@/lib/api/contests";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
@@ -34,7 +35,7 @@ describe("GracePanel", () => {
   test("states the grace the contest holds", () => {
     render(<GracePanel contest={contest(1440)} dict={dict} />);
 
-    expect(screen.getByText(t().inForce.replace("{n}", "1440"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().inForce, { n: "1440" }))).toBeInTheDocument();
   });
 
   test("says the installation's default is in force when the contest has none", () => {

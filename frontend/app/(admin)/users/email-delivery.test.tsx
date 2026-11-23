@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { EmailSummary, SendByEmailOption, sendingTime, summariseEmail } from "./email-delivery";
 
@@ -67,20 +68,20 @@ describe("EmailSummary", () => {
 
     expect(screen.getByText("2 письма с данными для входа поставлены в очередь.")).toBeVisible();
     expect(screen.getByText(/Отправка займёт около 1 минуты/)).toBeVisible();
-    expect(screen.getByText(t.notEmailed.replace("{n}", "3"))).toBeVisible();
+    expect(screen.getByText(fill(t.notEmailed, { n: "3" }))).toBeVisible();
 
     const noAddress = screen
-      .getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.no_address))
+      .getByText(fill(t.group, { n: "1", reason: ru.accounts.emailSkipped.no_address }))
       .closest("details") as HTMLElement;
     expect(within(noAddress).getByText("ivanov")).toBeInTheDocument();
 
     const notActive = screen
-      .getByText(t.group.replace("{n}", "1").replace("{reason}", ru.accounts.emailSkipped.not_active))
+      .getByText(fill(t.group, { n: "1", reason: ru.accounts.emailSkipped.not_active }))
       .closest("details") as HTMLElement;
     expect(within(notActive).getByText("blocked1")).toBeInTheDocument();
 
     // A reason newer than this build is shown raw rather than dropped.
-    expect(screen.getByText(t.group.replace("{n}", "1").replace("{reason}", "invented_later"))).toBeVisible();
+    expect(screen.getByText(fill(t.group, { n: "1", reason: "invented_later" }))).toBeVisible();
   });
 
   test("leaves out the queued line when nothing was queued", () => {
@@ -88,7 +89,7 @@ describe("EmailSummary", () => {
 
     expect(screen.queryByText(/queued/)).not.toBeInTheDocument();
     expect(screen.queryByText(en.accounts.signInMail.replaced)).not.toBeInTheDocument();
-    expect(screen.getByText(en.accounts.signInMail.notEmailed.replace("{n}", "1"))).toBeVisible();
+    expect(screen.getByText(fill(en.accounts.signInMail.notEmailed, { n: "1" }))).toBeVisible();
   });
 
   test("opens a short list and collapses a long one, logins included either way", () => {

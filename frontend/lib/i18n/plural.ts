@@ -1,4 +1,5 @@
 import type { Locale } from "./config";
+import { fill } from "./fill";
 
 /**
  * A count's sentence in every form the platform's languages need, keyed by
@@ -12,5 +13,5 @@ export type PluralForms = { one: string; few: string; many: string; other: strin
 export function plural(forms: PluralForms, n: number, locale: Locale): string {
   const category = new Intl.PluralRules(locale).select(n);
   const form = category in forms ? forms[category as keyof PluralForms] : forms.other;
-  return form.replace("{n}", String(n));
+  return fill(form, { n });
 }

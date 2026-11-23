@@ -9,6 +9,7 @@ import { API_PREFIX } from "@/lib/api/client";
 import { summarisePublishCheck } from "@/lib/api/publish-gate";
 import { formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
+import { fill } from "@/lib/i18n/fill";
 
 import { loadContest, loadContestResource } from "./contest";
 import { PublishGateReport } from "./publish-gate";
@@ -96,7 +97,7 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
             term={t.facts.duration}
             value={
               contest.durationMin
-                ? t.facts.minutes.replace("{n}", String(contest.durationMin))
+                ? fill(t.facts.minutes, { n: contest.durationMin })
                 : t.facts.wholeWindow
             }
           />

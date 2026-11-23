@@ -39,6 +39,7 @@ import {
 } from "./bulk-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 export type SelectedAccount = { id: string; display: string };
 
@@ -289,7 +290,7 @@ function SelectionList({ dict }: { dict: Dictionary }) {
             className="shrink-0 text-ink-3 transition-colors duration-(--t-input) ease-standard hover:text-ink"
           >
             <X className="size-3.5" />
-            <span className="sr-only">{t.unpick.replace("{name}", row.display)}</span>
+            <span className="sr-only">{fill(t.unpick, { name: row.display })}</span>
           </button>
         </li>
       ))}
@@ -333,9 +334,9 @@ function ChangedSkipped({
   return (
     <div role="status" className="flex flex-col gap-3">
       <p className="text-small text-ink-2">
-        <span className="text-good">{t.changed.replace("{n}", String(changedCount))}</span>
+        <span className="text-good">{fill(t.changed, { n: changedCount })}</span>
         {skipped.length > 0 ? (
-          <span className="text-warn"> · {t.skipped.replace("{n}", String(skipped.length))}</span>
+          <span className="text-warn"> · {fill(t.skipped, { n: skipped.length })}</span>
         ) : null}
       </p>
       <SkippedList skipped={skipped} dict={dict} />
@@ -447,7 +448,7 @@ function StatusForm({
   // Frozen at mount: a successful run clears the selection, and the outcome on
   // screen must not change under it.
   const [frozenIds] = useState(ids);
-  const title = titleTemplate.replace("{n}", String(frozenIds.length));
+  const title = fill(titleTemplate, { n: frozenIds.length });
   const [state, formAction, pending] = useActionState<BulkState, FormData>(action, {});
   const [reasonMissing, setReasonMissing] = useState(false);
 
@@ -587,7 +588,7 @@ function RolesForm({
   const t = dict.accounts.selection.bulk;
   const store = useSelectionStore();
   const [frozenIds] = useState(ids);
-  const title = t.rolesDialog.title.replace("{n}", String(frozenIds.length));
+  const title = fill(t.rolesDialog.title, { n: frozenIds.length });
   const [state, formAction, pending] = useActionState<BulkState, FormData>(
     bulkReplaceRolesAction,
     {},
@@ -656,7 +657,7 @@ function RolesForm({
         <DialogHeader>
           <DialogTitle>{t.rolesDialog.confirmEmptyTitle}</DialogTitle>
           <DialogDescription>
-            {t.rolesDialog.confirmEmptyBody.replace("{n}", String(frozenIds.length))}
+            {fill(t.rolesDialog.confirmEmptyBody, { n: frozenIds.length })}
           </DialogDescription>
         </DialogHeader>
 
@@ -827,7 +828,7 @@ function ResetPasswordForm({
       <HiddenIds ids={frozenIds} />
 
       <DialogHeader>
-        <DialogTitle>{t.resetDialog.title.replace("{n}", String(frozenIds.length))}</DialogTitle>
+        <DialogTitle>{fill(t.resetDialog.title, { n: frozenIds.length })}</DialogTitle>
         <DialogDescription>{t.resetDialog.description}</DialogDescription>
       </DialogHeader>
 
@@ -894,9 +895,9 @@ export function SelectionBar({
   return (
     <div className="flex flex-wrap items-center gap-3 border border-line-2 bg-panel px-4 py-2.5">
       <p role="status" aria-live="polite" className="font-mono text-data text-ink-2">
-        {t.count.replace("{n}", String(count))}
+        {fill(t.count, { n: count })}
         {offPage > 0 ? (
-          <span className="text-warn"> · {t.offPage.replace("{n}", String(offPage))}</span>
+          <span className="text-warn"> · {fill(t.offPage, { n: offPage })}</span>
         ) : null}
       </p>
 
@@ -1004,7 +1005,7 @@ export function SelectionBar({
 
       {tooMany ? (
         <p role="alert" className="w-full text-small text-bad">
-          {bulk.tooMany.replace("{n}", String(MAX_BULK_ACCOUNTS))}
+          {fill(bulk.tooMany, { n: MAX_BULK_ACCOUNTS })}
         </p>
       ) : null}
 

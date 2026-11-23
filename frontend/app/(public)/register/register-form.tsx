@@ -11,6 +11,7 @@ import { displayCode, EMAIL_MAX_CHARS, NAME_MAX_CHARS } from "@/lib/api/registra
 import { copyText } from "@/lib/clipboard";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 import { registerAction, type RegisterState } from "./actions";
 
@@ -109,7 +110,7 @@ function Outcome({ outcome, t }: { outcome: RegistrationOutcome; t: Text }) {
         <h2 ref={heading} tabIndex={-1} className="text-h3 text-ink outline-none">
           {t.accepted.title}
         </h2>
-        <p className="text-body text-ink-2">{t.accepted.body.replace("{email}", outcome.email)}</p>
+        <p className="text-body text-ink-2">{fill(t.accepted.body, { email: outcome.email })}</p>
       </div>
     );
   }
@@ -120,7 +121,7 @@ function Outcome({ outcome, t }: { outcome: RegistrationOutcome; t: Text }) {
         <h2 ref={heading} tabIndex={-1} className="text-h3 text-ink outline-none">
           {t.repeat.title}
         </h2>
-        <p className="text-body text-ink-2">{t.repeat.emailNotSent.replace("{email}", outcome.email)}</p>
+        <p className="text-body text-ink-2">{fill(t.repeat.emailNotSent, { email: outcome.email })}</p>
       </div>
     );
   }

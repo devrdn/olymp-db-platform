@@ -9,6 +9,7 @@ import { InlineLink } from "@/components/ui/inline-link";
 import { RESEND_COOLDOWN_SECONDS } from "@/lib/auth/signup-rules";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 import { confirmSignupAction, resendCodeAction, type ConfirmState, type ResendOutcome } from "./actions";
 
@@ -114,7 +115,7 @@ function Resend({ t, errors }: { t: Text; errors: Dictionary["errors"] }) {
   return (
     <div className="flex flex-col gap-3 border-t border-line pt-6">
       <Button type="button" variant="secondary" disabled={waiting || sending} onClick={resend} className="self-start">
-        {sending ? t.resending : waiting ? t.resendIn.replace("{seconds}", String(left)) : t.resend}
+        {sending ? t.resending : waiting ? fill(t.resendIn, { seconds: left }) : t.resend}
       </Button>
 
       {outcome?.sent ? (

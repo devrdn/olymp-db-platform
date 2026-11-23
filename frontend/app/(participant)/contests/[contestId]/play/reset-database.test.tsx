@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import type { ResetState } from "./requests";
 
@@ -97,7 +98,7 @@ describe("ResetDatabase", () => {
     await openAndConfirm();
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      en.participant.console.reference.replace("{id}", "req-9"),
+      fill(en.participant.console.reference, { id: "req-9" }),
     );
   });
 

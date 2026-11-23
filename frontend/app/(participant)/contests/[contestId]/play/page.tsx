@@ -19,6 +19,7 @@ import { fetchIdentity } from "@/lib/auth/session";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { ClarificationSignalProvider } from "./clarification-signal";
@@ -446,7 +447,7 @@ function WaitingRoom({
       </div>
       <div className="flex max-w-body flex-col gap-2">
         <p className="text-body text-ink">{t.body}</p>
-        {startsAt ? <p className="text-small text-ink-2">{t.startsAt.replace("{time}", startsAt)}</p> : null}
+        {startsAt ? <p className="text-small text-ink-2">{fill(t.startsAt, { time: startsAt })}</p> : null}
       </div>
     </div>
   );

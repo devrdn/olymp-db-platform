@@ -1,5 +1,6 @@
 import { StoryText } from "@/components/product/story-text";
 import type { PlayDictionary } from "./dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 
 /**
@@ -37,8 +38,8 @@ export function PrintView({
         <h1 className="text-h2 text-ink">{contestTitle}</h1>
         <p className="text-small text-ink-2">
           {participantName
-            ? t.print.by.replace("{name}", participantName).replace("{date}", date)
-            : t.print.byUnknown.replace("{date}", date)}
+            ? fill(t.print.by, { name: participantName, date })
+            : fill(t.print.byUnknown, { date })}
         </p>
       </header>
       <h2 className="mb-3 text-h3 text-ink">{t.story.heading}</h2>

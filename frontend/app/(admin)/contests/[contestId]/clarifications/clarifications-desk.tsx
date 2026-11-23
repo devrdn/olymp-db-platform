@@ -24,6 +24,7 @@ import {
 import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 /** How often the desk reads the queue while its tab is visible, as monitoring does. */
@@ -199,7 +200,7 @@ export function ClarificationsDesk({
         {!running ? <p className="max-w-body text-body text-ink">{t.closed}</p> : null}
         <div role="group" aria-label={t.states} className="flex flex-wrap gap-2">
           <Button variant={state === "open" ? "primary" : "secondary"} size="sm" aria-pressed={state === "open"} onClick={() => choose("open")}>
-            {t.waiting.replace("{n}", String(counts.open))}
+            {fill(t.waiting, { n: counts.open })}
           </Button>
           <Button
             variant={state === "answered" ? "primary" : "secondary"}
@@ -207,7 +208,7 @@ export function ClarificationsDesk({
             aria-pressed={state === "answered"}
             onClick={() => choose("answered")}
           >
-            {t.answered.replace("{n}", String(counts.answered))}
+            {fill(t.answered, { n: counts.answered })}
           </Button>
         </div>
         {problem === "forbidden" ? <p className="text-body text-bad">{t.forbidden}</p> : null}
@@ -299,9 +300,9 @@ function QueueItem({
     <article className="flex min-w-0 flex-col gap-3 border border-line p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <p className="text-row text-ink">
-          {t.asker.replace("{name}", item.asker.fullName).replace("{login}", item.asker.login)}
+          {fill(t.asker, { name: item.asker.fullName, login: item.asker.login })}
         </p>
-        <p className="text-small text-ink-3">{t.askedAt.replace("{time}", formatTime(item.createdAt, { locale }))}</p>
+        <p className="text-small text-ink-3">{fill(t.askedAt, { time: formatTime(item.createdAt, { locale }) })}</p>
       </div>
       {about ? <p className="text-small text-ink-2">{about}</p> : null}
       <p className="whitespace-pre-wrap break-words text-body text-ink">{item.body}</p>
@@ -314,8 +315,8 @@ function QueueItem({
             {answer.editedAt ? <Tag tone="mute">{t.edited}</Tag> : null}
             <span>
               {answer.answeredBy
-                ? t.answeredBy.replace("{login}", answer.answeredBy).replace("{time}", formatTime(answer.answeredAt, { locale }))
-                : t.answeredAt.replace("{time}", formatTime(answer.answeredAt, { locale }))}
+                ? fill(t.answeredBy, { login: answer.answeredBy, time: formatTime(answer.answeredAt, { locale }) })
+                : fill(t.answeredAt, { time: formatTime(answer.answeredAt, { locale }) })}
             </span>
           </div>
           {answer.body.trim() !== "" ? (
@@ -418,7 +419,7 @@ function AnswerForm({
         <div className="flex flex-wrap justify-between gap-x-3 text-small text-ink-3">
           <span id={noteId}>{t.markdownNote}</span>
           <span id={counterId} className="tabular-nums">
-            {t.counter.replace("{n}", String(body.length)).replace("{max}", String(ANSWER_MAX_CHARS))}
+            {fill(t.counter, { n: body.length, max: ANSWER_MAX_CHARS })}
           </span>
         </div>
       </div>
@@ -559,7 +560,7 @@ function Announcements({
                 {t.announcementNote} {t.markdownNote}
               </span>
               <span id={counterId} className="tabular-nums">
-                {t.counter.replace("{n}", String(body.length)).replace("{max}", String(ANNOUNCEMENT_MAX_CHARS))}
+                {fill(t.counter, { n: body.length, max: ANNOUNCEMENT_MAX_CHARS })}
               </span>
             </div>
           </div>
@@ -580,7 +581,7 @@ function Announcements({
       <div className="flex flex-col gap-4">
         {items.map((a) => (
           <div key={a.id} className="flex min-w-0 flex-col gap-1.5 border-l-2 border-accent pl-3">
-            <p className="text-small text-ink-3">{t.postedAt.replace("{time}", formatTime(a.createdAt, { locale }))}</p>
+            <p className="text-small text-ink-3">{fill(t.postedAt, { time: formatTime(a.createdAt, { locale }) })}</p>
             <StoryText markdown={a.body} className="max-w-none font-sans text-body" />
           </div>
         ))}

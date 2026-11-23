@@ -13,6 +13,7 @@ import { formatMoment } from "@/lib/format/datetime";
 import type { PlayDictionary } from "./dictionary";
 import type { Locale } from "@/lib/i18n/config";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { fetchQueryLog, fetchQueryLogEntry } from "./requests";
@@ -288,7 +289,7 @@ function LogRow({
           <StatusBadge status={entry.status} labels={t.status} />
         </td>
         <td className="p-2 font-mono text-ink-2 tabular-nums">
-          {entry.durationMs !== undefined ? t.durationMs.replace("{n}", String(entry.durationMs)) : ""}
+          {entry.durationMs !== undefined ? fill(t.durationMs, { n: entry.durationMs }) : ""}
         </td>
         <td className="p-2 font-mono text-ink-2 tabular-nums">{entry.rowCount !== undefined ? entry.rowCount : ""}</td>
         <td className="p-2 text-small text-ink-2 whitespace-nowrap">{formatMoment(entry.executedAt, { locale })}</td>

@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
 
 import type { FeedItem, FeedPage, Roster } from "@/lib/api/monitor";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 const { fetchRoster, fetchFeed } = vi.hoisted(() => ({ fetchRoster: vi.fn(), fetchFeed: vi.fn() }));
 vi.mock("@/lib/api/monitor", async (importOriginal) => ({
@@ -146,6 +147,6 @@ describe("the monitoring screen", () => {
     renderView();
 
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
-    expect(screen.getByText(dict.workspace.monitor.problems.tooOften.replace("{seconds}", "42"))).toBeInTheDocument();
+    expect(screen.getByText(fill(dict.workspace.monitor.problems.tooOften, { seconds: "42" }))).toBeInTheDocument();
   });
 });

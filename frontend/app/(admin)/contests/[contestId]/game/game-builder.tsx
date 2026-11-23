@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { saveGameDefinitionAction, type GameState } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * `ColumnDefinition` plus a client-only `key`, so reordering or removing keeps
@@ -128,7 +129,7 @@ export function GameBuilder({
   }
 
   function removeTable(key: string, name: string) {
-    if (!window.confirm(tb.removeTableConfirm.replace("{name}", name))) return;
+    if (!window.confirm(fill(tb.removeTableConfirm, { name }))) return;
     setTables((prev) => prev.filter((t) => t.key !== key));
   }
 
@@ -183,7 +184,7 @@ export function GameBuilder({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h4 className="text-control text-ink">{tb.structureHeading}</h4>
             <span className="text-label text-ink-3">
-              {tb.limitTables.replace("{n}", String(tables.length)).replace("{max}", String(limits.maxTables))}
+              {fill(tb.limitTables, { n: tables.length, max: limits.maxTables })}
             </span>
           </div>
 
@@ -232,7 +233,7 @@ export function GameBuilder({
             {saving ? tb.saving : tb.save}
           </button>
           <span className={cn("font-mono text-label", oversized ? "text-bad" : "text-ink-3")}>
-            {tb.sizeHint.replace("{n}", String(definitionBytes)).replace("{max}", String(limits.maxDefinitionBytes))}
+            {fill(tb.sizeHint, { n: definitionBytes, max: limits.maxDefinitionBytes })}
           </span>
           {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
           <span role="status" aria-live="polite" className="text-small text-ink-2">
@@ -342,7 +343,7 @@ function TableCard({
         </label>
         <div className="flex items-center gap-3">
           <span className="text-label text-ink-3">
-            {tb.limitColumns.replace("{n}", String(table.columns.length)).replace("{max}", String(limits.maxTableColumns))}
+            {fill(tb.limitColumns, { n: table.columns.length, max: limits.maxTableColumns })}
           </span>
           <button
             type="button"
@@ -356,7 +357,7 @@ function TableCard({
       </div>
 
       {locked ? (
-        <p className="max-w-body text-small text-warn">{tb.lockedTable.replace("{n}", String(rowCount))}</p>
+        <p className="max-w-body text-small text-warn">{fill(tb.lockedTable, { n: rowCount })}</p>
       ) : null}
 
       <div className="overflow-x-auto">

@@ -26,6 +26,7 @@ import {
   type SettingsState,
 } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * A titled block with its own save. One form per endpoint, so one refusal
@@ -209,8 +210,7 @@ function TrustedDomainSwitch({
 
   if (!on && !domain) return null;
 
-  // A replacer function, so a `$` in the domain is not read as a pattern.
-  const label = domain ? t.trustedDomainOnly.replace("{domain}", () => domain) : t.trustedDomainOnlyNoDomain;
+  const label = domain ? fill(t.trustedDomainOnly, { domain }) : t.trustedDomainOnlyNoDomain;
   const unset = on && domain === "";
 
   return (

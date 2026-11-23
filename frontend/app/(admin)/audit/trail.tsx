@@ -12,6 +12,7 @@ import {
 } from "@/lib/api/audit";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 /**
@@ -76,7 +77,7 @@ export function AuditTrailRegister({
 
   return (
     <div className="flex flex-col gap-6">
-      <p className="font-mono text-data text-ink-3">{t.counted.replace("{n}", String(total))}</p>
+      <p className="font-mono text-data text-ink-3">{fill(t.counted, { n: total })}</p>
 
       <ScrollBox>
         <table className="w-full border-collapse text-left max-narrow:[--row-px:--spacing(2)] wide:min-w-3xl">

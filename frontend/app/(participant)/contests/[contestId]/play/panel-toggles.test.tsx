@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { PHONE_QUERY, PanelToggles, PanelVisibilityProvider, useSchemaPanel } from "./panel-toggles";
 
@@ -82,15 +83,15 @@ describe("the panel toggles", () => {
 
     expect(screen.getByRole("button", { name: t.schema })).toHaveAttribute(
       "title",
-      t.shortcut.replace("{name}", t.schema).replace("{keys}", t.keys.schema),
+      fill(t.shortcut, { name: t.schema, keys: t.keys.schema }),
     );
     expect(screen.getByRole("button", { name: t.side })).toHaveAttribute(
       "title",
-      t.shortcut.replace("{name}", t.side).replace("{keys}", t.keys.side),
+      fill(t.shortcut, { name: t.side, keys: t.keys.side }),
     );
     expect(screen.getByRole("button", { name: t.bottom })).toHaveAttribute(
       "title",
-      t.shortcut.replace("{name}", t.bottom).replace("{keys}", t.keys.bottom),
+      fill(t.shortcut, { name: t.bottom, keys: t.keys.bottom }),
     );
   });
 

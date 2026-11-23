@@ -7,6 +7,7 @@ import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import { cn } from "@/lib/utils";
 
 import { QueryRow, type QueryRowLabels } from "./query-row";
+import { fill } from "@/lib/i18n/fill";
 
 export type AnswerAttemptsLabels = {
   empty: string;
@@ -52,7 +53,7 @@ export function AnswerAttempts({
       <div className="flex flex-col gap-1">
         <p className="text-small text-ink-3">{labels.window}</p>
         {answers.truncated ? (
-          <p className="text-small text-warn">{labels.truncated.replace("{n}", String(total))}</p>
+          <p className="text-small text-warn">{fill(labels.truncated, { n: total })}</p>
         ) : null}
       </div>
       {answers.questions.map((question) => (
@@ -92,7 +93,7 @@ function QuestionAttempts({
   return (
     <section aria-labelledby={headingId} className="flex min-w-0 flex-col gap-2">
       <h3 id={headingId} className="text-h3 text-ink">
-        {labels.question.replace("{n}", String(ord))}
+        {fill(labels.question, { n: ord })}
       </h3>
       <ol className="flex min-w-0 flex-col border-t border-line">
         {attempts.map((attempt) => (
@@ -134,7 +135,7 @@ const AttemptRow = memo(function AttemptRow({
     <li className="flex min-w-0 flex-col gap-2 border-b border-line py-3">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
         <span className="font-mono text-label text-ink-3 uppercase">
-          {labels.attempt.replace("{n}", String(attempt.attemptNo))}
+          {fill(labels.attempt, { n: attempt.attemptNo })}
         </span>
         <time
           dateTime={attempt.submittedAt}
@@ -147,7 +148,7 @@ const AttemptRow = memo(function AttemptRow({
           {attempt.correct ? labels.correct : labels.wrong}
         </span>
         <span className="font-mono text-label text-ink-2 tabular-nums">
-          {labels.points.replace("{n}", String(attempt.points))}
+          {fill(labels.points, { n: attempt.points })}
         </span>
       </div>
       <p className="min-w-0 font-mono text-data break-words whitespace-pre-wrap text-ink">{attempt.value}</p>
@@ -158,7 +159,7 @@ const AttemptRow = memo(function AttemptRow({
         onClick={() => setOpen((current) => !current)}
         className="self-start text-small text-ink-2 underline-offset-4 hover:text-ink hover:underline"
       >
-        {labels.queriesToggle.replace("{n}", String(count))}
+        {fill(labels.queriesToggle, { n: count })}
       </button>
       <div id={listId} className="flex min-w-0 flex-col gap-2 border-l-2 border-line pl-3 empty:hidden max-narrow:pl-2">
         {open ? (
@@ -180,7 +181,7 @@ const AttemptRow = memo(function AttemptRow({
                 ))}
               </ol>
               {attempt.moreQueries > 0 ? (
-                <p className="text-small text-ink-3">{labels.moreQueries.replace("{n}", String(attempt.moreQueries))}</p>
+                <p className="text-small text-ink-3">{fill(labels.moreQueries, { n: attempt.moreQueries })}</p>
               ) : null}
             </>
           )

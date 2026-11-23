@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 import type { GameSchema } from "@/lib/api/schema";
 
 import { SchemaPanel } from "./schema-panel";
@@ -37,12 +38,12 @@ function panel(value: GameSchema = schema(), onQueryTable = vi.fn(), diagram = t
 
 /** The button on a table's name, which writes a query on it. */
 function nameButton(table: string) {
-  return screen.getByRole("button", { name: t.query.replace("{table}", table) });
+  return screen.getByRole("button", { name: fill(t.query, { table }) });
 }
 
 /** The chevron beside it, which opens and closes the table. */
 function chevron(table: string, open = true) {
-  return screen.getByRole("button", { name: (open ? t.collapse : t.expand).replace("{table}", table) });
+  return screen.getByRole("button", { name: fill((open ? t.collapse : t.expand), { table }) });
 }
 
 describe("the schema panel", () => {
@@ -158,7 +159,7 @@ describe("the schema panel", () => {
 
     await user.click(guests);
     expect(guests).toHaveAttribute("aria-expanded", "false");
-    expect(guests).toHaveAccessibleName(t.expand.replace("{table}", "guests"));
+    expect(guests).toHaveAccessibleName(fill(t.expand, { table: "guests" }));
     expect(screen.queryByText("full_name")).not.toBeInTheDocument();
 
     await user.click(guests);
@@ -204,7 +205,7 @@ describe("the schema panel", () => {
   test("the name says what a click does, for a pointer as well as a screen reader", () => {
     panel();
 
-    expect(nameButton("guests")).toHaveAttribute("title", t.query.replace("{table}", "guests"));
+    expect(nameButton("guests")).toHaveAttribute("title", fill(t.query, { table: "guests" }));
   });
 
   test("searching narrows to the matching columns", async () => {
@@ -216,7 +217,7 @@ describe("the schema panel", () => {
     expect(screen.getByText("full_name")).toBeInTheDocument();
     // `rooms` matched nothing and is gone, as is the unmatched `id` of
     // `guests`.
-    expect(screen.queryByRole("button", { name: t.query.replace("{table}", "rooms") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: fill(t.query, { table: "rooms" }) })).not.toBeInTheDocument();
     expect(screen.queryByText("room_id")).not.toBeInTheDocument();
   });
 

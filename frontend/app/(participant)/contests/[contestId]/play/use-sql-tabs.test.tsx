@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi, type Mock } from "vi
 
 import { TAB_BODY_MAX_BYTES, type WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
 import { draftStorageKey } from "./use-autosave";
@@ -252,7 +253,7 @@ describe("the participant's SQL tabs", () => {
     show();
 
     fireEvent.doubleClick(tab("Suspects"));
-    const field = screen.getByRole("textbox", { name: t.rename.replace("{tab}", "Suspects") });
+    const field = screen.getByRole("textbox", { name: fill(t.rename, { tab: "Suspects" }) });
     fireEvent.change(field, { target: { value: "Witnesses" } });
     fireEvent.keyDown(field, { key: "Enter" });
     await settle();
@@ -264,7 +265,7 @@ describe("the participant's SQL tabs", () => {
 
     answer = () => refusal(400, "workspace_title_invalid");
     fireEvent.doubleClick(tab("Witnesses"));
-    const again = screen.getByRole("textbox", { name: t.rename.replace("{tab}", "Witnesses") });
+    const again = screen.getByRole("textbox", { name: fill(t.rename, { tab: "Witnesses" }) });
     fireEvent.change(again, { target: { value: "" } });
     fireEvent.keyDown(again, { key: "Enter" });
     await settle();
@@ -279,7 +280,7 @@ describe("the participant's SQL tabs", () => {
     answer = () => refusal(400, "workspace_title_invalid");
 
     fireEvent.doubleClick(tab("Suspects"));
-    const field = screen.getByRole("textbox", { name: t.rename.replace("{tab}", "Suspects") });
+    const field = screen.getByRole("textbox", { name: fill(t.rename, { tab: "Suspects" }) });
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.keyDown(field, { key: "Enter" });
     await settle();
@@ -310,7 +311,7 @@ describe("closing a tab", () => {
     confirmClose = vi.fn<(title: string) => boolean>(() => false);
     show();
 
-    fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t.close, { tab: "Suspects" }) }));
     await settle();
 
     expect(confirmClose).toHaveBeenCalledWith("Suspects");
@@ -325,7 +326,7 @@ describe("closing a tab", () => {
     await wait(1500);
     calls = [];
 
-    fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t.close, { tab: "Suspects" }) }));
     await settle();
 
     expect(confirmClose).not.toHaveBeenCalled();
@@ -343,7 +344,7 @@ describe("closing a tab", () => {
     expect(window.localStorage.getItem(draftStorageKey("u1", "c1", "tab:t2"))).not.toBeNull();
     calls = [];
 
-    fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t.close, { tab: "Suspects" }) }));
     await settle();
     await wait(30_000);
 
@@ -386,7 +387,7 @@ describe("reordering the tabs", () => {
     await settle();
     // A second drop and a close while the first order is in flight.
     dragOnto("Query 1", "Suspects");
-    fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Query 1") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t.close, { tab: "Query 1" }) }));
     await settle();
 
     expect(requests("PUT")).toHaveLength(1);

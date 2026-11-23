@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { GameSchema, GameTable } from "@/lib/api/schema";
 import type { PlayDictionary } from "./dictionary";
 import { SchemaDiagramDialog } from "./schema-diagram-dialog";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * The console's schema panel: the game's tables, their columns, each column's
@@ -196,7 +197,7 @@ function TableRow({
   t: PlayDictionary["participant"]["play"]["schema"];
 }) {
   const foreignKeys = table.columns.filter((column) => column.references !== "").length;
-  const query = t.query.replace("{table}", table.name);
+  const query = fill(t.query, { table: table.name });
 
   return (
     <li>
@@ -210,7 +211,7 @@ function TableRow({
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          aria-label={(open ? t.collapse : t.expand).replace("{table}", table.name)}
+          aria-label={fill((open ? t.collapse : t.expand), { table: table.name })}
           // At least 44px wide under a finger, with the glyph left where a
           // mouse sees it rather than centred in the wider box.
           className="shrink-0 self-stretch pr-1 pl-3 text-ink-3 hover:bg-sunk hover:text-ink pointer-coarse:min-w-11 pointer-coarse:text-left"
@@ -253,7 +254,7 @@ function TableRow({
                 title={[
                   column.references !== "" ? `fk ${column.references}` : column.type,
                   column.references !== ""
-                    ? t.foreignKey.replace("{table}", column.references)
+                    ? fill(t.foreignKey, { table: column.references })
                     : column.nullable
                       ? t.nullable
                       : "",

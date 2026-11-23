@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { ResultsRow } from "@/lib/api/results";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The medal is drawn once per row render, which makes it a render counter.
 const { prizeBadgeRenders } = vi.hoisted(() => ({ prizeBadgeRenders: { count: 0 } }));
@@ -85,7 +86,7 @@ describe("the participant list", () => {
     expect(within(dan).getByTestId("place")).toHaveTextContent(dict.leaderboard.unplaced);
     expect(within(dan).getByRole("checkbox", { name: "Dan Popa" })).not.toBeChecked();
 
-    expect(screen.getByText(t().ticked.replace("{selected}", "3").replace("{total}", "4"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().ticked, { selected: "3", total: "4" }))).toBeInTheDocument();
   });
 
   test("ticking a row changes that row alone and re-renders no other", async () => {
@@ -134,7 +135,7 @@ describe("the participant list", () => {
     expect(screen.getByText("Ion Rus")).toBeInTheDocument();
     expect(screen.queryByText("Ana Pop")).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByText(t().ticked.replace("{selected}", "2").replace("{total}", "4"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().ticked, { selected: "2", total: "4" }))).toBeInTheDocument();
   });
 
   test("says so when the search matches nobody", async () => {

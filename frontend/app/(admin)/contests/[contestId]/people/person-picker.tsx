@@ -7,6 +7,7 @@ import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { ApiError, request } from "@/lib/api/client";
 import { MIN_DIRECTORY_QUERY_LENGTH } from "@/lib/api/people-terms";
 import { debounce, type Debounced } from "@/lib/format/debounce";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * Debounce for the directory search: under ~200ms bursts are not collapsed,
@@ -189,7 +190,7 @@ export function PersonPicker({
       {/* Announces the choice with its login, which the input text lacks. */}
       <p id={`${id}-help`} role="status" aria-live="polite" className="text-small text-ink-3">
         {chosen
-          ? selectedTemplate.replace("{name}", chosen.value.fullName).replace("{login}", chosen.value.login)
+          ? fill(selectedTemplate, { name: chosen.value.fullName, login: chosen.value.login })
           : helpText}
       </p>
 

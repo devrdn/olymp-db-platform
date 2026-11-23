@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 const { confirmSignupAction, resendCodeAction } = vi.hoisted(() => ({
   confirmSignupAction: vi.fn(),
@@ -31,7 +32,7 @@ function renderForm() {
   return render(<ConfirmForm t={en.auth.confirm} errors={en.errors} />);
 }
 
-const waitingFor = (seconds: number) => en.auth.confirm.resendIn.replace("{seconds}", String(seconds));
+const waitingFor = (seconds: number) => fill(en.auth.confirm.resendIn, { seconds });
 
 describe("ConfirmForm, the fields", () => {
   /** The address is the server's, from its cookie; nothing in the page can choose another. */

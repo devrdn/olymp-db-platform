@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
@@ -33,8 +34,19 @@ describe("DeleteDraftPanel", () => {
 
     await user.click(screen.getByRole("button", { name: t().action }));
 
-    expect(confirm).toHaveBeenCalledWith(t().confirm.replace("{title}", "Spring round"));
+    expect(confirm).toHaveBeenCalledWith(fill(t().confirm, { title: "Spring round" }));
     expect(serverRequest).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  test("names a title that reads like a replacement pattern literally", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<DeleteDraftPanel contestId={contestId} title="Q$&A 50$' off" dict={dict} />);
+
+    await user.click(screen.getByRole("button", { name: t().action }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Q$&A 50$' off"));
     confirm.mockRestore();
   });
 

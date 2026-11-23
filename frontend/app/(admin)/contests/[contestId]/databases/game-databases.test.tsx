@@ -4,6 +4,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
 
 import { GameDatabases } from "./game-databases";
@@ -135,7 +136,7 @@ describe("the contest's databases", () => {
 
     await userEvent.click(screen.getByRole("button", { name: t.drop }));
 
-    expect(confirm).toHaveBeenCalledWith(t.confirm.replace("{who}", "Ivan Petrov"));
+    expect(confirm).toHaveBeenCalledWith(fill(t.confirm, { who: "Ivan Petrov" }));
     expect(dropGameInstanceAction).not.toHaveBeenCalled();
   });
 

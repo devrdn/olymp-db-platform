@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { useHydrated } from "@/lib/use-hydrated";
 
 import { type DeleteDraftState, deleteDraftAction } from "./actions";
@@ -34,7 +35,7 @@ export function DeleteDraftPanel({
       action={formAction}
       className="contents"
       onSubmit={(event) => {
-        if (!window.confirm(t.confirm.replace("{title}", title))) event.preventDefault();
+        if (!window.confirm(fill(t.confirm, { title }))) event.preventDefault();
       }}
     >
       <Panel title={t.heading} dict={dict}>

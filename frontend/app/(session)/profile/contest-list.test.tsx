@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 
 import type { ProfileContest, ProfileContests } from "@/lib/api/profile";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { ContestList } from "./contest-list";
 
@@ -48,7 +49,7 @@ describe("a contest that has ended", () => {
     expect(within(row).getByText(en.profile.contests.points)).toBeInTheDocument();
 
     const link = within(row).getByRole("link", {
-      name: en.profile.contests.report.replace("{title}", "The Greenhouse"),
+      name: fill(en.profile.contests.report, { title: "The Greenhouse" }),
     });
     expect(link).toHaveAttribute("href", "/profile/contests/6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01");
   });
@@ -171,7 +172,7 @@ describe("a contest that has ended", () => {
     expect(within(row).queryByText(/Starts/)).not.toBeInTheDocument();
     expect(
       within(row).getByRole("link", {
-        name: en.profile.contests.report.replace("{title}", "Cut short"),
+        name: fill(en.profile.contests.report, { title: "Cut short" }),
       }),
     ).toBeInTheDocument();
   });
@@ -184,7 +185,7 @@ describe("a contest that has ended", () => {
     expect(within(row).queryByText(en.contests.status.running)).not.toBeInTheDocument();
     expect(
       within(row).getByRole("link", {
-        name: en.profile.contests.report.replace("{title}", "Cut short"),
+        name: fill(en.profile.contests.report, { title: "Cut short" }),
       }),
     ).toBeInTheDocument();
   });
@@ -226,7 +227,7 @@ describe("a contest that is running", () => {
     expect(within(row).queryByText(en.profile.contests.solved)).not.toBeInTheDocument();
     expect(
       within(row).queryByRole("link", {
-        name: en.profile.contests.report.replace("{title}", "Spring open"),
+        name: fill(en.profile.contests.report, { title: "Spring open" }),
       }),
     ).not.toBeInTheDocument();
   });
@@ -281,7 +282,7 @@ describe("the list itself", () => {
     render_(list([finished()], true));
 
     expect(
-      screen.getByText(en.profile.contests.truncated.replace("{count}", "1")),
+      screen.getByText(fill(en.profile.contests.truncated, { count: "1" })),
     ).toBeInTheDocument();
   });
 

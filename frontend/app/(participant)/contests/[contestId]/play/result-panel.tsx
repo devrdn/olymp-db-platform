@@ -13,6 +13,7 @@ import type { ConsoleState } from "./requests";
 import { PaneHandle, SHARE_BOUNDS, useResultRows } from "./pane-splitter";
 import { RowDetail } from "./row-detail";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { refusalKind, showsReference } from "./refusals";
 
 /**
@@ -48,7 +49,7 @@ export function ResultPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       {!sourceTitle ? null : (
         <p className="shrink-0 truncate border-b border-line px-3 py-1 text-small text-ink-3">
-          {dict.participant.play.workspace.resultFrom.replace("{tab}", sourceTitle)}
+          {fill(dict.participant.play.workspace.resultFrom, { tab: sourceTitle })}
         </p>
       )}
       <ResultBody contestId={contestId} state={state} resultDownload={resultDownload} dict={dict} />
@@ -84,7 +85,7 @@ function ResultBody({
     // A write answers with a count rather than with rows.
     return (
       <p role="status" className="p-4 text-body text-ink">
-        {t.affected.replace("{count}", String(result.rows_affected))}
+        {fill(t.affected, { count: result.rows_affected })}
       </p>
     );
   }
@@ -108,7 +109,7 @@ function ResultBody({
           <span>
             {t.meter.time}{" "}
             <b className="font-medium text-ink tabular-nums">
-              {t.meter.ms.replace("{n}", String(Math.max(1, Math.round(result.duration_micros / 1000))))}
+              {fill(t.meter.ms, { n: Math.max(1, Math.round(result.duration_micros / 1000)) })}
             </b>
           </span>
         ) : null}
@@ -131,7 +132,7 @@ function ResultBody({
       <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
         {result.truncated ? (
           <p role="status" className="shrink-0 text-small text-warn">
-            {t.truncated.replace("{count}", String(result.rows.length))}
+            {fill(t.truncated, { count: result.rows.length })}
           </p>
         ) : null}
 
@@ -762,7 +763,7 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
           it; under an ordinary refusal it would read as a fault. */}
       {state.requestId && showsReference(state.code, dict.errors) ? (
         <p className="mt-2 font-mono text-small text-ink-3">
-          {dict.participant.console.reference.replace("{id}", state.requestId)}
+          {fill(dict.participant.console.reference, { id: state.requestId })}
         </p>
       ) : null}
     </div>

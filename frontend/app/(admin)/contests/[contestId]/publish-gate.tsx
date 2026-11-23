@@ -2,6 +2,7 @@ import { Tag } from "@/components/ui/tag";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import type { CellState, PublishGate } from "@/lib/api/publish-gate";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 const HEAD =
@@ -97,7 +98,7 @@ export function PublishGateReport({
                       <Mark state="ok" dict={dict} />
                     ) : (
                       <span className="text-warn">
-                        {t.questionsMissing.replace("{n}", String(row.questionsMissing))}
+                        {fill(t.questionsMissing, { n: row.questionsMissing })}
                       </span>
                     )}
                   </td>

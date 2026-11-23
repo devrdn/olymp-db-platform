@@ -10,6 +10,7 @@ import type { FeedItem } from "@/lib/api/monitor";
 import { readableDuration } from "@/lib/format/bytes";
 import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import type { FeedState } from "./feed-list";
@@ -194,7 +195,7 @@ export function LiveFeed({
       </div>
 
       {feed.gap > 0 ? (
-        <p className="text-small text-warn">{t.feed.gap.replace("{n}", String(feed.gap))}</p>
+        <p className="text-small text-warn">{fill(t.feed.gap, { n: feed.gap })}</p>
       ) : null}
 
       <div className="relative">
@@ -242,13 +243,13 @@ export function LiveFeed({
             {t.feed.toLatest}{" "}
             {feed.missed > 0 ? (
               <span className="font-mono text-label text-accent">
-                {t.feed.newItems.replace("{n}", String(feed.missed))}
+                {fill(t.feed.newItems, { n: feed.missed })}
               </span>
             ) : null}
           </button>
         ) : unseen > 0 ? (
           <button type="button" onClick={jump} className={JUMP}>
-            {t.feed.newItems.replace("{n}", String(unseen))}
+            {fill(t.feed.newItems, { n: unseen })}
           </button>
         ) : null}
       </div>
@@ -347,10 +348,6 @@ const FeedLine = memo(function FeedLine({
     </li>
   );
 });
-
-function fill(template: string, values: Record<string, string | number>): string {
-  return template.replace(/\{(\w+)\}/g, (whole, name: string) => (name in values ? String(values[name]) : whole));
-}
 
 function Detail({ item, t, quiet }: { item: FeedItem; t: MonitorDict; quiet: boolean }) {
   const d = t.feed.describe;

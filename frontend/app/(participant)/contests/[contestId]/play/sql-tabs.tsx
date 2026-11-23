@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { PlayDictionary } from "./dictionary";
 import type { AutosaveEngine, AutosaveStatus } from "./use-autosave";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /** One tab, as the strip needs it. */
 export type SqlTabView = { id: string; title: string };
@@ -223,7 +224,7 @@ export function SqlTabStrip({
                   // Selects the whole name when rename opens (F2 and double-click
                   // both mount this focused), so typing replaces it.
                   onFocus={(event) => event.currentTarget.select()}
-                  aria-label={t.rename.replace("{tab}", tab.title)}
+                  aria-label={fill(t.rename, { tab: tab.title })}
                   defaultValue={tab.title}
                   // The server's bound on a title. An empty or pasted-over name is
                   // still the server's to refuse.
@@ -268,7 +269,7 @@ export function SqlTabStrip({
                   // Not a tab stop: the strip is one stop, and Delete on the focused
                   // tab reaches this button.
                   tabIndex={-1}
-                  aria-label={t.close.replace("{tab}", tab.title)}
+                  aria-label={fill(t.close, { tab: tab.title })}
                   onClick={(event) => {
                     event.stopPropagation();
                     onClose(tab.id);

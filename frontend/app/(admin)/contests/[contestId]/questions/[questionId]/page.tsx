@@ -6,6 +6,7 @@ import { questionListSchema, questionSchema } from "@/lib/api/content";
 import { contentEditable, sequentialActive } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { activeDictionary } from "@/lib/i18n/server";
+import { fill } from "@/lib/i18n/fill";
 
 import { loadContest, loadContestResource } from "../../contest";
 import { QuestionEditor } from "./question-editor";
@@ -66,7 +67,7 @@ export default async function QuestionPage(
 
         <div className="flex flex-wrap items-center gap-3">
           {/* `ord` starts at one and matches the number in the question list. */}
-          <h2 className="text-h3 text-ink">{t.heading.replace("{n}", String(question.ord))}</h2>
+          <h2 className="text-h3 text-ink">{fill(t.heading, { n: question.ord })}</h2>
           {!question.isVisible ? (
             <Tag tone="mute">{dict.workspace.questions.hidden}</Tag>
           ) : null}

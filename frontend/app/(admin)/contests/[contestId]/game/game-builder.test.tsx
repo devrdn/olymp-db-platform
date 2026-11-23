@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 import type { GameDefinition } from "@/lib/api/game";
 
 import { GameBuilder } from "./game-builder";
@@ -145,7 +146,7 @@ describe("the table builder's own structure editor", () => {
   test("locks a table's name and columns once it already holds data", () => {
     show({ rowCounts: { suspects: 3 } });
 
-    expect(screen.getByText(tb.lockedTable.replace("{n}", "3"))).toBeInTheDocument();
+    expect(screen.getByText(fill(tb.lockedTable, { n: "3" }))).toBeInTheDocument();
     expect(screen.getByDisplayValue("suspects")).toBeDisabled();
     expect(screen.getByDisplayValue("full_name")).toBeDisabled();
     expect(screen.getByRole("button", { name: tb.removeTable })).toBeDisabled();
@@ -155,7 +156,7 @@ describe("the table builder's own structure editor", () => {
   test("leaves a table with no rows fully editable", () => {
     show({ rowCounts: { suspects: 0 } });
 
-    expect(screen.queryByText(tb.lockedTable.replace("{n}", "0"))).not.toBeInTheDocument();
+    expect(screen.queryByText(fill(tb.lockedTable, { n: "0" }))).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("suspects")).not.toBeDisabled();
     expect(screen.getByRole("button", { name: tb.removeTable })).not.toBeDisabled();
   });

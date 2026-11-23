@@ -8,6 +8,7 @@ import type { ProfileContest, ProfileContests, ProfileResult } from "@/lib/api/p
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
@@ -65,7 +66,7 @@ export function ContestList({
           </ul>
           {contests.truncated ? (
             <p className="font-mono text-data text-ink-3">
-              {t.truncated.replace("{count}", String(contests.items.length))}
+              {fill(t.truncated, { count: contests.items.length })}
             </p>
           ) : null}
         </>
@@ -96,7 +97,7 @@ function Row({
           /* The name links to the report; the accessible name keeps the title inside it. */
           <Link
             href={`/profile/contests/${contest.contestId}`}
-            aria-label={t.report.replace("{title}", contest.title)}
+            aria-label={fill(t.report, { title: contest.title })}
             className="max-w-head text-row text-ink underline decoration-line-2 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:decoration-ink"
           >
             {contest.title}
@@ -151,10 +152,7 @@ function Row({
         ) : (
           <>
             <p className="font-mono text-data text-ink-2">
-              {t.starts.replace(
-                "{when}",
-                contest.startsAt ? formatMoment(contest.startsAt, { locale }) : shared.unscheduled,
-              )}
+              {fill(t.starts, { when: contest.startsAt ? formatMoment(contest.startsAt, { locale }) : shared.unscheduled })}
             </p>
             {/* The waiting room turns into the contest at the start, so nobody
                has to reload this page to find out. */}

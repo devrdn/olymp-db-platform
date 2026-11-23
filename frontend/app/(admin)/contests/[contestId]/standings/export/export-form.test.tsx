@@ -6,6 +6,7 @@ import type { ResultsReport, ResultsRow } from "@/lib/api/results";
 import { formatTime } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import type { ResultsPdfTexts } from "./pdf/results-document";
 
@@ -112,7 +113,7 @@ function show(value: ResultsReport = report()) {
 
 const t = () => dict.leaderboard.export;
 const download = (kind: "csv" | "table" | "protocol", n: number) =>
-  screen.getByRole("button", { name: t().download[kind].replace("{n}", String(n)) });
+  screen.getByRole("button", { name: fill(t().download[kind], { n }) });
 
 beforeEach(() => {
   for (const mock of [fetchResultsAction, downloadResultsCsv, fetchResultsReport, makeResultsPdf, saveBlob]) {
@@ -332,7 +333,7 @@ describe("the export form", () => {
     expect(screen.getByRole("checkbox", { name: "Vlad Lungu" })).not.toBeChecked();
     expect(download("csv", 1)).toBeEnabled();
     expect(
-      screen.getByText(t().asOf.replace("{time}", formatTime("2026-11-02T10:40:00Z", { locale: "en" }))),
+      screen.getByText(fill(t().asOf, { time: formatTime("2026-11-02T10:40:00Z", { locale: "en" }) })),
     ).toBeInTheDocument();
   });
 
@@ -381,7 +382,7 @@ describe("the export form", () => {
   test("states the moment the list was read", () => {
     show();
 
-    const stamp = screen.getByText(t().asOf.replace("{time}", formatTime("2026-11-02T10:15:00Z", { locale: "en" })));
+    const stamp = screen.getByText(fill(t().asOf, { time: formatTime("2026-11-02T10:15:00Z", { locale: "en" }) }));
     expect(within(stamp.parentElement as HTMLElement).getByRole("button", { name: t().refresh })).toBeInTheDocument();
   });
 });

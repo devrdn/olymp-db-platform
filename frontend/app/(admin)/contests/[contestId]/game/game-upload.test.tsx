@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 import type { Game, Upload, UploadLimits } from "@/lib/api/game";
 
 import { GameUpload } from "./game-upload";
@@ -145,7 +146,7 @@ describe("the game upload panel", () => {
     show();
 
     expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
-    expect(screen.getByText(tu.limitHint.replace("{max}", "4.0 GiB"))).toBeInTheDocument();
+    expect(screen.getByText(fill(tu.limitHint, { max: "4.0 GiB" }))).toBeInTheDocument();
   });
 
   test("shows an unfinished upload and asks for the same file to continue", () => {
@@ -154,7 +155,7 @@ describe("the game upload panel", () => {
     expect(screen.getByText(tu.resumeHeading)).toBeInTheDocument();
     expect(
       screen.getByText(
-        tu.resumeBody.replace("{filename}", "dump.sql").replace("{received}", "5 B").replace("{total}", "12 B"),
+        fill(tu.resumeBody, { filename: "dump.sql", received: "5 B", total: "12 B" }),
       ),
     ).toBeInTheDocument();
   });
@@ -166,7 +167,7 @@ describe("the game upload panel", () => {
 
     await userEvent.upload(screen.getByLabelText(tu.resumePick), wrongFile);
 
-    expect(screen.getByText(tu.resumeMismatch.replace("{filename}", "dump.sql"))).toBeInTheDocument();
+    expect(screen.getByText(fill(tu.resumeMismatch, { filename: "dump.sql" }))).toBeInTheDocument();
     expect(beginGameUploadAction).not.toHaveBeenCalled();
     expect(currentGameUploadAction).not.toHaveBeenCalled();
   });

@@ -1,6 +1,7 @@
 import { Band } from "@/components/layout/band";
 import { SqlBlock } from "@/components/product/sql-block";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 /** The previewed statement: readable at a glance even without SQL. */
 export const PREVIEW_QUERY = `SELECT name, city, last_seen
@@ -65,7 +66,7 @@ export function ConsolePreview({ dict }: { dict: Dictionary }) {
               <span>
                 {meter.time}{" "}
                 <b className="font-medium text-ink tabular-nums">
-                  {meter.ms.replace("{n}", PREVIEW_MS)}
+                  {fill(meter.ms, { n: PREVIEW_MS })}
                 </b>
               </span>
             </div>

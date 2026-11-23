@@ -3,6 +3,7 @@
 import { ExportMenu } from "@/components/product/export-menu";
 import { monitorCsvHref, type FeedPage, type Roster } from "@/lib/api/monitor";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { LiveFeed } from "./live-feed";
@@ -109,7 +110,7 @@ export function Problem({
     : problem.kind === "forbidden"
       ? t.problems.forbidden
       : problem.kind === "tooOften"
-        ? t.problems.tooOften.replace("{seconds}", String(problem.seconds))
+        ? fill(t.problems.tooOften, { seconds: problem.seconds })
         : t.problems.failed;
   return (
     // Collapsed when empty rather than hidden, so it stays in the accessibility

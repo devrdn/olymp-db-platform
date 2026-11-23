@@ -26,6 +26,7 @@ import {
 } from "./create-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * Creating accounts from the register: one account (`NewAccountForm`) or a
@@ -330,9 +331,9 @@ function ImportRosterForm({
         </DialogHeader>
 
         <p role="status" className="flex flex-wrap items-baseline gap-x-2 text-small text-ink-2">
-          <span className="text-good">{t.roster.created.replace("{n}", String(created.length))}</span>
+          <span className="text-good">{fill(t.roster.created, { n: created.length })}</span>
           {skipped.length > 0 ? (
-            <span className="text-warn">· {t.roster.skipped.replace("{n}", String(skipped.length))}</span>
+            <span className="text-warn">· {fill(t.roster.skipped, { n: skipped.length })}</span>
           ) : null}
         </p>
 
@@ -389,7 +390,7 @@ function ImportRosterForm({
         {notImported.length > 0 ? (
           <NotImportedRows
             logins={notImported}
-            title={t.roster.notImported.replace("{n}", String(notImported.length))}
+            title={fill(t.roster.notImported, { n: notImported.length })}
             why={stopped ? (messageForCode(stopped, dict.errors)) : null}
           />
         ) : null}

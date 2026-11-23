@@ -6,6 +6,7 @@ import { EMAIL_SKIP_REASONS } from "@/lib/api/accounts-terms";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { plural } from "@/lib/i18n/plural";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * Emailing sign-in details beside an issued one-time password: the option on
@@ -118,7 +119,7 @@ export function sendingTime(
 ): string {
   const t = dict.accounts.signInMail;
   const minutes = plural(t.minutes, Math.max(1, Math.ceil(queued / perMinute)), locale);
-  return (queued === 1 ? t.etaOne : t.etaMany).replace("{minutes}", minutes);
+  return fill((queued === 1 ? t.etaOne : t.etaMany), { minutes });
 }
 
 /** Up to this many accounts not emailed, their logins show without a click. */
@@ -164,14 +165,12 @@ export function EmailSummary({
       {summary.notEmailed > 0 ? (
         <>
           <p className="text-small text-warn">
-            {t.notEmailed.replace("{n}", String(summary.notEmailed))}
+            {fill(t.notEmailed, { n: summary.notEmailed })}
           </p>
           {summary.groups.map((group) => (
             <details key={group.reason} open={open}>
               <summary className="cursor-pointer text-small text-ink-2 marker:text-ink-3 hover:text-ink">
-                {t.group
-                  .replace("{n}", String(group.logins.length))
-                  .replace("{reason}", reasons[group.reason] ?? group.reason)}
+                {fill(t.group, { n: group.logins.length, reason: reasons[group.reason] ?? group.reason })}
               </summary>
               <ul className="mt-1.5 flex max-h-40 flex-wrap gap-x-3 gap-y-1 overflow-y-auto font-mono text-data text-ink-2">
                 {group.logins.map((login, index) => (

@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { runQuery, type ConsoleState } from "./requests";
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
 import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * The SQL editor: always visible, never behind a tab. It is only the input
@@ -118,7 +119,7 @@ export function ConsoleEditor({
     contestId,
     initial: initialTabs,
     localTitle: te.local,
-    confirmClose: (title) => window.confirm(te.closeConfirm.replace("{tab}", title)),
+    confirmClose: (title) => window.confirm(fill(te.closeConfirm, { tab: title })),
     // A draft that beat the server copy goes into that tab's document and, if
     // the tab is open, into the field a run is built from.
     onRestore: (id, text) => {

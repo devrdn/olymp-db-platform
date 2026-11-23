@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { CELL_CLIP_CHARS, ResultPanel } from "./result-panel";
 import type { ConsoleState } from "./requests";
@@ -313,7 +314,7 @@ describe("what the table says about itself", () => {
     // The count beside its label: a two-row result also has a cell reading "2".
     const meter = screen.getByText(t.meter.rows).closest("span");
     expect(meter).toHaveTextContent("2");
-    expect(screen.getByText(t.meter.ms.replace("{n}", "38"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.meter.ms, { n: "38" }))).toBeInTheDocument();
   });
 
   // An unmeasured duration is not a measured zero.
@@ -470,7 +471,7 @@ describe("a large result", () => {
     expect(cell.getAttribute("title")?.length).toBeLessThanOrEqual(CELL_CLIP_CHARS + 1);
 
     await userEvent.click(cell.closest("tr") as HTMLElement);
-    const region = screen.getByRole("region", { name: en.participant.play.workspace.row.region.replace("{n}", "1") });
+    const region = screen.getByRole("region", { name: fill(en.participant.play.workspace.row.region, { n: "1" }) });
     expect(region.querySelector("dd")?.textContent).toBe(huge);
 
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.download }));
@@ -504,7 +505,7 @@ describe("which tab the result came from", () => {
     );
 
     expect(
-      screen.getByText(en.participant.play.workspace.resultFrom.replace("{tab}", "Suspects")),
+      screen.getByText(fill(en.participant.play.workspace.resultFrom, { tab: "Suspects" })),
     ).toBeInTheDocument();
   });
 
@@ -520,7 +521,7 @@ describe("which tab the result came from", () => {
     );
 
     expect(
-      screen.getByText(en.participant.play.workspace.resultFrom.replace("{tab}", "Suspects")),
+      screen.getByText(fill(en.participant.play.workspace.resultFrom, { tab: "Suspects" })),
     ).toBeInTheDocument();
   });
 
@@ -593,7 +594,7 @@ describe("opening one row of the result", () => {
 
     await user.click(rowOf(2));
 
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "3") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "3" }) })).toBeInTheDocument();
     expect(rowOf(2)).toHaveAttribute("aria-selected", "true");
     expect(rowOf(1)).toHaveAttribute("aria-selected", "false");
   });
@@ -607,12 +608,12 @@ describe("opening one row of the result", () => {
 
     rowOf(1).focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "2") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "2" }) })).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
     rowOf(3).focus();
     await user.keyboard(" ");
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "4" }) })).toBeInTheDocument();
   });
 
   // Neither `aria-selected` on a table row nor the new panel is announced,
@@ -623,7 +624,7 @@ describe("opening one row of the result", () => {
 
     await user.click(rowOf(2));
 
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "3") })).toHaveFocus();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "3" }) })).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(rowOf(2)).toHaveFocus();
@@ -636,17 +637,17 @@ describe("opening one row of the result", () => {
     await user.click(rowOf(4));
     await user.keyboard("{ArrowDown}");
 
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "6") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "6" }) })).toBeInTheDocument();
     expect(rowOf(5)).toHaveAttribute("aria-selected", "true");
 
     await user.keyboard("{ArrowUp}{ArrowUp}");
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "4" }) })).toBeInTheDocument();
 
     // They stop at the ends rather than wrapping.
     rowOf(0).focus();
     await user.click(rowOf(0));
     await user.keyboard("{ArrowUp}");
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "1") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "1" }) })).toBeInTheDocument();
   });
 
   test("closes on Esc and on the button", async () => {
@@ -668,7 +669,7 @@ describe("opening one row of the result", () => {
     const { rerender } = show(answer(10));
 
     await user.click(rowOf(3));
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "4" }) })).toBeInTheDocument();
 
     rerender(<ResultPanel contestId="c1" resultDownload state={answer(10)} dict={en} />);
     expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
@@ -698,8 +699,8 @@ describe("opening one row of the result", () => {
     fireEvent.scroll(scroller);
 
     expect(within(table).queryByText("cell-3-0")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).getByText("cell-3-1")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "4" }) })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: fill(t.region, { n: "4" }) })).getByText("cell-3-1")).toBeInTheDocument();
 
     (scroller as unknown as { scrollTop: number }).scrollTop = 0;
     fireEvent.scroll(scroller);
@@ -716,7 +717,7 @@ describe("opening one row of the result", () => {
     await user.click(rowOf(0));
     for (let i = 0; i < 20; i++) await user.keyboard("{ArrowDown}");
 
-    expect(screen.getByRole("region", { name: t.region.replace("{n}", "21") })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: fill(t.region, { n: "21" }) })).toBeInTheDocument();
     // Ten rows of 44px per hundred pixels: row 20 ends at 924px, and a 440px
     // box showing it has to have scrolled at least to 484.
     expect(scroller.scrollTop).toBeGreaterThanOrEqual(21 * 44 - 440);
@@ -779,7 +780,7 @@ describe("opening one row of the result", () => {
     expect(scroller.className).toMatch(/(^|\s)flex-1(\s|$)/);
     expect(scroller.className).toMatch(/(^|\s)min-h-0(\s|$)/);
 
-    const panel = screen.getByRole("region", { name: t.region.replace("{n}", "3") });
+    const panel = screen.getByRole("region", { name: fill(t.region, { n: "3" }) });
     expect(panel.className).toMatch(/(^|\s)max-narrow:flex-1(\s|$)/);
     expect(panel.className).toMatch(/(^|\s)min-h-0(\s|$)/);
     expect((panel.querySelector("dl") as HTMLElement).className).toMatch(/(^|\s)overflow-auto(\s|$)/);

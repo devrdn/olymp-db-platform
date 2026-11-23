@@ -4,6 +4,7 @@ import { ExportMenu } from "@/components/product/export-menu";
 import { MONITOR_FLAGS, participantCsvHref, type MonitorFlags, type Participant } from "@/lib/api/monitor";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { FlagBadges } from "../participants-table";
 
@@ -52,12 +53,12 @@ export function ParticipantHeader({
             <dt className={TERM}>{t.clock}</dt>
             <dd className="text-small text-ink-2">
               {participant.startedAt
-                ? t.started.replace("{time}", formatMoment(participant.startedAt, { locale }))
+                ? fill(t.started, { time: formatMoment(participant.startedAt, { locale }) })
                 : t.notStarted}
             </dd>
             <dd className="text-small text-ink-2">
               {participant.finishedAt
-                ? t.finished.replace("{time}", formatMoment(participant.finishedAt, { locale }))
+                ? fill(t.finished, { time: formatMoment(participant.finishedAt, { locale }) })
                 : t.notFinished}
             </dd>
           </div>

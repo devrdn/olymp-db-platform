@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AnswerInput, ClarificationQueue, QueueState, StaffClarification } from "@/lib/api/clarifications";
 import { ANNOUNCEMENT_MAX_CHARS, ANSWER_MAX_CHARS } from "@/lib/api/clarifications";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { ClarificationsDesk, DESK_POLL_MS } from "./clarifications-desk";
 
@@ -108,10 +109,10 @@ describe("the staff desk", () => {
   test("shows the waiting questions with who asked and what about, and both counts", () => {
     show();
 
-    expect(screen.getByRole("button", { name: t.waiting.replace("{n}", "1") })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: t.answered.replace("{n}", "2") })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: fill(t.waiting, { n: "1" }) })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: fill(t.answered, { n: "2" }) })).toHaveAttribute("aria-pressed", "false");
     const item = screen.getByRole("article");
-    expect(within(item).getByText(t.asker.replace("{name}", "Ana Ionescu").replace("{login}", "ana"))).toBeInTheDocument();
+    expect(within(item).getByText(fill(t.asker, { name: "Ana Ionescu", login: "ana" }))).toBeInTheDocument();
     expect(within(item).getByText("Question 1: The greenhouse")).toBeInTheDocument();
     expect(within(item).getByText("Is the year inclusive?")).toHaveClass("whitespace-pre-wrap");
   });
@@ -145,7 +146,7 @@ describe("the staff desk", () => {
     expect(within(item).getByText(t.publicNote)).toBeInTheDocument();
 
     await userEvent.type(field, "Yes, inclusive.");
-    expect(within(item).getByText(t.counter.replace("{n}", "15").replace("{max}", String(ANSWER_MAX_CHARS)))).toBeInTheDocument();
+    expect(within(item).getByText(fill(t.counter, { n: "15", max: ANSWER_MAX_CHARS }))).toBeInTheDocument();
     await userEvent.click(within(item).getByRole("radio", { name: t.public }));
     await userEvent.click(within(item).getByRole("button", { name: t.send }));
 
@@ -157,7 +158,7 @@ describe("the staff desk", () => {
     expect(await screen.findByText(t.sent)).toBeInTheDocument();
     // It leaves the waiting list, and the counts follow.
     expect(screen.queryByRole("article")).toBeNull();
-    expect(screen.getByRole("button", { name: t.answered.replace("{n}", "3") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: fill(t.answered, { n: "3" }) })).toBeInTheDocument();
   });
 
   test("declines with an empty reply", async () => {
@@ -185,7 +186,7 @@ describe("the staff desk", () => {
   test("edits an answer with the form filled from it", async () => {
     api.queues.answered = queue([answered("c9", "private")], { open: 1, answered: 1 });
     show();
-    await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+    await userEvent.click(screen.getByRole("button", { name: fill(t.answered, { n: "2" }) }));
 
     const item = await screen.findByRole("article");
     expect(within(item).getByTestId("markdown")).toHaveTextContent("Yes.");
@@ -218,7 +219,7 @@ describe("the staff desk", () => {
     expect(api.reads.at(-1)?.state).toBe("open");
     expect(await screen.findByText("A new one")).toBeInTheDocument();
     expect(screen.getAllByRole("textbox", { name: t.answerLabel })[0]).toHaveValue("Half an answer");
-    expect(screen.getByRole("button", { name: t.waiting.replace("{n}", "2") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: fill(t.waiting, { n: "2" }) })).toBeInTheDocument();
   });
 
   // The navigation's waiting count is drawn by the server layout, once; the
@@ -323,7 +324,7 @@ describe("the staff desk", () => {
       return queue(all.slice(from, from + limit), { open: 1, answered: all.length });
     };
     show();
-    await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+    await userEvent.click(screen.getByRole("button", { name: fill(t.answered, { n: "2" }) }));
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(50));
 
     for (const expected of [100, 150, 160]) {
@@ -342,7 +343,7 @@ describe("the staff desk", () => {
     test("goes to the field when an answer opens for editing, and back to Edit on Cancel", async () => {
       api.queues.answered = queue([answered("c9")], { open: 1, answered: 1 });
       show();
-      await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+      await userEvent.click(screen.getByRole("button", { name: fill(t.answered, { n: "2" }) }));
       const item = await screen.findByRole("article");
 
       await userEvent.click(within(item).getByRole("button", { name: t.edit }));
@@ -355,7 +356,7 @@ describe("the staff desk", () => {
     test("returns to Edit once an edit is saved", async () => {
       api.queues.answered = queue([answered("c9")], { open: 1, answered: 1 });
       show();
-      await userEvent.click(screen.getByRole("button", { name: t.answered.replace("{n}", "2") }));
+      await userEvent.click(screen.getByRole("button", { name: fill(t.answered, { n: "2" }) }));
       const item = await screen.findByRole("article");
       await userEvent.click(within(item).getByRole("button", { name: t.edit }));
       await userEvent.click(within(item).getByRole("button", { name: t.save }));

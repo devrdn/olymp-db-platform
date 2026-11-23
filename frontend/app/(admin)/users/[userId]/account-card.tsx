@@ -34,6 +34,7 @@ import {
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "../email-delivery";
 import { offeredActions } from "./offered";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * One account and its actions. Three forms for three endpoints (profile, roles,
@@ -155,7 +156,7 @@ function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary })
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent closeLabel={dict.accounts.selection.bulk.close}>
           <DialogHeader>
-            <DialogTitle>{t.unlockSignInConfirmTitle.replace("{login}", account.login)}</DialogTitle>
+            <DialogTitle>{fill(t.unlockSignInConfirmTitle, { login: account.login })}</DialogTitle>
             <DialogDescription>{t.unlockSignInConfirmBody}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -243,10 +244,8 @@ export function AccountCard({
             <p className="text-small text-ink-3">
               {/* A backfilled row may lack a timestamp; drop the date half of the sentence. */}
               {statusChangedAtLabel
-                ? t.changedBy
-                    .replace("{name}", account.statusChangedByLogin || t.unknownActor)
-                    .replace("{date}", statusChangedAtLabel)
-                : t.changedByNoDate.replace("{name}", account.statusChangedByLogin || t.unknownActor)}
+                ? fill(t.changedBy, { name: account.statusChangedByLogin || t.unknownActor, date: statusChangedAtLabel })
+                : fill(t.changedByNoDate, { name: account.statusChangedByLogin || t.unknownActor })}
             </p>
           </div>
         </Panel>

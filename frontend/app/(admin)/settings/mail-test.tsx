@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { MailStatus } from "@/lib/api/settings";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 import { sendTestMailAction, type MailTestState } from "./actions";
 
@@ -24,7 +25,7 @@ export function MailTest({ mail, dict }: { mail: MailStatus; dict: Dictionary })
       <div className="flex flex-col gap-1.5">
         <h2 className="text-h3 text-ink">{t.heading}</h2>
         <p className="max-w-body text-body text-ink-2">
-          {mail.enabled ? t.on.replace("{address}", mail.from) : t.off}
+          {mail.enabled ? fill(t.on, { address: mail.from }) : t.off}
         </p>
       </div>
 
@@ -39,7 +40,7 @@ export function MailTest({ mail, dict }: { mail: MailStatus; dict: Dictionary })
 
             {state.sentTo && !failure ? (
               <p role="status" className="text-small text-good">
-                {t.sent.replace("{address}", state.sentTo)}
+                {fill(t.sent, { address: state.sentTo })}
               </p>
             ) : null}
 

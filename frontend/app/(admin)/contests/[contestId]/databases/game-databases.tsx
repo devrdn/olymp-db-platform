@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 import { dropGameInstanceAction, type GameState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -169,7 +170,7 @@ function DropDatabase({
       action={formAction}
       className="flex flex-col items-end gap-1"
       onSubmit={(event) => {
-        if (!window.confirm(t.confirm.replace("{who}", who))) event.preventDefault();
+        if (!window.confirm(fill(t.confirm, { who }))) event.preventDefault();
       }}
     >
       <input type="hidden" name="contestId" value={contestId} />

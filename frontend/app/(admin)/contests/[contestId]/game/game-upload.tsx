@@ -20,6 +20,7 @@ import {
 } from "./actions";
 import { useGamePoll } from "./game-poll";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * Consecutive out-of-order refusals resynced automatically (this tab's offset
@@ -406,7 +407,7 @@ export function GameUpload({
             <input type="file" className="sr-only" onChange={handleFileChange} />
           </label>
           <span className="text-label text-ink-3">
-            {tu.limitHint.replace("{max}", readableBytes(uploadLimits.maxFileBytes))}
+            {fill(tu.limitHint, { max: readableBytes(uploadLimits.maxFileBytes) })}
           </span>
         </div>
       ) : null}
@@ -415,14 +416,11 @@ export function GameUpload({
         <div className="flex flex-col gap-2 border-l-2 border-warn pl-4">
           <p className="text-control text-ink">{tu.resumeHeading}</p>
           <p className="max-w-body text-small text-ink-2">
-            {tu.resumeBody
-              .replace("{filename}", resumable.filename)
-              .replace("{received}", readableBytes(resumable.receivedBytes))
-              .replace("{total}", readableBytes(resumable.declaredBytes))}
+            {fill(tu.resumeBody, { filename: resumable.filename, received: readableBytes(resumable.receivedBytes), total: readableBytes(resumable.declaredBytes) })}
           </p>
           {mismatch ? (
             <p role="alert" className="max-w-body text-small text-bad">
-              {tu.resumeMismatch.replace("{filename}", resumable.filename)}
+              {fill(tu.resumeMismatch, { filename: resumable.filename })}
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-3">
@@ -469,14 +467,11 @@ export function GameUpload({
           </div>
           <div className="flex flex-wrap items-center gap-3 text-label text-ink-3">
             <span>
-              {tu.progress
-                .replace("{sent}", readableBytes(sentBytes))
-                .replace("{total}", readableBytes(totalBytes))
-                .replace("{percent}", String(percent))}
+              {fill(tu.progress, { sent: readableBytes(sentBytes), total: readableBytes(totalBytes), percent })}
             </span>
-            {rateBps > 0 ? <span>{tu.rate.replace("{rate}", readableBytes(rateBps))}</span> : null}
+            {rateBps > 0 ? <span>{fill(tu.rate, { rate: readableBytes(rateBps) })}</span> : null}
             {etaSeconds !== null ? (
-              <span>{tu.eta.replace("{time}", readableDuration(etaSeconds))}</span>
+              <span>{fill(tu.eta, { time: readableDuration(etaSeconds) })}</span>
             ) : null}
           </div>
           {phase === "uploading" ? (
@@ -606,7 +601,7 @@ export function GameUpload({
                   {tu.next}
                 </button>
                 {windowTotal > 0 ? (
-                  <span className="text-label text-ink-3">{tu.totalLines.replace("{n}", String(windowTotal))}</span>
+                  <span className="text-label text-ink-3">{fill(tu.totalLines, { n: windowTotal })}</span>
                 ) : null}
               </form>
 

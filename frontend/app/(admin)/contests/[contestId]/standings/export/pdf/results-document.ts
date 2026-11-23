@@ -9,6 +9,7 @@ import type { Content } from "pdfmake";
 import type { ResultsCell, ResultsField, ResultsReport, ResultsRow } from "@/lib/api/results";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { plural } from "@/lib/i18n/plural";
 
 import type { LogoImage } from "../../../story/pdf/logo";
@@ -91,10 +92,6 @@ export function offsetLabel(longOffset: string): string {
 export function contestTitle(report: ResultsReport, language: string): string {
   const { titles, defaultLanguage } = report.contest;
   return titles[language] || titles[defaultLanguage] || "";
-}
-
-function fill(template: string, values: Record<string, string | number>): string {
-  return template.replace(/\{(\w+)\}/g, (whole, key: string) => (key in values ? String(values[key]) : whole));
 }
 
 function textStyle(step: Step, color: string = COLOR.ink): Content {

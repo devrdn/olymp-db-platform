@@ -6,6 +6,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { type Contest, MAX_GRACE_PERIOD_MIN } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { extendGraceAction, type SettingsState } from "./actions";
 import { Panel, SaveRow } from "./settings-panels";
@@ -30,7 +31,7 @@ export function GracePanel({ contest, dict }: { contest: Contest; dict: Dictiona
         <input type="hidden" name="currentGraceMin" value={inForce} />
 
         <p className="text-body text-ink-2">
-          {inForce > 0 ? t.inForce.replace("{n}", String(inForce)) : t.inForceDefault}
+          {inForce > 0 ? fill(t.inForce, { n: inForce }) : t.inForceDefault}
         </p>
 
         <Field id="gracePeriodMin" label={t.label} describedBy={hintId}>

@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 
 import { refreshQuestions, submitAnswer, type AnswerState } from "./requests";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { refusalKind, showsReference } from "./refusals";
 
 /**
@@ -167,8 +168,8 @@ export function QuestionsPanel({
             <li key={index} className="flex items-baseline gap-2 text-small text-ink-3">
               <Lock aria-hidden="true" className="size-3.5 shrink-0 self-center" />
               {index > 1
-                ? t.lockedItem.replace("{n}", String(index)).replace("{m}", String(index - 1))
-                : t.lockedNotYet.replace("{n}", String(index))}
+                ? fill(t.lockedItem, { n: index, m: index - 1 })
+                : fill(t.lockedNotYet, { n: index })}
             </li>
           ))}
         </ul>
@@ -176,7 +177,7 @@ export function QuestionsPanel({
       {/* Once for the list: the penalty belongs to the contest
           (docs/ARCHITECTURE.md §6.1.1). */}
       {scoring === "icpc" ? (
-        <p className="text-small text-ink-3">{t.icpcPenalty.replace("{n}", String(icpcPenaltyMin))}</p>
+        <p className="text-small text-ink-3">{fill(t.icpcPenalty, { n: icpcPenaltyMin })}</p>
       ) : null}
     </div>
   );
@@ -254,7 +255,7 @@ function QuestionCard({
           <span aria-hidden="true" className="shrink-0 font-mono text-label text-ink-3">
             {index}.
           </span>
-          <span className="sr-only">{t.numberLabel.replace("{n}", String(index))}</span>
+          <span className="sr-only">{fill(t.numberLabel, { n: index })}</span>
           {title ? (
             <h2 id={titleId} className="min-w-0 text-row text-ink [overflow-wrap:anywhere]">
               {title}
@@ -278,7 +279,7 @@ function QuestionCard({
               are shown rather than a meaningless zero. */}
           {scoring !== "icpc" ? (
             <span className="font-mono text-label text-ink-3 uppercase">
-              {(question.isBonus ? t.bonusPoints : t.points).replace("{n}", String(question.points))}
+              {fill((question.isBonus ? t.bonusPoints : t.points), { n: question.points })}
             </span>
           ) : null}
         </div>
@@ -286,7 +287,7 @@ function QuestionCard({
 
       {question.isBonus && !closed ? (
         <p className="text-small text-ink-2 [overflow-wrap:anywhere]">
-          {t.bonusHint.replace("{n}", String(question.points))}
+          {fill(t.bonusHint, { n: question.points })}
         </p>
       ) : null}
 
@@ -351,7 +352,7 @@ function QuestionCard({
             ) : attemptsRemaining !== undefined ? (
               <span className="text-small text-ink-2">
                 {attemptsRemaining > 0
-                  ? t.attemptsLeft.replace("{n}", String(attemptsRemaining))
+                  ? fill(t.attemptsLeft, { n: attemptsRemaining })
                   : t.noAttempts}
               </span>
             ) : null}
@@ -474,8 +475,8 @@ function Verdict({
     scoring === "icpc"
       ? t.correctIcpc
       : bonus !== undefined
-        ? t.correctBonus.replace("{n}", String(bonus))
-        : t.correct.replace("{n}", String(points));
+        ? fill(t.correctBonus, { n: bonus })
+        : fill(t.correct, { n: points });
   return (
     <p role="status" className={cn("text-small", correct ? "text-good" : "text-ink-2")}>
       {correct ? correctText : t.incorrect}
@@ -500,7 +501,7 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
       {message}
       {state.subject ? <span className="ml-1 font-mono text-ink-2">{state.subject}</span> : null}
       {state.requestId && showsReference(state.code, dict.errors) ? (
-        <p className="mt-1.5 font-mono text-ink-3">{t.reference.replace("{id}", state.requestId)}</p>
+        <p className="mt-1.5 font-mono text-ink-3">{fill(t.reference, { id: state.requestId })}</p>
       ) : null}
     </div>
   );

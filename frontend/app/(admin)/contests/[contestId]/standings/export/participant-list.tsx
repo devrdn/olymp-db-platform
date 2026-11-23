@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import type { Scoring } from "@/lib/api/contests";
 import type { ResultsRow } from "@/lib/api/results";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import {
@@ -66,7 +67,7 @@ export function ParticipantList({
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="font-mono text-label text-ink-3 uppercase">{t.whom}</h3>
         <p className="font-mono text-data text-ink-3" aria-live="polite">
-          {t.ticked.replace("{selected}", String(selected.size)).replace("{total}", String(rows.length))}
+          {fill(t.ticked, { selected: selected.size, total: rows.length })}
         </p>
       </div>
 

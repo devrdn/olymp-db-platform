@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 
 import type { ProfileReport } from "@/lib/api/profile";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { ResultSummary } from "./result-summary";
 
@@ -79,7 +80,7 @@ describe("a contest scored in points", () => {
     // 5,400,000 ms is an hour and a half.
     expect(figure(t().result.worked)).toBe("1:30:00");
     expect(figure(t().result.place)).toContain("4");
-    expect(within(strip()).getByText(t().result.placeOf.replace("{n}", "31"))).toBeInTheDocument();
+    expect(within(strip()).getByText(fill(t().result.placeOf, { n: "31" }))).toBeInTheDocument();
     expect(screen.queryByText(t().result.placePending)).not.toBeInTheDocument();
   });
 
@@ -175,8 +176,8 @@ describe("a report cut at the bound", () => {
     const questions = report().questions;
     const attempts = questions.reduce((sum, question) => sum + question.attempts, 0);
     expect(attempts).toBe(5);
-    expect(screen.getByText(t().questions.truncated.replace("{n}", "5"))).toBeInTheDocument();
-    expect(screen.queryByText(t().questions.truncated.replace("{n}", "2"))).not.toBeInTheDocument();
+    expect(screen.getByText(fill(t().questions.truncated, { n: "5" }))).toBeInTheDocument();
+    expect(screen.queryByText(fill(t().questions.truncated, { n: "2" }))).not.toBeInTheDocument();
   });
 
   test("says nothing when the report is whole", () => {

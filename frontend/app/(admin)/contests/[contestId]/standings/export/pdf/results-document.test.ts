@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 
 import type { ResultsReport, ResultsRow } from "@/lib/api/results";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { A4, MM } from "../../../story/pdf/theme";
 import {
@@ -296,8 +297,8 @@ describe("resultsProtocolDocument", () => {
     expect(text).toContain("Results protocol");
     expect(text).toContain("Participants: 3 of 12");
     expect(text).toContain(texts.scoring.icpc);
-    expect(text).toContain(texts.icpcPenalty.other.replace("{n}", "20"));
-    expect(text).toContain(texts.prizePlaces.replace("{first}", "1").replace("{second}", "1").replace("{third}", "1"));
+    expect(text).toContain(fill(texts.icpcPenalty.other, { n: "20" }));
+    expect(text).toContain(fill(texts.prizePlaces, { first: "1", second: "1", third: "1" }));
   });
 
   test("the rules of a points contest say nothing of an ICPC penalty", () => {
@@ -306,7 +307,7 @@ describe("resultsProtocolDocument", () => {
     );
 
     expect(text).toContain(texts.scoring.points);
-    expect(text).not.toContain(texts.icpcPenalty.other.replace("{n}", "20"));
+    expect(text).not.toContain(fill(texts.icpcPenalty.other, { n: "20" }));
   });
 
   test("the protocol lists prize winners by prize with names only", () => {

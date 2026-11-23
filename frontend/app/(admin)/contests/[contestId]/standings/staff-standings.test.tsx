@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
 import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // One stable router object, as Next provides: the component lists `router` in
 // an effect's dependencies.
@@ -65,7 +66,7 @@ describe("the staff table", () => {
     expect(within(row).getByText("moriarty")).toBeInTheDocument();
     expect(within(row).getByText(t().disqualified)).toBeInTheDocument();
     expect(
-      screen.getByText(t().shownFrozen.replace("{time}", formatTime("2026-09-20T11:30:00Z", { locale: "en" }))),
+      screen.getByText(fill(t().shownFrozen, { time: formatTime("2026-09-20T11:30:00Z", { locale: "en" }) })),
     ).toBeInTheDocument();
   });
 
@@ -136,7 +137,7 @@ describe("the staff table", () => {
     show(board({ revealedAt: "2026-09-20T13:00:00Z", shown: { state: "final", frozenAt: undefined } }), "finished");
     expect(screen.queryByRole("button", { name: t().reveal })).not.toBeInTheDocument();
     expect(
-      screen.getByText(t().revealedAt.replace("{time}", formatTime("2026-09-20T13:00:00Z", { locale: "en" }))),
+      screen.getByText(fill(t().revealedAt, { time: formatTime("2026-09-20T13:00:00Z", { locale: "en" }) })),
     ).toBeInTheDocument();
   });
 

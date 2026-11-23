@@ -1,6 +1,7 @@
 import { announcementListSchema, CLARIFICATION_PAGE_SIZE, clarificationQueueSchema } from "@/lib/api/clarifications";
 import { questionListSchema } from "@/lib/api/content";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
+import { fill } from "@/lib/i18n/fill";
 
 import { loadContest, loadContestResource } from "../contest";
 import { ClarificationsDesk, type QuestionLabel } from "./clarifications-desk";
@@ -33,7 +34,7 @@ export default async function ClarificationsPage(props: PageProps<"/contests/[co
     .map((q, index) => {
       const n = String(index + 1);
       const title = (q.texts[locale]?.title || (fallback ? q.texts[fallback]?.title : "") || "").trim();
-      return { id: q.id, label: title ? t.aboutTitled.replace("{n}", n).replace("{title}", title) : t.about.replace("{n}", n) };
+      return { id: q.id, label: title ? fill(t.aboutTitled, { n, title }) : fill(t.about, { n }) };
     });
 
   return (

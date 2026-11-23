@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { loggedQuery } from "@/components/product/test-fixtures";
 import type { Answers, Attempt } from "@/lib/api/journal";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { MyAnswers } from "./my-answers";
 
@@ -55,33 +56,33 @@ describe("my answers", () => {
   test("groups the attempts by question, with the verdict and the points", () => {
     renderTab();
 
-    expect(screen.getByRole("heading", { name: t().question.replace("{n}", "1") })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: fill(t().question, { n: "1" }) })).toBeInTheDocument();
     const rows = screen.getAllByRole("listitem");
     expect(within(rows[0]).getByText(t().wrong)).toBeInTheDocument();
     expect(within(rows[1]).getByText(t().correct)).toBeInTheDocument();
-    expect(within(rows[1]).getByText(t().points.replace("{n}", "20"))).toBeInTheDocument();
+    expect(within(rows[1]).getByText(fill(t().points, { n: "20" }))).toBeInTheDocument();
   });
 
   test("opens an attempt to the queries that led to it, and counts the ones left out", () => {
     renderTab();
 
     // Two carried and seven counted: the toggle names all nine.
-    fireEvent.click(screen.getByRole("button", { name: t().queriesToggle.replace("{n}", "9") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t().queriesToggle, { n: "9" }) }));
     expect(screen.getByText("SELECT 3")).toBeInTheDocument();
-    expect(screen.getByText(t().moreQueries.replace("{n}", "7"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t().moreQueries, { n: "7" }))).toBeInTheDocument();
   });
 
   test("shows no address on the queries under an attempt", () => {
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: t().queriesToggle.replace("{n}", "9") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t().queriesToggle, { n: "9" }) }));
     expect(screen.queryByText("10.0.0.1")).not.toBeInTheDocument();
   });
 
   test("says when an attempt had no queries before it", () => {
     renderTab();
 
-    fireEvent.click(screen.getByRole("button", { name: t().queriesToggle.replace("{n}", "0") }));
+    fireEvent.click(screen.getByRole("button", { name: fill(t().queriesToggle, { n: "0" }) }));
     expect(screen.getByText(t().noQueries)).toBeInTheDocument();
   });
 

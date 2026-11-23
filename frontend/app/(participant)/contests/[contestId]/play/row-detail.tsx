@@ -8,6 +8,7 @@ import { toCsv } from "@/lib/format/csv";
 import { cn } from "@/lib/utils";
 
 import type { PlayDictionary } from "./dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * One row of a query's result, open in full (SPEC.md §5).
@@ -75,7 +76,7 @@ export function RowDetail({
     <div
       ref={regionRef}
       role="region"
-      aria-label={t.region.replace("{n}", number)}
+      aria-label={fill(t.region, { n: number })}
       // Focused by script only, never a tab stop.
       tabIndex={-1}
       onKeyDown={onKeyDown}
@@ -83,7 +84,7 @@ export function RowDetail({
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
         <span className="font-mono text-label text-ink-3 uppercase">
-          {t.heading.replace("{n}", number)}
+          {fill(t.heading, { n: number })}
         </span>
         <div className="flex-1" />
         {/* CSV, like the table's download, so a paste lands in the same columns. */}
@@ -140,7 +141,7 @@ export function RowDetail({
                   size="sm"
                   // The accessible name names the column, or every copy button in a
                   // wide row would read the same.
-                  aria-label={t.copyValueNamed.replace("{column}", column)}
+                  aria-label={fill(t.copyValueNamed, { column })}
                   onClick={() => copy(value)}
                 >
                   {t.copyValue}

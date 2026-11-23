@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { PrintView } from "./print-view";
@@ -207,7 +208,7 @@ async function waitForRealEditor(container: HTMLElement = document.body) {
 
 /** The name of a table in the schema panel, the button that writes a query on it. */
 function tableName(table: string) {
-  return { name: en.participant.play.schema.query.replace("{table}", table) };
+  return { name: fill(en.participant.play.schema.query, { table }) };
 }
 
 /**

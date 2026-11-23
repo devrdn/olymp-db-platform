@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 import { resetDatabase, type ResetState } from "./requests";
 import type { PlayDictionary } from "./dictionary";
@@ -84,7 +85,7 @@ export function ResetDatabase({
               {messageForCode(outcome.code, dict.errors)}
               {outcome.requestId && showsReference(outcome.code, dict.errors) ? (
                 <p className="mt-2 font-mono text-small text-ink-3">
-                  {dict.participant.console.reference.replace("{id}", outcome.requestId)}
+                  {fill(dict.participant.console.reference, { id: outcome.requestId })}
                 </p>
               ) : null}
             </div>

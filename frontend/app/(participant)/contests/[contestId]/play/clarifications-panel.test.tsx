@@ -7,6 +7,7 @@ import type { FeedItem } from "@/lib/api/clarifications";
 import { MAX_OPEN_QUESTIONS, QUESTION_MAX_CHARS } from "@/lib/api/clarifications";
 import type { OpenPlayQuestion } from "@/lib/api/play";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { ClarificationSignalProvider, useClarificationPublisher, type ClarificationPublisher } from "./clarification-signal";
 import { ClarificationsPanel } from "./clarifications-panel";
@@ -203,7 +204,7 @@ describe("the questions to the organisers", () => {
     expect(within(item).queryByText(t.mine)).toBeNull();
     expect(within(item).getByText(t.declined)).toBeInTheDocument();
     expect(within(item).getByText(t.edited)).toBeInTheDocument();
-    expect(within(item).getByText(t.aboutQuestionTitled.replace("{n}", "1").replace("{title}", "The greenhouse"))).toBeInTheDocument();
+    expect(within(item).getByText(fill(t.aboutQuestionTitled, { n: "1", title: "The greenhouse" }))).toBeInTheDocument();
   });
 
   test("says when the participant's own answer was published to everyone", async () => {
@@ -225,7 +226,7 @@ describe("the questions to the organisers", () => {
     await screen.findByText(t.empty);
     const picker = screen.getByRole("combobox", { name: t.about });
     const options = within(picker).getAllByRole("option").map((o) => o.textContent);
-    expect(options).toEqual([t.general, t.questionOptionTitled.replace("{n}", "1").replace("{title}", "The greenhouse")]);
+    expect(options).toEqual([t.general, fill(t.questionOptionTitled, { n: "1", title: "The greenhouse" })]);
   });
 
   test("counts characters against the bound and sends the question with Ctrl+Enter", async () => {
@@ -238,7 +239,7 @@ describe("the questions to the organisers", () => {
     expect(field).toHaveAttribute("maxLength", String(QUESTION_MAX_CHARS));
     await userEvent.selectOptions(screen.getByRole("combobox", { name: t.about }), "q1");
     await userEvent.type(field, "Why?");
-    expect(screen.getByText(t.counter.replace("{n}", "4").replace("{max}", String(QUESTION_MAX_CHARS)))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.counter, { n: "4", max: QUESTION_MAX_CHARS }))).toBeInTheDocument();
 
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
 

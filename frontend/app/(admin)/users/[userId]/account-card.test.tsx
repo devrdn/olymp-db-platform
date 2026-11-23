@@ -14,6 +14,7 @@ vi.mock("./actions", async (importOriginal) => ({
 
 import type { Account, Role } from "@/lib/api/accounts";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import type { MailOffer } from "../email-delivery";
 import { AccountCard } from "./account-card";
@@ -136,7 +137,7 @@ describe("AccountCard, the status-explanation panel", () => {
       />,
     );
 
-    expect(screen.getByText(en.accounts.card.changedByNoDate.replace("{name}", "a.admin"))).toBeInTheDocument();
+    expect(screen.getByText(fill(en.accounts.card.changedByNoDate, { name: "a.admin" }))).toBeInTheDocument();
     expect(screen.queryByText(/,\s*\.$/)).not.toBeInTheDocument();
   });
 });
@@ -184,7 +185,7 @@ describe("AccountCard, clearing a sign-in lockout", () => {
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
 
     expect(
-      screen.getByText(en.accounts.card.unlockSignInConfirmTitle.replace("{login}", "s.popescu")),
+      screen.getByText(fill(en.accounts.card.unlockSignInConfirmTitle, { login: "s.popescu" })),
     ).toBeInTheDocument();
     expect(unlockSignInAction).not.toHaveBeenCalled();
   });
@@ -197,7 +198,7 @@ describe("AccountCard, clearing a sign-in lockout", () => {
 
     await waitFor(() =>
       expect(
-        screen.queryByText(en.accounts.card.unlockSignInConfirmTitle.replace("{login}", "s.popescu")),
+        screen.queryByText(fill(en.accounts.card.unlockSignInConfirmTitle, { login: "s.popescu" })),
       ).not.toBeInTheDocument(),
     );
     expect(unlockSignInAction).not.toHaveBeenCalled();
@@ -248,7 +249,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     const submitted = resetPasswordAction.mock.calls[0][1] as FormData;
     expect(submitted.has("send_by_email")).toBe(false);
     // Not asked, so nothing is said about email.
-    expect(screen.queryByText(en.accounts.signInMail.notEmailed.replace("{n}", "1"))).not.toBeInTheDocument();
+    expect(screen.queryByText(fill(en.accounts.signInMail.notEmailed, { n: "1" }))).not.toBeInTheDocument();
   });
 
   test("ticks the option by default, sends it, and shows the password, the queued email and when it goes", async () => {
@@ -303,7 +304,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     expect(await screen.findByText("swordfish-1")).toBeInTheDocument();
     expect(
       screen.getByText(
-        en.accounts.signInMail.group.replace("{n}", "1").replace("{reason}", en.accounts.emailSkipped.no_address),
+        fill(en.accounts.signInMail.group, { n: "1", reason: en.accounts.emailSkipped.no_address }),
       ),
     ).toBeInTheDocument();
   });

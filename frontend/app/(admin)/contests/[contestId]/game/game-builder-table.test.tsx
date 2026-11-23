@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 
 import { GameBuilderTable } from "./game-builder-table";
@@ -173,7 +174,7 @@ describe("the table builder's own data panel", () => {
 
     expect(screen.getByText(td.resumeHeading)).toBeInTheDocument();
     expect(
-      screen.getByText(td.resumeBody.replace("{received}", "5 B").replace("{total}", "12 B")),
+      screen.getByText(fill(td.resumeBody, { received: "5 B", total: "12 B" })),
     ).toBeInTheDocument();
   });
 
@@ -185,7 +186,7 @@ describe("the table builder's own data panel", () => {
 
     await userEvent.upload(screen.getByLabelText(td.resumePick), wrongFile);
 
-    expect(screen.getByText(td.resumeMismatch.replace("{total}", "12 B"))).toBeInTheDocument();
+    expect(screen.getByText(fill(td.resumeMismatch, { total: "12 B" }))).toBeInTheDocument();
     expect(beginTableUploadAction).not.toHaveBeenCalled();
     expect(currentTableUploadAction).not.toHaveBeenCalled();
   });
@@ -436,7 +437,7 @@ describe("the table builder's own data panel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
 
-    expect(window.confirm).toHaveBeenCalledWith(td.deleteRowConfirm.replace("{row}", "4"));
+    expect(window.confirm).toHaveBeenCalledWith(fill(td.deleteRowConfirm, { row: "4" }));
     await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalledWith(contestId, "suspects", 4));
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
   });

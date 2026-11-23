@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action would pull in `next/headers`.
 const { registerAction, copyText } = vi.hoisted(() => ({
@@ -129,7 +130,7 @@ describe("RegisterForm, a repeat registration with mail off", () => {
 
     expect(await screen.findByRole("heading", { name: en.registration.repeat.title })).toBeInTheDocument();
     expect(
-      screen.getByText(en.registration.repeat.emailNotSent.replace("{email}", "ana@example.com")),
+      screen.getByText(fill(en.registration.repeat.emailNotSent, { email: "ana@example.com" })),
     ).toBeInTheDocument();
     expect(screen.queryByText(en.registration.created.codeLabel)).not.toBeInTheDocument();
   });
@@ -144,7 +145,7 @@ describe("RegisterForm, an accepted registration (mail on)", () => {
 
     expect(await screen.findByRole("heading", { name: en.registration.accepted.title })).toBeInTheDocument();
     expect(
-      screen.getByText(en.registration.accepted.body.replace("{email}", "ana@example.com")),
+      screen.getByText(fill(en.registration.accepted.body, { email: "ana@example.com" })),
     ).toBeInTheDocument();
     expect(screen.queryByText(en.registration.created.codeLabel)).not.toBeInTheDocument();
     expect(screen.queryByText(en.registration.created.password)).not.toBeInTheDocument();

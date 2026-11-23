@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
+import { fill } from "@/lib/i18n/fill";
 
 import { RowDetail } from "./row-detail";
 
@@ -59,7 +60,7 @@ describe("the open row", () => {
     const statement = A_STATEMENT;
     show({ columns: ["id", "note"], columnTypes: undefined, row: ["7", statement] });
 
-    const region = screen.getByRole("region", { name: t.region.replace("{n}", "1") });
+    const region = screen.getByRole("region", { name: fill(t.region, { n: "1" }) });
     expect(within(region).getByText("id")).toBeInTheDocument();
     expect(within(region).getByText("note")).toBeInTheDocument();
     // Whole, not clipped and not only in a `title`.
@@ -71,7 +72,7 @@ describe("the open row", () => {
   test("shows a null the same way the table does", () => {
     show({ columns: ["alibi"], columnTypes: undefined, row: [null] });
 
-    const region = screen.getByRole("region", { name: t.region.replace("{n}", "1") });
+    const region = screen.getByRole("region", { name: fill(t.region, { n: "1" }) });
     expect(within(region).getByText(en.participant.console.null)).toBeInTheDocument();
   });
 
@@ -88,7 +89,7 @@ describe("the open row", () => {
   test("says which row of the answer it is", () => {
     show({ index: 41 });
 
-    expect(screen.getByText(t.heading.replace("{n}", "42"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.heading, { n: "42" }))).toBeInTheDocument();
   });
 
   // The panel mounts when a row opens. Neither `aria-selected` nor a new
@@ -96,7 +97,7 @@ describe("the open row", () => {
   test("takes the keyboard when it opens, without joining the tab order", () => {
     show({ index: 2 });
 
-    const region = screen.getByRole("region", { name: t.region.replace("{n}", "3") });
+    const region = screen.getByRole("region", { name: fill(t.region, { n: "3" }) });
     expect(region).toHaveFocus();
     expect(region).toHaveAttribute("tabindex", "-1");
   });
@@ -116,7 +117,7 @@ describe("taking a value out of the page", () => {
     const writeText = clipboardThatWorks();
     show();
 
-    await user.click(screen.getByRole("button", { name: t.copyValueNamed.replace("{column}", "alibi") }));
+    await user.click(screen.getByRole("button", { name: fill(t.copyValueNamed, { column: "alibi" }) }));
 
     expect(writeText).toHaveBeenCalledWith("at the lighthouse");
     expect(screen.getByRole("status")).toHaveTextContent(t.copied);
@@ -127,7 +128,7 @@ describe("taking a value out of the page", () => {
     show({ columns: ["alibi"], columnTypes: undefined, row: [null] });
 
     expect(
-      screen.queryByRole("button", { name: t.copyValueNamed.replace("{column}", "alibi") }),
+      screen.queryByRole("button", { name: fill(t.copyValueNamed, { column: "alibi" }) }),
     ).not.toBeInTheDocument();
   });
 
@@ -161,7 +162,7 @@ describe("taking a value out of the page", () => {
     stubExecCommand(exec);
     show();
 
-    await user.click(screen.getByRole("button", { name: t.copyValueNamed.replace("{column}", "alibi") }));
+    await user.click(screen.getByRole("button", { name: fill(t.copyValueNamed, { column: "alibi" }) }));
 
     expect(exec).toHaveBeenCalledWith("copy");
     expect(screen.getByRole("status")).toHaveTextContent(t.copied);

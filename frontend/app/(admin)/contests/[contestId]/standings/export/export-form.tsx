@@ -15,6 +15,7 @@ import { formatTime } from "@/lib/format/datetime";
 import { LOCALE_NAMES, LOCALES, type Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { fetchResultsAction } from "./actions";
@@ -151,14 +152,14 @@ export function ExportForm({
   const detailHint = `${ids}-detail-hint`;
   const excelHint = `${ids}-excel-hint`;
   const downloadHint = `${ids}-download-hint`;
-  const downloadLabel = busy === "download" ? t.preparing : t.download[kind].replace("{n}", String(count));
+  const downloadLabel = busy === "download" ? t.preparing : fill(t.download[kind], { n: count });
 
   return (
     <div className="flex flex-col gap-6">
       <Warnings report={report} t={t} />
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <p className="font-mono text-data text-ink-3">{t.asOf.replace("{time}", formatTime(report.generatedAt, { locale }))}</p>
+        <p className="font-mono text-data text-ink-3">{fill(t.asOf, { time: formatTime(report.generatedAt, { locale }) })}</p>
         <Button type="button" variant="quiet" size="sm" onClick={refresh} disabled={busy !== null} aria-busy={busy === "refresh"}>
           <RefreshCw strokeWidth={1.75} aria-hidden />
           {busy === "refresh" ? t.refreshing : t.refresh}

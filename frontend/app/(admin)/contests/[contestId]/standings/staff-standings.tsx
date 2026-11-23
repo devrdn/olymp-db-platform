@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { revealStandingsAction, type RevealState } from "./actions";
 import { fetchStaffStandings } from "./requests";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors">;
 
@@ -150,7 +151,7 @@ export function StaffStandingsView({
 
       {standings.revealedAt ? (
         <p className="font-mono text-label text-gold uppercase">
-          {t.staff.revealedAt.replace("{time}", formatTime(standings.revealedAt, { locale }))}
+          {fill(t.staff.revealedAt, { time: formatTime(standings.revealedAt, { locale }) })}
         </p>
       ) : null}
 
@@ -275,7 +276,7 @@ export function StaffStandingsView({
         </ScrollBox>
       )}
       {standings.truncated ? (
-        <p className="text-small text-warn">{t.truncated.replace("{count}", String(standings.rows.length))}</p>
+        <p className="text-small text-warn">{fill(t.truncated, { count: standings.rows.length })}</p>
       ) : null}
     </div>
   );
@@ -290,7 +291,7 @@ function Shown({ standings, dict, locale }: { standings: StaffStandings; dict: S
     case "frozen":
       return (
         <p className="bg-frost-wash px-3 py-1.5 text-small text-frost">
-          {t.shownFrozen.replace("{time}", standings.shown.frozenAt ? formatTime(standings.shown.frozenAt, { locale }) : "")}
+          {fill(t.shownFrozen, { time: standings.shown.frozenAt ? formatTime(standings.shown.frozenAt, { locale }) : "" })}
         </p>
       );
     case "final":

@@ -8,6 +8,7 @@ import type { Account, AccountStatus, Role } from "@/lib/api/accounts";
 import { formatDay, formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 // Client components; the `"use client"` boundary lives in their files, so the
@@ -142,7 +143,7 @@ export function AccountRegister({
                     <td className={cn(CELL, "w-8 pr-0 align-middle")}>
                       <RowCheckbox
                         id={account.id}
-                        label={t.selection.pickAccount.replace("{name}", account.fullName)}
+                        label={fill(t.selection.pickAccount, { name: account.fullName })}
                         display={account.login}
                       />
                     </td>

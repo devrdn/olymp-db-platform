@@ -29,6 +29,7 @@ import {
 } from "./actions";
 import { PersonPicker } from "./person-picker";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -191,10 +192,9 @@ export function ParticipantPanel({
 }) {
   const t = dict.workspace.people;
   const showScore = scoring !== "icpc";
-  // A replacer function, so a `$` in the domain is not read as a pattern.
   const untrusted =
     trustedDomainOnly && trustedDomain
-      ? t.participants.untrustedEmail.replace("{domain}", () => trustedDomain)
+      ? fill(t.participants.untrustedEmail, { domain: trustedDomain })
       : null;
 
   return (
@@ -453,7 +453,7 @@ function ImportParticipants({ contestId, dict }: { contestId: string; dict: Dict
       {state.result ? (
         <div role="status" className="flex flex-col gap-2 pt-1">
           <p className="text-small text-good">
-            {t.import.added.replace("{n}", String(state.result.added))}
+            {fill(t.import.added, { n: state.result.added })}
           </p>
 
           {state.result.skipped.length > 0 ? (

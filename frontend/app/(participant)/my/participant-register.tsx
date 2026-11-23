@@ -8,6 +8,7 @@ import { Tag } from "@/components/ui/tag";
 import type { ContestSummary } from "@/lib/api/contests";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import { EnrollButton } from "./enroll-button";
@@ -208,7 +209,7 @@ export function ParticipantRegister({
                       {hasTable(contest) ? (
                         <Link
                           href={`/contests/${contest.id}/leaderboard`}
-                          aria-label={dict.leaderboard.openLabel.replace("{title}", contest.title)}
+                          aria-label={fill(dict.leaderboard.openLabel, { title: contest.title })}
                           className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
                         >
                           {dict.leaderboard.open}

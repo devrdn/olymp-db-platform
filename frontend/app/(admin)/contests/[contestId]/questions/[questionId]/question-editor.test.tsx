@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action would pull in Next's server runtime; `vi.hoisted`
 // because `vi.mock` factories run first.
@@ -66,14 +67,14 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     const penalty = screen.getByLabelText(dict.workspace.question.shape.penalty);
     expect(penalty).toHaveValue(20);
     expect(
-      screen.getByText(dict.workspace.question.shape.penaltyPreview.replace("{n}", "2").replace("{points}", "10")),
+      screen.getByText(fill(dict.workspace.question.shape.penaltyPreview, { n: "2", points: "10" })),
     ).toBeInTheDocument();
 
     await user.clear(penalty);
     await user.type(penalty, "50");
 
     expect(
-      screen.getByText(dict.workspace.question.shape.penaltyPreview.replace("{n}", "5").replace("{points}", "10")),
+      screen.getByText(fill(dict.workspace.question.shape.penaltyPreview, { n: "5", points: "10" })),
     ).toBeInTheDocument();
   });
 
@@ -300,7 +301,7 @@ describe("QuestionEditor, fields the scoring mode does not use", () => {
 
     expect(screen.queryByLabelText(t.points)).toBeNull();
     expect(screen.queryByLabelText(t.penalty)).toBeNull();
-    expect(screen.queryByText(t.penaltyPreview.replace("{n}", "2").replace("{points}", "10"))).toBeNull();
+    expect(screen.queryByText(fill(t.penaltyPreview, { n: "2", points: "10" }))).toBeNull();
     expect(screen.getByLabelText(t.attempts)).toBeInTheDocument();
   });
 
@@ -317,7 +318,7 @@ describe("QuestionEditor, fields the scoring mode does not use", () => {
 
     expect(screen.getByLabelText(t.points)).toHaveValue(10);
     expect(screen.queryByLabelText(t.penalty)).toBeNull();
-    expect(screen.queryByText(t.penaltyPreview.replace("{n}", "2").replace("{points}", "10"))).toBeNull();
+    expect(screen.queryByText(fill(t.penaltyPreview, { n: "2", points: "10" }))).toBeNull();
   });
 
   test("under first to solve a save carries the edited points and the stored penalty", async () => {
@@ -338,7 +339,7 @@ describe("QuestionEditor, fields the scoring mode does not use", () => {
 
     expect(screen.getByLabelText(t.points)).toBeEnabled();
     expect(screen.getByLabelText(t.penalty)).toBeEnabled();
-    expect(screen.getByText(t.penaltyPreview.replace("{n}", "2").replace("{points}", "10"))).toBeInTheDocument();
+    expect(screen.getByText(fill(t.penaltyPreview, { n: "2", points: "10" }))).toBeInTheDocument();
   });
 });
 
@@ -378,7 +379,7 @@ describe("QuestionEditor, the bonus question", () => {
     expect(checkbox).toBeChecked();
     expect(screen.getByLabelText(t.penalty)).toBeDisabled();
     expect(screen.getByText(t.bonusNoPenalty)).toBeInTheDocument();
-    expect(screen.queryByText(t.penaltyPreview.replace("{n}", "1").replace("{points}", "4"))).toBeNull();
+    expect(screen.queryByText(fill(t.penaltyPreview, { n: "1", points: "4" }))).toBeNull();
   });
 
   test("ticking it from the keyboard sets the penalty aside, and unticking brings it back", async () => {
@@ -446,7 +447,7 @@ describe("QuestionEditor, the reference answers", () => {
 // A title per language, bounded as the API bounds it (contests.QuestionText).
 describe("QuestionEditor, the title", () => {
   const t = () => dict.workspace.question.texts;
-  const counter = (n: number) => t().titleCounter.replace("{n}", String(n)).replace("{max}", "200");
+  const counter = (n: number) => fill(t().titleCounter, { n, max: "200" });
 
   function renderTitled(editable = true) {
     render(

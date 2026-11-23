@@ -12,6 +12,7 @@ import {
 import type { PlayDictionary } from "./dictionary";
 import { useAutosave, type AutosaveStatus } from "./use-autosave";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 /**
  * The notes tab (docs/ARCHITECTURE.md §6.4): one plain, self-saving field
@@ -141,7 +142,7 @@ function NotesEditor({
             data-testid="notes-counter"
             className={`shrink-0 text-small tabular-nums ${full ? "text-bad" : "text-ink-2"}`}
           >
-            {t.counter.replace("{n}", String(count)).replace("{max}", String(NOTES_MAX_CHARS))}
+            {fill(t.counter, { n: count, max: NOTES_MAX_CHARS })}
           </p>
         ) : null}
       </div>

@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { ContestSummary } from "@/lib/api/contests";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action pulls in `next/headers`; only whether the control
 // is offered is under test.
@@ -207,7 +208,7 @@ describe("the way into a contest still to come", () => {
 });
 
 describe("the way to a contest's table", () => {
-  const label = (title: string) => en.leaderboard.openLabel.replace("{title}", title);
+  const label = (title: string) => fill(en.leaderboard.openLabel, { title });
 
   test("sits beside the way in once the contest is under way", () => {
     render_([contest({ status: "running", enrolled: true })]);

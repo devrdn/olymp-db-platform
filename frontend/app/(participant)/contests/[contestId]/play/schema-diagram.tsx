@@ -6,6 +6,7 @@ import { Maximize, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { GameSchema } from "@/lib/api/schema";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import {
   HEADER_HEIGHT,
@@ -459,11 +460,7 @@ function Relations({ schema, t }: { schema: GameSchema; t: DiagramDictionary }) 
   const relations = schema.tables.flatMap((table) =>
     (table.foreign_keys ?? []).map((key) => ({
       id: `${table.name}\u0000${key.name}`,
-      text: t.relation
-        .replace("{table}", table.name)
-        .replace("{columns}", key.columns.join(", "))
-        .replace("{target}", key.referenced_table)
-        .replace("{targetColumns}", key.referenced_columns.join(", ")),
+      text: fill(t.relation, { table: table.name, columns: key.columns.join(", "), target: key.referenced_table, targetColumns: key.referenced_columns.join(", ") }),
     })),
   );
   const keyed = schema.tables.filter((table) => (table.primary_key ?? []).length > 0);
@@ -488,7 +485,7 @@ function Relations({ schema, t }: { schema: GameSchema; t: DiagramDictionary }) 
           <ul aria-labelledby={keysId}>
             {keyed.map((table) => (
               <li key={table.name}>
-                {t.primaryKey.replace("{table}", table.name).replace("{columns}", (table.primary_key ?? []).join(", "))}
+                {fill(t.primaryKey, { table: table.name, columns: (table.primary_key ?? []).join(", ") })}
               </li>
             ))}
           </ul>

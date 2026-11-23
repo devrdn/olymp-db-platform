@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Registration } from "@/lib/api/registrations-terms";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action would pull in `next/headers`.
 const { checkInAction } = vi.hoisted(() => ({ checkInAction: vi.fn() }));
@@ -49,7 +50,7 @@ function renderDesk(registrations = [ana, ion]) {
 const t = () => en.registration.desk;
 const search = () => screen.getByRole("searchbox", { name: t().search });
 const toggleFor = (name: string) =>
-  screen.getByRole("button", { name: t().hereFor.replace("{name}", name) });
+  screen.getByRole("button", { name: fill(t().hereFor, { name }) });
 
 function counter(label: string) {
   return screen.getByText(label, { selector: "dt" }).nextElementSibling;
@@ -140,6 +141,6 @@ describe("RegistrationDesk", () => {
 
     const row = screen.getByText("Ana Popescu").closest("tr")!;
     expect(within(row).getByText("ana@example.com")).toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: t().hereFor.replace("{name}", "Ana Popescu") })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: fill(t().hereFor, { name: "Ana Popescu" }) })).toBeInTheDocument();
   });
 });

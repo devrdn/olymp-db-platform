@@ -4,6 +4,7 @@ import { identityHue } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { initials } from "@/lib/format/initials";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 /**
@@ -177,24 +178,21 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
     case "solved": {
       const attempt = cell.attempts ?? 1;
       const template = cell.first ? t.solvedFirst : t.solved;
-      return template
-        .replace("{letter}", letter)
-        .replace("{minute}", String(cell.minute ?? 0))
-        .replace("{attempt}", String(attempt));
+      return fill(template, { letter, minute: cell.minute ?? 0, attempt });
     }
     case "failed":
-      return t.failed.replace("{letter}", letter).replace("{n}", String(cell.attempts ?? 0));
+      return fill(t.failed, { letter, n: cell.attempts ?? 0 });
     case "pending": {
       const n = String(cell.pending ?? 0);
       const wrong = cell.attempts ?? 0;
       // Wrong attempts made before the freeze stay visible: they were public
       // already, so this leaks nothing.
       return wrong > 0
-        ? t.pendingWrong.replace("{letter}", letter).replace("{n}", n).replace("{w}", String(wrong))
-        : t.pending.replace("{letter}", letter).replace("{n}", n);
+        ? fill(t.pendingWrong, { letter, n, w: wrong })
+        : fill(t.pending, { letter, n });
     }
     case "untried":
-      return t.untried.replace("{letter}", letter);
+      return fill(t.untried, { letter });
   }
 }
 
@@ -471,7 +469,7 @@ export function StandingsView({
           </ScrollBox>
           {standings.truncated ? (
             <p className="text-small text-warn">
-              {t.truncated.replace("{count}", String(rows.length))}
+              {fill(t.truncated, { count: rows.length })}
             </p>
           ) : null}
         </>
@@ -672,7 +670,7 @@ function Podium({
             </span>
             {holders.length > 1 ? (
               <span className="text-small text-ink-3">
-                {dict.leaderboard.podiumMore.replace("{count}", String(holders.length - 1))}
+                {fill(dict.leaderboard.podiumMore, { count: holders.length - 1 })}
               </span>
             ) : null}
             <div className={cn("w-full border-t-4", height, MEDAL_CLASSES[medal].step)} />
@@ -693,10 +691,7 @@ function Banner({
   locale: string;
 }) {
   const t = dict.leaderboard;
-  const updated = t.updated.replace(
-    "{time}",
-    formatTime(standings.generatedAt, { locale }),
-  );
+  const updated = fill(t.updated, { time: formatTime(standings.generatedAt, { locale }) });
 
   switch (standings.state) {
     case "live":
@@ -727,7 +722,7 @@ function Banner({
           <SnowflakeIcon />
           <div className="flex flex-col gap-0.5">
             <span className="font-mono text-label uppercase">
-              {t.frozen.replace("{time}", at)}
+              {fill(t.frozen, { time: at })}
             </span>
             <span className="text-small">
               {ended(standings.endsAt) ? t.frozenOver : t.frozenBody}

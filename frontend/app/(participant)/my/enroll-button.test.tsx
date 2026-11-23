@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action pulls in `next/headers`.
 const enrollAction = vi.hoisted(() => vi.fn());
@@ -31,7 +32,7 @@ describe("EnrollButton, refused for an address outside the site's domain", () =>
     const alert = await join();
 
     expect(alert).toHaveTextContent(en.errors.contest_trusted_email_required);
-    expect(alert).toHaveTextContent(en.participant.trustedDomain.replace("{domain}", () => "example.edu"));
+    expect(alert).toHaveTextContent(fill(en.participant.trustedDomain, { domain: "example.edu" }));
     expect(alert).toHaveTextContent("example.edu");
   });
 

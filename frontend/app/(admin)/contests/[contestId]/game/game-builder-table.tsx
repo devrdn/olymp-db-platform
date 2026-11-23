@@ -20,6 +20,7 @@ import {
   gameTableDataWindowAction,
 } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { fill } from "@/lib/i18n/fill";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
@@ -385,7 +386,7 @@ export function GameBuilderTable({
   }
 
   async function removeRow(row: number) {
-    if (!window.confirm(td.deleteRowConfirm.replace("{row}", String(row)))) return;
+    if (!window.confirm(fill(td.deleteRowConfirm, { row }))) return;
     setDeletingRow(row);
     const result = await deleteTableRowAction(contestId, table.name, row);
     setDeletingRow(null);
@@ -452,7 +453,7 @@ export function GameBuilderTable({
               {td.next}
             </button>
             {windowTotal > 0 ? (
-              <span className="text-label text-ink-3">{td.totalRows.replace("{n}", String(windowTotal))}</span>
+              <span className="text-label text-ink-3">{fill(td.totalRows, { n: windowTotal })}</span>
             ) : null}
           </form>
         </div>
@@ -550,7 +551,7 @@ export function GameBuilderTable({
           <div className="flex flex-col gap-2 border-t border-line pt-4">
             <h5 className="text-control text-ink">{td.csvHeading}</h5>
             <p className="max-w-body text-small text-ink-2">
-              {td.csvLede.replace("{columns}", table.columns.map((c) => c.name).join(", "))}
+              {fill(td.csvLede, { columns: table.columns.map((c) => c.name).join(", ") })}
             </p>
 
             {phase === "idle" ? (
@@ -560,7 +561,7 @@ export function GameBuilderTable({
                   <input type="file" className="sr-only" onChange={handleFileChange} />
                 </label>
                 <span className="text-label text-ink-3">
-                  {td.limitHint.replace("{max}", readableBytes(limits.maxFileBytes))}
+                  {fill(td.limitHint, { max: readableBytes(limits.maxFileBytes) })}
                 </span>
               </div>
             ) : null}
@@ -569,13 +570,11 @@ export function GameBuilderTable({
               <div className="flex flex-col gap-2 border-l-2 border-warn pl-4">
                 <p className="text-control text-ink">{td.resumeHeading}</p>
                 <p className="max-w-body text-small text-ink-2">
-                  {td.resumeBody
-                    .replace("{received}", readableBytes(resumable.receivedBytes))
-                    .replace("{total}", readableBytes(resumable.declaredBytes))}
+                  {fill(td.resumeBody, { received: readableBytes(resumable.receivedBytes), total: readableBytes(resumable.declaredBytes) })}
                 </p>
                 {mismatch ? (
                   <p role="alert" className="max-w-body text-small text-bad">
-                    {td.resumeMismatch.replace("{total}", readableBytes(resumable.declaredBytes))}
+                    {fill(td.resumeMismatch, { total: readableBytes(resumable.declaredBytes) })}
                   </p>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-3">
@@ -614,14 +613,11 @@ export function GameBuilderTable({
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-label text-ink-3">
                   <span>
-                    {td.progress
-                      .replace("{sent}", readableBytes(sentBytes))
-                      .replace("{total}", readableBytes(totalBytes))
-                      .replace("{percent}", String(percent))}
+                    {fill(td.progress, { sent: readableBytes(sentBytes), total: readableBytes(totalBytes), percent })}
                   </span>
-                  {rateBps > 0 ? <span>{td.rate.replace("{rate}", readableBytes(rateBps))}</span> : null}
+                  {rateBps > 0 ? <span>{fill(td.rate, { rate: readableBytes(rateBps) })}</span> : null}
                   {etaSeconds !== null ? (
-                    <span>{td.eta.replace("{time}", readableDuration(etaSeconds))}</span>
+                    <span>{fill(td.eta, { time: readableDuration(etaSeconds) })}</span>
                   ) : null}
                 </div>
                 {phase === "uploading" ? (

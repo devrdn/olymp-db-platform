@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 
 import type { PublicContest } from "@/lib/api/showcase";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+import { fill } from "@/lib/i18n/fill";
 
 import { RecentContests } from "./recent-contests";
 
@@ -38,7 +39,7 @@ describe("the contest list", () => {
   test("leads to the public table only where there is one to read", () => {
     render(<RecentContests signedIn={false} archive={false} contests={[running({ tableOpen: false })]} dict={en} locale="en" />);
     expect(
-      screen.queryByRole("link", { name: en.home.contests.tableOf.replace("{title}", "Spring round") }),
+      screen.queryByRole("link", { name: fill(en.home.contests.tableOf, { title: "Spring round" }) }),
     ).toBeNull();
   });
 
@@ -46,7 +47,7 @@ describe("the contest list", () => {
     render(<RecentContests signedIn={false} archive={false} contests={[running()]} dict={en} locale="en" />);
     // Named by the contest, so repeated links are distinguishable.
     expect(
-      screen.getByRole("link", { name: en.home.contests.tableOf.replace("{title}", "Spring round") }),
+      screen.getByRole("link", { name: fill(en.home.contests.tableOf, { title: "Spring round" }) }),
     ).toHaveAttribute(
       "href",
       `/contests/${running().id}/leaderboard`,
@@ -98,7 +99,7 @@ describe("the contest list", () => {
     );
 
     const picture = screen.getByRole("img", {
-      name: en.home.contests.coverOf.replace("{title}", "Spring round"),
+      name: fill(en.home.contests.coverOf, { title: "Spring round" }),
     });
     expect(picture).toHaveAttribute(
       "src",
