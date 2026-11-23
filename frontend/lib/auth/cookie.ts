@@ -46,3 +46,18 @@ export function parseSetCookie(header: string): ParsedCookie | null {
 
   return parsed;
 }
+
+/** RFC 6265's cookie-octet: printable ASCII but for space, `"`, `,`, `;` and `\`. */
+const COOKIE_VALUE = /^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]+$/;
+
+/**
+ * One cookie of the browser's for a Cookie header the server sends on, or null
+ * for a value no cookie the API issued can have. Next decodes cookie values,
+ * so a sender's `%0A` arrives as a line break, which `fetch` refuses as a
+ * header value. Dropped rather than refused: a request without that cookie is
+ * one from a browser that never had it, which the API already handles (no
+ * session, or the address's sign-in budget instead of the device's).
+ */
+export function cookiePair(name: string, value: string | undefined): string | null {
+  return value !== undefined && COOKIE_VALUE.test(value) ? `${name}=${value}` : null;
+}

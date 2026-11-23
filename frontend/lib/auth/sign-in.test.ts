@@ -31,7 +31,7 @@ describe("signIn", () => {
       },
     );
 
-    expect(outcome).toEqual({ ok: true, mustChangePassword: false });
+    expect(outcome).toEqual({ ok: true, value: { mustChangePassword: false } });
     expect(handed).toMatchObject({ name: "dbcontest_session", value: "abc123", maxAge: 43200 });
   });
 
@@ -52,6 +52,86 @@ describe("signIn", () => {
     );
 
     expect(outcome).toEqual({ ok: false, code: "invalid_credentials" });
+    expect(cookieWasSet).toBe(false);
+  });
+
+  test("reads a gateway's page as the API being unreachable, never as a verdict on the password", async () => {
+    const outcome = await signIn(
+      { login: "strelcova.i", password: "correct horse" },
+      {
+        fetchImpl: async () => new Response("<html>502 Bad Gateway</html>", { status: 502 }),
+        setCookie: () => {},
+      },
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "unreachable" });
+  });
+
+  test("gives every attempt its own deadline, so a stalled API cannot hold a sign-in open", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const answers = [
+      new Response(JSON.stringify({ error: { code: "sign_in_busy" } }), { status: 503 }),
+      new Response(JSON.stringify({ must_change_password: false }), { status: 200 }),
+    ];
+
+    await signIn(
+      { login: "strelcova.i", password: "correct horse" },
+      {
+        fetchImpl: async (_url, init) => {
+          signals.push(init?.signal);
+          return answers.shift()!;
+        },
+        setCookie: () => {},
+        sleep: async () => {},
+      },
+    );
+
+    expect(signals).toHaveLength(2);
+    for (const signal of signals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+    }
+    expect(signals[0]).not.toBe(signals[1]);
+  });
+
+  test("reads a dead network or a deadline as the API being unreachable, rather than throwing", async () => {
+    const failures = [new TypeError("fetch failed"), new DOMException("signal timed out", "TimeoutError")];
+
+    for (const failure of failures) {
+      const outcome = await signIn(
+        { login: "strelcova.i", password: "correct horse" },
+        {
+          fetchImpl: async () => {
+            throw failure;
+          },
+          setCookie: () => {},
+        },
+      );
+
+      expect(outcome).toEqual({ ok: false, code: "unreachable" });
+    }
+  });
+
+  test("issues no session when it cannot read the API's answer to a sign-in that worked", async () => {
+    let cookieWasSet = false;
+
+    for (const body of ["<html>proxy</html>", JSON.stringify({ must_change_password: "yes" })]) {
+      const outcome = await signIn(
+        { login: "strelcova.i", password: "correct horse" },
+        {
+          fetchImpl: async () =>
+            new Response(body, {
+              status: 200,
+              headers: { "set-cookie": "dbcontest_session=abc123; Path=/; Max-Age=43200; HttpOnly" },
+            }),
+          setCookie: () => {
+            cookieWasSet = true;
+          },
+        },
+      );
+
+      expect(outcome).toEqual({ ok: false, code: "unreachable" });
+    }
     expect(cookieWasSet).toBe(false);
   });
 
@@ -120,6 +200,28 @@ describe("signIn", () => {
     );
 
     expect(sent?.get("cookie")).toBe("dbcontest_device=AQID.c2ln; dbcontest_session=old-session");
+  });
+
+  test("signs in without a cookie whose value could not go into a header, rather than failing", async () => {
+    for (const deviceToken of ["AQID\nFAKE LINE", decodeURIComponent("AQID%0AFAKE LINE")]) {
+      let sent: Headers | undefined;
+
+      const outcome = await signIn(
+        { login: "strelcova.i", password: "correct horse" },
+        {
+          fetchImpl: async (_input, init) => {
+            sent = new Headers(init?.headers);
+            return new Response(JSON.stringify({ must_change_password: false }), { status: 200 });
+          },
+          setCookie: () => {},
+          deviceToken,
+          sessionToken: "old-session",
+        },
+      );
+
+      expect(outcome).toEqual({ ok: true, value: { mustChangePassword: false } });
+      expect(sent?.get("cookie")).toBe("dbcontest_session=old-session");
+    }
   });
 
   test("sends the previous session alone when the browser has no device cookie", async () => {
@@ -227,7 +329,7 @@ describe("signIn", () => {
         },
       );
 
-      expect(outcome).toEqual({ ok: true, mustChangePassword: false });
+      expect(outcome).toEqual({ ok: true, value: { mustChangePassword: false } });
       expect(calls).toBe(2);
       expect(waits).toEqual([1000]);
     });

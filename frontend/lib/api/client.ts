@@ -138,7 +138,7 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   });
 
   if (!response.ok) {
-    throw await toApiError(response);
+    throw await apiErrorOf(response);
   }
   return response;
 }
@@ -174,7 +174,7 @@ function fileNameOf(response: Response): string | null {
  * Turns any failing response into an ApiError. A proxy's 502 is an HTML page,
  * which becomes `unreachable` rather than a SyntaxError.
  */
-async function toApiError(response: Response): Promise<ApiError> {
+export async function apiErrorOf(response: Response): Promise<ApiError> {
   const raw = await response.text();
 
   try {

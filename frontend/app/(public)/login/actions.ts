@@ -56,7 +56,7 @@ export async function signInAction(
   redirect(
     destinationAfterLogin(
       {
-        mustChangePassword: outcome.mustChangePassword,
+        mustChangePassword: outcome.value.mustChangePassword,
         permissions: identity?.permissions ?? [],
         managesContests: identity?.managesContests ?? false,
       },

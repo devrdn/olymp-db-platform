@@ -53,6 +53,15 @@ describe("sessionHeader", () => {
     expect(await sessionHeader()).toEqual({ cookie: "__Host-dbcontest_session=abc" });
   });
 
+  test("passes on no session where its value could not go into a header", async () => {
+    vi.stubEnv("COOKIE_SECURE", "false");
+    for (const value of ["abc\nFAKE LINE", decodeURIComponent("abc%0AFAKE LINE")]) {
+      jar.set("dbcontest_session", value);
+
+      expect(await sessionHeader()).toEqual({});
+    }
+  });
+
   test("passes on no session where the cookie lacks the prefix it must carry", async () => {
     vi.stubEnv("COOKIE_SECURE", "true");
     jar.set("dbcontest_session", "abc");

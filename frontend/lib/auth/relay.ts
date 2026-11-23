@@ -4,6 +4,7 @@ import { callerHeaders } from "@/lib/api/caller";
 import { apiOrigin } from "@/lib/api/config";
 import type { Relay } from "@/lib/api/signup";
 
+import { cookiePair } from "./cookie";
 import { browserCookieOptions } from "./cookie-policy";
 
 /**
@@ -14,10 +15,8 @@ import { browserCookieOptions } from "./cookie-policy";
 export async function browserRelay(forward: readonly string[]): Promise<Relay> {
   const jar = await cookies();
   const cookie = forward
-    .flatMap((name) => {
-      const value = jar.get(name)?.value;
-      return value ? [`${name}=${value}`] : [];
-    })
+    .map((name) => cookiePair(name, jar.get(name)?.value))
+    .filter((pair) => pair !== null)
     .join("; ");
 
   return {

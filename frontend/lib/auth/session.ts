@@ -6,6 +6,7 @@ import { API_PREFIX } from "@/lib/api/client";
 import { apiOrigin } from "@/lib/api/config";
 import { SERVER_REQUEST_TIMEOUT_MS } from "@/lib/api/server";
 
+import { cookiePair } from "./cookie";
 import { cookieSecure } from "./cookie-policy";
 
 /**
@@ -40,9 +41,9 @@ export type CurrentIdentity = {
  */
 export async function sessionHeader(): Promise<Record<string, string>> {
   const { name } = sessionCookie();
-  const session = (await cookies()).get(name)?.value;
+  const session = cookiePair(name, (await cookies()).get(name)?.value);
 
-  return session ? { cookie: `${name}=${session}` } : {};
+  return session ? { cookie: session } : {};
 }
 
 /**

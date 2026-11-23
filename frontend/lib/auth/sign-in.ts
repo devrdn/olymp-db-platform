@@ -1,6 +1,10 @@
-import { API_PREFIX } from "@/lib/api/client";
+import { z } from "zod";
 
-import { parseSetCookie, type ParsedCookie } from "./cookie";
+import { API_PREFIX, apiErrorOf } from "@/lib/api/client";
+import { outcome, type Outcome } from "@/lib/api/outcome";
+import { SERVER_REQUEST_TIMEOUT_MS } from "@/lib/api/server";
+
+import { cookiePair, parseSetCookie, type ParsedCookie } from "./cookie";
 import { sessionCookie } from "./session";
 
 /**
@@ -43,17 +47,20 @@ const MAX_RETRY_WAIT_MS = 5000;
 
 const DEFAULT_RETRY_WAIT_MS = 1000;
 
-function retryWait(header: string | null): number {
-  const seconds = header === null ? Number.NaN : Number(header.trim());
-  if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_RETRY_WAIT_MS;
-  return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
+function retryWait(seconds: number | undefined): number {
+  return seconds === undefined ? DEFAULT_RETRY_WAIT_MS : Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
 }
+
+/** The answer to a sign-in that worked; read before any cookie is handed on. */
+const signedInSchema = z.object({ must_change_password: z.boolean().optional() });
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export type SignInOutcome =
-  | { ok: true; mustChangePassword: boolean }
-  | { ok: false; code: string };
+/**
+ * Signed in, or the refusal's code alone. A wrong login and a wrong password
+ * get the same code; never turn it into "no such account".
+ */
+export type SignInOutcome = Outcome<{ mustChangePassword: boolean }>;
 
 export async function signIn(
   credentials: Credentials,
@@ -61,50 +68,47 @@ export async function signIn(
 ): Promise<SignInOutcome> {
   const { fetchImpl, setCookie, origin = "", headers = {}, deviceToken, sessionToken, sleep = realSleep } = deps;
 
-  const cookie = [
-    ...(deviceToken ? [`${DEVICE_COOKIE}=${deviceToken}`] : []),
-    ...(sessionToken ? [`${sessionCookie().name}=${sessionToken}`] : []),
-  ].join("; ");
+  const cookie = [cookiePair(DEVICE_COOKIE, deviceToken), cookiePair(sessionCookie().name, sessionToken)]
+    .filter((pair) => pair !== null)
+    .join("; ");
 
+  // Each attempt its own deadline, as every other server call has. The body is
+  // read inside it, so an answer this side cannot read is `unreachable` before
+  // any cookie is set, not a session issued to a browser told nothing.
   const attempt = () =>
-    fetchImpl(`${origin}${API_PREFIX}/auth/login`, {
-      method: "POST",
-      headers: {
-        ...headers,
-        ...(cookie ? { cookie } : {}),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(credentials),
+    outcome(async () => {
+      const response = await fetchImpl(`${origin}${API_PREFIX}/auth/login`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          ...(cookie ? { cookie } : {}),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(credentials),
+        signal: AbortSignal.timeout(SERVER_REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) throw await apiErrorOf(response);
+      const body = signedInSchema.parse(await response.json());
+      return {
+        cookies: response.headers.getSetCookie?.() ?? [],
+        mustChangePassword: body.must_change_password ?? false,
+      };
     });
 
-  let response = await attempt();
-  let failure = response.ok ? null : await failureCode(response);
+  let answer = await attempt();
 
   // "Busy" is not a verdict on the password: wait as asked (bounded) and retry
   // once. A second refusal means sustained load, which retries would add to.
-  if (failure === BUSY) {
-    await sleep(retryWait(response.headers.get("retry-after")));
-    response = await attempt();
-    failure = response.ok ? null : await failureCode(response);
+  if (!answer.ok && answer.code === BUSY) {
+    await sleep(retryWait(answer.retryAfterSeconds));
+    answer = await attempt();
   }
 
-  if (failure !== null) return { ok: false, code: failure };
+  if (!answer.ok) return { ok: false, code: answer.code };
 
-  const raw = response.headers.getSetCookie?.() ?? [];
-  for (const header of raw) {
+  for (const header of answer.value.cookies) {
     const cookie = parseSetCookie(header);
     if (cookie) setCookie(cookie);
   }
-
-  const body = (await response.json()) as { must_change_password?: boolean };
-  return { ok: true, mustChangePassword: Boolean(body.must_change_password) };
-}
-
-/**
- * A wrong login and a wrong password get the same code; never turn it into
- * "no such account".
- */
-async function failureCode(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
-  return body?.error?.code ?? "unreachable";
+  return { ok: true, value: { mustChangePassword: answer.value.mustChangePassword } };
 }
