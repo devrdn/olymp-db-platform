@@ -2157,10 +2157,10 @@ Two properties say what happens once a contest has ended:
 
 A CHECK on the table (`contests_self_registration_open`) says that a contest
 with `enrollment = 'open'` always has `visibility = 'open'`: a contest anybody
-may join cannot be closed. The domain states the same rule
-(`ErrVisibilityNeedsInviteOnly`), and the repository applies it in the
-statement's locking read, so closing such a contest is refused with that error
-rather than tripping the constraint.
+may join cannot be closed. The domain decides the same rule
+(`ErrVisibilityNeedsInviteOnly`) against the row it read, and the write lands
+only if that row is unchanged (section 7.3), so closing such a contest is
+refused with that error rather than tripping the constraint.
 
 **The defaults.** Every contest that existed before the setting became `open`
 with its tasks hidden, so nothing that was listed disappears. A new contest is
@@ -2701,6 +2701,24 @@ finds the row. The other gets `ErrStatusChanged` → 409 `status_changed`, a
 code of its own rather than `invalid_transition`: the caller was right a
 minute ago, and what they need to hear is "look again", not "that is not
 allowed".
+
+**Every other write of the contest row is conditional too.** `Update`,
+`ExtendGrace`, `SetPrizePlaces` and `SetArchiveSettings` read the row inside
+their unit of work, decide every rule in `internal/contests` against it, and
+write with `WHERE id = $1 AND version = $2`. `contests.version` moves on every
+`UPDATE` of the row, by a trigger, so the scheduler's start and finish and an
+organiser's status change move it as surely as a settings save. A decision
+taken against a row that has since moved is refused with `ErrContestChanged`
+→ 409 `contest_changed`: an edit decided against a published contest cannot
+land on the running one the scheduler made of it, and of two organisers
+saving at once the second reloads instead of silently overwriting the first.
+That refusal, and `ErrNotFound`, are all the repository decides; the rules
+(the running-contest locks, an archived contest's prize places, the
+self-registration visibility) are the domain's alone. `updated_at` cannot
+serve as the version: the reclaim sweep measures a finished contest's grace
+from it, and the display-only writes leave it where it was. `SetStatus` keeps
+its compare-and-set on the status, which is what the publication gate was
+decided against.
 
 **A new question's position is allocated under a lock on the contest.**
 `INSERT ... (SELECT MAX(ord)+1)` reads the same number for two simultaneous
@@ -4231,9 +4249,10 @@ tab; and anybody at all without signing in, at
   finishes, through their own `PUT /contests/{id}/prize-places` rather than the
   general update, and are refused once the contest is archived. That write
   touches the three counts alone and leaves `updated_at`, from which the
-  reclaim sweep measures the grace, where it was; it refuses an archived
-  contest in the same statement, under the row's lock. A change shows on a
-  cached public table within its ten seconds.
+  reclaim sweep measures the grace, where it was. The service refuses an
+  archived contest, and the write lands only if the row is unchanged since it
+  was read (section 7.3), so an archive committed in between refuses it too.
+  A change shows on a cached public table within its ten seconds.
 
 A frozen table stays frozen after the end until the organiser presses "reveal
 results", which is irreversible and written to `audit_log`. There are no

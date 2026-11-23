@@ -123,6 +123,7 @@ func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]co
 		}
 		c.Status = contests.StatusFinished
 		c.UpdatedAt = now
+		c.Version++
 		s.Contests.byID[id] = c
 		finished = append(finished, contests.FinishedContest{ID: id, Users: s.Contests.finishRoster(id)})
 	}

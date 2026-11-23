@@ -439,6 +439,8 @@ func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
 			message: "contest cannot move to that status"},
 		contests.ErrStatusChanged: {status: http.StatusConflict, code: "status_changed",
 			message: "contest status changed while the request was being decided"},
+		contests.ErrContestChanged: {status: http.StatusConflict, code: "contest_changed",
+			message: "contest changed while the request was being decided"},
 		contests.ErrNotEditable: {status: http.StatusConflict, code: "not_editable",
 			message: "contest can no longer be edited"},
 		contests.ErrFreezeAlreadyReached: {status: http.StatusConflict, code: "freeze_already_reached",

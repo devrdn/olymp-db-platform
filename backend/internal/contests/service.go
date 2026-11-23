@@ -345,20 +345,33 @@ type UpdateCommand struct {
 
 // Update changes a contest's settings.
 func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error) {
-	current, err := s.contests.ByID(ctx, cmd.ContestID)
+	var written Contest
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		current, err := s.contests.ByID(ctx, cmd.ContestID)
+		if err != nil {
+			return err
+		}
+		updated, err := s.decideUpdate(ctx, current, cmd.applyTo(current))
+		if err != nil {
+			return err
+		}
+		if written, err = s.contests.Update(ctx, updated); err != nil {
+			return err
+		}
+		changes := audit.Between(current.auditFields(), updated.auditFields())
+		return s.record(ctx, cmd.ActorID, audit.ActionContestUpdate, updated.ID, changes.Payload())
+	})
 	if err != nil {
 		return Contest{}, err
 	}
-	if !current.SettingsEditable() {
-		return Contest{}, fmt.Errorf("%w: it is %s", ErrNotEditable, current.Status)
-	}
+	return written, nil
+}
 
+// applyTo is current with the fields the command sends, before any rule.
+func (cmd UpdateCommand) applyTo(current Contest) Contest {
 	updated := current
 	if cmd.Enrollment != "" {
 		updated.Enrollment = cmd.Enrollment
-		if updated.Enrollment == EnrollmentOpen {
-			updated.Visibility = VisibilityOpen
-		}
 	}
 	if cmd.QuestionMode != "" {
 		updated.QuestionMode = cmd.QuestionMode
@@ -405,9 +418,21 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	if cmd.SchemaDiagram != nil {
 		updated.SchemaDiagram = *cmd.SchemaDiagram
 	}
+	return updated
+}
 
-	// A client cannot send "no duration", and a fixed contest with one does
-	// not validate, so switching back to fixed timing clears it here.
+// decideUpdate applies every rule a change of current's settings to updated
+// must pass, and returns what is to be written.
+func (s *Service) decideUpdate(ctx context.Context, current, updated Contest) (Contest, error) {
+	if !current.SettingsEditable() {
+		return Contest{}, fmt.Errorf("%w: it is %s", ErrNotEditable, current.Status)
+	}
+	// Self-registration opens the contest (checkVisibility). A client cannot
+	// send "no duration", and a fixed contest with one does not validate, so
+	// switching back to fixed timing clears it.
+	if updated.Enrollment == EnrollmentOpen {
+		updated.Visibility = VisibilityOpen
+	}
 	if updated.Timing == TimingFixed {
 		updated.DurationMin = nil
 	}
@@ -424,18 +449,6 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		return Contest{}, err
 	}
 	if err := s.checkScoringKeepsBonus(ctx, current, updated); err != nil {
-		return Contest{}, err
-	}
-
-	changes := audit.Between(current.auditFields(), updated.auditFields())
-
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.contests.Update(ctx, updated); err != nil {
-			return err
-		}
-		return s.record(ctx, cmd.ActorID, audit.ActionContestUpdate, updated.ID, changes.Payload())
-	})
-	if err != nil {
 		return Contest{}, err
 	}
 	return updated, nil
@@ -455,44 +468,43 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 // move the reclaim deadline later: now is after the old updated_at and the
 // new grace is larger than the old one.
 func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID, graceMin int) (Contest, error) {
-	current, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return Contest{}, err
-	}
-	if !current.Ended() {
-		return Contest{}, fmt.Errorf(
-			"%w: the grace period is set through the ordinary settings while the contest is %s",
-			ErrNotEditable, current.Status)
-	}
-	effective := current.Settings.GracePeriodMin
-	if effective <= 0 {
-		effective = s.defaultGraceMin
-	}
-	if graceMin <= effective {
-		return Contest{}, fmt.Errorf(
-			"%w: %d does not extend the current %d-minute grace period",
-			ErrGraceNotLonger, graceMin, effective)
-	}
-
-	updated := current
-	updated.Settings.GracePeriodMin = graceMin
-	if err := updated.Validate(); err != nil {
-		return Contest{}, err
-	}
-
-	changes := audit.NewChanges()
-	changes.Set("grace_period_min", current.Settings.GracePeriodMin, graceMin)
-
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.contests.Update(ctx, updated); err != nil {
+	var written Contest
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		current, err := s.contests.ByID(ctx, contestID)
+		if err != nil {
 			return err
 		}
+		if !current.Ended() {
+			return fmt.Errorf(
+				"%w: the grace period is set through the ordinary settings while the contest is %s",
+				ErrNotEditable, current.Status)
+		}
+		effective := current.Settings.GracePeriodMin
+		if effective <= 0 {
+			effective = s.defaultGraceMin
+		}
+		if graceMin <= effective {
+			return fmt.Errorf(
+				"%w: %d does not extend the current %d-minute grace period",
+				ErrGraceNotLonger, graceMin, effective)
+		}
+
+		updated := current
+		updated.Settings.GracePeriodMin = graceMin
+		if err := updated.Validate(); err != nil {
+			return err
+		}
+		if written, err = s.contests.Update(ctx, updated); err != nil {
+			return err
+		}
+		changes := audit.NewChanges()
+		changes.Set("grace_period_min", current.Settings.GracePeriodMin, graceMin)
 		return s.record(ctx, actorID, audit.ActionContestUpdate, contestID, changes.Payload())
 	})
 	if err != nil {
 		return Contest{}, err
 	}
-	return updated, nil
+	return written, nil
 }
 
 // checkRunningChange refuses changes to a running contest's shape (question

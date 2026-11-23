@@ -2629,6 +2629,7 @@ const en = {
     participant_cannot_be_staff: "This account already takes part in the contest, so it cannot also be appointed to its staff.",
     invalid_transition: "That transition is not possible from the current state.",
     status_changed: "Somebody else moved this contest while you were deciding. Reload to see where it is now — nothing you did was saved.",
+    contest_changed: "This contest changed while you were deciding: somebody saved it, or it started or ended. Reload to see it as it is now — nothing you did was saved.",
     not_editable: "A contest in this state cannot be changed.",
     freeze_already_reached: "The leaderboard has already frozen, so the end date can only move later. Every other setting can still be saved.",
     icpc_start_locked: "The start date cannot change while ICPC scoring is running, since penalties are counted from it. Every other setting can still be saved.",

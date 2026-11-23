@@ -1708,3 +1708,24 @@ func TestUpdateToSelfRegistrationOpensAClosedContest(t *testing.T) {
 		t.Errorf("visibility change = %v, want closed -> open", change)
 	}
 }
+
+// Leaving self-registration closes nothing: the visibility and archive tasks
+// are the archive settings' to change.
+func TestUpdateToInviteOnlyKeepsTheArchiveSettings(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	c.Enrollment, c.Visibility, c.ArchiveTasks = contests.EnrollmentOpen, contests.VisibilityOpen, true
+	f.Contests.Put(c)
+
+	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentInviteOnly,
+	}); err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+
+	stored, _ := f.Contests.ByID(context.Background(), c.ID)
+	if stored.Enrollment != contests.EnrollmentInviteOnly || stored.Visibility != contests.VisibilityOpen || !stored.ArchiveTasks {
+		t.Errorf("enrolment, visibility, archive tasks = %s, %s, %v, want invite_only, open, true",
+			stored.Enrollment, stored.Visibility, stored.ArchiveTasks)
+	}
+}

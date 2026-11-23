@@ -429,6 +429,7 @@ var contestsErrors = joined(errorTable{
 	// Its own code: the request was legal when sent, so the interface says to
 	// look again rather than that it was wrong.
 	{err: contests.ErrStatusChanged, status: http.StatusConflict, code: codeStatusChanged},
+	{err: contests.ErrContestChanged, status: http.StatusConflict, code: codeContestChanged},
 	{err: contests.ErrNotEditable, status: http.StatusConflict, code: codeNotEditable},
 	{err: contests.ErrFreezeAlreadyReached, status: http.StatusConflict, code: codeFreezeAlreadyReached},
 	{err: contests.ErrICPCStartLocked, status: http.StatusConflict, code: codeICPCStartLocked},

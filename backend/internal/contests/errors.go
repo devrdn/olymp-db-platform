@@ -12,7 +12,7 @@ func Errors() []error {
 		ErrNotFound, ErrQuestionNotFound, ErrStoryNotFound,
 		ErrParticipantNotFound, ErrManagerNotFound,
 		ErrPackageTooLarge, ErrNotPublishable,
-		ErrInvalidTransition, ErrStatusChanged, ErrNotEditable,
+		ErrInvalidTransition, ErrStatusChanged, ErrContestChanged, ErrNotEditable,
 		ErrFreezeAlreadyReached, ErrICPCStartLocked, ErrOwnerImmutable,
 		ErrAlreadyEnrolled, ErrEnrollmentClosed, ErrParticipantStarted,
 		ErrStaffCannotParticipate, ErrParticipantCannotBeStaff,

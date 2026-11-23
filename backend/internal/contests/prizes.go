@@ -49,32 +49,42 @@ func (p PrizePlaces) Tier(place int) int {
 	}
 }
 
+// PrizePlacesEditable reports whether the prize counts may change. They change
+// only what the standings display, so they stay open while the contest runs
+// and after it finishes, until it is archived.
+func (c Contest) PrizePlacesEditable() bool {
+	return c.Status != StatusArchived
+}
+
 // SetPrizePlaces changes how many prizes the standings show. It is a second
-// door beside Update, not a widening of it: the counts change only what the
-// table displays, so they stay open while the contest runs and after it
-// finishes, until it is archived. The repository decides the archived refusal
-// in the write itself, so an archive racing this save cannot be overtaken.
+// door beside Update, not a widening of it, and is refused once the contest
+// is archived.
 func (s *Service) SetPrizePlaces(ctx context.Context, actorID, contestID uuid.UUID, places PrizePlaces) (Contest, error) {
 	if err := places.Validate(); err != nil {
 		return Contest{}, err
 	}
 
-	var updated Contest
+	var written Contest
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		previous, err := s.contests.SetPrizePlaces(ctx, contestID, places)
+		current, err := s.contests.ByID(ctx, contestID)
 		if err != nil {
 			return err
 		}
-		if updated, err = s.contests.ByID(ctx, contestID); err != nil {
+		if !current.PrizePlacesEditable() {
+			return fmt.Errorf("%w: it is %s", ErrNotEditable, current.Status)
+		}
+		updated := current
+		updated.PrizePlaces = places
+		if written, err = s.contests.SetPrizePlaces(ctx, updated); err != nil {
 			return err
 		}
-		changes := audit.Between(prizeAuditFields(previous), prizeAuditFields(places))
+		changes := audit.Between(prizeAuditFields(current.PrizePlaces), prizeAuditFields(places))
 		return s.record(ctx, actorID, audit.ActionContestUpdate, contestID, changes.Payload())
 	})
 	if err != nil {
 		return Contest{}, err
 	}
-	return updated, nil
+	return written, nil
 }
 
 // prizeAuditFields is the counts as the audit trail names them.

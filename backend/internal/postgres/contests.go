@@ -43,7 +43,7 @@ const contestColumnsBefore = `
 	c.created_at, c.updated_at,
 	c.leaderboard_freeze_min, c.leaderboard_names, c.leaderboard_revealed_at,
 	c.icpc_penalty_min, c.result_download, c.schema_diagram, c.visibility, c.archive_tasks,
-	c.prize_first, c.prize_second, c.prize_third,
+	c.prize_first, c.prize_second, c.prize_third, c.version,
 	COALESCE((
 		SELECT json_agg(json_build_object('code', cl.lang, 'is_default', cl.is_default)
 		                ORDER BY cl.is_default DESC, cl.lang)
@@ -97,7 +97,7 @@ func contestScanTargets(c *contests.Contest, settings, languages, translations *
 		&c.CreatedAt, &c.UpdatedAt,
 		&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
 		&c.ICPCPenaltyMin, &c.ResultDownload, &c.SchemaDiagram, &c.Visibility, &c.ArchiveTasks,
-		&c.PrizePlaces.First, &c.PrizePlaces.Second, &c.PrizePlaces.Third,
+		&c.PrizePlaces.First, &c.PrizePlaces.Second, &c.PrizePlaces.Third, &c.Version,
 		languages, translations,
 		&c.CoverHash, &c.CoverAttribution,
 		&c.SQLMode,
@@ -268,102 +268,63 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 	return found, total, nil
 }
 
-// Update saves a contest's own fields. Status is not among them: it moves
-// only through SetStatus, so the service's lifecycle rules and publish gate
-// cannot be bypassed.
-func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
+// Update saves a contest's settings and visibility. Status is not among them:
+// it moves only through SetStatus, so the service's lifecycle rules and
+// publish gate cannot be bypassed.
+func (r *Contests) Update(ctx context.Context, c contests.Contest) (contests.Contest, error) {
 	settings, err := json.Marshal(c.Settings)
 	if err != nil {
-		return fmt.Errorf("encode contest settings: %w", err)
+		return contests.Contest{}, fmt.Errorf("encode contest settings: %w", err)
 	}
-
-	tag, err := r.querier(ctx).Exec(ctx, `
-		UPDATE contests
-		SET enrollment = $2, question_mode = $3, progression = $4, scoring = $5, timing = $6, duration_min = $7,
-		    starts_at = $8, ends_at = $9, allowed_cidrs = $10, settings = $11,
-		    leaderboard_freeze_min = $12, leaderboard_names = $13, icpc_penalty_min = $14,
-		    result_download = $15, schema_diagram = $16, updated_at = now(),
-		    -- Self-registration is always open (contests_self_registration_open).
-		    -- archive_tasks is SetArchiveSettings' alone, so a stale read cannot undo it.
-		    visibility = CASE WHEN $2 = 'open' THEN 'open' ELSE visibility END
-		WHERE id = $1`,
-		c.ID, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
+	return r.writeIfUnchanged(ctx, c, `
+		enrollment = $3, question_mode = $4, progression = $5, scoring = $6, timing = $7, duration_min = $8,
+		starts_at = $9, ends_at = $10, allowed_cidrs = $11, settings = $12,
+		leaderboard_freeze_min = $13, leaderboard_names = $14, icpc_penalty_min = $15,
+		result_download = $16, schema_diagram = $17, visibility = $18, updated_at = now()`,
+		c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings,
-		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin, c.ResultDownload, c.SchemaDiagram)
-	if err != nil {
-		return fmt.Errorf("update contest: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return contests.ErrNotFound
-	}
-	return nil
+		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin,
+		c.ResultDownload, c.SchemaDiagram, c.Visibility)
 }
 
 // SetPrizePlaces leaves updated_at alone: the reclaim sweep measures a
-// finished contest's grace from it. The row lock taken while reading the old
-// counts makes a concurrent archive either commit first, so the status test
-// excludes the row, or wait for this write.
-func (r *Contests) SetPrizePlaces(ctx context.Context, id uuid.UUID, places contests.PrizePlaces) (contests.PrizePlaces, error) {
-	var previous contests.PrizePlaces
-	err := r.querier(ctx).QueryRow(ctx, `
-		WITH prior AS (
-			SELECT id, prize_first, prize_second, prize_third
-			FROM contests
-			WHERE id = $1 AND status <> 'archived'
-			FOR UPDATE
-		)
-		UPDATE contests c
-		SET prize_first = $2, prize_second = $3, prize_third = $4
-		FROM prior
-		WHERE c.id = prior.id
-		RETURNING prior.prize_first, prior.prize_second, prior.prize_third`,
-		id, places.First, places.Second, places.Third).
-		Scan(&previous.First, &previous.Second, &previous.Third)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		// Nothing matched: a second read tells a missing contest from an
-		// archived one.
-		if _, err := r.ByID(ctx, id); err != nil {
-			return contests.PrizePlaces{}, err
-		}
-		return contests.PrizePlaces{}, fmt.Errorf("%w: it is archived", contests.ErrNotEditable)
-	case err != nil:
-		return contests.PrizePlaces{}, fmt.Errorf("set prize places: %w", err)
-	}
-	return previous, nil
+// finished contest's grace from it.
+func (r *Contests) SetPrizePlaces(ctx context.Context, c contests.Contest) (contests.Contest, error) {
+	return r.writeIfUnchanged(ctx, c, `prize_first = $3, prize_second = $4, prize_third = $5`,
+		c.PrizePlaces.First, c.PrizePlaces.Second, c.PrizePlaces.Third)
 }
 
-// SetArchiveSettings leaves updated_at alone, as SetPrizePlaces does. The
-// self-registration test sits in the locking read, so closing a contest that
-// takes self-registration matches no row instead of tripping the CHECK.
-func (r *Contests) SetArchiveSettings(ctx context.Context, id uuid.UUID, s contests.ArchiveSettings) (contests.ArchiveSettings, error) {
-	var previous contests.ArchiveSettings
-	err := r.querier(ctx).QueryRow(ctx, `
-		WITH prior AS (
-			SELECT id, visibility, archive_tasks
-			FROM contests
-			WHERE id = $1 AND ($2 = 'open' OR enrollment = 'invite_only')
-			FOR UPDATE
+// SetArchiveSettings leaves updated_at alone, as SetPrizePlaces does.
+func (r *Contests) SetArchiveSettings(ctx context.Context, c contests.Contest) (contests.Contest, error) {
+	return r.writeIfUnchanged(ctx, c, `visibility = $3, archive_tasks = $4`, c.Visibility, c.ArchiveTasks)
+}
+
+// writeIfUnchanged runs UPDATE contests SET set on c's row while it is still
+// at c.Version, and returns the row as written; set's parameters start at $3.
+// PostgreSQL re-evaluates the version against the committed row once a
+// concurrent writer's lock is released, so of two writes decided against the
+// same read only the first lands.
+func (r *Contests) writeIfUnchanged(ctx context.Context, c contests.Contest, set string, args ...any) (contests.Contest, error) {
+	written, err := scanContest(r.querier(ctx).QueryRow(ctx, `
+		WITH written AS (
+			UPDATE contests SET `+set+`
+			WHERE id = $1 AND version = $2
+			RETURNING *
 		)
-		UPDATE contests c
-		SET visibility = $2, archive_tasks = $3
-		FROM prior
-		WHERE c.id = prior.id
-		RETURNING prior.visibility, prior.archive_tasks`,
-		id, s.Visibility, s.ArchiveTasks).
-		Scan(&previous.Visibility, &previous.ArchiveTasks)
+		SELECT `+contestColumns+` FROM written c`,
+		append([]any{c.ID, c.Version}, args...)...))
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		// Nothing matched: a second read tells a missing contest from the
-		// refused closing.
-		if _, err := r.ByID(ctx, id); err != nil {
-			return contests.ArchiveSettings{}, err
-		}
-		return contests.ArchiveSettings{}, contests.ErrVisibilityNeedsInviteOnly
-	case err != nil:
-		return contests.ArchiveSettings{}, fmt.Errorf("set archive settings: %w", err)
+	case err == nil:
+		return written, nil
+	case !errors.Is(err, contests.ErrNotFound):
+		return contests.Contest{}, fmt.Errorf("write contest: %w", err)
 	}
-	return previous, nil
+	// Nothing matched: a second read tells a missing contest from a changed
+	// one.
+	if _, err := r.ByID(ctx, c.ID); err != nil {
+		return contests.Contest{}, err
+	}
+	return contests.Contest{}, contests.ErrContestChanged
 }
 
 // finishRoster is the CTE that finishes the active registrations of every

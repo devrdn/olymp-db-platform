@@ -98,6 +98,10 @@
       "meaning": "The contest is not running, so no participant could read an answer or an announcement. The questions stay readable."
     },
     {
+      "code": "contest_changed",
+      "meaning": "Somebody else saved the contest, or it started or ended, while this request was being decided. Reload and decide again; nothing was changed."
+    },
+    {
       "code": "contest_ended",
       "meaning": "The contest has finished or been archived. It is over for everybody and will not open again, so nothing more is taken from anyone."
     },

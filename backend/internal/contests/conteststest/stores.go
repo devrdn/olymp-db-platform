@@ -167,7 +167,7 @@ func (r *Contests) serve(c contests.Contest) contests.Contest {
 // identity and timestamps are assigned here, languages and titles are dropped,
 // and Put's seed defaults are not applied.
 func (r *Contests) Create(_ context.Context, c contests.Contest) (contests.Contest, error) {
-	c.ID = uuid.New()
+	c.ID, c.Version = uuid.New(), 0
 	c.Languages, c.Translations = nil, nil
 	c.LeaderboardRevealedAt = nil
 	c.CoverHash, c.CoverAttribution = "", ""
@@ -276,65 +276,58 @@ func matchesTitle(c contests.Contest, query string) bool {
 	return false
 }
 
-// Update saves the contest's own columns only: status moves through
-// SetStatus, languages and titles have their own operations, and the author,
-// creation time and reveal time are not the caller's to rewrite.
-func (r *Contests) Update(_ context.Context, c contests.Contest) error {
-	stored, ok := r.byID[c.ID]
-	if !ok {
-		return contests.ErrNotFound
-	}
-	stored.Enrollment, stored.QuestionMode = c.Enrollment, c.QuestionMode
-	stored.Progression, stored.Scoring = c.Progression, c.Scoring
-	stored.ICPCPenaltyMin = c.ICPCPenaltyMin
-	stored.Timing, stored.DurationMin = c.Timing, c.DurationMin
-	stored.StartsAt, stored.EndsAt = c.StartsAt, c.EndsAt
-	stored.AllowedCIDRs, stored.Settings = c.AllowedCIDRs, c.Settings
-	stored.LeaderboardFreezeMin, stored.LeaderboardNames = c.LeaderboardFreezeMin, c.LeaderboardNames
-	stored.ResultDownload = c.ResultDownload
-	stored.SchemaDiagram = c.SchemaDiagram
-	// Update never writes archive_tasks, and opens a contest that takes
-	// self-registration; the postgres Update does the same in SQL.
-	if c.Enrollment == contests.EnrollmentOpen {
-		stored.Visibility = contests.VisibilityOpen
-	}
-	if now, ok := r.now(); ok {
-		stored.UpdatedAt = now
-	}
-	r.store(stored)
-	return nil
+// Update saves the contest's settings and visibility only: status moves
+// through SetStatus, prize places and archive tasks have their own writes,
+// languages and titles their own operations, and the author, creation time
+// and reveal time are not the caller's to rewrite.
+func (r *Contests) Update(_ context.Context, c contests.Contest) (contests.Contest, error) {
+	return r.writeIfUnchanged(c, func(stored *contests.Contest) {
+		stored.Enrollment, stored.Visibility = c.Enrollment, c.Visibility
+		stored.QuestionMode = c.QuestionMode
+		stored.Progression, stored.Scoring = c.Progression, c.Scoring
+		stored.ICPCPenaltyMin = c.ICPCPenaltyMin
+		stored.Timing, stored.DurationMin = c.Timing, c.DurationMin
+		stored.StartsAt, stored.EndsAt = c.StartsAt, c.EndsAt
+		stored.AllowedCIDRs, stored.Settings = c.AllowedCIDRs, c.Settings
+		stored.LeaderboardFreezeMin, stored.LeaderboardNames = c.LeaderboardFreezeMin, c.LeaderboardNames
+		stored.ResultDownload = c.ResultDownload
+		stored.SchemaDiagram = c.SchemaDiagram
+		if now, ok := r.now(); ok {
+			stored.UpdatedAt = now
+		}
+	})
 }
 
 // SetPrizePlaces writes the counts alone and keeps UpdatedAt, as the real
 // repository does.
-func (r *Contests) SetPrizePlaces(_ context.Context, id uuid.UUID, places contests.PrizePlaces) (contests.PrizePlaces, error) {
-	stored, ok := r.byID[id]
-	if !ok {
-		return contests.PrizePlaces{}, contests.ErrNotFound
-	}
-	if stored.Status == contests.StatusArchived {
-		return contests.PrizePlaces{}, contests.ErrNotEditable
-	}
-	previous := stored.PrizePlaces
-	stored.PrizePlaces = places
-	r.store(stored)
-	return previous, nil
+func (r *Contests) SetPrizePlaces(_ context.Context, c contests.Contest) (contests.Contest, error) {
+	return r.writeIfUnchanged(c, func(stored *contests.Contest) {
+		stored.PrizePlaces = c.PrizePlaces
+	})
 }
 
-// SetArchiveSettings mirrors the real statement: the self-registration test
-// and the write are one step, and UpdatedAt stays.
-func (r *Contests) SetArchiveSettings(_ context.Context, id uuid.UUID, settings contests.ArchiveSettings) (contests.ArchiveSettings, error) {
-	stored, ok := r.byID[id]
+// SetArchiveSettings writes visibility and archive tasks alone and keeps
+// UpdatedAt, as the real repository does.
+func (r *Contests) SetArchiveSettings(_ context.Context, c contests.Contest) (contests.Contest, error) {
+	return r.writeIfUnchanged(c, func(stored *contests.Contest) {
+		stored.Visibility, stored.ArchiveTasks = c.Visibility, c.ArchiveTasks
+	})
+}
+
+// writeIfUnchanged is every conditional write: set copies the written fields
+// onto the stored row only while that row is still at c.Version.
+func (r *Contests) writeIfUnchanged(c contests.Contest, set func(stored *contests.Contest)) (contests.Contest, error) {
+	stored, ok := r.byID[c.ID]
 	if !ok {
-		return contests.ArchiveSettings{}, contests.ErrNotFound
+		return contests.Contest{}, contests.ErrNotFound
 	}
-	if settings.Visibility == contests.VisibilityClosed && stored.Enrollment == contests.EnrollmentOpen {
-		return contests.ArchiveSettings{}, contests.ErrVisibilityNeedsInviteOnly
+	if stored.Version != c.Version {
+		return contests.Contest{}, contests.ErrContestChanged
 	}
-	previous := contests.ArchiveSettings{Visibility: stored.Visibility, ArchiveTasks: stored.ArchiveTasks}
-	stored.Visibility, stored.ArchiveTasks = settings.Visibility, settings.ArchiveTasks
+	set(&stored)
+	stored.Version++
 	r.store(stored)
-	return previous, nil
+	return r.serve(r.byID[c.ID]), nil
 }
 
 func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) ([]uuid.UUID, error) {
@@ -344,6 +337,7 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) (
 		c, ok := r.byID[id]
 		if ok {
 			c.Status = r.racesTo
+			c.Version++
 			r.byID[id] = c
 		}
 		r.racesTo = ""
@@ -357,6 +351,7 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) (
 		return nil, contests.ErrStatusChanged
 	}
 	c.Status = to
+	c.Version++
 	if now, ok := r.now(); ok {
 		c.UpdatedAt = now
 	}

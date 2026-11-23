@@ -132,7 +132,11 @@ var (
 	ErrInvalidTransition = errors.New("contest cannot move to that status")
 	// ErrStatusChanged is a move decided against a status that has since
 	// changed: unlike ErrInvalidTransition, the caller should look again.
-	ErrStatusChanged  = errors.New("contest status changed while the request was being decided")
+	ErrStatusChanged = errors.New("contest status changed while the request was being decided")
+	// ErrContestChanged is a write decided against a contest row that has
+	// been written since, by the scheduler or another organiser: nothing was
+	// saved, and the caller should reload and decide again.
+	ErrContestChanged = errors.New("contest changed while the request was being decided")
 	ErrInvalidContest = errors.New("contest is not valid")
 	// ErrGraceNotLonger is a grace period that is not longer than the one in
 	// force, which is the installation default while the contest has none.
@@ -200,6 +204,8 @@ type Contest struct {
 	CreatedBy uuid.UUID
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// Version moves on every write of the row; see Repository.
+	Version int64
 }
 
 // Settings are the tunables stored as jsonb on the contest row. Typed rather
@@ -373,11 +379,8 @@ func (c Contest) Validate() error {
 	if !slices.Contains([]string{EnrollmentOpen, EnrollmentInviteOnly}, c.Enrollment) {
 		return fmt.Errorf("%w: unknown enrollment type %q", ErrInvalidContest, c.Enrollment)
 	}
-	if err := validVisibility(c.Visibility); err != nil {
+	if err := c.checkVisibility(); err != nil {
 		return err
-	}
-	if c.Enrollment == EnrollmentOpen && c.Visibility == VisibilityClosed {
-		return ErrVisibilityNeedsInviteOnly
 	}
 	if !slices.Contains([]string{QuestionModeMulti, QuestionModeSingle}, c.QuestionMode) {
 		return fmt.Errorf("%w: unknown question mode %q", ErrInvalidContest, c.QuestionMode)
@@ -513,6 +516,12 @@ func (f Filter) Normalize() Filter {
 
 // Repository stores contests, their languages and their titles. Languages and
 // translations are replaced as a whole because the set must be consistent.
+//
+// Update, SetPrizePlaces and SetArchiveSettings are conditional: the service
+// decides the write against a row it read, and it lands only while the stored
+// row is still at that row's Version. Their one refusal besides ErrNotFound
+// is ErrContestChanged; every rule about what may be written is the
+// service's.
 type Repository interface {
 	Create(ctx context.Context, c Contest) (Contest, error)
 	// ByID returns a contest with its languages and translations, or
@@ -520,27 +529,24 @@ type Repository interface {
 	ByID(ctx context.Context, id uuid.UUID) (Contest, error)
 	// List returns a page of contests and the total matching the filter.
 	List(ctx context.Context, f Filter) ([]Contest, int, error)
-	// Update saves the contest's own fields; status and the prize places are
+	// Update saves c's settings and visibility if the row is unchanged since
+	// c was read, and returns the row as stored. Status, prize places,
+	// archive tasks, the reveal time, the author, languages and titles are
 	// not among them.
-	Update(ctx context.Context, c Contest) error
-	// SetPrizePlaces writes the prize counts alone, leaving updated_at as it
-	// was, and returns the counts it replaced, read under the row's lock. It
-	// reports ErrNotEditable for an archived contest, decided in the same
-	// statement, and ErrNotFound for a missing one.
-	SetPrizePlaces(ctx context.Context, id uuid.UUID, places PrizePlaces) (PrizePlaces, error)
-	// SetArchiveSettings writes visibility and archive tasks alone, leaving
-	// updated_at as it was, and returns the settings it replaced, read under
-	// the row's lock. It reports ErrVisibilityNeedsInviteOnly for closing a
-	// contest with self-registration, decided in the same statement, and
-	// ErrNotFound for a missing one.
-	SetArchiveSettings(ctx context.Context, id uuid.UUID, s ArchiveSettings) (ArchiveSettings, error)
+	Update(ctx context.Context, c Contest) (Contest, error)
+	// SetPrizePlaces saves c.PrizePlaces alone, on the same condition as
+	// Update, leaving updated_at as it was.
+	SetPrizePlaces(ctx context.Context, c Contest) (Contest, error)
+	// SetArchiveSettings saves c.Visibility and c.ArchiveTasks alone, on the
+	// same condition as Update, leaving updated_at as it was.
+	SetArchiveSettings(ctx context.Context, c Contest) (Contest, error)
 	// SetStatus moves the contest from status from to status to, and reports
 	// ErrStatusChanged if a concurrent request moved it since the caller read
-	// it. A move to finished finishes every active registration of the
-	// contest in the same write, so no reader sees the contest ended and a
-	// participant still active; registered and disqualified ones stay. It
-	// returns the users whose registrations it finished, nobody for any other
-	// move.
+	// it. It moves the version like every other write. A move to finished
+	// finishes every active registration of the contest in the same write, so
+	// no reader sees the contest ended and a participant still active;
+	// registered and disqualified ones stay. It returns the users whose
+	// registrations it finished, nobody for any other move.
 	SetStatus(ctx context.Context, id uuid.UUID, from, to string) (finished []uuid.UUID, err error)
 	// Delete removes a contest and everything hanging off it.
 	Delete(ctx context.Context, id uuid.UUID) error

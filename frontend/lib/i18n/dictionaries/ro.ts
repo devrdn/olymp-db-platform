@@ -2396,6 +2396,7 @@ const ro = {
     participant_cannot_be_staff: "Acest cont participă deja la olimpiadă, așa că nu poate fi numit și în echipa care o organizează.",
     invalid_transition: "Din starea curentă această trecere nu este posibilă.",
     status_changed: "Altcineva a mutat olimpiada cât timp decideați. Reîncărcați pagina — nimic din ce ați făcut nu a fost salvat.",
+    contest_changed: "Olimpiada s-a schimbat cât timp decideați: altcineva a salvat-o, ori a început sau s-a încheiat. Reîncărcați pagina — nimic din ce ați făcut nu a fost salvat.",
     not_editable: "O olimpiadă în această stare nu poate fi modificată.",
     freeze_already_reached: "Clasamentul s-a înghețat deja, așa că data de final poate fi mutată doar mai târziu. Celelalte setări pot fi salvate în continuare.",
     icpc_start_locked: "Data de început nu se poate schimba cât timp olimpiada rulează cu scorul ICPC, deoarece penalizările se calculează de la ea. Celelalte setări pot fi salvate în continuare.",

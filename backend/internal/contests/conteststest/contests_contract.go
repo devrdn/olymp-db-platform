@@ -145,11 +145,13 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		}
 		return c
 	}
-	update := func(t *testing.T, ctx context.Context, target ContestTarget, c contests.Contest) {
+	update := func(t *testing.T, ctx context.Context, target ContestTarget, c contests.Contest) contests.Contest {
 		t.Helper()
-		if err := target.Repo.Update(ctx, c); err != nil {
+		written, err := target.Repo.Update(ctx, c)
+		if err != nil {
 			t.Fatalf("Update() = %v", err)
 		}
+		return written
 	}
 	setStatus := func(t *testing.T, ctx context.Context, target ContestTarget, id uuid.UUID, from, to string) []uuid.UUID {
 		t.Helper()
@@ -477,18 +479,17 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
-	t.Run("Update saves the contest's own fields", func(t *testing.T) {
+	t.Run("Update saves the contest's settings and visibility", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author := target.NewUser()
 			created := create(t, ctx, target, full(author))
 			want := other(author)
-			want.ID = created.ID
-			want.Status = created.Status
+			want.ID, want.Status, want.Version = created.ID, created.Status, created.Version
 
-			update(t, ctx, target, want)
-			want.PrizePlaces = created.PrizePlaces
-			want.Visibility, want.ArchiveTasks = created.Visibility, created.ArchiveTasks
+			written := update(t, ctx, target, want)
+			want.PrizePlaces, want.ArchiveTasks = created.PrizePlaces, created.ArchiveTasks
 
+			wantFields(t, written, want)
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
 	})
@@ -498,84 +499,56 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			author := target.NewUser()
 			created := create(t, ctx, target, full(author))
 			want := plain(author)
-			want.ID = created.ID
-			want.Status = created.Status
+			want.ID, want.Status, want.Version = created.ID, created.Status, created.Version
 
 			update(t, ctx, target, want)
-			want.PrizePlaces = created.PrizePlaces
-			want.Visibility, want.ArchiveTasks = created.Visibility, created.ArchiveTasks
+			want.PrizePlaces, want.ArchiveTasks = created.PrizePlaces, created.ArchiveTasks
 
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
 	})
 
-	t.Run("Update to self-registration opens a closed contest", func(t *testing.T) {
-		each(t, func(ctx context.Context, target ContestTarget) {
-			author := target.NewUser()
-			created := create(t, ctx, target, plain(author))
-			if created.Visibility != contests.VisibilityClosed {
-				t.Fatalf("Visibility = %q, want closed", created.Visibility)
-			}
-			want := created
-			want.Enrollment = contests.EnrollmentOpen
-			want.Visibility = contests.VisibilityOpen
-
-			update(t, ctx, target, want)
-
-			wantFields(t, byID(t, ctx, target, created.ID), want)
-		})
-	})
-
-	t.Run("Update with invite-only enrolment leaves visibility and archive tasks as stored", func(t *testing.T) {
-		each(t, func(ctx context.Context, target ContestTarget) {
-			author := target.NewUser()
-			created := create(t, ctx, target, full(author))
-			stale := created
-			stale.Enrollment = contests.EnrollmentInviteOnly
-			stale.Visibility = contests.VisibilityClosed
-			stale.ArchiveTasks = false
-
-			update(t, ctx, target, stale)
-
-			got := byID(t, ctx, target, created.ID)
-			if got.Visibility != created.Visibility || got.ArchiveTasks != created.ArchiveTasks {
-				t.Errorf("visibility, archive tasks = %q, %v, want %q, %v as stored",
-					got.Visibility, got.ArchiveTasks, created.Visibility, created.ArchiveTasks)
-			}
-		})
-	})
-
-	t.Run("SetArchiveSettings writes both and returns the previous", func(t *testing.T) {
+	t.Run("Update stamps updated_at with the store's clock", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
 			created := create(t, ctx, target, plain(target.NewUser()))
 
-			previous, err := target.Repo.SetArchiveSettings(ctx, created.ID,
-				contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true})
+			written := update(t, ctx, target, created)
+
+			if now := target.Now(); !written.UpdatedAt.Equal(now) {
+				t.Errorf("UpdatedAt = %v, want the store's clock, %v", written.UpdatedAt, now)
+			}
+		})
+	})
+
+	t.Run("SetArchiveSettings writes both and returns the row", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			created := create(t, ctx, target, plain(target.NewUser()))
+			want := created
+			want.Visibility, want.ArchiveTasks = contests.VisibilityOpen, true
+
+			written, err := target.Repo.SetArchiveSettings(ctx, want)
 			if err != nil {
 				t.Fatalf("SetArchiveSettings() = %v", err)
 			}
 
-			if want := (contests.ArchiveSettings{Visibility: contests.VisibilityClosed}); previous != want {
-				t.Errorf("previous = %+v, want %+v", previous, want)
-			}
-			got := byID(t, ctx, target, created.ID)
-			if got.Visibility != contests.VisibilityOpen || !got.ArchiveTasks {
-				t.Errorf("visibility, archive tasks = %q, %v, want open, true", got.Visibility, got.ArchiveTasks)
-			}
+			wantFields(t, written, want)
+			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
 	})
 
-	t.Run("SetArchiveSettings refuses closed on self-registration and changes nothing", func(t *testing.T) {
+	t.Run("SetArchiveSettings writes nothing but visibility and archive tasks", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
-			created := create(t, ctx, target, full(target.NewUser()))
+			created := create(t, ctx, target, plain(target.NewUser()))
+			handed := full(created.CreatedBy)
+			handed.ID, handed.Version = created.ID, created.Version
+			want := created
+			want.Visibility, want.ArchiveTasks = handed.Visibility, handed.ArchiveTasks
 
-			_, err := target.Repo.SetArchiveSettings(ctx, created.ID,
-				contests.ArchiveSettings{Visibility: contests.VisibilityClosed, ArchiveTasks: false})
-
-			if !errors.Is(err, contests.ErrVisibilityNeedsInviteOnly) {
-				t.Errorf("SetArchiveSettings() = %v, want ErrVisibilityNeedsInviteOnly", err)
+			if _, err := target.Repo.SetArchiveSettings(ctx, handed); err != nil {
+				t.Fatalf("SetArchiveSettings() = %v", err)
 			}
-			wantFields(t, byID(t, ctx, target, created.ID), created)
+
+			wantFields(t, byID(t, ctx, target, created.ID), want)
 		})
 	})
 
@@ -583,23 +556,16 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		// The reclaim sweep measures a finished contest's grace from it.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			created := create(t, ctx, target, plain(target.NewUser()))
+			c := created
+			c.Visibility, c.ArchiveTasks = contests.VisibilityOpen, true
 
-			if _, err := target.Repo.SetArchiveSettings(ctx, created.ID,
-				contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true}); err != nil {
+			if _, err := target.Repo.SetArchiveSettings(ctx, c); err != nil {
 				t.Fatalf("SetArchiveSettings() = %v", err)
 			}
 
 			if got := byID(t, ctx, target, created.ID); !got.UpdatedAt.Equal(created.UpdatedAt) {
 				t.Errorf("UpdatedAt = %v, want %v left alone", got.UpdatedAt, created.UpdatedAt)
 			}
-		})
-	})
-
-	t.Run("SetArchiveSettings reports ErrNotFound for a missing contest", func(t *testing.T) {
-		each(t, func(ctx context.Context, target ContestTarget) {
-			_, err := target.Repo.SetArchiveSettings(ctx, uuid.New(),
-				contests.ArchiveSettings{Visibility: contests.VisibilityOpen})
-			notFound(t, err, "SetArchiveSettings")
 		})
 	})
 
@@ -630,36 +596,34 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
-	// SetPrizePlaces is their one writer, so a settings save made from an
-	// earlier read cannot undo a prize change made since.
-	t.Run("Update leaves the prize places alone", func(t *testing.T) {
+	t.Run("Update leaves the prize places and archive tasks alone", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author := target.NewUser()
 			created := create(t, ctx, target, full(author))
-			stale := created
-			stale.PrizePlaces = contests.PrizePlaces{}
+			handed := created
+			handed.PrizePlaces, handed.ArchiveTasks = contests.PrizePlaces{}, false
 
-			update(t, ctx, target, stale)
+			update(t, ctx, target, handed)
 
 			wantFields(t, byID(t, ctx, target, created.ID), created)
 		})
 	})
 
-	t.Run("SetPrizePlaces writes the counts, returns the ones it replaced and leaves updated_at alone", func(t *testing.T) {
+	t.Run("SetPrizePlaces writes the counts alone and leaves updated_at alone", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author := target.NewUser()
 			created := create(t, ctx, target, full(author))
+			handed := other(author)
+			handed.ID, handed.Version = created.ID, created.Version
 			want := created
-			want.PrizePlaces = contests.PrizePlaces{First: 4, Second: 0, Third: 9}
+			want.PrizePlaces = handed.PrizePlaces
 
-			previous, err := target.Repo.SetPrizePlaces(ctx, created.ID, want.PrizePlaces)
+			written, err := target.Repo.SetPrizePlaces(ctx, handed)
 			if err != nil {
 				t.Fatalf("SetPrizePlaces() = %v", err)
 			}
 
-			if previous != created.PrizePlaces {
-				t.Errorf("previous = %+v, want %+v", previous, created.PrizePlaces)
-			}
+			wantFields(t, written, want)
 			got := byID(t, ctx, target, created.ID)
 			wantFields(t, got, want)
 			if !got.UpdatedAt.Equal(created.UpdatedAt) {
@@ -668,32 +632,108 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
-	t.Run("SetPrizePlaces refuses an archived contest and keeps its counts", func(t *testing.T) {
-		each(t, func(ctx context.Context, target ContestTarget) {
-			author := target.NewUser()
-			c := full(author)
-			c.Status = contests.StatusArchived
-			created := create(t, ctx, target, c)
+	// The conditional writes, each with an edit to make to the row it is
+	// handed.
+	conditional := []struct {
+		name  string
+		write func(repo contests.Repository, ctx context.Context, c contests.Contest) (contests.Contest, error)
+		edit  func(c *contests.Contest)
+	}{
+		{"Update", contests.Repository.Update, func(c *contests.Contest) { c.QuestionMode = contests.QuestionModeMulti }},
+		{"SetPrizePlaces", contests.Repository.SetPrizePlaces, func(c *contests.Contest) { c.PrizePlaces = contests.PrizePlaces{First: 9} }},
+		{"SetArchiveSettings", contests.Repository.SetArchiveSettings, func(c *contests.Contest) { c.ArchiveTasks = false }},
+	}
+	for _, w := range conditional {
+		t.Run(w.name+" refuses a row written since it was read, and changes nothing", func(t *testing.T) {
+			// The scheduler starting the contest between an organiser's read
+			// and write is the case that matters: the edit was decided
+			// against a contest that was not yet running.
+			each(t, func(ctx context.Context, target ContestTarget) {
+				read := create(t, ctx, target, full(target.NewUser()))
+				setStatus(t, ctx, target, read.ID, contests.StatusPublished, contests.StatusRunning)
+				before := byID(t, ctx, target, read.ID)
+				stale := read
+				w.edit(&stale)
 
-			_, err := target.Repo.SetPrizePlaces(ctx, created.ID, contests.PrizePlaces{First: 7})
+				_, err := w.write(target.Repo, ctx, stale)
 
-			if !errors.Is(err, contests.ErrNotEditable) {
-				t.Errorf("SetPrizePlaces() = %v, want ErrNotEditable", err)
-			}
-			wantFields(t, byID(t, ctx, target, created.ID), created)
+				if !errors.Is(err, contests.ErrContestChanged) {
+					t.Errorf("%s() = %v, want ErrContestChanged", w.name, err)
+				}
+				wantFields(t, byID(t, ctx, target, read.ID), before)
+			})
 		})
-	})
 
-	t.Run("SetPrizePlaces of a contest that is not there is reported", func(t *testing.T) {
+		t.Run(w.name+" lands once of two writes decided against one read", func(t *testing.T) {
+			// Two organisers saving at once: the second must reload rather
+			// than silently overwrite the first.
+			each(t, func(ctx context.Context, target ContestTarget) {
+				read := create(t, ctx, target, full(target.NewUser()))
+				first := read
+				w.edit(&first)
+
+				written, err := w.write(target.Repo, ctx, first)
+				if err != nil {
+					t.Fatalf("the first %s() = %v", w.name, err)
+				}
+				_, err = w.write(target.Repo, ctx, read)
+
+				if !errors.Is(err, contests.ErrContestChanged) {
+					t.Errorf("the second %s() = %v, want ErrContestChanged", w.name, err)
+				}
+				wantFields(t, byID(t, ctx, target, read.ID), written)
+			})
+		})
+
+		t.Run(w.name+" returns the row at its new version, which the next write starts from", func(t *testing.T) {
+			each(t, func(ctx context.Context, target ContestTarget) {
+				read := create(t, ctx, target, full(target.NewUser()))
+
+				written, err := w.write(target.Repo, ctx, read)
+				if err != nil {
+					t.Fatalf("%s() = %v", w.name, err)
+				}
+
+				if written.Version == read.Version {
+					t.Errorf("Version = %d after the write, want it moved", written.Version)
+				}
+				if got := byID(t, ctx, target, read.ID); got.Version != written.Version {
+					t.Errorf("Version read back = %d, want the returned %d", got.Version, written.Version)
+				}
+				if _, err := w.write(target.Repo, ctx, written); err != nil {
+					t.Errorf("a %s() from the returned row = %v, want it to land", w.name, err)
+				}
+			})
+		})
+
+		t.Run(w.name+" of a contest that is not there is reported", func(t *testing.T) {
+			each(t, func(ctx context.Context, target ContestTarget) {
+				c := plain(target.NewUser())
+				c.ID = uuid.New()
+
+				_, err := w.write(target.Repo, ctx, c)
+
+				notFound(t, err, w.name+"()")
+			})
+		})
+	}
+
+	t.Run("SetStatus moves the version", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
-			_, err := target.Repo.SetPrizePlaces(ctx, uuid.New(), contests.PrizePlaces{First: 1})
-			notFound(t, err, "SetPrizePlaces")
+			created := create(t, ctx, target, plain(target.NewUser()))
+
+			setStatus(t, ctx, target, created.ID, contests.StatusDraft, contests.StatusPublished)
+
+			if got := byID(t, ctx, target, created.ID); got.Version == created.Version {
+				t.Errorf("Version = %d after SetStatus(), want it moved", got.Version)
+			}
 		})
 	})
 
 	t.Run("Update leaves status, author, creation time, languages and titles alone, and writes no reveal time", func(t *testing.T) {
-		// A caller saving a contest it read earlier must not undo status,
-		// language or title changes made since.
+		// None of these is Update's to write, whatever it is handed: status
+		// moves through SetStatus, languages and titles have their own
+		// operations.
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author, stranger := target.NewUser(), target.NewUser()
 			created := create(t, ctx, target, plain(author))
@@ -703,9 +743,9 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			before := byID(t, ctx, target, created.ID)
 
 			stale := plain(stranger)
-			stale.ID = created.ID
+			stale.ID, stale.Version = created.ID, before.Version
 			stale.Status = contests.StatusArchived
-			stale.Enrollment = contests.EnrollmentOpen
+			stale.Enrollment, stale.Visibility = contests.EnrollmentOpen, contests.VisibilityOpen
 			revealed := at(11)
 			stale.LeaderboardRevealedAt = &revealed
 			stale.CreatedAt = at(1)
@@ -738,15 +778,6 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
-	t.Run("Update of a contest that is not there is reported", func(t *testing.T) {
-		each(t, func(ctx context.Context, target ContestTarget) {
-			c := plain(target.NewUser())
-			c.ID = uuid.New()
-
-			notFound(t, target.Repo.Update(ctx, c), "Update()")
-		})
-	})
-
 	t.Run("Update of one contest leaves the others alone", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
 			author := target.NewUser()
@@ -754,8 +785,7 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			theirs := create(t, ctx, target, full(author))
 
 			changed := other(author)
-			changed.ID = ours.ID
-			changed.Status = ours.Status
+			changed.ID, changed.Status, changed.Version = ours.ID, ours.Status, ours.Version
 			update(t, ctx, target, changed)
 
 			wantFields(t, byID(t, ctx, target, theirs.ID), full(author))
@@ -1115,15 +1145,13 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			wantFields(t, byID(t, ctx, target, created.ID), full(author))
 
 			edit := other(author)
-			edit.ID = created.ID
-			edit.Status = created.Status
+			edit.ID, edit.Status, edit.Version = created.ID, created.Status, created.Version
 			update(t, ctx, target, edit)
 			scribble(edit)
 
 			want := other(author)
 			want.Status = created.Status
-			want.PrizePlaces = created.PrizePlaces
-			want.Visibility, want.ArchiveTasks = created.Visibility, created.ArchiveTasks
+			want.PrizePlaces, want.ArchiveTasks = created.PrizePlaces, created.ArchiveTasks
 			wantFields(t, byID(t, ctx, target, created.ID), want)
 
 			given := []contests.ContestLanguage{english, {Code: "ro"}}

@@ -366,4 +366,20 @@ func ScheduleRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			wantStatus(t, ctx, target, id, contests.StatusFinished, "finished contest")
 		})
 	})
+
+	t.Run("a write decided before AdvanceFinished finished the contest is refused", func(t *testing.T) {
+		// An organiser's save read while the contest ran must not land on the
+		// finished one.
+		each(t, func(ctx context.Context, target ScheduleTarget) {
+			id := target.Seed(contests.StatusRunning, nil, at(target, -time.Hour))
+			read := byID(t, ctx, target, id)
+
+			matched(t, "AdvanceFinished(0)", finish(t, ctx, target, 0), map[string]uuid.UUID{"overdue": id}, nil)
+			_, err := target.Contests.Update(ctx, read)
+
+			if !errors.Is(err, contests.ErrContestChanged) {
+				t.Errorf("Update() = %v, want ErrContestChanged", err)
+			}
+		})
+	})
 }

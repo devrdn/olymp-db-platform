@@ -198,7 +198,13 @@ func TestSettingPrizePlacesLeavesTheReclaimClockAlone(t *testing.T) {
 			t.Fatalf("insert = %v", err)
 		}
 
-		if _, err := NewContests(testPool).SetPrizePlaces(ctx, id, contests.PrizePlaces{First: 1, Second: 2, Third: 3}); err != nil {
+		repo := NewContests(testPool)
+		c, err := repo.ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		c.PrizePlaces = contests.PrizePlaces{First: 1, Second: 2, Third: 3}
+		if _, err := repo.SetPrizePlaces(ctx, c); err != nil {
 			t.Fatalf("SetPrizePlaces() = %v", err)
 		}
 
@@ -212,9 +218,11 @@ func TestSettingPrizePlacesLeavesTheReclaimClockAlone(t *testing.T) {
 	})
 }
 
-// An archive that commits while the save waits for the row is seen by the
-// save, which is then refused rather than writing into an archived contest.
-func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
+// A write decided before an archive that commits while the write waits for
+// the row is refused once the lock is released: PostgreSQL re-reads the
+// version against the committed row rather than writing into the archived
+// contest.
+func TestAWriteWaitingOnAnArchiveIsRefusedOnceItCommits(t *testing.T) {
 	if testPool == nil {
 		t.Skip("set CORE_DB_DSN to run the database tests")
 	}
@@ -230,6 +238,10 @@ func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
 		t.Fatalf("finish = %v", err)
 	}
 	repo := NewContests(testPool)
+	read, err := repo.ByID(ctx, contest)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
 
 	archiving := make(chan struct{})
 	commit := make(chan struct{})
@@ -253,7 +265,9 @@ func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
 
 	saved := make(chan error, 1)
 	go func() {
-		_, err := repo.SetPrizePlaces(ctx, contest, contests.PrizePlaces{First: 3})
+		decided := read
+		decided.PrizePlaces = contests.PrizePlaces{First: 3}
+		_, err := repo.SetPrizePlaces(ctx, decided)
 		saved <- err
 	}()
 	select {
@@ -268,8 +282,8 @@ func TestASavedPrizePlacesRacingAnArchiveIsRefused(t *testing.T) {
 	}
 	select {
 	case err := <-saved:
-		if !errors.Is(err, contests.ErrNotEditable) {
-			t.Errorf("SetPrizePlaces() = %v, want ErrNotEditable once the archive committed", err)
+		if !errors.Is(err, contests.ErrContestChanged) {
+			t.Errorf("SetPrizePlaces() = %v, want ErrContestChanged once the archive committed", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("SetPrizePlaces() never returned after the archive committed")
@@ -332,7 +346,7 @@ func TestUpdateWritesTheICPCPenalty(t *testing.T) {
 		}
 
 		before.ICPCPenaltyMin = 50
-		if err := repo.Update(ctx, before); err != nil {
+		if _, err := repo.Update(ctx, before); err != nil {
 			t.Fatalf("Update() = %v", err)
 		}
 
@@ -875,4 +889,59 @@ func archivedAtKeptThrough(t *testing.T, ctx context.Context, id uuid.UUID, edit
 		t.Fatalf("read archived_at: %v", err)
 	}
 	return kept
+}
+
+// startsAfterRead is the contest repository with the scheduler starting the
+// contest, on its own connection, right after the first read.
+type startsAfterRead struct {
+	*Contests
+	start sync.Once
+	t     *testing.T
+}
+
+func (r *startsAfterRead) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
+	c, err := r.Contests.ByID(ctx, id)
+	r.start.Do(func() {
+		if _, err := r.Contests.SetStatus(context.Background(), id, contests.StatusPublished, contests.StatusRunning); err != nil {
+			r.t.Errorf("the scheduler's SetStatus() = %v", err)
+		}
+	})
+	return c, err
+}
+
+// An organiser's edit decided against a published contest must not land once
+// the scheduler has started it: a question mode change is refused on a
+// running contest, and the stale decision would have bypassed that.
+func TestAnUpdateDecidedBeforeTheStartIsRefusedOnceTheContestRuns(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	if _, err := testPool.Exec(ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, id); err != nil {
+		t.Fatalf("publish = %v", err)
+	}
+	repo := NewContests(testPool)
+	service := contests.NewService(contests.ServiceConfig{
+		Contests:      &startsAfterRead{Contests: repo, t: t},
+		Questions:     NewQuestions(testPool),
+		Registrations: NewRegistrations(testPool),
+		Audit:         audit.New(NewAuditSink(testPool)),
+		UnitOfWork:    storage.NewUnitOfWork(testPool),
+		Gate:          contests.NewGate(0),
+		GameReadiness: NewGameInstances(testPool),
+		Covers:        NewCovers(testPool),
+		Appointees:    NewUsers(testPool),
+	})
+
+	_, err := service.Update(ctx, contests.UpdateCommand{ContestID: id, QuestionMode: contests.QuestionModeSingle})
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("Update() = %v, want ErrContestChanged", err)
+	}
+	got, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if got.Status != contests.StatusRunning || got.QuestionMode != contests.QuestionModeMulti {
+		t.Errorf("status, question mode = %s, %s, want running, multi: the stale edit landed",
+			got.Status, got.QuestionMode)
+	}
 }

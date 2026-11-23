@@ -301,6 +301,8 @@ var (
 		"The contest cannot move to that status from the one it is in.")
 	codeStatusChanged = httpx.NewCode("status_changed",
 		"Somebody else moved the contest while this request was being decided. Reload and look again; nothing was changed.")
+	codeContestChanged = httpx.NewCode("contest_changed",
+		"Somebody else saved the contest, or it started or ended, while this request was being decided. Reload and decide again; nothing was changed.")
 	codeNotEditable = httpx.NewCode("not_editable",
 		"The contest's status no longer allows this change. The message says which status.")
 	codeFreezeAlreadyReached = httpx.NewCode("freeze_already_reached",
