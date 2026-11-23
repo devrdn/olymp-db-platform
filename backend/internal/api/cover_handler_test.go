@@ -157,6 +157,24 @@ func TestUploadingTooOftenIsRefusedAndTheRefusalsCount(t *testing.T) {
 	}
 }
 
+// The visitor's read is spent per address before the identifier is parsed, so
+// a refusal costs neither the database nor the volume.
+func TestThePublicCoverIsLimitedPerAddress(t *testing.T) {
+	f := newCoverFixture(t)
+	path := "/public/contests/not-a-uuid/cover"
+
+	for i := range api.PublicCoverReadsPerMinute {
+		if rec := f.do(t, http.MethodGet, path, "", nil); rec.Code != http.StatusNotFound {
+			t.Fatalf("read %d: status = %d, want 404 (%s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	rec := f.do(t, http.MethodGet, path, "", nil)
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "public_too_often" {
+		t.Fatalf("status = %d (%s), want 429 public_too_often", rec.Code, rec.Body.String())
+	}
+	assertRetryAfter(t, rec, "60")
+}
+
 func TestAnUploadPastTheDecodeSlotsIsToldToComeBackWithoutReachingTheStore(t *testing.T) {
 	store, release := newBlockingCoverStore(t)
 	f := newCoverFixtureServing(t, store, rbac.PermissionContestAdminAll)
