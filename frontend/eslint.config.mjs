@@ -2,6 +2,8 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
+import { noSchemaInClient } from "./scripts/no-schema-in-client.mjs";
+
 /**
  * The three rules that keep the design system from being decorative.
  *
@@ -50,6 +52,13 @@ const eslintConfig = defineConfig([
   {
     rules: {
       "no-restricted-syntax": ["error", ...restricted],
+    },
+  },
+  {
+    files: ["**/*.ts", "**/*.tsx"],
+    plugins: { bundle: { rules: { "no-schema-in-client": noSchemaInClient } } },
+    rules: {
+      "bundle/no-schema-in-client": ["error", { root: import.meta.dirname }],
     },
   },
   // Override default ignores of eslint-config-next.

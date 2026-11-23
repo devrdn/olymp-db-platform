@@ -3,8 +3,9 @@
  *
  * Every `*-terms` module exists for the same reason: a schema module calls
  * `z.object()` at load, so a bundler cannot drop it, and a client component
- * importing one array from it would ship all of zod (about 280 KB). The
- * schemas import these, so each term keeps one definition.
+ * importing one array from it would ship all of zod (about 110 KB minified,
+ * 31 KB gzipped). The schemas import these, so each term keeps one
+ * definition. `scripts/no-schema-in-client.mjs` holds client files to it.
  */
 
 import type { Question } from "./content";
