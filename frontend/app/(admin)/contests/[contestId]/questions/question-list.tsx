@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { StateView } from "@/components/product/state-view";
-import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ScrollBox } from "@/components/ui/scroll-box";
@@ -12,16 +11,9 @@ import { answerable, untranslated } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
 import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { useHydrated } from "@/lib/use-hydrated";
 import { cn } from "@/lib/utils";
 
-import {
-  addQuestionAction,
-  deleteQuestionAction,
-  reorderQuestionsAction,
-  type QuestionListState,
-} from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
+import { addQuestionAction, deleteQuestionAction, reorderQuestionsAction } from "./actions";
 import { fill } from "@/lib/i18n/fill";
 
 const HEAD =
@@ -174,8 +166,8 @@ function firstLine(question: Question): string {
 }
 
 /**
- * Move and delete controls. Separate forms, so the delete's confirmation and
- * pending state do not affect the moves.
+ * Move and delete controls. Separate forms, so the delete's confirmation,
+ * pending state and refusal do not affect the moves.
  */
 function RowControls({
   contestId,
@@ -197,13 +189,14 @@ function RowControls({
   };
 
   return (
-    <div className="flex items-center justify-end gap-1">
+    <div className="flex items-start justify-end gap-1">
       {index > 0 ? (
         <ReorderButton
           contestId={contestId}
           order={swapped(index, index - 1)}
           label={t.moveUp}
           glyph="↑"
+          dict={dict}
         />
       ) : (
         <span className="inline-block size-7" />
@@ -215,6 +208,7 @@ function RowControls({
           order={swapped(index, index + 1)}
           label={t.moveDown}
           glyph="↓"
+          dict={dict}
         />
       ) : (
         <span className="inline-block size-7" />
@@ -230,28 +224,26 @@ function ReorderButton({
   order,
   label,
   glyph,
+  dict,
 }: {
   contestId: string;
   order: string[];
   label: string;
   glyph: string;
+  dict: Dictionary;
 }) {
-  const [, formAction, pending] = useActionState<QuestionListState, FormData>(
-    reorderQuestionsAction,
-    {},
-  );
-
   return (
-    <form action={formAction} className="contents">
-      <input type="hidden" name="contestId" value={contestId} />
-      {order.map((id, position) => (
-        <input key={`${id}-${position}`} type="hidden" name="order" value={id} />
-      ))}
-
-      <Button type="submit" size="icon" variant="quiet" disabled={pending} aria-label={label}>
+    <ActionForm
+      action={reorderQuestionsAction}
+      fields={{ contestId, order }}
+      errors={dict.errors}
+      className="flex flex-col items-end gap-1"
+    >
+      <ActionButton size="icon" variant="quiet" aria-label={label}>
         <span aria-hidden>{glyph}</span>
-      </Button>
-    </form>
+      </ActionButton>
+      <ActionOutcome narrow />
+    </ActionForm>
   );
 }
 
@@ -265,64 +257,35 @@ function DeleteQuestion({
   dict: Dictionary;
 }) {
   const t = dict.workspace.questions;
-  const [, formAction, pending] = useActionState<QuestionListState, FormData>(
-    deleteQuestionAction,
-    {},
-  );
-  const hydrated = useHydrated();
 
+  // Deletion is permanent, so it asks first.
   return (
-    <form
-      action={formAction}
-      className="contents"
-      /* Deletion is permanent. The question is asked here, which React skips when it replays a
-         submission queued before hydration, so the button stays disabled until then. */
-      onSubmit={(event) => {
-        if (!window.confirm(t.confirmRemove)) event.preventDefault();
-      }}
+    <ActionForm
+      action={deleteQuestionAction}
+      fields={{ contestId, questionId }}
+      confirm={t.confirmRemove}
+      errors={dict.errors}
+      className="flex flex-col items-end gap-1"
     >
-      <input type="hidden" name="contestId" value={contestId} />
-      <input type="hidden" name="questionId" value={questionId} />
-
-      <Button
-        type="submit"
-        size="icon"
-        variant="quiet"
-        disabled={!hydrated || pending}
-        aria-label={t.remove}
-      >
+      <ActionButton size="icon" variant="quiet" aria-label={t.remove}>
         <span aria-hidden className="text-bad">
           ×
         </span>
-      </Button>
-    </form>
+      </ActionButton>
+      <ActionOutcome narrow />
+    </ActionForm>
   );
 }
 
 function AddQuestion({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.workspace.questions;
-  const [state, formAction, pending] = useActionState<QuestionListState, FormData>(
-    addQuestionAction,
-    {},
-  );
-
-  const failure = state.code
-    ? (messageForCode(state.code, dict.errors))
-    : null;
 
   return (
-    <form action={formAction} className="flex flex-col gap-3">
-      <input type="hidden" name="contestId" value={contestId} />
-
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? t.adding : t.add}
-      </Button>
-
-      {failure ? (
-        <p role="alert" className="max-w-body text-small text-bad">
-          {failure}
-        </p>
-      ) : null}
-    </form>
+    <ActionForm action={addQuestionAction} fields={{ contestId }} errors={dict.errors} className="flex flex-col gap-3">
+      <ActionButton pendingLabel={t.adding} className="self-start">
+        {t.add}
+      </ActionButton>
+      <ActionOutcome />
+    </ActionForm>
   );
 }

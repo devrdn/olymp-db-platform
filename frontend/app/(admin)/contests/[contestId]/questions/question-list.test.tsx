@@ -1,18 +1,20 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderToString } from "react-dom/server";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-const { deleteQuestionAction } = vi.hoisted(() => ({ deleteQuestionAction: vi.fn(async () => ({})) }));
+const { deleteQuestionAction, reorderQuestionsAction } = vi.hoisted(() => ({
+  deleteQuestionAction: vi.fn(async (): Promise<{ code?: string }> => ({})),
+  reorderQuestionsAction: vi.fn(async (): Promise<{ code?: string }> => ({})),
+}));
 
 // The real Server Actions would pull in Next's server runtime.
 vi.mock("./actions", () => ({
   addQuestionAction: vi.fn(async () => ({})),
   deleteQuestionAction,
-  reorderQuestionsAction: vi.fn(async () => ({})),
+  reorderQuestionsAction,
 }));
 
 import { QuestionList } from "./question-list";
@@ -172,36 +174,16 @@ describe("QuestionList on a phone", () => {
   });
 });
 
+function list(questions: Question[] = [question()]) {
+  return (
+    <QuestionList contestId="c1" questions={questions} languages={["en"]} editable scoring="points" dict={dict} />
+  );
+}
+
 describe("QuestionList, deleting a question", () => {
-  test("the server's markup leaves the delete button disabled until the page is hydrated", () => {
-    const html = renderToString(
-      <QuestionList
-        contestId="c1"
-        questions={[question()]}
-        languages={["en"]}
-        editable
-        scoring="points"
-        dict={dict}
-      />,
-    );
-    const page = new DOMParser().parseFromString(html, "text/html");
-    const remove = page.querySelector(`button[aria-label="${dict.workspace.questions.remove}"]`);
-
-    expect(remove?.hasAttribute("disabled")).toBe(true);
-  });
-
   test("asks first and sends nothing on no", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(
-      <QuestionList
-        contestId="c1"
-        questions={[question()]}
-        languages={["en"]}
-        editable
-        scoring="points"
-        dict={dict}
-      />,
-    );
+    render(list());
 
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
 
@@ -210,24 +192,25 @@ describe("QuestionList, deleting a question", () => {
     confirm.mockRestore();
   });
 
-  test("hydrating the server's markup enables the delete button", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const list = (
-      <QuestionList
-        contestId="c1"
-        questions={[question()]}
-        languages={["en"]}
-        editable
-        scoring="points"
-        dict={dict}
-      />
-    );
-    container.innerHTML = renderToString(list);
+  test("says why a refused delete did not happen", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteQuestionAction.mockResolvedValueOnce({ code: "question_not_found" });
+    render(list());
 
-    render(list, { container, hydrate: true });
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
 
-    expect(await screen.findByRole("button", { name: dict.workspace.questions.remove })).toBeEnabled();
-    container.remove();
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.question_not_found);
+    confirm.mockRestore();
+  });
+});
+
+describe("QuestionList, moving a question", () => {
+  test("says why a refused move did not happen", async () => {
+    reorderQuestionsAction.mockResolvedValueOnce({ code: "question_not_found" });
+    render(list([question(), question({ id: "6a2b9d33-2c5f-4b88-8e1e-3d6c9f02b5e7", ord: 2 })]));
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.moveDown }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.question_not_found);
   });
 });
