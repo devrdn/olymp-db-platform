@@ -8,7 +8,6 @@ import {
   postAnnouncement,
   clarificationFeedSchema,
   clarificationQueueSchema,
-  latestStamp,
   staffClarificationSchema,
 } from "./clarifications";
 
@@ -110,26 +109,6 @@ describe("staffClarificationSchema", () => {
       total: 1,
     });
     expect(parsed.items[0]).toEqual({ id: "a1", body: "Hello", createdAt: "2026-11-02T09:00:00.000000Z" });
-  });
-});
-
-describe("latestStamp", () => {
-  test("is the newest time anything changed that was not the reader's own question", () => {
-    const feed = clarificationFeedSchema.parse({
-      items: [
-        // Asked by the reader and not answered yet: nothing new to them.
-        { ...clarification, id: "mine", mine: true, answer: null, posted_at: "2026-11-02T10:00:00.000000Z" },
-        { ...clarification, answer: { ...answer, edited_at: "2026-11-02T09:30:00.000000Z" } },
-        { kind: "announcement", id: "a1", posted_at: "2026-11-02T09:10:00.000000Z", body: "x" },
-      ],
-      next: null,
-      open: 1,
-    });
-    expect(latestStamp(feed.items)).toBe("2026-11-02T09:30:00.000000Z");
-  });
-
-  test("is empty when nothing came from the organisers", () => {
-    expect(latestStamp([])).toBe("");
   });
 });
 

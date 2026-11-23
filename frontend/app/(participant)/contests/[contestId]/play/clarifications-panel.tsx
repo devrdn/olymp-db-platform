@@ -4,14 +4,8 @@ import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useStat
 
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
-import {
-  MAX_OPEN_QUESTIONS,
-  QUESTION_MAX_CHARS,
-  latestStamp,
-  type FeedItem,
-  type SeenAnnouncement,
-  type SeenClarification,
-} from "@/lib/api/clarifications";
+import type { FeedItem, SeenAnnouncement, SeenClarification } from "@/lib/api/clarifications";
+import { MAX_OPEN_QUESTIONS, QUESTION_MAX_CHARS, latestStamp } from "@/lib/api/clarifications-terms";
 import { formatTime } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import { messageForCode } from "@/lib/i18n/errors";

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi, type Mock } from "vitest";
 
 import { cuedEdges, measureScroller } from "@/components/ui/scroll-cue-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
-import { MAX_TABS } from "@/lib/api/workspace";
+import { MAX_TABS } from "@/lib/api/workspace-terms";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
 

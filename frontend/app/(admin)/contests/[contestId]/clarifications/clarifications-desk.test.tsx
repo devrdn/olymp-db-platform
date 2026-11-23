@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { AnswerInput, ClarificationQueue, QueueState, StaffClarification } from "@/lib/api/clarifications";
-import { ANNOUNCEMENT_MAX_CHARS, ANSWER_MAX_CHARS } from "@/lib/api/clarifications";
+import { ANNOUNCEMENT_MAX_CHARS, ANSWER_MAX_CHARS } from "@/lib/api/clarifications-terms";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
 

@@ -1,4 +1,5 @@
-import { announcementListSchema, CLARIFICATION_PAGE_SIZE, clarificationQueueSchema } from "@/lib/api/clarifications";
+import { announcementListSchema, clarificationQueueSchema } from "@/lib/api/clarifications";
+import { CLARIFICATION_PAGE_SIZE } from "@/lib/api/clarifications-terms";
 import { questionListSchema } from "@/lib/api/content";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { fill } from "@/lib/i18n/fill";

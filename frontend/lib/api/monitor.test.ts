@@ -9,8 +9,6 @@ import {
   fetchRevision,
   fetchRoster,
   fetchTimeline,
-  monitorCsvHref,
-  participantCsvHref,
   participantSchema,
   queriesPath,
   rosterSchema,
@@ -167,10 +165,6 @@ describe("the addresses the screen asks", () => {
     );
     expect(feedPath(CONTEST, { before: "xyz", kinds: [] })).toBe(`/contests/${CONTEST}/monitor/feed?before=xyz`);
   });
-
-  test("offers the contest's CSV as an API path on this origin", () => {
-    expect(monitorCsvHref(CONTEST)).toBe(`/api/v1/contests/${CONTEST}/monitor/export.csv`);
-  });
 });
 
 describe("reading from the browser", () => {
@@ -273,10 +267,6 @@ describe("the addresses of one participant", () => {
     expect(queriesPath(CONTEST, REG, { status: "error", q: "50%", cursor: "q9" })).toBe(
       `/contests/${CONTEST}/monitor/participants/${REG}/queries?status=error&q=50%25&cursor=q9`,
     );
-  });
-
-  test("offers the participant's CSV as an API path on this origin", () => {
-    expect(participantCsvHref(CONTEST, REG)).toBe(`/api/v1/contests/${CONTEST}/monitor/participants/${REG}/export.csv`);
   });
 });
 

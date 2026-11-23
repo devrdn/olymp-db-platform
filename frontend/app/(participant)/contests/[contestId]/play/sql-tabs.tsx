@@ -3,7 +3,7 @@
 import { useId, useRef, useState, useSyncExternalStore } from "react";
 
 import { scrollCue } from "@/components/ui/scroll-cue";
-import { MAX_TABS, TAB_TITLE_MAX_CHARS } from "@/lib/api/workspace";
+import { MAX_TABS, TAB_TITLE_MAX_CHARS } from "@/lib/api/workspace-terms";
 import { cn } from "@/lib/utils";
 
 import type { PlayDictionary } from "./dictionary";

@@ -5,14 +5,13 @@ import { isId } from "@/lib/api/ids";
 import {
   answersSchema,
   feedSchema,
-  MAX_FEED_PAGE,
-  MONITOR_SHOWN,
   participantSchema,
   queriesSchema,
   rosterSchema,
   timelinePath,
   workspaceSchema,
 } from "@/lib/api/monitor";
+import { MAX_FEED_PAGE, MONITOR_SHOWN } from "@/lib/api/monitor-terms";
 import { Refusal } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 

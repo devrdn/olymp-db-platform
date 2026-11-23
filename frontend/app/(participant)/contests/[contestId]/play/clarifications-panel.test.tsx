@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { FeedItem } from "@/lib/api/clarifications";
-import { MAX_OPEN_QUESTIONS, QUESTION_MAX_CHARS } from "@/lib/api/clarifications";
+import { MAX_OPEN_QUESTIONS, QUESTION_MAX_CHARS } from "@/lib/api/clarifications-terms";
 import type { OpenPlayQuestion } from "@/lib/api/play";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";

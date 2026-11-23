@@ -1,5 +1,6 @@
 import { RefusalNote } from "@/components/product/refusal-note";
-import { feedSchema, MAX_FEED_PAGE, MONITOR_SHOWN, rosterSchema } from "@/lib/api/monitor";
+import { feedSchema, rosterSchema } from "@/lib/api/monitor";
+import { MAX_FEED_PAGE, MONITOR_SHOWN } from "@/lib/api/monitor-terms";
 import { Refusal } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 

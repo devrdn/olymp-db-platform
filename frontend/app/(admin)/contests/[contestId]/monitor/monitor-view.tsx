@@ -1,7 +1,8 @@
 "use client";
 
 import { ExportMenu } from "@/components/product/export-menu";
-import { monitorCsvHref, type FeedPage, type Roster } from "@/lib/api/monitor";
+import type { FeedPage, Roster } from "@/lib/api/monitor";
+import { monitorCsvHref } from "@/lib/api/monitor-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";

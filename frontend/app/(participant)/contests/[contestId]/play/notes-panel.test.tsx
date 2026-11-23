@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { NOTES_COUNTER_FROM, NOTES_MAX_CHARS } from "@/lib/api/workspace";
+import { NOTES_COUNTER_FROM, NOTES_MAX_CHARS } from "@/lib/api/workspace-terms";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { NotesPanel } from "./notes-panel";

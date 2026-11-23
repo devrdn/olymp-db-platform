@@ -2,12 +2,8 @@
 
 import { useCallback, useId, useRef, useState } from "react";
 
-import {
-  NOTES_COUNTER_FROM,
-  NOTES_MAX_CHARS,
-  saveNotes,
-  type WorkspaceNotes,
-} from "@/lib/api/workspace";
+import { saveNotes, type WorkspaceNotes } from "@/lib/api/workspace";
+import { NOTES_COUNTER_FROM, NOTES_MAX_CHARS } from "@/lib/api/workspace-terms";
 
 import type { PlayDictionary } from "./dictionary";
 import { useAutosave, type AutosaveStatus } from "./use-autosave";

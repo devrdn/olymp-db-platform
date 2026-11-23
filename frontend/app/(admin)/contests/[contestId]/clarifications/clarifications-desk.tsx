@@ -8,10 +8,6 @@ import { StoryText } from "@/components/product/story-text";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import {
-  ANNOUNCEMENT_MAX_CHARS,
-  ANSWER_MAX_CHARS,
-  CLARIFICATION_PAGE_SIZE,
-  QUEUE_MAX_SHOWN,
   answerClarification,
   fetchAnnouncements,
   fetchQueue,
@@ -22,6 +18,12 @@ import {
   type QueueState,
   type StaffClarification,
 } from "@/lib/api/clarifications";
+import {
+  ANNOUNCEMENT_MAX_CHARS,
+  ANSWER_MAX_CHARS,
+  CLARIFICATION_PAGE_SIZE,
+  QUEUE_MAX_SHOWN,
+} from "@/lib/api/clarifications-terms";
 import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";

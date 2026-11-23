@@ -1,4 +1,5 @@
-import { MONITOR_FLAGS, type MonitorFlags, type RosterRow } from "@/lib/api/monitor";
+import type { RosterRow } from "@/lib/api/monitor";
+import { MONITOR_FLAGS, type MonitorFlags } from "@/lib/api/monitor-terms";
 
 /**
  * The participants table's data work: merging fresh reads, sorting, filtering,

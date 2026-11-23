@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { browserRequest } from "./browser";
-import { API_PREFIX } from "./client";
+import { monitorBase, participantBase, type MonitorFlags } from "./monitor-terms";
 import {
   queriesSchema,
   type QueriesPage,
@@ -15,18 +15,6 @@ import {
  * reads that poll them. Browser-side because a Server Action loses the 429's
  * `Retry-After` header.
  */
-
-/** The six flags (docs/ARCHITECTURE.md §9.4), in the order the table shows them. */
-export const MONITOR_FLAGS = [
-  "multipleIps",
-  "parallelSessions",
-  "longAbsence",
-  "answerWithoutQueries",
-  "largePaste",
-  "identicalQueries",
-] as const;
-export type MonitorFlag = (typeof MONITOR_FLAGS)[number];
-export type MonitorFlags = Record<MonitorFlag, boolean>;
 
 const flagsSchema = z
   .object({
@@ -267,16 +255,6 @@ export type FeedParams = {
   limit?: number;
 };
 
-/** The most events one page of the feed carries (`monitor.MaxFeedPage`). */
-export const MAX_FEED_PAGE = 200;
-
-/** The refusal a monitoring screen shows in place of what it read: the organiser's own read budget. */
-export const MONITOR_SHOWN = ["monitor_too_often"] as const;
-
-function monitorBase(contestId: string): string {
-  return `/contests/${encodeURIComponent(contestId)}/monitor`;
-}
-
 function withQuery(path: string, query: URLSearchParams): string {
   const text = query.toString();
   return text ? `${path}?${text}` : path;
@@ -298,17 +276,9 @@ export function feedPath(contestId: string, params: FeedParams): string {
   return withQuery(`${monitorBase(contestId)}/feed`, feedQuery(params, true));
 }
 
-export function participantBase(contestId: string, registrationId: string): string {
-  return `${monitorBase(contestId)}/participants/${encodeURIComponent(registrationId)}`;
-}
-
 /** The feed's parameters less `participant`, which the route itself names. */
 export function timelinePath(contestId: string, registrationId: string, params: FeedParams): string {
   return withQuery(`${participantBase(contestId, registrationId)}/timeline`, feedQuery(params, false));
-}
-
-export function monitorCsvHref(contestId: string): string {
-  return `${API_PREFIX}${monitorBase(contestId)}/export.csv`;
 }
 
 // The SQL log's shapes live in `./journal`, shared with the participant's profile.
@@ -342,10 +312,6 @@ export async function fetchTimeline(
 ): Promise<FeedPage> {
   const payload = await browserRequest(timelinePath(contestId, registrationId, params), { signal: options.signal });
   return feedSchema.parse(payload);
-}
-
-export function participantCsvHref(contestId: string, registrationId: string): string {
-  return `${API_PREFIX}${participantBase(contestId, registrationId)}/export.csv`;
 }
 
 export const participantSchema = z
@@ -386,9 +352,6 @@ export async function fetchQueries(
   const payload = await browserRequest(queriesPath(contestId, registrationId, params), { signal: options.signal });
   return queriesSchema.parse(payload);
 }
-
-/** The document a notes revision belongs to; any other document is a tab's id. */
-export const NOTES_DOCUMENT = "notes";
 
 const revisionFields = {
   id: z.number(),

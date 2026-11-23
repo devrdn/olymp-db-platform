@@ -9,12 +9,12 @@ import {
   fetchFeed,
   fetchRoster,
   fetchTimeline,
-  MAX_FEED_PAGE,
   type FeedPage,
   type FeedParams,
   type ReadOptions,
   type Roster,
 } from "@/lib/api/monitor";
+import { MAX_FEED_PAGE } from "@/lib/api/monitor-terms";
 
 import {
   appendNewer,

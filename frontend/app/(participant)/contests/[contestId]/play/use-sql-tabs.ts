@@ -4,15 +4,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 
 import { ApiError } from "@/lib/api/client";
 import { failureCodeOf } from "@/lib/api/outcome";
-import {
-  MAX_TABS,
-  TAB_BODY_MAX_BYTES,
-  createTab,
-  deleteTab,
-  reorderTabs,
-  updateTab,
-  type WorkspaceTab,
-} from "@/lib/api/workspace";
+import { createTab, deleteTab, reorderTabs, updateTab, type WorkspaceTab } from "@/lib/api/workspace";
+import { MAX_TABS, TAB_BODY_MAX_BYTES } from "@/lib/api/workspace-terms";
 
 import type { SqlTabView } from "./sql-tabs";
 import { isClosed, type ClosedCode } from "./refusals";

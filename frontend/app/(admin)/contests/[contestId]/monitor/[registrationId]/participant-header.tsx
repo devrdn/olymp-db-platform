@@ -1,7 +1,8 @@
 import Link from "next/link";
 
 import { ExportMenu } from "@/components/product/export-menu";
-import { MONITOR_FLAGS, participantCsvHref, type MonitorFlags, type Participant } from "@/lib/api/monitor";
+import type { Participant } from "@/lib/api/monitor";
+import { MONITOR_FLAGS, participantCsvHref, type MonitorFlags } from "@/lib/api/monitor-terms";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";

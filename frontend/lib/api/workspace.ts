@@ -16,25 +16,9 @@ import { browserRequest } from "./browser";
  * `deadline_passed`, or 429 `workspace_too_often` (with `Retry-After`) past
  * sixty a minute.
  *
- * zod costs nothing extra here: the play route's client bundle already
- * carries it (`components/product/standings.tsx` reads
- * `lib/api/leaderboard.ts`).
+ * zod costs nothing extra here: these calls parse their answers with it, so
+ * it ships with them.
  */
-
-/** The most characters the notes may hold (`workspace.MaxNotesRunes`). */
-export const NOTES_MAX_CHARS = 20000;
-
-/** The length at which the notes field starts showing its counter. */
-export const NOTES_COUNTER_FROM = 18000;
-
-/** The most SQL tabs one participant may keep (`workspace.MaxTabs`). */
-export const MAX_TABS = 10;
-
-/** The most characters a tab's title may hold (`workspace.MaxTitleRunes`). */
-export const TAB_TITLE_MAX_CHARS = 40;
-
-/** The most UTF-8 bytes a tab's text may hold (`sqlpolicy.MaxQueryBytes`). */
-export const TAB_BODY_MAX_BYTES = 64 * 1024;
 
 export const workspaceTabSchema = z
   .object({

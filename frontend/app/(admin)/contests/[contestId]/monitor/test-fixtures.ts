@@ -1,4 +1,5 @@
-import type { FeedDetail, FeedItem, MonitorFlags, RosterRow } from "@/lib/api/monitor";
+import type { FeedDetail, FeedItem, RosterRow } from "@/lib/api/monitor";
+import type { MonitorFlags } from "@/lib/api/monitor-terms";
 
 /** Test builders: an unremarkable participant row and feed item. */
 

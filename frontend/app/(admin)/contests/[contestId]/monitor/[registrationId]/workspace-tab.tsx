@@ -4,7 +4,8 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "
 
 import { buttonVariants } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
-import { fetchRevision, NOTES_DOCUMENT, type RevisionInfo, type Workspace } from "@/lib/api/monitor";
+import { fetchRevision, type RevisionInfo, type Workspace } from "@/lib/api/monitor";
+import { NOTES_DOCUMENT } from "@/lib/api/monitor-terms";
 import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";

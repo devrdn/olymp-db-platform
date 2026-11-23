@@ -3,7 +3,8 @@
 import { useMemo } from "react";
 
 import { useQueryLog, type QueryLogRefresh, type QueryOutcome } from "@/components/product/use-query-log";
-import { fetchQueries, fetchTimeline, MAX_FEED_PAGE, type QueriesPage } from "@/lib/api/monitor";
+import { fetchQueries, fetchTimeline, type QueriesPage } from "@/lib/api/monitor";
+import { MAX_FEED_PAGE } from "@/lib/api/monitor-terms";
 
 import { MAX_RUNNING_TRIES } from "../feed-list";
 import { MONITOR_POLL_MS } from "../use-monitor";

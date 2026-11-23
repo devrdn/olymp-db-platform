@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi, type Mock } from "vitest";
 
-import { TAB_BODY_MAX_BYTES, type WorkspaceTab } from "@/lib/api/workspace";
+import type { WorkspaceTab } from "@/lib/api/workspace";
+import { TAB_BODY_MAX_BYTES } from "@/lib/api/workspace-terms";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
 
