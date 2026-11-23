@@ -10,7 +10,6 @@ const ru = {
       close: "Закрыть меню",
     },
     helpLabel: "Подсказка",
-    /** The button that sends nothing, in every question asked before a step that cannot be taken back. */
     cancel: "Отмена",
     theme: {
       system: "Следовать теме системы",
@@ -1097,7 +1096,7 @@ const ru = {
         disqualify: "Дисквалифицировать",
         confirmDisqualify: "Дисквалифицировать участника? Всё сделанное им останется в записи.",
         confirmRemoveEnded: "Удалить участника «{name}» из завершившейся олимпиады?",
-        confirmRemoveEndedBody: "Работу он не начинал, но его регистрация пропадёт из записи олимпиады.",
+        confirmRemoveEndedBody: "Он так и не начал работу, но пропадёт из списка участников олимпиады.",
         empty: {
           title: "Пока никто не записан",
           body: "Вставьте список логинов ниже — или оставьте запись открытой, и участники запишутся сами.",

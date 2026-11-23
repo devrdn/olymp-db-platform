@@ -10,7 +10,6 @@ const ro = {
       close: "Închideți meniul",
     },
     helpLabel: "Explicație",
-    /** The button that sends nothing, in every question asked before a step that cannot be taken back. */
     cancel: "Anulați",
     theme: {
       system: "Urmați tema sistemului",
