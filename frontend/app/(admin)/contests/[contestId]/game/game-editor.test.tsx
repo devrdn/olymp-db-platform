@@ -182,4 +182,25 @@ describe("the game editor", () => {
 
     await waitFor(() => expect(screen.getByText(en.errors.game_not_editable)).toBeInTheDocument());
   });
+
+  test("a refusal this build has no sentence for shows the fallback, never the code", async () => {
+    const user = userEvent.setup();
+    saved.current = { code: "game_code_added_later" };
+    show(game(), { script: "SELECT 1" });
+
+    await user.click(screen.getByRole("button", { name: t.save }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.errors.fallback);
+    expect(screen.queryByText(/game_code_added_later/)).not.toBeInTheDocument();
+  });
+
+  // The stored code is the server's text, and the dictionary only inherits
+  // `constructor`: the build's own words are shown, as for any unknown code.
+  test("reads a build code the dictionary only inherits as unknown", () => {
+    show(game({ status: "failed", buildError: "ERROR: boom", buildErrorCode: "constructor" }));
+
+    expect(screen.getByText(t.buildErrorLede)).toBeInTheDocument();
+    expect(screen.getByText("ERROR: boom")).toBeInTheDocument();
+  });
 });
+

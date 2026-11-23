@@ -1,17 +1,18 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
+import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { CodeEditor } from "@/components/product/code-editor";
 import { Tag } from "@/components/ui/tag";
-import { buttonVariants } from "@/components/ui/button";
 import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { knownMessage } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
-import { saveGameScriptAction, type GameState } from "./actions";
+import { saveGameScriptAction } from "./actions";
 import { useGamePoll } from "./game-poll";
 
 /**
@@ -19,29 +20,48 @@ import { useGamePoll } from "./game-poll";
  * answers 202 and a worker builds; the status is polled while building and
  * polling stops when it ends.
  */
-export function GameEditor({
-  contestId,
-  initial,
-  initialScript,
-  editable,
-  dict,
-}: {
+export function GameEditor(props: {
   contestId: string;
   initial: Game;
   initialScript: string;
   editable: boolean;
   dict: Dictionary;
 }) {
-  const t = dict.workspace.game;
-  const errors = dict.errors;
+  return (
+    <ActionForm
+      action={saveGameScriptAction}
+      fields={{ contestId: props.contestId }}
+      errors={props.dict.errors}
+      className="flex flex-col gap-4"
+    >
+      {(state) => <ScriptEditor {...props} saved={state.ok === true} />}
+    </ActionForm>
+  );
+}
 
-  const [state, save, saving] = useActionState<GameState, FormData>(saveGameScriptAction, {});
+/** The editor inside the form; `saved` is whether the last save was accepted. */
+function ScriptEditor({
+  contestId,
+  initial,
+  initialScript,
+  editable,
+  saved,
+  dict,
+}: {
+  contestId: string;
+  initial: Game;
+  initialScript: string;
+  editable: boolean;
+  saved: boolean;
+  dict: Dictionary;
+}) {
+  const t = dict.workspace.game;
   const [polled, setPolled] = useState<Game | null>(null);
 
   // Derived rather than set from an effect: after a save the server said
   // `pending`, and this holds whether or not revalidation has refreshed
   // `initial` yet.
-  const game: Game = polled ?? (state.ok ? { ...initial, status: "pending", building: true } : initial);
+  const game: Game = polled ?? (saved ? { ...initial, status: "pending", building: true } : initial);
 
   // The textarea a form submits and the browser restores; CodeEditor only draws
   // the text, as in the participant's console.
@@ -58,12 +78,10 @@ export function GameEditor({
   const tooLong = bytes > maxBytes;
   // A refusal the platform names is shown in the reader's language; an
   // unknown code falls back to the words the server stored.
-  const platformRefusal =
-    game.buildErrorCode !== "" ? errors[game.buildErrorCode as keyof typeof errors] : undefined;
+  const platformRefusal = game.buildErrorCode !== "" ? knownMessage(game.buildErrorCode, dict.errors) : undefined;
 
   return (
-    <form action={save} className="flex flex-col gap-4">
-      <input type="hidden" name="contestId" value={contestId} />
+    <>
       <textarea
         ref={mirrorRef}
         name="script"
@@ -118,23 +136,17 @@ export function GameEditor({
       />
 
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="submit"
-          disabled={!editable || saving || tooLong}
-          className={cn(buttonVariants({ variant: "primary" }))}
-        >
-          {saving ? t.saving : t.save}
-        </button>
+        <ActionButton disabled={!editable || tooLong} pendingLabel={t.saving}>
+          {t.save}
+        </ActionButton>
         <span className={cn("font-mono text-label", tooLong ? "text-bad" : "text-ink-3")}>
           {fill(t.size, { n: Math.ceil(bytes / 1024), max: Math.floor(maxBytes / 1024) })}
         </span>
         {tooLong ? <span className="text-small text-bad">{t.tooLong}</span> : null}
         {!editable ? <span className="text-small text-ink-2">{t.frozen}</span> : null}
-        <span role="status" aria-live="polite" className="text-small text-ink-2">
-          {state.code ? (errors[state.code as keyof typeof errors] ?? state.code) : state.ok ? t.saved : ""}
-        </span>
+        <ActionOutcome saved={t.saved} />
       </div>
-    </form>
+    </>
   );
 }
 
