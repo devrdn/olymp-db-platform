@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { FeedbackLink } from "@/components/product/feedback-link";
@@ -8,6 +8,7 @@ import { StoryText } from "@/components/product/story-text";
 import { branding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
+import { isId } from "@/lib/api/ids";
 import { playQuestionListSchema, playStorySchema } from "@/lib/api/play";
 import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
@@ -80,6 +81,8 @@ function takesTheScreen(code: string): boolean {
  */
 export default async function PlayPage({ params }: PageProps<"/contests/[contestId]/play">) {
   const { contestId } = await params;
+  // The segment is written into request paths and the sign-in trace below.
+  if (!isId(contestId)) notFound();
   // `branding` shares the layout's request (React's `cache()`).
   const [locale, whole, brand] = await Promise.all([activeLocale(), activeDictionary(), branding()]);
   // Narrowed once and never widened: everything handed to a Client Component

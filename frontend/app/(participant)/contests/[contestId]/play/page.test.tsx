@@ -12,7 +12,8 @@ const { serverRequest, branding } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 vi.mock("@/lib/api/branding", () => ({ branding }));
-vi.mock("next/navigation", () => ({
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
   redirect: vi.fn(() => {
     throw new Error("NEXT_REDIRECT");
   }),
@@ -106,5 +107,16 @@ describe("the play page's feedback link", () => {
 
     expect(screen.getByText(dict.participant.play.unavailable.body)).toBeInTheDocument();
     expect(feedbackLink()).not.toBeInTheDocument();
+  });
+});
+
+describe("the play page's address", () => {
+  test("is the not-found page when the contest segment is not an id, before any request", async () => {
+    const forged = "x\nFAKE auth redirect: /admin";
+
+    await expect(
+      PlayPage({ params: Promise.resolve({ contestId: forged }) } as unknown as Parameters<typeof PlayPage>[0]),
+    ).rejects.toMatchObject({ digest: expect.stringContaining("NEXT_HTTP_ERROR_FALLBACK;404") });
+    expect(serverRequest).not.toHaveBeenCalled();
   });
 });
