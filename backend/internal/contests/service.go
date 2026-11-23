@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -199,58 +198,18 @@ func NewService(cfg ServiceConfig) *Service {
 // CreateCommand describes a new contest. Everything but the author is
 // optional: an organizer starts from an empty draft and fills it in.
 type CreateCommand struct {
-	ActorID      uuid.UUID
-	Enrollment   string
-	QuestionMode string
-	// Progression empty defaults to ProgressionFree (§6.1.1).
-	Progression string
-	// Scoring empty defaults to ScoringPoints (§6.1.1).
-	Scoring      string
-	Timing       string
-	DurationMin  *int
-	StartsAt     *time.Time
-	EndsAt       *time.Time
-	AllowedCIDRs []netip.Prefix
-	Settings     Settings
+	ActorID uuid.UUID
+	// Patch is applied to DefaultContest.
+	Patch        Patch
 	Languages    []ContestLanguage
 	Translations []Translation
-	// LeaderboardFreezeMin is nil for no freeze; LeaderboardNames empty
-	// defaults to LeaderboardNamesFullName.
-	LeaderboardFreezeMin *int
-	LeaderboardNames     string
-	// ICPCPenaltyMin is nil for the default of DefaultICPCPenaltyMin minutes.
-	ICPCPenaltyMin *int
-	// ResultDownload is nil for the default, on.
-	ResultDownload *bool
-	// SchemaDiagram is nil for the default, on.
-	SchemaDiagram *bool
 }
 
 // Create registers a contest and makes its author the owner.
 func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error) {
-	enrollment := orDefault(cmd.Enrollment, EnrollmentInviteOnly)
-	c := Contest{
-		Status:       StatusDraft,
-		Enrollment:   enrollment,
-		Visibility:   DefaultVisibility(enrollment),
-		QuestionMode: orDefault(cmd.QuestionMode, QuestionModeMulti),
-		Progression:  orDefault(cmd.Progression, ProgressionFree),
-		Scoring:      orDefault(cmd.Scoring, ScoringPoints),
-		Timing:       orDefault(cmd.Timing, TimingFixed),
-		DurationMin:  cmd.DurationMin,
-		StartsAt:     cmd.StartsAt,
-		EndsAt:       cmd.EndsAt,
-		AllowedCIDRs: cmd.AllowedCIDRs,
-		Settings:     cmd.Settings,
-		Languages:    cmd.Languages,
-		CreatedBy:    cmd.ActorID,
-
-		LeaderboardFreezeMin: cmd.LeaderboardFreezeMin,
-		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesFullName),
-		ICPCPenaltyMin:       orDefaultValue(cmd.ICPCPenaltyMin, DefaultICPCPenaltyMin),
-		ResultDownload:       orDefaultValue(cmd.ResultDownload, true),
-		SchemaDiagram:        orDefaultValue(cmd.SchemaDiagram, true),
-	}
+	c := cmd.Patch.ApplyTo(DefaultContest())
+	c.CreatedBy = cmd.ActorID
+	c.Languages = cmd.Languages
 	if err := c.Validate(); err != nil {
 		return Contest{}, err
 	}
@@ -296,6 +255,9 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		if err := s.policies.Save(ctx, DefaultSQLPolicy(created.ID)); err != nil {
 			return err
 		}
+		// Deliberately the kind of contest made, not every setting the patch
+		// carried (auditFields): a setting added to Patch is audited on update
+		// only, unless it is added here too.
 		return s.record(ctx, cmd.ActorID, audit.ActionContestCreate, created.ID, map[string]any{
 			"enrollment":    created.Enrollment,
 			"visibility":    created.Visibility,
@@ -311,36 +273,12 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 	return created, nil
 }
 
-// UpdateCommand changes a contest's own fields. A zero field means "leave it
-// alone"; Settings is a pointer for the same reason, since its zero value is
-// a meaningful configuration.
+// UpdateCommand changes a contest's own settings.
 type UpdateCommand struct {
-	ActorID      uuid.UUID
-	ContestID    uuid.UUID
-	Enrollment   string
-	QuestionMode string
-	Progression  string
-	Scoring      string
-	Timing       string
-	DurationMin  *int
-	StartsAt     *time.Time
-	EndsAt       *time.Time
-	// AllowedCIDRs replaces the network restriction. A non-nil empty slice
-	// clears it; nil leaves it as it was.
-	AllowedCIDRs []netip.Prefix
-	Settings     *Settings
-	// LeaderboardFreezeMin sets the freeze; ClearLeaderboardFreeze removes it,
-	// since nil already means "leave it alone".
-	LeaderboardFreezeMin   *int
-	ClearLeaderboardFreeze bool
-	LeaderboardNames       string
-	// ICPCPenaltyMin is the per-attempt penalty in minutes; nil leaves it
-	// alone, because zero (no penalty) is a real setting.
-	ICPCPenaltyMin *int
-	// ResultDownload is nil to leave it alone, since false is a real setting.
-	ResultDownload *bool
-	// SchemaDiagram is nil to leave it alone, since false is a real setting.
-	SchemaDiagram *bool
+	ActorID   uuid.UUID
+	ContestID uuid.UUID
+	// Patch is applied to the stored contest.
+	Patch Patch
 }
 
 // Update changes a contest's settings.
@@ -351,7 +289,7 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		if err != nil {
 			return err
 		}
-		updated, err := s.decideUpdate(ctx, current, cmd.applyTo(current))
+		updated, err := s.decideUpdate(ctx, current, cmd.Patch.ApplyTo(current))
 		if err != nil {
 			return err
 		}
@@ -367,72 +305,14 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	return written, nil
 }
 
-// applyTo is current with the fields the command sends, before any rule.
-func (cmd UpdateCommand) applyTo(current Contest) Contest {
-	updated := current
-	if cmd.Enrollment != "" {
-		updated.Enrollment = cmd.Enrollment
-	}
-	if cmd.QuestionMode != "" {
-		updated.QuestionMode = cmd.QuestionMode
-	}
-	if cmd.Progression != "" {
-		updated.Progression = cmd.Progression
-	}
-	if cmd.Scoring != "" {
-		updated.Scoring = cmd.Scoring
-	}
-	if cmd.Timing != "" {
-		updated.Timing = cmd.Timing
-	}
-	if cmd.DurationMin != nil {
-		updated.DurationMin = cmd.DurationMin
-	}
-	if cmd.StartsAt != nil {
-		updated.StartsAt = cmd.StartsAt
-	}
-	if cmd.EndsAt != nil {
-		updated.EndsAt = cmd.EndsAt
-	}
-	if cmd.AllowedCIDRs != nil {
-		updated.AllowedCIDRs = cmd.AllowedCIDRs
-	}
-	if cmd.Settings != nil {
-		updated.Settings = *cmd.Settings
-	}
-	switch {
-	case cmd.ClearLeaderboardFreeze:
-		updated.LeaderboardFreezeMin = nil
-	case cmd.LeaderboardFreezeMin != nil:
-		updated.LeaderboardFreezeMin = cmd.LeaderboardFreezeMin
-	}
-	if cmd.LeaderboardNames != "" {
-		updated.LeaderboardNames = cmd.LeaderboardNames
-	}
-	if cmd.ICPCPenaltyMin != nil {
-		updated.ICPCPenaltyMin = *cmd.ICPCPenaltyMin
-	}
-	if cmd.ResultDownload != nil {
-		updated.ResultDownload = *cmd.ResultDownload
-	}
-	if cmd.SchemaDiagram != nil {
-		updated.SchemaDiagram = *cmd.SchemaDiagram
-	}
-	return updated
-}
-
 // decideUpdate applies every rule a change of current's settings to updated
 // must pass, and returns what is to be written.
 func (s *Service) decideUpdate(ctx context.Context, current, updated Contest) (Contest, error) {
 	if !current.SettingsEditable() {
 		return Contest{}, fmt.Errorf("%w: it is %s", ErrNotEditable, current.Status)
 	}
-	// Self-registration opens the contest (checkVisibility). A client cannot
-	// send "no duration", and a fixed contest with one does not validate, so
-	// switching back to fixed timing clears it.
-	if updated.Enrollment == EnrollmentOpen {
-		updated.Visibility = VisibilityOpen
-	}
+	// A patch cannot say "no duration", and a fixed contest with one does not
+	// validate, so switching back to fixed timing clears it.
 	if updated.Timing == TimingFixed {
 		updated.DurationMin = nil
 	}
@@ -812,15 +692,6 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// orDefaultValue is orDefault for a setting whose zero is meaningful, so nil
-// stands for "not sent".
-func orDefaultValue[T any](value *T, fallback T) T {
-	if value == nil {
-		return fallback
-	}
-	return *value
-}
-
 func equalDuration(a, b *int) bool {
 	switch {
 	case a == nil && b == nil:
@@ -900,15 +771,6 @@ func langCodes(byLang map[string]string) []string {
 	}
 	slices.Sort(codes)
 	return codes
-}
-
-// cidrStrings renders a network list for the audit trail.
-func cidrStrings(prefixes []netip.Prefix) []string {
-	out := make([]string, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		out = append(out, prefix.String())
-	}
-	return out
 }
 
 func languageCodes(langs []ContestLanguage) []string {

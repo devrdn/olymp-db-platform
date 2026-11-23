@@ -733,7 +733,7 @@ func TestAContestStoredWithColumnDefaultsCanBeUpdatedThroughTheService(t *testin
 		})
 
 		updated, err := service.Update(ctx, contests.UpdateCommand{
-			ActorID: author.ID, ContestID: id, Progression: contests.ProgressionSequential,
+			ActorID: author.ID, ContestID: id, Patch: contests.Patch{Progression: contests.ProgressionSequential},
 		})
 		if err != nil {
 			t.Fatalf("Update() = %v", err)
@@ -1035,7 +1035,7 @@ func TestAnUpdateDecidedBeforeTheStartIsRefusedOnceTheContestRuns(t *testing.T) 
 	}
 	service := raceService(&afterFirstRead{Contests: repo, other: scheduler, t: t}, NewQuestions(testPool), conteststest.NewGames())
 
-	_, err := service.Update(ctx, contests.UpdateCommand{ContestID: id, QuestionMode: contests.QuestionModeSingle})
+	_, err := service.Update(ctx, contests.UpdateCommand{ContestID: id, Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle}})
 
 	if !errors.Is(err, contests.ErrContestChanged) {
 		t.Errorf("Update() = %v, want ErrContestChanged", err)

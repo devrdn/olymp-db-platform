@@ -149,7 +149,7 @@ func TestAContestWithABonusQuestionCannotLeavePointsScoring(t *testing.T) {
 			}
 
 			_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-				ActorID: uuid.New(), ContestID: c.ID, Scoring: scoring,
+				ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Scoring: scoring},
 			})
 			if !errors.Is(err, contests.ErrBonusNeedsPoints) {
 				t.Errorf("Update(scoring %s) = %v, want ErrBonusNeedsPoints", scoring, err)
@@ -169,7 +169,7 @@ func TestAContestWithoutABonusQuestionMayLeavePointsScoring(t *testing.T) {
 	}
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Scoring: contests.ScoringWinner,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Scoring: contests.ScoringWinner},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)

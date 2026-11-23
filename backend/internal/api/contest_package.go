@@ -66,7 +66,7 @@ type PackagedContest struct {
 	ICPCPenaltyMin int  `json:"icpc_penalty_min"`
 	ResultDownload bool `json:"result_download"`
 	// SchemaDiagram: a package written before the setting existed has no
-	// such key, and an importer reads that as true.
+	// such key, which an importer reads as contests.DefaultContest's value.
 	SchemaDiagram bool               `json:"schema_diagram"`
 	PrizePlaces   PrizePlacesPayload `json:"prize_places"`
 	// Leaderboard is the freeze and labelling configuration; when results were

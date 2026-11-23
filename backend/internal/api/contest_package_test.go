@@ -149,8 +149,8 @@ func TestTheContestPackageCarriesEverythingNeededToAuthorItAgain(t *testing.T) {
 	}
 }
 
-// Configuration, so it travels; checked turned off, since true is also what
-// an importer would assume for a missing key.
+// Configuration, so it travels; checked turned off, since the default is also
+// what an importer would assume for a missing key.
 func TestTheContestPackageCarriesWhetherTheResultDownloadIsOffered(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestAdminAll)
 	c := seedPackagedContest(t, f)
@@ -168,8 +168,8 @@ func TestTheContestPackageCarriesWhetherTheResultDownloadIsOffered(t *testing.T)
 	}
 }
 
-// Configuration, so it travels; checked turned off, since true is also what
-// an importer would assume for a missing key.
+// Configuration, so it travels; checked turned off, since the default is also
+// what an importer would assume for a missing key.
 func TestTheContestPackageCarriesWhetherTheSchemaDiagramIsShown(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestAdminAll)
 	c := seedPackagedContest(t, f)

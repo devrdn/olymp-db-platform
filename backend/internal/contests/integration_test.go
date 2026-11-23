@@ -47,9 +47,11 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 		// Opens signup for Enroll below; it cannot change once running.
 		{"Update", func() error {
 			_, err := f.Service.Update(ctx, contests.UpdateCommand{
-				ActorID:    actor,
-				ContestID:  c.ID,
-				Enrollment: contests.EnrollmentOpen,
+				ActorID:   actor,
+				ContestID: c.ID,
+				Patch: contests.Patch{
+					Enrollment: contests.EnrollmentOpen,
+				},
 			})
 			return err
 		}},
@@ -205,10 +207,12 @@ func TestARefusalIsRecordedWithoutATransaction(t *testing.T) {
 	student := f.AddUser("s.popescu")
 
 	if _, err := f.Service.Update(ctx, contests.UpdateCommand{
-		ActorID:      uuid.New(),
-		ContestID:    c.ID,
-		Enrollment:   contests.EnrollmentOpen,
-		AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")},
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			Enrollment:   contests.EnrollmentOpen,
+			AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")},
+		},
 	}); err != nil {
 		t.Fatalf("Update() = %v", err)
 	}
@@ -282,7 +286,7 @@ func TestARefusedConditionalWriteRecordsNothing(t *testing.T) {
 	}{
 		"Update": {contests.StatusDraft, func(f *conteststest.Fixture, id uuid.UUID) error {
 			_, err := f.Service.Update(ctx, contests.UpdateCommand{
-				ActorID: actor, ContestID: id, LeaderboardNames: contests.LeaderboardNamesFullName,
+				ActorID: actor, ContestID: id, Patch: contests.Patch{LeaderboardNames: contests.LeaderboardNamesFullName},
 			})
 			return err
 		}},

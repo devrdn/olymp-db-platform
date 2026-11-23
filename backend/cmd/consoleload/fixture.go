@@ -196,22 +196,13 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 	// Running until the run's planned end, which is also how sweep tells a
 	// run still going; fixed timing, so no participant has a clock to start.
 	starts := time.Now().UTC().Add(-time.Minute)
-	contest, err := postgres.NewContests(st.core).Create(ctx, contests.Contest{
-		Status:           contests.StatusRunning,
-		Enrollment:       contests.EnrollmentInviteOnly,
-		QuestionMode:     contests.QuestionModeMulti,
-		Progression:      contests.ProgressionFree,
-		Scoring:          contests.ScoringPoints,
-		Timing:           contests.TimingFixed,
+	row := contests.Patch{
 		StartsAt:         &starts,
 		EndsAt:           &ends,
-		CreatedBy:        owner.ID,
 		LeaderboardNames: contests.LeaderboardNamesLogin,
-		ICPCPenaltyMin:   contests.DefaultICPCPenaltyMin,
-		ResultDownload:   true,
-		SchemaDiagram:    true,
-		Visibility:       contests.VisibilityClosed,
-	})
+	}.ApplyTo(contests.DefaultContest())
+	row.Status, row.CreatedBy = contests.StatusRunning, owner.ID
+	contest, err := postgres.NewContests(st.core).Create(ctx, row)
 	if err != nil {
 		return report, fmt.Errorf("create the contest: %w", err)
 	}

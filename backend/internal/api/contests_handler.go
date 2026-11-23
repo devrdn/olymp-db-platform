@@ -195,18 +195,18 @@ type leaderboardRequest struct {
 	Names     string          `json:"names"`
 }
 
-func (req *leaderboardRequest) apply(cmd *contests.UpdateCommand) error {
-	cmd.LeaderboardNames = req.Names
+func (req *leaderboardRequest) apply(p *contests.Patch) error {
+	p.LeaderboardNames = req.Names
 	switch raw := bytes.TrimSpace(req.FreezeMin); {
 	case len(raw) == 0:
 	case bytes.Equal(raw, []byte("null")):
-		cmd.ClearLeaderboardFreeze = true
+		p.ClearLeaderboardFreeze = true
 	default:
 		var minutes int
 		if err := json.Unmarshal(raw, &minutes); err != nil {
 			return fmt.Errorf("leaderboard.freeze_min must be a whole number of minutes or null")
 		}
-		cmd.LeaderboardFreezeMin = &minutes
+		p.LeaderboardFreezeMin = &minutes
 	}
 	return nil
 }
@@ -458,29 +458,66 @@ func boolParam(r *http.Request, name string) (*bool, error) {
 	return &value, nil
 }
 
+// contestRequest is a contest's settings on the wire, for create and update
+// alike; patch says what an absent field means.
 type contestRequest struct {
-	Enrollment   string `json:"enrollment"`
-	QuestionMode string `json:"question_mode"`
-	// Progression and Scoring: an empty string means "leave it" on update and
-	// "the domain default" on create.
-	Progression string  `json:"progression"`
-	Scoring     string  `json:"scoring"`
-	Timing      string  `json:"timing"`
-	DurationMin *int    `json:"duration_min"`
-	StartsAt    *string `json:"starts_at"`
-	EndsAt      *string `json:"ends_at"`
-	// ICPCPenaltyMin: nil means "leave it" on update and
-	// contests.DefaultICPCPenaltyMin on create.
-	ICPCPenaltyMin *int `json:"icpc_penalty_min"`
-	// ResultDownload: nil means "leave it" on update and true on create.
-	ResultDownload *bool `json:"result_download"`
-	// SchemaDiagram: nil means "leave it" on update and true on create.
-	SchemaDiagram *bool                          `json:"schema_diagram"`
-	AllowedCIDRs  []string                       `json:"allowed_cidrs"`
-	Settings      *SettingsResponse              `json:"settings"`
-	Leaderboard   *leaderboardRequest            `json:"leaderboard"`
-	Languages     []LanguageResponse             `json:"languages"`
-	Translations  map[string]TranslationResponse `json:"translations"`
+	Enrollment     string                         `json:"enrollment"`
+	QuestionMode   string                         `json:"question_mode"`
+	Progression    string                         `json:"progression"`
+	Scoring        string                         `json:"scoring"`
+	Timing         string                         `json:"timing"`
+	DurationMin    *int                           `json:"duration_min"`
+	StartsAt       *string                        `json:"starts_at"`
+	EndsAt         *string                        `json:"ends_at"`
+	ICPCPenaltyMin *int                           `json:"icpc_penalty_min"`
+	ResultDownload *bool                          `json:"result_download"`
+	SchemaDiagram  *bool                          `json:"schema_diagram"`
+	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
+	Settings       *SettingsResponse              `json:"settings"`
+	Leaderboard    *leaderboardRequest            `json:"leaderboard"`
+	Languages      []LanguageResponse             `json:"languages"`
+	Translations   map[string]TranslationResponse `json:"translations"`
+}
+
+// patch decodes the request's settings into the domain's patch, which owns
+// what a field left out means. It answers a malformed field itself and
+// reports whether it did not have to.
+func (req contestRequest) patch(w http.ResponseWriter, r *http.Request) (contests.Patch, bool) {
+	starts, ends, err := req.window()
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return contests.Patch{}, false
+	}
+	cidrs, err := parseCIDRs(req.AllowedCIDRs)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidCIDR, err.Error())
+		return contests.Patch{}, false
+	}
+	p := contests.Patch{
+		Enrollment:     req.Enrollment,
+		QuestionMode:   req.QuestionMode,
+		Progression:    req.Progression,
+		Scoring:        req.Scoring,
+		Timing:         req.Timing,
+		DurationMin:    req.DurationMin,
+		StartsAt:       starts,
+		EndsAt:         ends,
+		AllowedCIDRs:   cidrs,
+		ICPCPenaltyMin: req.ICPCPenaltyMin,
+		ResultDownload: req.ResultDownload,
+		SchemaDiagram:  req.SchemaDiagram,
+	}
+	if p.Settings, err = req.settings(); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return contests.Patch{}, false
+	}
+	if req.Leaderboard != nil {
+		if err := req.Leaderboard.apply(&p); err != nil {
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+			return contests.Patch{}, false
+		}
+	}
+	return p, true
 }
 
 func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -488,52 +525,17 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-
-	starts, ends, err := req.window()
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	patch, ok := req.patch(w, r)
+	if !ok {
 		return
-	}
-	cidrs, err := parseCIDRs(req.AllowedCIDRs)
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidCIDR, err.Error())
-		return
-	}
-	settings, err := req.settings()
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-		return
-	}
-	// The same decoding as update, so the two agree on what a null freeze
-	// means.
-	var board contests.UpdateCommand
-	if req.Leaderboard != nil {
-		if err := req.Leaderboard.apply(&board); err != nil {
-			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-			return
-		}
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	created, err := h.service.Create(r.Context(), contests.CreateCommand{
-		LeaderboardFreezeMin: board.LeaderboardFreezeMin,
-		LeaderboardNames:     board.LeaderboardNames,
-		ActorID:              identity.UserID,
-		Enrollment:           req.Enrollment,
-		QuestionMode:         req.QuestionMode,
-		Progression:          req.Progression,
-		Scoring:              req.Scoring,
-		Timing:               req.Timing,
-		DurationMin:          req.DurationMin,
-		StartsAt:             starts,
-		EndsAt:               ends,
-		ICPCPenaltyMin:       req.ICPCPenaltyMin,
-		ResultDownload:       req.ResultDownload,
-		SchemaDiagram:        req.SchemaDiagram,
-		AllowedCIDRs:         cidrs,
-		Settings:             settings,
-		Languages:            toDomainLanguages(req.Languages),
-		Translations:         toDomainTranslations(req.Translations),
+		ActorID:      identity.UserID,
+		Patch:        patch,
+		Languages:    toDomainLanguages(req.Languages),
+		Translations: toDomainTranslations(req.Translations),
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -582,50 +584,17 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	starts, ends, err := req.window()
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-		return
-	}
-	cidrs, err := parseCIDRs(req.AllowedCIDRs)
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidCIDR, err.Error())
+	patch, ok := req.patch(w, r)
+	if !ok {
 		return
 	}
 
-	cmd := contests.UpdateCommand{
-		ContestID:      id,
-		Enrollment:     req.Enrollment,
-		QuestionMode:   req.QuestionMode,
-		Progression:    req.Progression,
-		Scoring:        req.Scoring,
-		Timing:         req.Timing,
-		DurationMin:    req.DurationMin,
-		StartsAt:       starts,
-		EndsAt:         ends,
-		ICPCPenaltyMin: req.ICPCPenaltyMin,
-		ResultDownload: req.ResultDownload,
-		SchemaDiagram:  req.SchemaDiagram,
-		AllowedCIDRs:   cidrs,
-	}
-	if req.Settings != nil {
-		settings, err := req.settings()
-		if err != nil {
-			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-			return
-		}
-		cmd.Settings = &settings
-	}
-	if req.Leaderboard != nil {
-		if err := req.Leaderboard.apply(&cmd); err != nil {
-			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-			return
-		}
-	}
 	identity, _ := auth.IdentityFrom(r.Context())
-	cmd.ActorID = identity.UserID
-
-	updated, err := h.service.Update(r.Context(), cmd)
+	updated, err := h.service.Update(r.Context(), contests.UpdateCommand{
+		ActorID:   identity.UserID,
+		ContestID: id,
+		Patch:     patch,
+	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -1003,15 +972,16 @@ func (req contestRequest) window() (*time.Time, *time.Time, error) {
 	return starts, ends, nil
 }
 
-func (req contestRequest) settings() (contests.Settings, error) {
+// settings parses req.Settings, nil when the request leaves them out.
+func (req contestRequest) settings() (*contests.Settings, error) {
 	if req.Settings == nil {
-		return contests.Settings{}, nil
+		return nil, nil
 	}
 	deadline, err := parseTime(&req.Settings.EnrollmentDeadline)
 	if err != nil {
-		return contests.Settings{}, fmt.Errorf("enrollment_deadline: %w", err)
+		return nil, fmt.Errorf("enrollment_deadline: %w", err)
 	}
-	return contests.Settings{
+	return &contests.Settings{
 		EnrollmentDeadline:   deadline,
 		QueryRateLimitPerMin: req.Settings.QueryRateLimitPerMin,
 		GracePeriodMin:       req.Settings.GracePeriodMin,

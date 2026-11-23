@@ -561,31 +561,3 @@ type Repository interface {
 	// manager a participant. Must run inside a unit of work; refuses otherwise.
 	LockContest(ctx context.Context, id uuid.UUID) error
 }
-
-// auditFields is the part of a contest the audit trail may hold. A new field
-// is not recorded unless added here. Authored text is excluded: the trail
-// records which titles changed, never the text (§9.2).
-func (c Contest) auditFields() map[string]any {
-	return map[string]any{
-		"enrollment":               c.Enrollment,
-		"visibility":               c.Visibility,
-		"archive_tasks":            c.ArchiveTasks,
-		"question_mode":            c.QuestionMode,
-		"progression":              c.Progression,
-		"scoring":                  c.Scoring,
-		"timing":                   c.Timing,
-		"duration_min":             c.DurationMin,
-		"starts_at":                c.StartsAt,
-		"ends_at":                  c.EndsAt,
-		"allowed_cidrs":            cidrStrings(c.AllowedCIDRs),
-		"enrollment_deadline":      c.Settings.EnrollmentDeadline,
-		"query_rate_limit_per_min": c.Settings.QueryRateLimitPerMin,
-		"grace_period_min":         c.Settings.GracePeriodMin,
-		"trusted_domain_only":      c.Settings.TrustedDomainOnly,
-		"leaderboard_freeze_min":   c.LeaderboardFreezeMin,
-		"leaderboard_names":        c.LeaderboardNames,
-		"icpc_penalty_min":         c.ICPCPenaltyMin,
-		"result_download":          c.ResultDownload,
-		"schema_diagram":           c.SchemaDiagram,
-	}
-}

@@ -56,10 +56,7 @@ func (c Contest) checkVisibility() error {
 // DefaultVisibility is what a new contest gets: self-registration is open, an
 // invite-only contest is closed.
 func DefaultVisibility(enrollment string) string {
-	if enrollment == EnrollmentOpen {
-		return VisibilityOpen
-	}
-	return VisibilityClosed
+	return Patch{Enrollment: enrollment}.ApplyTo(DefaultContest()).Visibility
 }
 
 // Listed reports whether a contest appears in lists. A closed contest leaves

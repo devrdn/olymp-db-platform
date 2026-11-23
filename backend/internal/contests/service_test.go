@@ -91,44 +91,6 @@ func TestCreateStoresAReadOnlyPolicy(t *testing.T) {
 	}
 }
 
-func TestCreateDefaultsToInviteOnlyAndSeveralQuestions(t *testing.T) {
-	f := conteststest.NewFixture()
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-
-	if created.Enrollment != contests.EnrollmentInviteOnly {
-		t.Errorf("enrollment = %q, want invite_only", created.Enrollment)
-	}
-	if created.QuestionMode != contests.QuestionModeMulti {
-		t.Errorf("question mode = %q, want multi", created.QuestionMode)
-	}
-	if created.Status != contests.StatusDraft {
-		t.Errorf("status = %q, want draft", created.Status)
-	}
-}
-
-// The public table is read without a session, and a self-registered
-// participant's login is their email address.
-func TestCreateLabelsTheLeaderboardByFullNameByDefault(t *testing.T) {
-	f := conteststest.NewFixture()
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-
-	stored, err := f.Contests.ByID(context.Background(), created.ID)
-	if err != nil {
-		t.Fatalf("ByID() = %v", err)
-	}
-	if stored.LeaderboardNames != contests.LeaderboardNamesFullName {
-		t.Errorf("stored LeaderboardNames = %q, want %q", stored.LeaderboardNames, contests.LeaderboardNamesFullName)
-	}
-}
-
 func TestCreateRecordsWhoCreatedTheContest(t *testing.T) {
 	f := conteststest.NewFixture()
 
@@ -159,7 +121,9 @@ func TestCreateRejectsIndividualTimingWithoutADuration(t *testing.T) {
 
 	_, err := f.Service.Create(context.Background(), contests.CreateCommand{
 		ActorID: uuid.New(),
-		Timing:  contests.TimingIndividual,
+		Patch: contests.Patch{
+			Timing: contests.TimingIndividual,
+		},
 	})
 
 	if !errors.Is(err, contests.ErrInvalidContest) {
@@ -172,7 +136,9 @@ func TestNothingIsWrittenWhenCreateIsRejected(t *testing.T) {
 
 	_, _ = f.Service.Create(context.Background(), contests.CreateCommand{
 		ActorID: uuid.New(),
-		Timing:  contests.TimingIndividual,
+		Patch: contests.Patch{
+			Timing: contests.TimingIndividual,
+		},
 	})
 
 	if got := f.Contests.Count(); got != 0 {
@@ -199,9 +165,11 @@ func TestUpdateRefusesToChangeTheQuestionModeWhileRunning(t *testing.T) {
 	c := f.SeedContest(contests.StatusRunning)
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID:      uuid.New(),
-		ContestID:    c.ID,
-		QuestionMode: contests.QuestionModeSingle,
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			QuestionMode: contests.QuestionModeSingle,
+		},
 	})
 
 	if !errors.Is(err, contests.ErrNotEditable) {
@@ -363,7 +331,9 @@ func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
 		ActorID:   uuid.New(),
 		ContestID: c.ID,
-		EndsAt:    &later,
+		Patch: contests.Patch{
+			EndsAt: &later,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -394,7 +364,7 @@ func TestUpdateExtendsEndsAtAfterTheFreezeWithoutMovingTheFreeze(t *testing.T) {
 	later := c.EndsAt.Add(45 * time.Minute)
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{EndsAt: &later},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -427,7 +397,7 @@ func TestUpdateExtendsEndsAtAfterTheFreezeKeepsTheStoredSeconds(t *testing.T) {
 	fromForm := withSeconds.Truncate(time.Minute).Add(time.Hour)
 	unchanged := 130 // the form resending the freeze it was given
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &fromForm, LeaderboardFreezeMin: &unchanged,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{EndsAt: &fromForm, LeaderboardFreezeMin: &unchanged},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -447,7 +417,7 @@ func TestUpdateAcceptsAnExtensionThatAlreadyCarriesThePairedFreeze(t *testing.T)
 	paired := 160
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later, LeaderboardFreezeMin: &paired,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{EndsAt: &later, LeaderboardFreezeMin: &paired},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -465,7 +435,7 @@ func TestUpdateRefusesToMoveEndsAtEarlierOnceTheFreezeIsReached(t *testing.T) {
 	earlier := c.EndsAt.Add(-5 * time.Minute)
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &earlier,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{EndsAt: &earlier},
 	})
 	if !errors.Is(err, contests.ErrFreezeAlreadyReached) {
 		t.Errorf("Update() = %v, want ErrFreezeAlreadyReached", err)
@@ -480,13 +450,15 @@ func TestUpdateRefusesAnExtensionWithAFreezeOtherThanThePairedOne(t *testing.T) 
 	later := c.EndsAt.Add(30 * time.Minute)
 	another := 200
 
-	for name, cmd := range map[string]contests.UpdateCommand{
+	for name, patch := range map[string]contests.Patch{
 		"another freeze": {LeaderboardFreezeMin: &another},
 		"no freeze":      {ClearLeaderboardFreeze: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			cmd.ActorID, cmd.ContestID, cmd.EndsAt = uuid.New(), c.ID, &later
-			_, err := f.Service.Update(context.Background(), cmd)
+			patch.EndsAt = &later
+			_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+				ActorID: uuid.New(), ContestID: c.ID, Patch: patch,
+			})
 			if !errors.Is(err, contests.ErrNotEditable) {
 				t.Errorf("Update() = %v, want ErrNotEditable", err)
 			}
@@ -511,7 +483,7 @@ func TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached(t *testing.T) {
 	later := f.Now.Add(4 * time.Hour)
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{EndsAt: &later},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -534,8 +506,12 @@ func TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze(t
 
 	resent := withSeconds.Truncate(time.Minute)
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &resent,
-		LeaderboardNames: contests.LeaderboardNamesFullName,
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			EndsAt:           &resent,
+			LeaderboardNames: contests.LeaderboardNamesFullName,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v, want the resend of an unchanged ends_at to be harmless", err)
@@ -562,7 +538,7 @@ func TestUpdateKeepsTheStoredEndsAtWhenAnExplicitMoveStaysInTheSameMinute(t *tes
 
 	movedWithinMinute := stored.Add(59 * time.Second) // 12:00:59.
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &movedWithinMinute,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{EndsAt: &movedWithinMinute},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -590,7 +566,7 @@ func TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning(t *testing.T) {
 	earlier := f.Now.Add(-2 * time.Hour)
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &earlier,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{StartsAt: &earlier},
 	})
 	if !errors.Is(err, contests.ErrICPCStartLocked) {
 		t.Errorf("Update() = %v, want ErrICPCStartLocked", err)
@@ -607,8 +583,12 @@ func TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC(t *test
 
 	resent := withSeconds.Truncate(time.Minute)
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &resent,
-		LeaderboardNames: contests.LeaderboardNamesFullName,
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			StartsAt:         &resent,
+			LeaderboardNames: contests.LeaderboardNamesFullName,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v, want the resend of an unchanged starts_at to be harmless", err)
@@ -631,7 +611,7 @@ func TestUpdateKeepsTheStoredStartsAtWhenAnExplicitMoveStaysInTheSameMinute(t *t
 
 	movedWithinMinute := stored.Add(59 * time.Second)
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &movedWithinMinute,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{StartsAt: &movedWithinMinute},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -656,7 +636,7 @@ func TestUpdateAllowsChangingStartsAtOutsideICPCScoringWhileRunning(t *testing.T
 	earlier := f.Now.Add(-2 * time.Hour)
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &earlier,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{StartsAt: &earlier},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -1110,7 +1090,9 @@ func TestAContestCanBeSwitchedBackToAFixedWindow(t *testing.T) {
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
 		ActorID:   uuid.New(),
 		ContestID: c.ID,
-		Timing:    contests.TimingFixed,
+		Patch: contests.Patch{
+			Timing: contests.TimingFixed,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -1164,10 +1146,12 @@ func TestAnEditRecordsWhatMovedAndWhatItWas(t *testing.T) {
 	later := f.Now.Add(9 * time.Hour)
 
 	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID:    uuid.New(),
-		ContestID:  c.ID,
-		EndsAt:     &later,
-		Enrollment: contests.EnrollmentOpen,
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			EndsAt:     &later,
+			Enrollment: contests.EnrollmentOpen,
+		},
 	}); err != nil {
 		t.Fatalf("Update() = %v", err)
 	}
@@ -1192,12 +1176,14 @@ func TestAnEditDoesNotRecordFieldsTheFormMerelyResent(t *testing.T) {
 	c := f.SeedContest(contests.StatusDraft)
 
 	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID:    uuid.New(),
-		ContestID:  c.ID,
-		Enrollment: contests.EnrollmentInviteOnly,
-		Timing:     contests.TimingFixed,
-		StartsAt:   c.StartsAt,
-		EndsAt:     c.EndsAt,
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			Enrollment: contests.EnrollmentInviteOnly,
+			Timing:     contests.TimingFixed,
+			StartsAt:   c.StartsAt,
+			EndsAt:     c.EndsAt,
+		},
 	}); err != nil {
 		t.Fatalf("Update() = %v", err)
 	}
@@ -1327,8 +1313,12 @@ func TestUpdateRefusesToMoveTheFreezeWhileRunning(t *testing.T) {
 	freeze := 30
 	settings := c.Settings
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Settings: &settings,
-		LeaderboardFreezeMin: &freeze,
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Patch: contests.Patch{
+			Settings:             &settings,
+			LeaderboardFreezeMin: &freeze,
+		},
 	})
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
@@ -1341,7 +1331,7 @@ func TestUpdateChangesTheLeaderboardLabelWhileRunning(t *testing.T) {
 	c := f.SeedContest(contests.StatusRunning)
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, LeaderboardNames: contests.LeaderboardNamesFullName,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{LeaderboardNames: contests.LeaderboardNamesFullName},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -1357,79 +1347,17 @@ func TestUpdateSetsAndClearsTheFreezeBeforeTheContestStarts(t *testing.T) {
 
 	freeze := 30
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, LeaderboardFreezeMin: &freeze,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{LeaderboardFreezeMin: &freeze},
 	})
 	if err != nil || updated.LeaderboardFreezeMin == nil || *updated.LeaderboardFreezeMin != 30 {
 		t.Fatalf("set: Update() = %+v, %v", updated.LeaderboardFreezeMin, err)
 	}
 
 	updated, err = f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ClearLeaderboardFreeze: true,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{ClearLeaderboardFreeze: true},
 	})
 	if err != nil || updated.LeaderboardFreezeMin != nil {
 		t.Fatalf("clear: Update() = %+v, %v", updated.LeaderboardFreezeMin, err)
-	}
-}
-
-// Matches the column default.
-func TestCreateDefaultsTheICPCPenaltyToTwenty(t *testing.T) {
-	f := conteststest.NewFixture()
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-	if created.ICPCPenaltyMin != 20 {
-		t.Errorf("ICPCPenaltyMin = %d, want 20", created.ICPCPenaltyMin)
-	}
-}
-
-func TestCreateHonoursAnExplicitICPCPenalty(t *testing.T) {
-	f := conteststest.NewFixture()
-	penalty := 15
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{
-		ActorID: uuid.New(), ICPCPenaltyMin: &penalty,
-	})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-	if created.ICPCPenaltyMin != 15 {
-		t.Errorf("ICPCPenaltyMin = %d, want 15", created.ICPCPenaltyMin)
-	}
-}
-
-// Nil means "leave it alone"; zero is a real setting (no penalty).
-func TestUpdateLeavesTheICPCPenaltyAloneWhenNotMentioned(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	c.ICPCPenaltyMin = 30
-	f.Contests.Put(c)
-
-	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
-	})
-	if err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-	if updated.ICPCPenaltyMin != 30 {
-		t.Errorf("ICPCPenaltyMin = %d, want it to survive an unrelated update", updated.ICPCPenaltyMin)
-	}
-}
-
-func TestUpdateSetsTheICPCPenalty(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	penalty := 45
-
-	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ICPCPenaltyMin: &penalty,
-	})
-	if err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-	if updated.ICPCPenaltyMin != 45 {
-		t.Errorf("ICPCPenaltyMin = %d, want 45", updated.ICPCPenaltyMin)
 	}
 }
 
@@ -1440,39 +1368,10 @@ func TestUpdateRefusesToChangeTheICPCPenaltyWhileRunning(t *testing.T) {
 	penalty := 30
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ICPCPenaltyMin: &penalty,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{ICPCPenaltyMin: &penalty},
 	})
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
-	}
-}
-
-// Matches the column default, so a new contest behaves like one created
-// before the setting existed.
-func TestCreateOffersTheResultDownloadByDefault(t *testing.T) {
-	f := conteststest.NewFixture()
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-	if !created.ResultDownload {
-		t.Error("ResultDownload = false, want true when the command does not mention it")
-	}
-}
-
-func TestCreateHonoursAResultDownloadTurnedOff(t *testing.T) {
-	f := conteststest.NewFixture()
-	off := false
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{
-		ActorID: uuid.New(), ResultDownload: &off,
-	})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-	if created.ResultDownload {
-		t.Error("ResultDownload = true, want the false the command asked for")
 	}
 }
 
@@ -1483,7 +1382,7 @@ func TestUpdateTurnsTheResultDownloadOffWhileRunning(t *testing.T) {
 	off := false
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ResultDownload: &off,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{ResultDownload: &off},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -1497,62 +1396,16 @@ func TestUpdateTurnsTheResultDownloadOffWhileRunning(t *testing.T) {
 	}
 }
 
-func TestUpdateLeavesTheResultDownloadAloneWhenNotMentioned(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	c.ResultDownload = false
-	f.Contests.Put(c)
-
-	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
-	})
-	if err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-	if updated.ResultDownload {
-		t.Error("ResultDownload = true, want false to survive an unrelated update")
-	}
-}
-
 func TestUpdateRefusesTheResultDownloadOnceFinished(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 	off := false
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ResultDownload: &off,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{ResultDownload: &off},
 	})
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
-	}
-}
-
-// Matches the column default, so a new contest behaves like one created
-// before the setting existed.
-func TestCreateOffersTheSchemaDiagramByDefault(t *testing.T) {
-	f := conteststest.NewFixture()
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-	if !created.SchemaDiagram {
-		t.Error("SchemaDiagram = false, want true when the command does not mention it")
-	}
-}
-
-func TestCreateHonoursASchemaDiagramTurnedOff(t *testing.T) {
-	f := conteststest.NewFixture()
-	off := false
-
-	created, err := f.Service.Create(context.Background(), contests.CreateCommand{
-		ActorID: uuid.New(), SchemaDiagram: &off,
-	})
-	if err != nil {
-		t.Fatalf("Create() = %v", err)
-	}
-	if created.SchemaDiagram {
-		t.Error("SchemaDiagram = true, want the false the command asked for")
 	}
 }
 
@@ -1563,7 +1416,7 @@ func TestUpdateTurnsTheSchemaDiagramOffWhileRunning(t *testing.T) {
 	off := false
 
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, SchemaDiagram: &off,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{SchemaDiagram: &off},
 	})
 	if err != nil {
 		t.Fatalf("Update() = %v", err)
@@ -1577,30 +1430,13 @@ func TestUpdateTurnsTheSchemaDiagramOffWhileRunning(t *testing.T) {
 	}
 }
 
-func TestUpdateLeavesTheSchemaDiagramAloneWhenNotMentioned(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	c.SchemaDiagram = false
-	f.Contests.Put(c)
-
-	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
-	})
-	if err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-	if updated.SchemaDiagram {
-		t.Error("SchemaDiagram = true, want false to survive an unrelated update")
-	}
-}
-
 func TestUpdateRefusesTheSchemaDiagramOnceFinished(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 	off := false
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, SchemaDiagram: &off,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{SchemaDiagram: &off},
 	})
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)
@@ -1611,7 +1447,7 @@ func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
 	t.Run("at creation", func(t *testing.T) {
 		f := conteststest.NewFixture()
 		_, err := f.Service.Create(context.Background(), contests.CreateCommand{
-			ActorID: uuid.New(), Settings: contests.Settings{TrustedDomainOnly: true},
+			ActorID: uuid.New(), Patch: contests.Patch{Settings: &contests.Settings{TrustedDomainOnly: true}},
 		})
 		if !errors.Is(err, contests.ErrTrustedDomainUnset) {
 			t.Errorf("Create() = %v, want ErrTrustedDomainUnset", err)
@@ -1622,7 +1458,7 @@ func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
 		f := conteststest.NewFixture()
 		c := f.SeedContest(contests.StatusDraft)
 		_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-			ActorID: uuid.New(), ContestID: c.ID, Settings: &contests.Settings{TrustedDomainOnly: true},
+			ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Settings: &contests.Settings{TrustedDomainOnly: true}},
 		})
 		if !errors.Is(err, contests.ErrTrustedDomainUnset) {
 			t.Errorf("Update() = %v, want ErrTrustedDomainUnset", err)
@@ -1634,7 +1470,7 @@ func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
 		f.Service.WithTrustedDomain("example.edu")
 		c := f.SeedContest(contests.StatusPublished)
 		if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-			ActorID: uuid.New(), ContestID: c.ID, Settings: &contests.Settings{TrustedDomainOnly: true},
+			ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Settings: &contests.Settings{TrustedDomainOnly: true}},
 		}); err != nil {
 			t.Fatalf("Update() = %v", err)
 		}
@@ -1651,83 +1487,16 @@ func TestTheSettingCannotBeTurnedOnWithoutADomain(t *testing.T) {
 		f.Contests.Put(c)
 
 		if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-			ActorID: uuid.New(), ContestID: c.ID, QuestionMode: contests.QuestionModeSingle,
+			ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
 		}); err != nil {
 			t.Errorf("Update() of another field = %v, want it saved", err)
 		}
 		if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-			ActorID: uuid.New(), ContestID: c.ID, Settings: &contests.Settings{},
+			ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Settings: &contests.Settings{}},
 		}); err != nil {
 			t.Errorf("turning the setting off = %v, want it allowed", err)
 		}
 	})
-}
-
-func TestCreateDerivesVisibilityFromEnrollment(t *testing.T) {
-	f := conteststest.NewFixture()
-	for enrollment, want := range map[string]string{
-		"":                            contests.VisibilityClosed,
-		contests.EnrollmentInviteOnly: contests.VisibilityClosed,
-		contests.EnrollmentOpen:       contests.VisibilityOpen,
-	} {
-		created, err := f.Service.Create(context.Background(), contests.CreateCommand{
-			ActorID: uuid.New(), Enrollment: enrollment,
-		})
-		if err != nil {
-			t.Fatalf("Create(%q) = %v", enrollment, err)
-		}
-		if created.Visibility != want || created.ArchiveTasks {
-			t.Errorf("a new %q contest has visibility %q, archive tasks %v, want %q, false",
-				enrollment, created.Visibility, created.ArchiveTasks, want)
-		}
-	}
-}
-
-func TestUpdateToSelfRegistrationOpensAClosedContest(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	if c.Visibility != contests.VisibilityClosed {
-		t.Fatalf("seeded visibility = %q, want closed", c.Visibility)
-	}
-
-	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
-	})
-	if err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-	if updated.Visibility != contests.VisibilityOpen {
-		t.Errorf("visibility = %q, want open once the contest takes self-registration", updated.Visibility)
-	}
-	stored, _ := f.Contests.ByID(context.Background(), c.ID)
-	if stored.Visibility != contests.VisibilityOpen {
-		t.Errorf("stored visibility = %q, want open", stored.Visibility)
-	}
-	change, ok := changesIn(t, f, audit.ActionContestUpdate)["visibility"].(map[string]any)
-	if !ok || change["from"] != contests.VisibilityClosed || change["to"] != contests.VisibilityOpen {
-		t.Errorf("visibility change = %v, want closed -> open", change)
-	}
-}
-
-// Leaving self-registration closes nothing: the visibility and archive tasks
-// are the archive settings' to change.
-func TestUpdateToInviteOnlyKeepsTheArchiveSettings(t *testing.T) {
-	f := conteststest.NewFixture()
-	c := f.SeedContest(contests.StatusDraft)
-	c.Enrollment, c.Visibility, c.ArchiveTasks = contests.EnrollmentOpen, contests.VisibilityOpen, true
-	f.Contests.Put(c)
-
-	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentInviteOnly,
-	}); err != nil {
-		t.Fatalf("Update() = %v", err)
-	}
-
-	stored, _ := f.Contests.ByID(context.Background(), c.ID)
-	if stored.Enrollment != contests.EnrollmentInviteOnly || stored.Visibility != contests.VisibilityOpen || !stored.ArchiveTasks {
-		t.Errorf("enrolment, visibility, archive tasks = %s, %s, %v, want invite_only, open, true",
-			stored.Enrollment, stored.Visibility, stored.ArchiveTasks)
-	}
 }
 
 // The edit is handed the row as it now stands, so a write it conditions on

@@ -165,7 +165,7 @@ func TestTheGeneralUpdateStaysRefusedOnceFinished(t *testing.T) {
 	c := f.SeedContest(contests.StatusFinished)
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Enrollment: contests.EnrollmentOpen},
 	})
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("Update() = %v, want ErrNotEditable", err)

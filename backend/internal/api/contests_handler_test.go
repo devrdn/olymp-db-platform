@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -803,6 +804,159 @@ func TestNetworkRestrictionsAreReadBackAsWritten(t *testing.T) {
 	cidrs, _ := decode(t, rec)["allowed_cidrs"].([]any)
 	if len(cidrs) != 2 || cidrs[0] != "10.20.0.0/16" {
 		t.Errorf("allowed_cidrs = %v, want both networks", cidrs)
+	}
+}
+
+// Each Patch field must be reachable from the request: a setting added to the
+// domain but never decoded passes the domain's table test and is still
+// unsettable. A field with no case here fails the guard.
+func TestEveryContestSettingCanBeSetThroughTheAPI(t *testing.T) {
+	cases := map[string]struct {
+		body  string
+		seed  func(c *contests.Contest)
+		holds func(c contests.Contest) bool
+	}{
+		"Enrollment": {
+			body:  `{"enrollment": "open"}`,
+			holds: func(c contests.Contest) bool { return c.Enrollment == contests.EnrollmentOpen },
+		},
+		"QuestionMode": {
+			body:  `{"question_mode": "single"}`,
+			holds: func(c contests.Contest) bool { return c.QuestionMode == contests.QuestionModeSingle },
+		},
+		"Progression": {
+			body:  `{"progression": "sequential"}`,
+			holds: func(c contests.Contest) bool { return c.Progression == contests.ProgressionSequential },
+		},
+		"Scoring": {
+			body:  `{"scoring": "icpc"}`,
+			holds: func(c contests.Contest) bool { return c.Scoring == contests.ScoringICPC },
+		},
+		"Timing": {
+			body:  `{"timing": "individual", "duration_min": 90}`,
+			holds: func(c contests.Contest) bool { return c.Timing == contests.TimingIndividual },
+		},
+		"DurationMin": {
+			body:  `{"timing": "individual", "duration_min": 90}`,
+			holds: func(c contests.Contest) bool { return c.DurationMin != nil && *c.DurationMin == 90 },
+		},
+		"StartsAt": {
+			body: `{"starts_at": "2026-03-01T08:00:00Z"}`,
+			holds: func(c contests.Contest) bool {
+				return c.StartsAt != nil && c.StartsAt.Equal(time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC))
+			},
+		},
+		"EndsAt": {
+			body: `{"ends_at": "2026-03-01T13:00:00Z"}`,
+			holds: func(c contests.Contest) bool {
+				return c.EndsAt != nil && c.EndsAt.Equal(time.Date(2026, 3, 1, 13, 0, 0, 0, time.UTC))
+			},
+		},
+		"AllowedCIDRs": {
+			body:  `{"allowed_cidrs": ["10.20.0.0/16"]}`,
+			holds: func(c contests.Contest) bool { return len(c.AllowedCIDRs) == 1 },
+		},
+		"Settings.EnrollmentDeadline": {
+			body: `{"settings": {"enrollment_deadline": "2026-02-28T09:00:00Z"}}`,
+			holds: func(c contests.Contest) bool {
+				d := c.Settings.EnrollmentDeadline
+				return d != nil && d.Equal(time.Date(2026, 2, 28, 9, 0, 0, 0, time.UTC))
+			},
+		},
+		"Settings.QueryRateLimitPerMin": {
+			body:  `{"settings": {"query_rate_limit_per_min": 30}}`,
+			holds: func(c contests.Contest) bool { return c.Settings.QueryRateLimitPerMin == 30 },
+		},
+		"Settings.GracePeriodMin": {
+			body:  `{"settings": {"grace_period_min": 60}}`,
+			holds: func(c contests.Contest) bool { return c.Settings.GracePeriodMin == 60 },
+		},
+		"Settings.TrustedDomainOnly": {
+			body:  `{"settings": {"trusted_domain_only": true}}`,
+			holds: func(c contests.Contest) bool { return c.Settings.TrustedDomainOnly },
+		},
+		"LeaderboardFreezeMin": {
+			body:  `{"leaderboard": {"freeze_min": 30}}`,
+			holds: func(c contests.Contest) bool { return c.LeaderboardFreezeMin != nil && *c.LeaderboardFreezeMin == 30 },
+		},
+		"ClearLeaderboardFreeze": {
+			body: `{"leaderboard": {"freeze_min": null}}`,
+			seed: func(c *contests.Contest) {
+				freeze := 30
+				c.LeaderboardFreezeMin = &freeze
+			},
+			holds: func(c contests.Contest) bool { return c.LeaderboardFreezeMin == nil },
+		},
+		"LeaderboardNames": {
+			body:  `{"leaderboard": {"names": "full_name"}}`,
+			holds: func(c contests.Contest) bool { return c.LeaderboardNames == contests.LeaderboardNamesFullName },
+		},
+		"ICPCPenaltyMin": {
+			body:  `{"icpc_penalty_min": 0}`,
+			holds: func(c contests.Contest) bool { return c.ICPCPenaltyMin == 0 },
+		},
+		"ResultDownload": {
+			body:  `{"result_download": false}`,
+			holds: func(c contests.Contest) bool { return !c.ResultDownload },
+		},
+		"SchemaDiagram": {
+			body:  `{"schema_diagram": false}`,
+			holds: func(c contests.Contest) bool { return !c.SchemaDiagram },
+		},
+	}
+	// Patch.Settings replaces every member at once, so a member the request
+	// does not decode is written as zero by every save that sends settings.
+	required := []string{}
+	for _, field := range reflect.VisibleFields(reflect.TypeFor[contests.Patch]()) {
+		if field.Name != "Settings" {
+			required = append(required, field.Name)
+			continue
+		}
+		for _, member := range reflect.VisibleFields(reflect.TypeFor[contests.Settings]()) {
+			required = append(required, "Settings."+member.Name)
+		}
+	}
+	for _, name := range required {
+		if _, ok := cases[name]; !ok {
+			t.Errorf("Patch.%s has no case here: decode it in contestRequest.patch and add one", name)
+		}
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newContestFixture(t)
+			f.service.WithTrustedDomain("example.edu")
+			c := f.ownedContest(t, contests.StatusDraft)
+			if tc.seed != nil {
+				tc.seed(&c)
+				f.stores.Contests.Put(c)
+			}
+			if tc.holds(c) {
+				t.Fatalf("the seeded contest already holds what %s sets", tc.body)
+			}
+
+			rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), tc.body)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("PATCH %s = %d (%s), want 200", tc.body, rec.Code, rec.Body.String())
+			}
+			stored, _ := f.stores.Contests.ByID(t.Context(), c.ID)
+			if !tc.holds(stored) {
+				t.Errorf("PATCH %s did not reach the stored contest: %+v", tc.body, stored)
+			}
+		})
+	}
+}
+
+// An empty string means "not sent", so a blank value is no longer read as
+// the default: it reaches validation and is refused.
+func TestCreatingAContestWithABlankSettingIsRefused(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+
+	rec := f.do(http.MethodPost, "/contests", `{"scoring": "  "}`)
+
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+		t.Errorf("status = %d (%s), want 400 invalid_request", rec.Code, rec.Body.String())
 	}
 }
 
