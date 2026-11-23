@@ -242,13 +242,21 @@ func TestArchiveCarriesEveryLanguagesTitle(t *testing.T) {
 	})
 }
 
-// enable_seqscan is off so the assertion is about what the planner can
-// match, not about the size of the test table: on a handful of rows it would
-// choose a sequential scan whatever the index offered.
+// The assertion is about what the planner can match, not about what a test
+// table's size and bloat make cheapest. enable_seqscan is off because on a
+// handful of rows a sequential scan wins whatever the index offers.
+// enable_sort and enable_bitmapscan are off because contests has other
+// indexes that reach the same rows and sort them afterwards, and a rollback
+// does not shrink an index: on a database earlier runs have bloated, one of
+// those can be priced below the archive index. With all three off the plan
+// uses the archive index if, and only if, it serves both the list's
+// predicate and its order.
 func TestArchiveListUsesTheArchiveIndex(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		q := storage.QuerierFrom(ctx, testPool)
 		exec(t, ctx, `SET LOCAL enable_seqscan = off`)
+		exec(t, ctx, `SET LOCAL enable_sort = off`)
+		exec(t, ctx, `SET LOCAL enable_bitmapscan = off`)
 
 		for name, query := range map[string]string{"without a query": "", "with a query": "sql"} {
 			rows, err := q.Query(ctx, `EXPLAIN `+archiveListSQL, escapeLike(query), 20, 0)
