@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 // A Server Component: the API, the session and the request are faked.
@@ -21,7 +22,8 @@ vi.mock("@/lib/auth/session", () => ({
   }),
 }));
 vi.mock("@/components/layout/session-actions", () => ({ signOutAction: vi.fn() }));
-vi.mock("next/navigation", () => ({
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
   redirect: vi.fn(),
   usePathname: () => "/profile",
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -72,5 +74,42 @@ describe("the profile's feedback link", () => {
 
     expect(screen.getByRole("link", { name: dict.profile.changePassword })).toBeInTheDocument();
     expect(feedbackLink()).not.toBeInTheDocument();
+  });
+});
+
+describe("a profile section that could not be read", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("costs the page nothing, and is logged on one line without what the failure said", async () => {
+    brandingWith("");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    serverRequest.mockImplementation(async (path: string) => {
+      if (path === "/me/summary") {
+        throw new TypeError('Headers.append: "dbcontest_session=secret-token\nFAKE LINE" is an invalid header value.');
+      }
+      return { items: [], truncated: false };
+    });
+
+    render(await ProfilePage());
+
+    expect(screen.getByRole("heading", { level: 1, name: "Sergiu Popescu" })).toBeInTheDocument();
+    expect(logged).toHaveBeenCalledTimes(1);
+    const line = logged.mock.calls[0].map(String).join(" ");
+    expect(line).toContain("/me/summary");
+    expect(line).not.toContain("secret-token");
+    expect(line).not.toMatch(/[\r\n]/);
+  });
+
+  test("writes no log line for a reader past their own profile budget", async () => {
+    brandingWith("");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    serverRequest.mockRejectedValue(new ApiError("profile_too_often", 429, "Too often"));
+
+    render(await ProfilePage());
+
+    expect(screen.getByRole("heading", { level: 1, name: "Sergiu Popescu" })).toBeInTheDocument();
+    expect(logged).not.toHaveBeenCalled();
   });
 });

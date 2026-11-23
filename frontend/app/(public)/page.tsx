@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 
 import { branding } from "@/lib/api/branding";
-import { serverRequest } from "@/lib/api/server";
+import { readPage } from "@/lib/api/page-read";
 import { publicContestsSchema, publicStatsSchema } from "@/lib/api/showcase";
 import { sessionCookie } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -41,21 +41,23 @@ export default async function HomePage() {
   const name = brand.name.trim() || dict.chrome.product;
 
   /**
-   * Settled, not joined: neither read should take the page down, and each
-   * section handles nothing. Contests are read in the visitor's language.
+   * Best-effort: neither read should take the page down, and a section shows
+   * nothing for a failed one. The failure is logged, since this is the only
+   * place "API down" differs from "new installation"; the public read budget
+   * is not, since any visitor can spend it at will. Contests are read in the
+   * visitor's language.
    */
-  const [stats, contests] = await Promise.allSettled([
-    serverRequest("/public/stats").then((payload) => publicStatsSchema.parse(payload)),
-    serverRequest(`/public/contests?lang=${locale}`).then(
-      (payload) => publicContestsSchema.parse(payload).items,
-    ),
+  const policy = { here: "/", absent: ["public_too_often"], bestEffort: true } as const;
+  const [stats, contests] = await Promise.all([
+    readPage("/public/stats", (payload) => publicStatsSchema.parse(payload), policy),
+    readPage(`/public/contests?lang=${locale}`, (payload) => publicContestsSchema.parse(payload).items, policy),
   ]);
 
   return (
     <>
       <Hero name={name} signedIn={signedIn} dict={dict} />
 
-      <Numbers stats={settled(stats, "/public/stats")} dict={dict} />
+      <Numbers stats={stats} dict={dict} />
 
       <HowItWorks dict={dict} />
 
@@ -65,7 +67,7 @@ export default async function HomePage() {
       <RecentContests
         signedIn={signedIn}
         archive={brand.archive}
-        contests={settled(contests, "/public/contests")}
+        contests={contests}
         dict={dict}
         locale={locale}
       />
@@ -81,15 +83,4 @@ export default async function HomePage() {
       />
     </>
   );
-}
-
-/**
- * A settled read's value, or `null`. The reason is logged, since the page
- * cannot show it and this is the only place "API down" differs from "new
- * installation".
- */
-function settled<T>(result: PromiseSettledResult<T>, path: string): T | null {
-  if (result.status === "fulfilled") return result.value;
-  console.error("reading %s for the front page failed", path, result.reason);
-  return null;
 }

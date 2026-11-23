@@ -24,14 +24,11 @@ export default async function DatabasesPage(props: PageProps<"/contests/[contest
     loadContestResource(contestId, "/game", (payload) => gameSchema.parse(payload), {
       absent: ["not_found"],
     }),
-    // Caught so a briefly unreachable cluster does not take the page down, but
-    // kept as `null`, distinct from an empty list, and logged: "no databases
-    // yet" would be a false statement in the middle of an incident.
-    loadContestResource(contestId, "/game/instances", (payload) =>
-      gameInstancesSchema.parse(payload),
-    ).catch((error: unknown) => {
-      console.error("reading the game databases of contest %s failed", contestId, error);
-      return null;
+    // Best-effort, so a briefly unreachable cluster does not take the page
+    // down, but `null` is distinct from an empty list: "no databases yet"
+    // would be a false statement in the middle of an incident.
+    loadContestResource(contestId, "/game/instances", (payload) => gameInstancesSchema.parse(payload), {
+      bestEffort: true,
     }),
   ]);
 

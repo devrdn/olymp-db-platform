@@ -8,9 +8,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { branding } from "@/lib/api/branding";
 import { profileContestsSchema, profileSummarySchema } from "@/lib/api/profile";
-import { serverRequest } from "@/lib/api/server";
+import { readPage } from "@/lib/api/page-read";
 import { feedbackHref } from "@/lib/api/settings";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { fetchIdentity } from "@/lib/auth/session";
 import { initials } from "@/lib/format/initials";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -43,8 +42,8 @@ export default async function ProfilePage() {
   if (!identity) redirect("/login?next=%2Fprofile");
 
   const [summary, contests] = await Promise.all([
-    read("/me/summary", (payload) => profileSummarySchema.parse(payload)),
-    read("/me/contests", (payload) => profileContestsSchema.parse(payload)),
+    readPage("/me/summary", (payload) => profileSummarySchema.parse(payload), PROFILE_READ),
+    readPage("/me/contests", (payload) => profileContestsSchema.parse(payload), PROFILE_READ),
   ]);
 
   const t = dict.profile;
@@ -114,20 +113,10 @@ export default async function ProfilePage() {
 }
 
 /**
- * One profile read. A dead session or one-time password gets the guard's
- * recovery; any other failure becomes `null` (one line in its section) and is
- * logged, since the page still renders.
+ * A failed profile read costs its section one line, never the page. The
+ * reader's own read budget is no failure worth logging.
  */
-async function read<T>(path: string, parse: (payload: unknown) => T): Promise<T | null> {
-  try {
-    return parse(await serverRequest(path));
-  } catch (error: unknown) {
-    const target = authRecoveryRedirect(error, "/profile");
-    if (target) redirect(target);
-    console.error("reading %s for the profile failed", path, error);
-    return null;
-  }
-}
+const PROFILE_READ = { here: "/profile", absent: ["profile_too_often"], bestEffort: true } as const;
 
 function Pair({ label, children }: { label: string; children: React.ReactNode }) {
   return (
