@@ -1,9 +1,6 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
 import { contestListSchema } from "@/lib/api/contests";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { readPage } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { ParticipantRegister } from "../my/participant-register";
@@ -26,13 +23,9 @@ export default async function OpenContestsPage() {
   // and other people's invitation-only contests.
   const search = new URLSearchParams({ scope: "participant", lang: locale });
 
-  const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, "/open");
-    if (target) redirect(target);
-    throw error;
+  const { items, total } = await readPage(`/contests?${search}`, (payload) => contestListSchema.parse(payload), {
+    here: "/open",
   });
-
-  const { items, total } = contestListSchema.parse(payload);
 
   return (
     <Band fill className="py-12">

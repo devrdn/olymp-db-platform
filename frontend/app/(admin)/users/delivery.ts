@@ -1,5 +1,6 @@
 import { mailStatusSchema } from "@/lib/api/accounts";
-import { serverOutcome, serverRequest } from "@/lib/api/server";
+import { bestEffort } from "@/lib/api/page-read";
+import { serverRequest } from "@/lib/api/server";
 
 import type { MailOffer } from "./email-delivery";
 
@@ -22,9 +23,7 @@ const MAIL_STATUS = "/users/mail-status";
  * the page still renders.
  */
 export async function readMailOffer(): Promise<MailOffer> {
-  const read = await serverOutcome(async () => mailStatusSchema.parse(await serverRequest(MAIL_STATUS)), {
-    report: MAIL_STATUS,
-  });
-  if (!read.ok) return { status: "unknown" };
-  return read.value.enabled ? { status: "on", perMinute: read.value.perMinute } : { status: "off" };
+  const status = await bestEffort(async () => mailStatusSchema.parse(await serverRequest(MAIL_STATUS)), MAIL_STATUS);
+  if (!status) return { status: "unknown" };
+  return status.enabled ? { status: "on", perMinute: status.perMinute } : { status: "off" };
 }

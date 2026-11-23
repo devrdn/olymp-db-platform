@@ -9,13 +9,13 @@ import { branding } from "@/lib/api/branding";
 import { ApiError } from "@/lib/api/client";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
+import { readPage } from "@/lib/api/page-read";
 import { playQuestionListSchema, playStorySchema } from "@/lib/api/play";
 import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
 import { workspaceSchema, type WorkspaceSnapshot } from "@/lib/api/workspace";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { fetchIdentity } from "@/lib/auth/session";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -90,13 +90,11 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   const dict = playDictionary(whole);
 
   const search = new URLSearchParams({ scope: "participant", enrolled: "true", lang: locale });
-  const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, `/contests/${contestId}/play`);
-    if (target) redirect(target);
-    throw error;
+  const listing = await readPage(`/contests?${search}`, (payload) => contestListSchema.parse(payload), {
+    here: `/contests/${contestId}/play`,
   });
 
-  const contest = contestListSchema.parse(payload).items.find((item) => item.id === contestId);
+  const contest = listing.items.find((item) => item.id === contestId);
   if (!contest) redirect("/my");
 
   if (contest.status === "published") {

@@ -1,9 +1,6 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
 import { auditActionsSchema, auditPageSchema, auditSearch, dayBounds } from "@/lib/api/audit";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { readPage } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { AuditFilters } from "./filters";
@@ -36,31 +33,6 @@ export default async function AuditPage(props: PageProps<"/audit">) {
 
   const search = auditSearch({ action, entity, offset, ...dayBounds(from, to) });
 
-  const here = () => {
-    const shown = new URLSearchParams();
-    for (const [key, value] of Object.entries({ action, entity, from, to })) {
-      if (value) shown.set(key, value);
-    }
-    return shown.size > 0 ? `/audit?${shown}` : "/audit";
-  };
-
-  // proxy.ts only saw a cookie; this answer says whether the session is alive.
-  // Both reads run together.
-  const onAuthFailure = (error: unknown) => {
-    const target = authRecoveryRedirect(error, here());
-    if (target) redirect(target);
-    throw error;
-  };
-  const [payload, actionsPayload] = await Promise.all([
-    serverRequest(`/audit?${search}`).catch(onAuthFailure),
-    serverRequest(`/audit/actions`).catch(onAuthFailure),
-  ]);
-
-  const { items, total } = auditPageSchema.parse(payload);
-  // Sorted for the dropdown; the server groups by domain.
-  const { items: actions } = auditActionsSchema.parse(actionsPayload);
-  actions.sort();
-
   const pageHref = (next: number) => {
     const shown = new URLSearchParams();
     for (const [key, value] of Object.entries({ action, entity, from, to })) {
@@ -69,6 +41,15 @@ export default async function AuditPage(props: PageProps<"/audit">) {
     if (next > 0) shown.set("offset", String(next));
     return shown.size > 0 ? `/audit?${shown}` : "/audit";
   };
+
+  // Both reads run together; sign-in leads back to this view, offset dropped.
+  const policy = { here: pageHref(0) };
+  const [{ items, total }, { items: actions }] = await Promise.all([
+    readPage(`/audit?${search}`, (payload) => auditPageSchema.parse(payload), policy),
+    readPage("/audit/actions", (payload) => auditActionsSchema.parse(payload), policy),
+  ]);
+  // Sorted for the dropdown; the server groups by domain.
+  actions.sort();
 
   return (
     <Band fill className="flex flex-col gap-8 py-12">

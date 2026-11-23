@@ -1,9 +1,6 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
 import { accountListSchema, roleListSchema } from "@/lib/api/accounts";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { readPage } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { AccountRegister, ACCOUNTS_PAGE } from "./account-register";
@@ -44,20 +41,12 @@ export default async function UsersPage(props: PageProps<"/users">) {
   if (offset > 0) search.set("offset", String(offset));
   search.set("limit", String(ACCOUNTS_PAGE));
 
-  // proxy.ts only saw a cookie; this answer says whether the session is alive,
-  // and a dead one goes back to sign-in. Both reads must succeed: accounts
-  // without role names would show bare codes.
-  const [accountsPayload, rolesPayload] = await Promise.all([
-    serverRequest(`/users?${search}`),
-    serverRequest("/roles"),
-  ]).catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, accountsHref({ query, status, offset }));
-    if (target) redirect(target);
-    throw error;
-  });
-
-  const { items, total } = accountListSchema.parse(accountsPayload);
-  const { items: roles } = roleListSchema.parse(rolesPayload);
+  // Both reads must succeed: accounts without role names would show bare codes.
+  const policy = { here: accountsHref({ query, status, offset }) };
+  const [{ items, total }, { items: roles }] = await Promise.all([
+    readPage(`/users?${search}`, (payload) => accountListSchema.parse(payload), policy),
+    readPage("/roles", (payload) => roleListSchema.parse(payload), policy),
+  ]);
 
   const pageHref = (next: number) => accountsHref({ query, status, offset: next });
   const mail = await mailRead;

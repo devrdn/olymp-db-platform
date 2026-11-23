@@ -1,9 +1,6 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
 import { contestListSchema } from "@/lib/api/contests";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { readPage } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { ParticipantRegister } from "./participant-register";
@@ -26,16 +23,9 @@ export default async function MyContestsPage() {
   // does mine start", asked under a timer on the day.
   const search = new URLSearchParams({ scope: "participant", enrolled: "true", lang: locale });
 
-  // The proxy only saw that a cookie exists. A dead session goes back to
-  // sign-in and a one-time password to the password screen; a retry could
-  // fix neither.
-  const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, "/my");
-    if (target) redirect(target);
-    throw error;
+  const { items, total } = await readPage(`/contests?${search}`, (payload) => contestListSchema.parse(payload), {
+    here: "/my",
   });
-
-  const { items, total } = contestListSchema.parse(payload);
 
   return (
     <Band fill className="py-12">

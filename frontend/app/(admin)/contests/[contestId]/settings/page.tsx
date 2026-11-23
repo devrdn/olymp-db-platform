@@ -42,7 +42,7 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
     // No cover is the ordinary state, read as an empty answer. This is the
     // staff read, not the public one, since a draft's cover is private.
     loadContestResource(contestId, "/cover", (payload) => contestCoverSchema.parse(payload), {
-      notFoundIsEmpty: true,
+      absent: ["not_found"],
     }),
     // Never throws; null leaves the trusted-domain switch to the contest's own value.
     fetchAuthMethods(),

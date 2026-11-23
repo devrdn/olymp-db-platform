@@ -1,10 +1,7 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
 import { ContestRegister } from "./contest-register";
 import { contestListSchema } from "@/lib/api/contests";
-import { serverRequest } from "@/lib/api/server";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
+import { readPage } from "@/lib/api/page-read";
 import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -34,20 +31,14 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
   // two.
   search.set("lang", locale);
 
-  // proxy.ts only saw a cookie; a dead session goes back to sign-in, which a
-  // retry could never fix.
-  const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
-    const resume = new URLSearchParams();
-    if (query) resume.set("q", query);
-    if (status) resume.set("status", status);
-    const here = resume.size > 0 ? `/contests?${resume}` : "/contests";
+  const resume = new URLSearchParams();
+  if (query) resume.set("q", query);
+  if (status) resume.set("status", status);
+  const here = resume.size > 0 ? `/contests?${resume}` : "/contests";
 
-    const target = authRecoveryRedirect(error, here);
-    if (target) redirect(target);
-    throw error;
+  const { items, total } = await readPage(`/contests?${search}`, (payload) => contestListSchema.parse(payload), {
+    here,
   });
-
-  const { items, total } = contestListSchema.parse(payload);
 
   return (
     <Band fill className="py-12">

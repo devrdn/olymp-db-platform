@@ -1,9 +1,6 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
-import { serverRequest } from "@/lib/api/server";
+import { readPage } from "@/lib/api/page-read";
 import { mailStatusSchema, settingsSchema } from "@/lib/api/settings";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { ArchiveSwitch } from "./archive-switch";
@@ -23,14 +20,11 @@ export async function generateMetadata() {
 export default async function SettingsPage() {
   const dict = await activeDictionary();
 
-  const payload = await serverRequest("/settings/all").catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, "/settings");
-    if (target) redirect(target);
-    throw error;
-  });
-
-  const settings = settingsSchema.parse(payload);
-  const mail = mailStatusSchema.parse(payload);
+  const { settings, mail } = await readPage(
+    "/settings/all",
+    (payload) => ({ settings: settingsSchema.parse(payload), mail: mailStatusSchema.parse(payload) }),
+    { here: "/settings" },
+  );
 
   return (
     <Band fill className="flex flex-col gap-8 py-12">

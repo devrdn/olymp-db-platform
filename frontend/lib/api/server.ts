@@ -53,21 +53,19 @@ export type ActionState = { ok?: undefined; code?: undefined } | ActionDone | Ac
 
 export type ServerOutcomeOptions<T> = {
   revalidate?: Revalidate<T>;
-  /** A best-effort read whose failure the page hides, named by its path for the log (see `outcome`). */
-  report?: string;
 };
 
 /**
- * Runs one call on the server, from a page or an action, and revalidates
- * `revalidate` only once it succeeded. A failure is the outcome's, never a
- * throw; `redirect` and `notFound` still are.
+ * Runs one call on the server for an action, and revalidates `revalidate`
+ * only once it succeeded; a page reads through `./page-read`. A failure is the
+ * outcome's, never a throw; `redirect` and `notFound` still are.
  */
 export async function serverOutcome<T>(
   call: () => Promise<T>,
   options: ServerOutcomeOptions<T> = {},
 ): Promise<Outcome<T>> {
-  const { revalidate = [], report } = options;
-  const result = await outcome(call, { report });
+  const { revalidate = [] } = options;
+  const result = await outcome(call);
   if (result.ok) {
     for (const target of typeof revalidate === "function" ? revalidate(result.value) : revalidate) {
       if (typeof target === "string") revalidatePath(target);

@@ -57,10 +57,10 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
     loadContest(contestId),
     // A 404 means this installation has no game cluster, not a wrong address.
     loadContestResource(contestId, "/game", (payload) => gameSchema.parse(payload), {
-      notFoundIsEmpty: true,
+      absent: ["not_found"],
     }),
     loadContestResource(contestId, "/game/script", (payload) => gameScriptSchema.parse(payload), {
-      notFoundIsEmpty: true,
+      absent: ["not_found"],
     }),
   ]);
 
@@ -74,8 +74,8 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
           uploadSchema.parse(payload),
         ).catch(() => null);
 
-  // `/game/definition` always answers 200; `notFoundIsEmpty` only covers a
-  // missing game cluster, already handled by `game === null`.
+  // `/game/definition` always answers 200; a missing game cluster is already
+  // `game === null`.
   const definition =
     game === null
       ? null

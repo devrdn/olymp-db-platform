@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound, unstable_rethrow } from "next/navigation";
+import { notFound } from "next/navigation";
 
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, questionSchema } from "@/lib/api/content";
@@ -11,21 +11,12 @@ import { fill } from "@/lib/i18n/fill";
 import { loadContest, loadContestResource } from "../../contest";
 import { QuestionEditor } from "./question-editor";
 
-/**
- * The contest's questions, for an advisory hint only: a failed read must not
- * take the editor down, so it answers undefined. Redirects and not-found
- * signals still propagate.
- */
+/** The contest's questions, for an advisory hint only: a failed read must not take the editor down. */
 async function otherQuestions(contestId: string) {
-  try {
-    const list = await loadContestResource(contestId, "/questions", (payload) =>
-      questionListSchema.parse(payload),
-    );
-    return list?.items;
-  } catch (error) {
-    unstable_rethrow(error);
-    return undefined;
-  }
+  const list = await loadContestResource(contestId, "/questions", (payload) => questionListSchema.parse(payload), {
+    bestEffort: true,
+  });
+  return list?.items;
 }
 
 /**

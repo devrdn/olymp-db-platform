@@ -10,7 +10,7 @@ import { SchemaNotesEditor } from "./schema-notes-editor";
 import { StoryEditor } from "./story-editor";
 
 /**
- * The story, and the table descriptions below it. A 404 for the story means
+ * The story, and the table descriptions below it. `story_not_found` means
  * nothing is written yet, so the editor opens empty rather than showing a
  * not-found page; the descriptions answer an empty set instead.
  */
@@ -20,7 +20,7 @@ export default async function StoryPage(props: PageProps<"/contests/[contestId]/
   const [contest, story, schemaNotes, brand] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/story", (payload) => storySchema.parse(payload), {
-      notFoundIsEmpty: true,
+      absent: ["story_not_found"],
     }),
     loadContestResource(contestId, "/schema-notes", (payload) => schemaNotesSchema.parse(payload)),
     branding(),

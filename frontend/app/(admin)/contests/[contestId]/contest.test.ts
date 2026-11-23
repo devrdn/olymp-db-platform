@@ -1,23 +1,9 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// React memoises `cache()` only inside a server render; this stand-in keeps one
-// memo for the whole file and compares arguments by identity, as React does.
+import { ApiError } from "@/lib/api/client";
+
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
-vi.mock("react", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("react")>()),
-  cache: <A extends unknown[], R>(fn: (...args: A) => R) => {
-    const memo: { args: A; value: R }[] = [];
-    return (...args: A): R => {
-      const hit = memo.find((entry) => entry.args.length === args.length && entry.args.every((a, i) => Object.is(a, args[i])));
-      if (hit) return hit.value;
-      const value = fn(...args);
-      memo.push({ args, value });
-      return value;
-    };
-  },
-}));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
-vi.mock("next/navigation", () => ({ notFound: vi.fn(), redirect: vi.fn() }));
 // The wire format is `contests.test.ts`'s business.
 vi.mock("@/lib/api/contests", () => ({ contestSchema: { parse: (payload: unknown) => payload } }));
 
@@ -25,32 +11,45 @@ import { loadContest, loadContestResource } from "./contest";
 
 const ID = "f767af3b-f135-40d2-a3a6-82d368de1004";
 
-const contest = { id: ID, title: "Night in the archive" };
+const asIs = (payload: unknown) => payload;
 
 beforeEach(() => {
   serverRequest.mockReset();
 });
 
-describe("one render's reads of a contest", () => {
-  test("ask the API for the contest once, however many parts of the screen need it", async () => {
-    serverRequest.mockResolvedValue(contest);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-    const [first, second] = await Promise.all([loadContest(ID), loadContest(ID)]);
+const NOT_FOUND = { digest: expect.stringContaining("NEXT_HTTP_ERROR_FALLBACK;404") };
 
-    expect(serverRequest).toHaveBeenCalledTimes(1);
-    expect(second).toEqual(first);
+describe("the workspace's reads of a contest", () => {
+  test("never turn a segment that is not an id into a request", async () => {
+    await expect(loadContest("x\nFAKE")).rejects.toMatchObject(NOT_FOUND);
+    await expect(loadContestResource("x\nFAKE", "/questions", asIs)).rejects.toMatchObject(NOT_FOUND);
+    expect(serverRequest).not.toHaveBeenCalled();
   });
 
-  test("ask for a sub-resource once, whatever each caller parses it with", async () => {
-    serverRequest.mockResolvedValue({ problems: [] });
+  test("answer a contest the caller may not see as one that does not exist", async () => {
+    serverRequest.mockRejectedValue(new ApiError("forbidden", 403, ""));
 
-    const [layout, page] = await Promise.all([
-      loadContestResource(ID, "/publish-check", (payload) => ({ layout: payload })),
-      loadContestResource(ID, "/publish-check", (payload) => ({ page: payload })),
-    ]);
+    await expect(loadContest(ID)).rejects.toMatchObject(NOT_FOUND);
+    await expect(loadContestResource(ID, "/questions", asIs)).rejects.toMatchObject(NOT_FOUND);
+  });
 
-    expect(serverRequest).toHaveBeenCalledTimes(1);
-    expect(layout).toEqual({ layout: { problems: [] } });
-    expect(page).toEqual({ page: { problems: [] } });
+  test("send a dead session to sign-in, back to the contest", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    serverRequest.mockRejectedValue(new ApiError("unauthenticated", 401, ""));
+
+    await expect(loadContestResource(ID, "/monitor/participants", asIs)).rejects.toMatchObject({
+      digest: expect.stringContaining(`/login?next=${encodeURIComponent(`/contests/${ID}`)}`),
+    });
+  });
+
+  test("read a sub-resource beneath the contest, under the screen's own policy", async () => {
+    serverRequest.mockRejectedValue(new ApiError("story_not_found", 404, ""));
+
+    expect(await loadContestResource(ID, "/story", asIs, { absent: ["story_not_found"] })).toBeNull();
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${ID}/story`);
   });
 });

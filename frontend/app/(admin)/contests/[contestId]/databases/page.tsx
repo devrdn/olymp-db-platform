@@ -22,7 +22,7 @@ export default async function DatabasesPage(props: PageProps<"/contests/[contest
   const [contest, game, databases] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/game", (payload) => gameSchema.parse(payload), {
-      notFoundIsEmpty: true,
+      absent: ["not_found"],
     }),
     // Caught so a briefly unreachable cluster does not take the page down, but
     // kept as `null`, distinct from an empty list, and logged: "no databases

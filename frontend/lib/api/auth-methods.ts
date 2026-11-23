@@ -2,7 +2,8 @@ import { z } from "zod";
 
 import { PROVIDER_IDS, type ProviderId } from "@/lib/auth/external";
 
-import { serverOutcome, serverRequest } from "./server";
+import { bestEffort } from "./page-read";
+import { serverRequest } from "./server";
 
 /** The ways in this installation offers, as `GET /auth/methods` says. */
 export const authMethodsSchema = z
@@ -32,8 +33,5 @@ const AUTH_METHODS = "/auth/methods";
  * without the answer.
  */
 export async function fetchAuthMethods(): Promise<AuthMethods | null> {
-  const read = await serverOutcome(async () => authMethodsSchema.parse(await serverRequest(AUTH_METHODS)), {
-    report: AUTH_METHODS,
-  });
-  return read.ok ? read.value : null;
+  return bestEffort(async () => authMethodsSchema.parse(await serverRequest(AUTH_METHODS)), AUTH_METHODS);
 }

@@ -1,12 +1,9 @@
-import { redirect } from "next/navigation";
-
 import { Band } from "@/components/layout/band";
 import { CopyButton } from "@/components/product/sql-block";
 import { ProviderLogo } from "@/components/product/provider-logo";
 import { integrationsSchema } from "@/lib/api/integrations";
-import { serverRequest } from "@/lib/api/server";
+import { readPage } from "@/lib/api/page-read";
 import { PROVIDER_NAMES } from "@/lib/auth/external";
-import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { ProviderSwitch } from "./provider-switch";
@@ -21,12 +18,9 @@ export default async function IntegrationsPage() {
   const dict = await activeDictionary();
   const t = dict.settings.integrations;
 
-  const payload = await serverRequest("/integrations").catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, "/integrations");
-    if (target) redirect(target);
-    throw error;
+  const providers = await readPage("/integrations", (payload) => integrationsSchema.parse(payload), {
+    here: "/integrations",
   });
-  const providers = integrationsSchema.parse(payload);
 
   return (
     <Band fill className="flex flex-col gap-8 py-12">
