@@ -568,6 +568,103 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
+// The settings form sends back the version it was loaded at, so a save made
+// after somebody else's is refused rather than written over it.
+func TestASettingsSaveDecidedAgainstAnOlderVersionIsAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	loaded := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+	if loaded.Code != http.StatusOK {
+		t.Fatalf("GET status = %d (%s)", loaded.Code, loaded.Body.String())
+	}
+	version, present := decode(t, loaded)["version"]
+	if !present {
+		t.Fatalf("the contest carries no version: %s", loaded.Body.String())
+	}
+	if other := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"scoring": "winner"}`); other.Code != http.StatusOK {
+		t.Fatalf("the other save = %d (%s)", other.Code, other.Body.String())
+	}
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		fmt.Sprintf(`{"expected_version": %v, "question_mode": "single"}`, version))
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_changed" {
+		t.Fatalf("status = %d (%s), want 409 contest_changed", rec.Code, rec.Body.String())
+	}
+	stored, _ := f.stores.Contests.ByID(t.Context(), c.ID)
+	if stored.QuestionMode != contests.QuestionModeMulti || stored.Scoring != contests.ScoringWinner {
+		t.Errorf("question mode, scoring = %s, %s, want multi, winner", stored.QuestionMode, stored.Scoring)
+	}
+}
+
+func TestASettingsSaveCarryingTheCurrentVersionIsApplied(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	version := decode(t, f.do(http.MethodGet, "/contests/"+c.ID.String(), ""))["version"]
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		fmt.Sprintf(`{"expected_version": %v, "question_mode": "single"}`, version))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["question_mode"] != contests.QuestionModeSingle || body["version"] == version {
+		t.Errorf("question mode, version = %v, %v, want single and a version past %v",
+			body["question_mode"], body["version"], version)
+	}
+}
+
+// A malformed expected version is refused as malformed, never read as absent,
+// which would save over whatever is stored. Zero and negative numbers are
+// compared like any version: zero is a never-written row's (the column
+// default), so each case writes once first and both are then stale.
+func TestTheExpectedVersionOfASettingsSaveIsReadStrictly(t *testing.T) {
+	for raw, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		`"1"`:                 {http.StatusBadRequest, "invalid_request"},
+		`"abc"`:               {http.StatusBadRequest, "invalid_request"},
+		`1.5`:                 {http.StatusBadRequest, "invalid_request"},
+		`9223372036854775808`: {http.StatusBadRequest, "invalid_request"},
+		`0`:                   {http.StatusConflict, "contest_changed"},
+		`-1`:                  {http.StatusConflict, "contest_changed"},
+	} {
+		t.Run(raw, func(t *testing.T) {
+			f := newContestFixture(t)
+			c := f.ownedContest(t, contests.StatusDraft)
+			if moved := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"scoring": "winner"}`); moved.Code != http.StatusOK {
+				t.Fatalf("moving the version = %d (%s)", moved.Code, moved.Body.String())
+			}
+
+			rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+				`{"expected_version": `+raw+`, "question_mode": "single"}`)
+
+			if rec.Code != want.status || errorCode(t, rec) != want.code {
+				t.Errorf("status = %d (%s), want %d %s", rec.Code, rec.Body.String(), want.status, want.code)
+			}
+			stored, _ := f.stores.Contests.ByID(t.Context(), c.ID)
+			if stored.QuestionMode != contests.QuestionModeMulti {
+				t.Errorf("question mode = %s, want multi: a refused save landed", stored.QuestionMode)
+			}
+		})
+	}
+}
+
+// Null is the field left out: the guard is the client's to opt into.
+func TestASettingsSaveWithANullExpectedVersionSavesOverWhateverIsStored(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		`{"expected_version": null, "question_mode": "single"}`)
+
+	if rec.Code != http.StatusOK || decode(t, rec)["question_mode"] != contests.QuestionModeSingle {
+		t.Errorf("status = %d (%s), want 200 with the change saved", rec.Code, rec.Body.String())
+	}
+}
+
 // The game's template is being built, so the draft can go once the build
 // finishes: the organiser's to wait for, not an outage.
 func TestDeletingADraftWhoseGameIsBeingBuiltIsAConflict(t *testing.T) {

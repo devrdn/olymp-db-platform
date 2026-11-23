@@ -170,6 +170,10 @@ type ContestResponse struct {
 	Translations map[string]TranslationResponse `json:"translations"`
 	CreatedAt    string                         `json:"created_at"`
 	UpdatedAt    string                         `json:"updated_at"`
+	// Version moves on every write of the contest. A settings form sends it
+	// back as expected_version, so a save made after somebody else's, or
+	// after the contest started or ended, is refused as contest_changed.
+	Version int64 `json:"version"`
 	// MayMonitor says whether the caller holds contest.monitor here, so the
 	// workspace can offer its monitoring tab without restating the rule. Sent
 	// only by GET /contests/{id}.
@@ -314,6 +318,7 @@ func toContestResponse(c contests.Contest) ContestResponse {
 		Translations: make(map[string]TranslationResponse, len(c.Translations)),
 		CreatedAt:    c.CreatedAt.UTC().Format(timeLayout),
 		UpdatedAt:    c.UpdatedAt.UTC().Format(timeLayout),
+		Version:      c.Version,
 	}
 	for _, prefix := range c.AllowedCIDRs {
 		out.AllowedCIDRs = append(out.AllowedCIDRs, prefix.String())
@@ -574,13 +579,20 @@ func (h *ContestsHandler) mayOffer(r *http.Request, permission string, contestID
 	return may
 }
 
+// contestUpdateRequest is contestRequest plus the version the client decided
+// the change against; absent, the change applies to whatever is stored.
+type contestUpdateRequest struct {
+	contestRequest
+	ExpectedVersion *int64 `json:"expected_version"`
+}
+
 func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
-	var req contestRequest
+	var req contestUpdateRequest
 	if !decodeBody(w, r, &req) {
 		return
 	}
@@ -591,9 +603,10 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	updated, err := h.service.Update(r.Context(), contests.UpdateCommand{
-		ActorID:   identity.UserID,
-		ContestID: id,
-		Patch:     patch,
+		ActorID:         identity.UserID,
+		ContestID:       id,
+		ExpectedVersion: req.ExpectedVersion,
+		Patch:           patch,
 	})
 	if err != nil {
 		h.fail(w, r, err)

@@ -160,6 +160,59 @@ func TestUpdateRefusesAFinishedContest(t *testing.T) {
 	}
 }
 
+// The form read the contest at one version and another organiser, or the
+// scheduler, wrote it since: saving its fields would undo what they did.
+func TestUpdateRefusesAnExpectedVersionTheContestHasMovedPast(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Patch: contests.Patch{Progression: contests.ProgressionSequential},
+	}); err != nil {
+		t.Fatalf("the other organiser's Update() = %v", err)
+	}
+	trail := len(f.Audit.Entries)
+
+	stale := c.Version
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ExpectedVersion: &stale,
+		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
+	})
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Fatalf("Update() = %v, want ErrContestChanged", err)
+	}
+	stored, _ := f.Contests.ByID(context.Background(), c.ID)
+	if stored.QuestionMode != contests.QuestionModeMulti || stored.Progression != contests.ProgressionSequential {
+		t.Errorf("question mode, progression = %s, %s, want multi, sequential: the stale save landed",
+			stored.QuestionMode, stored.Progression)
+	}
+	if len(f.Audit.Entries) != trail {
+		t.Errorf("the refused save recorded %v", f.Audit.Entries[trail:])
+	}
+}
+
+func TestUpdateSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	read, err := f.Service.ByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ExpectedVersion: &read.Version,
+		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
+	})
+
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.QuestionMode != contests.QuestionModeSingle || updated.Version == read.Version {
+		t.Errorf("question mode, version = %s, %d, want single and a version past %d",
+			updated.QuestionMode, updated.Version, read.Version)
+	}
+}
+
 func TestUpdateRefusesToChangeTheQuestionModeWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)

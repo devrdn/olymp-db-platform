@@ -2713,9 +2713,14 @@ A decision taken against a row that has since moved is refused with
 `ErrContestChanged` → 409 `contest_changed`: an edit decided against a
 published contest cannot land on the running one the scheduler made of it, and
 of two organisers saving at once the second reloads instead of silently
-overwriting the first. The repository decides only that refusal and
-`ErrNotFound`; the rules (the running-contest locks, an archived contest's
-prize places, the self-registration visibility) are the domain's alone.
+overwriting the first. The contest response carries the version, and
+`PATCH /contests/{id}` takes it back as an optional `expected_version`: when
+present, `Update` refuses a row at any other version the same way, so the
+check covers the time the settings form was open, not only the request.
+Without it the save applies to whatever is stored. The repository decides
+only that refusal and `ErrNotFound`; the rules (the running-contest locks, an
+archived contest's prize places, the self-registration visibility) are the
+domain's alone.
 `updated_at` cannot serve as the version: the reclaim sweep measures a
 finished contest's grace from it, and the display-only writes leave it where
 it was.

@@ -1015,6 +1015,60 @@ func publishableRow(t *testing.T, ctx context.Context) (id, question uuid.UUID, 
 	return id, question, games
 }
 
+// The version a client is handed is the one the stored row carries and the
+// one a write moves, so an expected version read before somebody else's save
+// is refused and the current one is accepted.
+func TestAnUpdateExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	service := raceService(NewContests(testPool), NewQuestions(testPool), conteststest.NewGames())
+
+	loaded, err := service.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if _, err := service.Update(ctx, contests.UpdateCommand{
+		ContestID: id, Patch: contests.Patch{Scoring: contests.ScoringWinner},
+	}); err != nil {
+		t.Fatalf("the other organiser's Update() = %v", err)
+	}
+
+	_, err = service.Update(ctx, contests.UpdateCommand{
+		ContestID: id, ExpectedVersion: &loaded.Version,
+		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
+	})
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Fatalf("Update(stale version) = %v, want ErrContestChanged", err)
+	}
+
+	current, err := service.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if current.QuestionMode != contests.QuestionModeMulti || current.Version == loaded.Version {
+		t.Fatalf("question mode, version = %s, %d, want multi and a version past %d",
+			current.QuestionMode, current.Version, loaded.Version)
+	}
+	saved, err := service.Update(ctx, contests.UpdateCommand{
+		ContestID: id, ExpectedVersion: &current.Version,
+		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
+	})
+	if err != nil {
+		t.Fatalf("Update(current version) = %v", err)
+	}
+	if saved.QuestionMode != contests.QuestionModeSingle || saved.Scoring != contests.ScoringWinner {
+		t.Errorf("question mode, scoring = %s, %s, want single, winner", saved.QuestionMode, saved.Scoring)
+	}
+	// What Update returns is what the next save sends back.
+	stored, err := service.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if saved.Version == current.Version || saved.Version != stored.Version {
+		t.Errorf("returned version = %d, want the stored %d, past %d", saved.Version, stored.Version, current.Version)
+	}
+}
+
 // An organiser's edit decided against a published contest must not land once
 // the scheduler has started it: a question mode change is refused on a
 // running contest, and the stale decision would have bypassed that.

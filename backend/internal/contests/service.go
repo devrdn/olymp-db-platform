@@ -277,6 +277,10 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 type UpdateCommand struct {
 	ActorID   uuid.UUID
 	ContestID uuid.UUID
+	// ExpectedVersion is the Version the caller decided the change against;
+	// a contest written since is refused with ErrContestChanged. Nil applies
+	// the patch to whatever is stored.
+	ExpectedVersion *int64
 	// Patch is applied to the stored contest.
 	Patch Patch
 }
@@ -288,6 +292,10 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		current, err := s.contests.ByID(ctx, cmd.ContestID)
 		if err != nil {
 			return err
+		}
+		if cmd.ExpectedVersion != nil && *cmd.ExpectedVersion != current.Version {
+			return fmt.Errorf("%w: it was read at version %d and is now at %d",
+				ErrContestChanged, *cmd.ExpectedVersion, current.Version)
 		}
 		updated, err := s.decideUpdate(ctx, current, cmd.Patch.ApplyTo(current))
 		if err != nil {
