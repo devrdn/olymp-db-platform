@@ -1875,7 +1875,8 @@ it, with the number of questions waiting beside it while the contest runs.
       point a domain name reads as one (U+3002, U+FF0E, U+FF61, U+2024,
       U+FE52; `users.IsLabelSeparator`). The login is mailed in the sign-in
       letter, and a mail client turns a dotted one into a link to a domain.
-      An administrator's form refuses a dotted login with `login_has_dot`,
+      An administrator's form (and the bootstrap command) refuses a dotted
+      login with `login_has_dot`,
       and a roster import skips its row with that reason; sign-up's chosen
       login has no dot in its alphabet and is refused, before the account is
       made, with the form's generic refusal; an external sign-in never
@@ -1994,10 +1995,11 @@ it, with the number of questions waiting beside it while the contest runs.
     holding it and marks the address verified; or creates a `student`
     account with no password, carrying the address only when vouched for and
     a login derived from the hint's local part or the name: lower-cased,
-    kept to letters, digits, hyphens and underscores, with a dot (or a code
-    point read as one) becoming a hyphen, then numbered or given a random
-    suffix while taken, so `ion.popescu@usm.md` becomes `ion-popescu`, or
-    `ion-popescu-2`. It refuses a staff account
+    kept to the ASCII letters a to z, digits, hyphens and underscores (any
+    other letter is dropped), with a dot (or a code point read as one)
+    becoming a hyphen, then, while taken, numbered up to `-50` and past that
+    given a random hex suffix, so `ion.popescu@usm.md` becomes `ion-popescu`,
+    or `ion-popescu-2`. It refuses a staff account
     unless `HomeDirectory` is set for this sign-in, a blocked or deleted one
     whatever the provider says, a creation while `SELF_SIGNUP_ENABLED` is
     off, a link by email to an account already linked to another identity of
@@ -2826,7 +2828,8 @@ bytes sent twice are a retry and not a second writer (`gamefile.Store.Append`
 against `ReplaceTail`). Its progress is recorded only while the upload is
 still `receiving` and only forwards, for a dump as for a table, so a chunk
 that finishes arriving after the upload completed answers
-`game_table_data_already_complete` and leaves the record alone.
+`game_upload_already_complete` (on a table's route,
+`game_table_data_already_complete`) and leaves the record alone.
 
 A dump and a table's CSV are two instances of one lifecycle,
 `provisioning.Uploads`: begin, append at the offset reached, abort, and the
@@ -2846,6 +2849,9 @@ contests one organiser owns share a buffer whoever uploads to them. A chunk
 beyond any of these bounds is refused unread with 503 `game_table_data_busy`
 and a `Retry-After`: 503 and not 429, because the limit is the installation's
 memory, shared by every organiser, and not a rate one caller exceeded. The
+dump routes declare the same refusal, 503 `game_upload_busy`, so that a store
+that buffered its chunks would have an answer; the dump's store streams
+today, so a dump route is not expected to send it. The
 interface sends a chunk refused as busy again by itself after its
 `Retry-After`, held between 1 and 60 seconds, for a dump as for a table, and
 leaves it to the organiser's Retry after five refusals in a row. A
