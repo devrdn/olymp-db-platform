@@ -55,7 +55,7 @@ function show({
 }
 
 beforeEach(() => {
-  refresh.mockClear();
+  refresh.mockReset();
   requestGameBuildAction.mockReset();
   gameStatusAction.mockClear();
   polled.current = null;
@@ -114,6 +114,24 @@ describe("GameBuild", () => {
     await userEvent.click(screen.getByRole("button", { name: t.action }));
 
     expect(await screen.findByText(en.errors.build_in_progress)).toBeInTheDocument();
+  });
+
+  test("never shows the refusal while the button it answers is still held", async () => {
+    requestGameBuildAction.mockResolvedValueOnce({ code: "build_in_progress" });
+    const { container } = show({ initialGame: game({ needsBuild: true }) });
+    const held: boolean[] = [];
+    const observer = new MutationObserver(() => {
+      if (screen.queryByRole("alert")) held.push(screen.getByRole("button", { name: t.action }).hasAttribute("disabled"));
+    });
+    observer.observe(container, { childList: true, subtree: true, characterData: true, attributes: true });
+
+    await userEvent.click(screen.getByRole("button", { name: t.action }));
+    await screen.findByRole("alert");
+    await waitFor(() => expect(screen.getByRole("button", { name: t.action })).toBeEnabled());
+    observer.disconnect();
+
+    expect(held.length).toBeGreaterThan(0);
+    expect(held).not.toContain(true);
   });
 
   // Scripts and dumps are complete when saved, so `NeedsBuild` is builder-only

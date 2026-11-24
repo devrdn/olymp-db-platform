@@ -93,12 +93,16 @@ export function CoverPanel({
     setAttempt(of);
     startAttempt(async () => {
       const state = await action(outcome?.state ?? {}, form);
-      setOutcome({ of, state });
-      setAttempt(null);
-      // `undefined`: the save was not about the cover; `null`: the cover is
-      // gone.
-      if (state.cover !== undefined) setCurrent(state.cover);
-      if (state.ok) setChosen(null);
+      // An update after the await leaves the transition unless wrapped again,
+      // and would show the outcome beside buttons still held.
+      startAttempt(() => {
+        setOutcome({ of, state });
+        setAttempt(null);
+        // `undefined`: the save was not about the cover; `null`: the cover is
+        // gone.
+        if (state.cover !== undefined) setCurrent(state.cover);
+        if (state.ok) setChosen(null);
+      });
     });
   }
 

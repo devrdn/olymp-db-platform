@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
@@ -148,6 +148,26 @@ describe("CoverPanel, a refusal from the server", () => {
     const refusal = await screen.findByText(dict.errors.cover_attribution_too_long);
     expect(describedBy(screen.getByLabelText(t.attribution))).toContain(refusal.id);
     expect(describedBy(screen.getByLabelText(t.file))).not.toContain(refusal.id);
+  });
+});
+
+describe("CoverPanel's answer", () => {
+  test("is never shown while the button it answers is still held", async () => {
+    removeCoverAction.mockResolvedValueOnce({ code: "cover_busy" });
+    const { container } = render(<CoverPanel contestId={contestId} cover={cover()} editable dict={dict} />);
+    const held: boolean[] = [];
+    const observer = new MutationObserver(() => {
+      if (screen.queryByRole("alert")) held.push(screen.getByRole("button", { name: t.remove }).hasAttribute("disabled"));
+    });
+    observer.observe(container, { childList: true, subtree: true, characterData: true, attributes: true });
+
+    await userEvent.click(screen.getByRole("button", { name: t.remove }));
+    await screen.findByRole("alert");
+    await waitFor(() => expect(screen.getByRole("button", { name: t.remove })).toBeEnabled());
+    observer.disconnect();
+
+    expect(held.length).toBeGreaterThan(0);
+    expect(held).not.toContain(true);
   });
 });
 

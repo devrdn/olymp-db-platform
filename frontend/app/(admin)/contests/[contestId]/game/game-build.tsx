@@ -71,13 +71,19 @@ export function GameBuild({
     setRefusalCode(null);
     startTransition(async () => {
       const result = await requestGameBuildAction(contestId);
-      if (result.code) {
-        setRefusalCode(result.code);
-        return;
-      }
-      // A plain action call does not refresh the server tree even after
-      // revalidating, unlike a form submit.
-      router.refresh();
+      // An update after the await leaves the transition unless wrapped again,
+      // and would show the refusal beside a button still held.
+      startTransition(() => {
+        if (result.code) {
+          setRefusalCode(result.code);
+          return;
+        }
+        // A plain action call does not refresh the server tree even after
+        // revalidating, unlike a form submit. React 19 ties the refresh's
+        // transition to the pending action, so the button stays held until
+        // the refreshed page arrives.
+        router.refresh();
+      });
     });
   }
 
