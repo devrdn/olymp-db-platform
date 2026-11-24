@@ -1754,9 +1754,11 @@ hundred at most).
   says the participant may act. Admission charges six a minute per account
   before the gate is asked. Once admitted, a question spends three a minute
   per registration, the first thing `clarifications.Service.Ask` does, before
-  the text is checked. Both count refused attempts. Reading the feed spends the play screen's
-  read budget (`participation.Reads`) before the gate. A successful read of
-  the feed, or a stored question, records the participant's start as the
+  the text is checked. Both count the attempts refused after them; a
+  malformed body or question id is refused before `Ask` and spends only the
+  account's. Reading the feed spends the play screen's read budget
+  (`participation.Reads`) before the gate. A successful read of the feed, or
+  a stored question, records the participant's start as the
   story does (`participation.Admission.Start`): under individual timing it
   starts their clock, since the feed carries the organisers' corrections of
   the tasks.
@@ -1865,7 +1867,7 @@ it, with the number of questions waiting beside it while the contest runs.
     recovery answer every address alike and in the same time; a login, which
     the leaderboards show anyway, may be refused as taken.
   - **One rule for every new account.** Every path that makes an account
-    (an administrator's form, a roster import, the bootstrap administrator,
+    (an administrator's form, an account import, the bootstrap administrator,
     sign-up, an external sign-in and the event form) checks it in one place,
     `users.Service.checkNewAccount`: the login, then the name and the
     address, then whether the login is free.
@@ -1875,9 +1877,9 @@ it, with the number of questions waiting beside it while the contest runs.
       point a domain name reads as one (U+3002, U+FF0E, U+FF61, U+2024,
       U+FE52; `users.IsLabelSeparator`). The login is mailed in the sign-in
       letter, and a mail client turns a dotted one into a link to a domain.
-      An administrator's form (and the bootstrap command) refuses a dotted
-      login with `login_has_dot`,
-      and a roster import skips its row with that reason; sign-up's chosen
+      An administrator's form refuses a dotted login with `login_has_dot`,
+      an account import (`POST /users/import`) skips its row with that
+      reason, and the bootstrap command stops on `users.ErrLoginHasDot`; sign-up's chosen
       login has no dot in its alphabet and is refused, before the account is
       made, with the form's generic refusal; an external sign-in never
       offers one, since it turns a dot into a hyphen (below). An account keeps the login it has, and
