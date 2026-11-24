@@ -291,12 +291,15 @@ or readable by other accounts.
 | `make cover` | the tests with a coverage summary | Go and a C compiler |
 | `make test-db` | recreates and migrates the test database and recreates `redis-test` (`127.0.0.1:${REDIS_TEST_PORT}`, 56379 by default, nothing persisted), then the repository packages and the cache's TTL contract with `-count=1` | Docker: `make dev-up` first, for `pg-core` |
 | `make test-game` | recreates `pg-game-test`, then `internal/gamedb`, `internal/queryrunner`, `internal/rpc` | Docker |
+| `make test-game-cluster` | only recreates `pg-game-test`, the step `test-game` and `test-game-build` begin with, for running one game test by hand | Docker |
 | `make test-game-build` | the cross-cluster tests | Docker: `pg-core` running; recreates both test databases |
 | `make test-all` | `fmt-check`, `tidy-check`, `vet`, `test-race`, `build`, `vuln`, `sec` | Go and a C compiler; installs `govulncheck` and `gosec` if missing |
 | `make front-test` | `npm test` (`vitest run`) | Node; installs dependencies if missing |
+| `make front-lint` | `npm run lint` alone | Node; installs dependencies if missing |
 | `make front-check` | lint, contrast, type-scale, error-codes, typecheck, tests, build (not `smoke`) | Node |
 | `make restore-covers-check`, `make game-uploads-check`, `make edge-check` | the backup and its restore and the Caddy forwarding, against throwaway containers | Docker |
 | `make e2e-smoke` | the browser smoke test against `E2E_BASE_URL` or `E2E_ENV_FILE` ([above](#the-browser-smoke-test)) | Node and a running stack; `make e2e-stack-up` for a throwaway one (Docker) |
+| `make e2e-measure` | measures the play screen in a real browser (`frontend/e2e/play-measure.perf.ts`) against the same stack, writing the figures to `E2E_MEASURE_OUT` | as `e2e-smoke` |
 | `make host-targets-check` | what `make run` and `make runner` take from `deploy/.env`, that no target shows a password on its echoed command line, the checks of `make migrate-force` and of the teardown targets, that the restores and `migrate-force` take `CONFIRM` and `FILE` only from the command line, when `make front-install` reinstalls, and that a value make cannot expand stops no other target, on throwaway env files with `go`, `docker` and `npm` stubbed | make and a shell |
 | `make e2e-redact-check` | that the failure artifact of `e2e.yml` keeps no generated secret in any file and no symlink, and that the artifact is deleted rather than uploaded when that cannot be made sure of, on fake env files and a fake artifact | a shell; not root |
 | `make scheduled-backup-check` | the backup rotation, the scheduled run and its systemd units, on synthetic sets in a throwaway container | Docker |
