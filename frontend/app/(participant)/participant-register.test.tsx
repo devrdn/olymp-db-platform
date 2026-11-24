@@ -7,7 +7,7 @@ import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action pulls in `next/headers`; only whether the control
 // is offered is under test.
-vi.mock("./actions", () => ({ enrollAction: vi.fn() }));
+vi.mock("./enroll-actions", () => ({ enrollAction: vi.fn() }));
 
 import { ParticipantRegister } from "./participant-register";
 

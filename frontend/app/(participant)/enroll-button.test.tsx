@@ -7,7 +7,7 @@ import { fill } from "@/lib/i18n/fill";
 
 // The real Server Action pulls in `next/headers`.
 const enrollAction = vi.hoisted(() => vi.fn());
-vi.mock("./actions", () => ({ enrollAction }));
+vi.mock("./enroll-actions", () => ({ enrollAction }));
 
 import { EnrollButton } from "./enroll-button";
 

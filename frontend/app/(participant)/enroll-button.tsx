@@ -5,7 +5,7 @@ import { InlineLink } from "@/components/ui/inline-link";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 
-import { enrollAction, type EnrollState } from "./actions";
+import { enrollAction, type EnrollState } from "./enroll-actions";
 
 /**
  * The join control in one register row. Each row owns its state, so one

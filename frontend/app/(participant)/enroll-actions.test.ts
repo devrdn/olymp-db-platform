@@ -12,7 +12,7 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
   serverRequest,
 }));
 
-import { enrollAction } from "./actions";
+import { enrollAction } from "./enroll-actions";
 
 const contestId = "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01";
 

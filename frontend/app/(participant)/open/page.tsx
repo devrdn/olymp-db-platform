@@ -3,7 +3,7 @@ import { contestListSchema } from "@/lib/api/contests";
 import { readPage } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
-import { ParticipantRegister } from "../my/participant-register";
+import { ParticipantRegister } from "../participant-register";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
