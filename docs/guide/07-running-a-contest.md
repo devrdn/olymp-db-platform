@@ -372,6 +372,11 @@ failed) and `staff_registered` (a participant's account administers every
 contest). Content freezes at the start; the window, the network, the CSV
 download and the diagram stay editable while the contest runs.
 
+A table builder's CSV that the server answers as busy goes on uploading by
+itself, and offers **Retry** if it stays busy; one whose table says its data
+was lost needs the CSV uploaded again
+([8. Troubleshooting](08-troubleshooting.md#a-tables-data-upload-stalls-or-a-table-says-its-data-was-lost)).
+
 **A contest only for the installation's own domain.** Where
 `TRUSTED_EMAIL_DOMAIN` is set, say to `example.edu`, **Who may enter, and
 from where** offers **Only verified @example.edu addresses**. With it on, an
@@ -589,6 +594,14 @@ ones you hear about, and what to do
 | `query_disk_full` | "Your database is at its size limit…" | their own copy hit its quota; they free it or reset |
 
 ### Incidents
+
+#### A save says the contest changed
+
+Two organisers editing one contest, or a save made just as the scheduler
+starts or finishes it, meet "This contest changed while you were deciding"
+(`contest_changed`). Nothing was saved. Press **Reload the page** under the
+sentence, check the contest as it now is, and save again
+([8. Troubleshooting](08-troubleshooting.md#a-save-says-the-contest-changed-while-you-were-deciding)).
 
 #### A participant broke their database
 
