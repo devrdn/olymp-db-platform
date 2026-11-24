@@ -146,7 +146,7 @@ reaches the game cluster only as the provisioning role. See
 
 ```bash
 make check            # format, vet and unit tests: run before pushing
-make test-db          # repository tests, on a database recreated from zero
+make test-db          # repository tests on a database recreated from zero, and the cache on Redis
 make test-game        # the game cluster's isolation, as the participant's role
 make test-game-build  # the path that crosses both clusters
 make front-check      # the interface's lint, checks, tests and build
