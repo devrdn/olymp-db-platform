@@ -184,11 +184,12 @@ jobs:
       # for it to add — the Makefile target exists to pass a developer's own
       # deploy/.env into the same packages.
       #
-      # Twenty minutes, not go test's default ten: internal/api alone takes
-      # about three minutes under -race on ten cores, the argon2id hashes of
-      # its import tests dominating, and a runner has two to four.
+      # The timeout lives in the Makefile (twenty minutes, not go test's
+      # default ten: internal/api alone takes about three minutes under -race
+      # on ten cores, the argon2id hashes of its import tests dominating, and
+      # a runner has two to four).
       - name: Test with the race detector
-        run: go test -race -timeout 20m -coverprofile=coverage.out ./...
+        run: make -C .. test-race RACE_FLAGS=-coverprofile=coverage.out
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1

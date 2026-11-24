@@ -182,8 +182,14 @@ build: ## Compile the binaries into backend/bin
 test: ## Run the unit tests
 	cd $(BACKEND) && go test ./...
 
+# CI runs this target too (RACE_FLAGS adds its coverage profile), so the
+# timeout is stated once. Twenty minutes, not go test's ten: internal/api alone
+# takes minutes under -race and far longer on a loaded machine.
+RACE_TIMEOUT ?= 20m
+RACE_FLAGS   ?=
+
 test-race: ## Run the tests with the race detector
-	cd $(BACKEND) && go test -race ./...
+	cd $(BACKEND) && go test -race -timeout $(RACE_TIMEOUT) $(RACE_FLAGS) ./...
 
 # The repository tests run their SQL against a real PostgreSQL, most inside a
 # transaction that is rolled back so they leave nothing behind; a few — where
