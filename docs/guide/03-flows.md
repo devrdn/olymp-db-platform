@@ -283,7 +283,7 @@ flowchart TD
   `Service.Enroll` in
   [backend/internal/contests/enrollment.go](../../backend/internal/contests/enrollment.go).
   The frontend button posts from
-  [frontend/app/(participant)/my/actions.ts](../../frontend/app/%28participant%29/my/actions.ts).
+  [frontend/app/(participant)/enroll-actions.ts](../../frontend/app/%28participant%29/enroll-actions.ts).
 - Staff additions: `POST /contests/ID/participants` behind
   `participant.manage`, calling `Service.AddParticipants`. The people screen
   ([frontend/app/(admin)/contests/[contestId]/people/actions.ts](../../frontend/app/%28admin%29/contests/%5BcontestId%5D/people/actions.ts))
