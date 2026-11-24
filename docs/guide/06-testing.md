@@ -522,8 +522,9 @@ and then the tag as pushed list exactly the two platforms. Nothing is tagged unt
 
 | CI | Locally |
 |---|---|
-| backend `build` | `make test-all`, then `make test-db`, `make test-game` and `make test-game-build` (`test-all` alone runs the database tests as skips) |
-| backend `security` | `make vuln sec` |
+| backend `build` | `make test-all` and `make static-check` (the cgo-free build `test-all` leaves out), then `make test-db`, `make test-game` and `make test-game-build` (`test-all` alone runs the database tests as skips) |
+| backend `observability` | `make observability-check` |
+| backend `security` | `make vuln sec` (also part of `test-all`) |
 | frontend `build` | `make front-check`, then `cd frontend && npm run smoke` |
 | host-targets `host-targets-check` | `make host-targets-check e2e-redact-check` |
 
