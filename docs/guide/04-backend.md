@@ -63,7 +63,7 @@ flowchart TB
     chk["internal/sqlpolicy/checker (cgo parser)"]
   end
 
-  platform["internal/platform/* (config, httpx, storage, cache, logging, metrics, i18n, password, server, filestore, flight, mail)"]
+  platform["internal/platform/* (config, httpx, storage, cache, logging, metrics, i18n, password, server, filestore, flight, mail, retry)"]
 
   cmdapi --> app
   app --> api
@@ -370,6 +370,15 @@ Example: a new operation on a contest's story.
 4. **Route.** Register it in `ContestsHandler.Mount`
    (`internal/api/contests_handler.go`), inside the group whose permission it
    needs (`contest.view` to read, `contest.edit` to change content, and so on).
+   If it needs a request budget, declare the budget once beside the routes
+   that spend it (`httpx.PerAddress`, `PerKey` or `PerTypedKey`: a name, whom
+   it counts, how many in what window, and its refusal's code) and charge it
+   with the handler's `budgets.spend` before the expensive step.
+   `httpx.Budgets.Charge` spends the address before any key, counts refusals,
+   refuses an unreadable address or an empty typed key, and answers with the
+   budget's window as `Retry-After`. A participant route is charged by
+   `participation.Admitter.Admit` instead, with the budget as a required
+   argument.
 5. **Errors.** A sentinel the table already answers needs nothing. A new one
    follows [recipe d](#d-add-an-api-error-code).
 6. **Tests.**
@@ -573,7 +582,10 @@ tests that use it.
 4. **The answer.** Add a row to the package's table in
    `internal/api/errortable.go`
    (`{err: widgets.ErrWidgetLocked, status: http.StatusConflict, code: codeWidgetLocked}`),
-   with `message`, `logAs` or `retryAfter` when needed. The status convention
+   with `message`, `logAs` or `retryAfter` when needed. A refusal that asks the
+   caller to wait says how long: the refusing code wraps its error with
+   `retry.After(err, wait)` (`internal/platform/retry`) when it knows the
+   window, and the row's `retryAfter` is the fallback. The status convention
    in `contestsErrors`: 404 for what is not there, 400 for a request that could
    never be right, 409 for one that is right but not now, 422 for one that is
    understood and cannot be met. A handler that must answer differently
@@ -813,7 +825,7 @@ breaks without noticing (by number; the reasons are there):
 | 1 | Every error you return to a handler is a declared sentinel with a declared answer and a message in every locale. |
 | 2 | Every new string field and every list a request carries has a bound in the domain. |
 | 3 | A `LIKE`/`ILIKE` pattern built from user text goes through `escapeLike`. |
-| 4, 5 | Anything that verifies a password uses `auth.Limiter`; the bounded key (the address) is checked before the unbounded one (the login). |
+| 4, 5 | Anything that verifies a password uses `auth.Limiter`; the bounded key (the address) is checked before the unbounded one (the login). A request budget is declared once and charged through `httpx.Budgets.Charge`, which keeps that order. |
 | 6 | No write on a hot path (middleware, every request) unless something observable changes. |
 | 7 | A new filter on a list endpoint lands with the index that serves it, in the same change. |
 | 8 | A partial-success import classifies errors: only row-level sentinels become "skipped". |
