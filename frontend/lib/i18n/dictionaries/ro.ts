@@ -45,17 +45,17 @@ const ro = {
     },
     signUp: {
       title: "Creați un cont",
-      lede: "Înregistrați-vă cu adresa de e-mail. Un cod de șase cifre trimis acolo o confirmă.",
+      lede: "Înregistrați-vă cu adresa de e-mail. Un cod de {signupCodeDigits} cifre trimis acolo o confirmă.",
       fullName: "Nume complet",
       fullNameHint: "Litere, spații, cratime, apostrofuri și puncte.",
       fullNameTooLong: "Numele este prea lung. Scurtați-l.",
       login: "Utilizator",
       loginHint:
-        "Între 3 și 64 de caractere: litere latine mici, cifre, _ și -, începând cu o literă sau o cifră. Majusculele devin minuscule pe măsură ce scrieți.",
+        "Între {signupLoginMin} și {signupLoginMax} de caractere: litere latine mici, cifre, _ și -, începând cu o literă sau o cifră. Majusculele devin minuscule pe măsură ce scrieți.",
       email: "E-mail",
       emailHint: "Aici se trimite codul care confirmă contul.",
       password: "Parolă",
-      passwordHint: "Cel puțin 12 caractere.",
+      passwordHint: "Cel puțin {passwordMin} caractere.",
       confirm: "Repetați parola",
       submit: "Creați contul",
       submitting: "Se trimite codul",
@@ -64,9 +64,9 @@ const ro = {
     },
     confirm: {
       title: "Confirmați adresa de e-mail",
-      lede: "Verificați căsuța {email}. Introduceți aici, în acest browser, codul de șase cifre din mesaj.",
+      lede: "Verificați căsuța {email}. Introduceți aici, în acest browser, codul de {signupCodeDigits} cifre din mesaj.",
       code: "Cod",
-      codeHint: "Șase cifre.",
+      codeHint: "{signupCodeDigits} cifre.",
       submit: "Confirmați",
       submitting: "Se confirmă",
       resend: "Trimiteți un cod nou",
@@ -406,7 +406,7 @@ const ro = {
       lede: "Ce face fiecare participant, chiar acum: tabelul face totalul, fluxul arată totul rând cu rând.",
       notes: {
         hints: "Marcajele sunt indicii, nu verdicte. Plecările de pe pagină și lipirile sunt raportate de browserul participantului, care poate greși sau tăcea.",
-        delay: "Fluxul rămâne în urmă cu aproximativ două secunde, ca nimic înregistrat cu întârziere să nu fie sărit.",
+        delay: "Fluxul rămâne în urmă cu aproximativ {feedSettleSeconds} secunde, ca nimic înregistrat cu întârziere să nu fie sărit.",
         absenceAtEnd: "O plecare se înregistrează când participantul revine, deci una care durează încă la sfârșitul concursului nu se înregistrează.",
       },
       export: {
@@ -463,7 +463,7 @@ const ro = {
         },
         longAbsence: {
           label: "Plecări",
-          explain: "Plecări lungi: peste 5 minute în total în afara paginii sau peste 10 plecări. Raportat de browser.",
+          explain: "Plecări lungi: peste {longAbsenceMinutes} minute în total în afara paginii sau peste {longAbsenceCount} plecări. Raportat de browser.",
         },
         answerWithoutQueries: {
           label: "Fără interogări",
@@ -471,11 +471,11 @@ const ro = {
         },
         largePaste: {
           label: "Lipire",
-          explain: "Lipire mare: peste 200 de caractere lipite în editorul SQL sau într-un răspuns. Raportat de browser.",
+          explain: "Lipire mare: peste {largePasteChars} de caractere lipite în editorul SQL sau într-un răspuns. Raportat de browser.",
         },
         identicalQueries: {
           label: "Același SQL",
-          explain: "Interogări identice: o interogare reușită de cel puțin 60 de caractere identică cu a altui participant, fără a ține cont de spații și majuscule.",
+          explain: "Interogări identice: o interogare reușită de cel puțin {identicalQueryMinChars} de caractere identică cu a altui participant, fără a ține cont de spații și majuscule.",
         },
       },
       feed: {
@@ -1159,7 +1159,7 @@ const ro = {
         scoringHelp: "Puncte însumează punctajul propriu al fiecărei întrebări, penalizarea inclusă. Primul care rezolvă are un singur câștigător: cine răspunde primul corect la întrebarea finală. ICPC stabilește locul după numărul de întrebări rezolvate și, la egalitate, după timpul de penalizare — punctajul propriu al întrebării nu se folosește.",
         winnerIgnoresPenalty: "Penalizarea per încercare setată pe fiecare întrebare este ignorată cât timp punctajul este pe primul care rezolvă.",
         icpcPenalty: "Penalizare per încercare greșită, minute",
-        icpcPenaltyHint: "Se adaugă la timpul de penalizare al unei înregistrări pentru fiecare încercare greșită la o întrebare pe care aceasta o rezolvă apoi. De la 0 la 240; nu se poate schimba după începerea olimpiadei.",
+        icpcPenaltyHint: "Se adaugă la timpul de penalizare al unei înregistrări pentru fiecare încercare greșită la o întrebare pe care aceasta o rezolvă apoi. De la 0 la {icpcPenaltyMaxMin}; nu se poate schimba după începerea olimpiadei.",
       },
       leaderboard: {
         heading: "Clasament",
@@ -1182,7 +1182,7 @@ const ro = {
         first: "Premii I",
         second: "Premii II",
         third: "Premii III",
-        hint: "Între 0 și 1000 fiecare. La egalitate locul este comun, deci o egalitate la limită primește premiul mai bun. Un participant care n-a punctat deloc nu primește premiu. Cu toate trei la 0 nimeni nu primește premiu.",
+        hint: "Între 0 și {prizePlacesMax} fiecare. La egalitate locul este comun, deci o egalitate la limită primește premiul mai bun. Un participant care n-a punctat deloc nu primește premiu. Cu toate trei la 0 nimeni nu primește premiu.",
         winnerHint: "În modul câștigător aceste numere nu se aplică: singurul câștigător primește premiul I.",
       },
       grace: {
@@ -1191,7 +1191,7 @@ const ro = {
         inForce: "În vigoare: {n} minute",
         inForceDefault: "În vigoare: valoarea implicită a instalării",
         label: "Păstrare, în minute de acum",
-        hint: "Mai lungă decât perioada în vigoare, cel mult 129.600 de minute (90 de zile). Bazele de date deja șterse nu revin.",
+        hint: "Mai lungă decât perioada în vigoare, cel mult {gracePeriodMaxMin} de minute ({gracePeriodMaxDays} de zile). Bazele de date deja șterse nu revin.",
       },
       deleteDraft: {
         heading: "Ștergeți această ciornă",
@@ -1254,7 +1254,7 @@ const ro = {
       cover: {
         heading: "Copertă",
         help: "Imaginea de pe cartonașul olimpiadei din vitrină și de deasupra poveștii ei. Ce se încarcă este decupat la 16:9, micșorat și recodificat: vizitatorul primește un fișier scris de acest serviciu — eticheta de localizare a fotografiei, și orice altceva ascuns în octeții originali, nu ajunge la el.",
-        hint: "JPEG, PNG sau WebP, până la 8 MB și cel mult 8000 de pixeli pe latură. SVG nu este acceptat, orice ar conține.",
+        hint: "JPEG, PNG sau WebP, până la {coverMaxMb} MB și cel mult {coverMaxPixels} de pixeli pe latură. SVG nu este acceptat, orice ar conține.",
         file: "Imagine",
         choose: "Alege o imagine",
         currentAlt: "Coperta acestei olimpiade",
@@ -1348,7 +1348,7 @@ const ro = {
     },
     images: {
       heading: "Însemne",
-      hint: "PNG, JPEG, GIF sau WebP, până la 512 KB și 4096 de pixeli pe latură. SVG nu este acceptat.",
+      hint: "PNG, JPEG, GIF sau WebP, până la {imageMaxKb} KB și {imageMaxEdge} de pixeli pe latură. SVG nu este acceptat.",
       help: "Formatul este citit din fișierul însuși, așa că redenumirea nu schimbă nimic. Un .ico nu este necesar — orice browser actual acceptă un PNG drept pictogramă de filă. SVG este refuzat pentru că este un document executabil: servit de la această adresă, ar rula cu drepturile unui administrator.",
       logo: "Logo",
       logoHelp: "În bară și pe ecranul de autentificare. Se citește mai bine un însemn lat.",
@@ -1423,7 +1423,7 @@ const ro = {
       handover: "Predați-o proprietarului. Se afișează o singură dată și nu mai poate fi recuperată.",
       unlockSignIn: "Deblocați autentificarea",
       unlockSignInNote:
-        "Șterge încercările de autentificare eșuate contorizate pentru acest cont, astfel încât titularul să poată încerca acum, fără să aștepte până la 15 minute. Încercările contorizate pentru o adresă se păstrează.",
+        "Șterge încercările de autentificare eșuate contorizate pentru acest cont, astfel încât titularul să poată încerca acum, fără să aștepte până la {signInLockoutMinutes} minute. Încercările contorizate pentru o adresă se păstrează.",
       unlockSignInConfirmTitle: "Deblocați autentificarea pentru {login}?",
       unlockSignInConfirmBody:
         "Faceți acest lucru doar când știți că titularul încearcă să se autentifice: cine ghicește parola primește și el încercările înapoi.",
@@ -1751,7 +1751,7 @@ const ro = {
         label: "Întrebarea dumneavoastră",
         counter: "{n} / {max}",
         open: "{n} din {max} așteaptă răspuns",
-        atCap: "Aveți 20 de întrebări care așteaptă răspuns. Veți putea pune alta după ce se răspunde la una dintre ele.",
+        atCap: "Aveți {openQuestionsMax} de întrebări care așteaptă răspuns. Veți putea pune alta după ce se răspunde la una dintre ele.",
         send: "Trimiteți întrebarea",
         sending: "Se trimite…",
         sent: "Întrebarea a fost trimisă.",
@@ -1883,7 +1883,7 @@ const ro = {
             retrying: "Nesalvat încă. Reîncercăm în curând.",
             closed: "Olimpiada s-a încheiat, așa că notițele nu se mai salvează. Ultimul text scris rămâne în acest browser.",
           },
-          limitReached: "Notițele au atins limita de 20.000 de caractere.",
+          limitReached: "Notițele au atins limita de {notesMaxChars} de caractere.",
           observed: "Organizatorul vă poate vedea notițele.",
         },
         log: {
@@ -2424,7 +2424,7 @@ const ro = {
     question_not_found: "Întrebarea nu a fost găsită.",
     story_not_found: "Povestea nu a fost încă scrisă.",
     image_too_large:
-      "Imaginea este prea grea sau prea mare. Până la 512 KB și cel mult 4096 de pixeli pe latură.",
+      "Imaginea este prea grea sau prea mare. Până la {imageMaxKb} KB și cel mult {imageMaxEdge} de pixeli pe latură.",
     image_not_accepted:
       "Acest fișier nu este o imagine pe care instalarea o păstrează. PNG, JPEG, GIF sau WebP — formatul este citit din fișier, nu din numele lui. Un .ico nu este necesar: orice browser actual acceptă un PNG drept pictogramă de filă.",
     cover_too_often:
@@ -2432,15 +2432,15 @@ const ro = {
     cover_busy:
       "Chiar acum se prelucrează mai multe coperte. Nu s-a salvat nimic — încercați din nou peste câteva secunde.",
     cover_too_large:
-      "Fișierul este prea greu pentru o copertă. Până la 8 MB.",
+      "Fișierul este prea greu pentru o copertă. Până la {coverMaxMb} MB.",
     cover_kind:
       "Acest fișier nu este o imagine pe care serviciul o acceptă drept copertă. JPEG, PNG sau WebP — formatul este citit din fișier, nu din numele lui. Un SVG nu este acceptat sub nicio formă: este un document care poate purta scripturi, iar coperta este văzută de fiecare vizitator.",
     cover_dimensions:
-      "Imaginea are prea mulți pixeli pe latură pentru o copertă. Până la 8000 pe 8000.",
+      "Imaginea are prea mulți pixeli pe latură pentru o copertă. Până la {coverMaxPixels} pe {coverMaxPixels}.",
     cover_attribution_required:
       "O copertă încărcată are nevoie de o linie care spune a cui este fotografia. O olimpiadă fără copertă încărcată primește una desenată și nu are nevoie de atribuire.",
     cover_attribution_too_long:
-      "Linia de atribuire este prea lungă. Până la 200 de caractere.",
+      "Linia de atribuire este prea lungă. Până la {coverAttributionMax} de caractere.",
     not_a_participant:
       "Nu participați la această olimpiadă.",
     contest_not_running:
@@ -2634,7 +2634,7 @@ const ro = {
       "Se pregătesc simultan atâtea descărcări câte permite această instalare. Nu s-a descărcat nimic — încercați peste un minut.",
     results_unknown_registration: "Cineva din selecție nu mai participă la această olimpiadă. Reîncărcați lista și încercați din nou.",
     results_email_forbidden: "Doar administratorii de conturi pot exporta adresele de e-mail.",
-    results_too_many_rows: "Această olimpiadă are peste 2000 de participanți, prea mulți pentru un singur export.",
+    results_too_many_rows: "Această olimpiadă are peste {resultsMaxRows} de participanți, prea mulți pentru un singur export.",
     results_export_too_often: "Exportul anterior încă se pregătește. Așteptați să se termine.",
     query_database_error: "Baza de date a refuzat interogarea:",
     archive_too_often: "Arhiva este deschisă prea des. Așteptați o clipă și încercați din nou.",
@@ -2646,7 +2646,7 @@ const ro = {
       "Serviciul de interogări nu răspunde acum. Nu are legătură cu interogarea dumneavoastră — încercați peste puțin timp.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
-    invalid_feedback_url: "Adresa pentru feedback trebuie să fie o adresă https completă, scrisă doar cu caractere latine simple, de exemplu https://forms.gle/…, care numește site-ul prin nume, nu printr-o adresă IP, fără spații sau bare oblice inverse și de cel mult 500 de caractere. Lăsați câmpul gol pentru a nu afișa niciun link.",
+    invalid_feedback_url: "Adresa pentru feedback trebuie să fie o adresă https completă, scrisă doar cu caractere latine simple, de exemplu https://forms.gle/…, care numește site-ul prin nume, nu printr-o adresă IP, fără spații sau bare oblice inverse și de cel mult {feedbackUrlMax} de caractere. Lăsați câmpul gol pentru a nu afișa niciun link.",
     mail_off: "E-mailul este dezactivat: SMTP nu este configurat pe server. Nu s-a trimis și nu s-a modificat nimic.",
     mail_no_address: "Contul dumneavoastră nu are o adresă de e-mail, așa că mesajul de test nu are unde să ajungă. Adăugați una în contul dumneavoastră, pe ecranul Conturi.",
     mail_relay_failed: "Serverul de e-mail nu a putut fi contactat sau a refuzat contul expeditor. Verificați setările SMTP, parola și permisiunile cutiei poștale.",
@@ -2663,11 +2663,11 @@ const ro = {
     workspace_tab_not_found:
       "Această filă nu mai există. Reîncărcați pagina pentru a vedea filele curente.",
     workspace_notes_too_long:
-      "Notițele sunt prea lungi. Scurtați-le la 20.000 de caractere pentru a le salva.",
+      "Notițele sunt prea lungi. Scurtați-le la {notesMaxChars} de caractere pentru a le salva.",
     workspace_tab_too_long:
       "Textul filei este mai lung decât poate fi o interogare. Scurtați-l pentru a-l salva.",
     workspace_title_invalid:
-      "Numele unei file trebuie să aibă între 1 și 40 de caractere, fără rânduri noi.",
+      "Numele unei file trebuie să aibă între 1 și {tabTitleMax} de caractere, fără rânduri noi.",
     workspace_text_invalid:
       "Textul conține un caracter care nu poate fi salvat. Eliminați-l și încercați din nou.",
     workspace_order_mismatch:
@@ -2676,14 +2676,14 @@ const ro = {
     signals_batch_too_large: "Au fost trimise prea multe acțiuni de pe pagină deodată. Vor fi trimise pe părți.",
     signals_too_many_stored:
       "S-au înregistrat atâtea acțiuni de pe pagină câte păstrează această olimpiadă. Nimic din ce ați făcut nu s-a pierdut.",
-    clarification_too_long: "O întrebare poate avea cel mult 2.000 de caractere. Scurtați-o sau puneți două întrebări.",
-    clarification_answer_too_long: "Un răspuns poate avea cel mult 4.000 de caractere.",
-    announcement_too_long: "Un anunț poate avea cel mult 4.000 de caractere.",
+    clarification_too_long: "O întrebare poate avea cel mult {questionMaxChars} de caractere. Scurtați-o sau puneți două întrebări.",
+    clarification_answer_too_long: "Un răspuns poate avea cel mult {answerMaxChars} de caractere.",
+    announcement_too_long: "Un anunț poate avea cel mult {announcementMaxChars} de caractere.",
     clarification_empty: "Scrieți mai întâi un text.",
     clarification_text_invalid:
       "Textul conține un caracter care nu poate fi salvat. Eliminați-l și încercați din nou.",
     clarification_too_many_open:
-      "Aveți deja 20 de întrebări care așteaptă răspuns. Veți putea pune alta după ce se răspunde la una dintre ele.",
+      "Aveți deja {openQuestionsMax} de întrebări care așteaptă răspuns. Veți putea pune alta după ce se răspunde la una dintre ele.",
     clarification_too_often: "Puneți întrebări prea des. Așteptați un minut și încercați din nou.",
     clarification_not_found: "Această întrebare nu aparține acestei olimpiade.",
     clarification_already_answered:
@@ -2702,7 +2702,7 @@ const ro = {
     profile_invalid_cursor: "Lista nu a putut fi continuată. Reîncărcați pagina.",
     profile_invalid_filter: "Un filtru nu este valid. Verificați starea și textul căutat.",
     public_too_often: "Pagina principală este încărcată prea des. Așteptați un minut și încercați din nou.",
-    registration_invalid_name: "Folosiți litere, spații, cratime, apostrofuri și puncte (lăsați un spațiu după punct), cel mult 100 de caractere fiecare.",
+    registration_invalid_name: "Folosiți litere, spații, cratime, apostrofuri și puncte (lăsați un spațiu după punct), cel mult {registrationNameMax} de caractere fiecare.",
     registration_invalid_email: "Introduceți o adresă de e-mail validă, de exemplu nume@example.com.",
     registration_full: "Locurile s-au ocupat. Adresați-vă organizatorilor la intrare.",
     registration_not_found: "Această înregistrare nu mai există. Reîncărcați pagina.",

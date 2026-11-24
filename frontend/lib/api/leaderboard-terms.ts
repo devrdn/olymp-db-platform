@@ -3,6 +3,9 @@
  * content-terms.ts for why).
  */
 
+/** The most registrations one results export carries (`leaderboard.DefaultMaxRows`). */
+export const RESULTS_MAX_ROWS = 2000;
+
 /** How many identity hues the palette carries (docs/design/SPEC.md §3.5). */
 export const IDENTITY_HUES = 6;
 

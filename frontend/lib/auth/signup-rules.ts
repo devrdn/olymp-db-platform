@@ -6,6 +6,9 @@
  * bounds.
  */
 
+/** The shortest login `PLAIN_LOGIN` takes. */
+export const LOGIN_MIN_CHARS = 3;
+
 /** The longest login `PLAIN_LOGIN` takes. */
 export const LOGIN_MAX_CHARS = 64;
 

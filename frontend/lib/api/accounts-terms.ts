@@ -17,6 +17,9 @@ export const SKIP_REASONS = [
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
+/** How long a failed sign-in counts against an account (`auth.LoginAttemptWindow`). */
+export const SIGN_IN_ATTEMPT_WINDOW_MS = 15 * 60_000;
+
 /** Rows per page of the account register, sent as the limit: at most `users.MaxPageSize`. */
 export const ACCOUNTS_PAGE = 50;
 

@@ -26,7 +26,9 @@ const (
 	// on account and address, because logins are public and an account-only
 	// key would let anybody lock the owner out.
 	maxLoginAttemptsPerAccountAddress = 10
-	loginAttemptWindow                = 15 * time.Minute
+	// LoginAttemptWindow is how long a failed sign-in counts against its
+	// keys, so the longest a refused owner waits.
+	LoginAttemptWindow = 15 * time.Minute
 
 	// DefaultMaxLoginAttemptsPerAccount is the account-wide ceiling, the
 	// backstop against guessing from many addresses. At ten times the
@@ -562,7 +564,7 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 		{trustedSubject(cmd.Login, gen), s.maxTrusted},
 		{"trusted-from:" + httpx.AddressSubject(cmd.IP), s.maxPerAddress},
 	} {
-		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
+		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, LoginAttemptWindow)
 		if err != nil {
 			return false, err
 		}
@@ -575,7 +577,7 @@ func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Dev
 
 func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 	subject := "ip:" + httpx.AddressSubject(cmd.IP)
-	allowed, first, err := s.limiter.Spend(ctx, subject, s.maxPerAddress, loginAttemptWindow)
+	allowed, first, err := s.limiter.Spend(ctx, subject, s.maxPerAddress, LoginAttemptWindow)
 	if err != nil {
 		return err
 	}
@@ -629,7 +631,7 @@ func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string
 		{accountAddressSubject(cmd.Login, cmd.IP, gen), maxLoginAttemptsPerAccountAddress},
 		{accountSubject(cmd.Login, gen), s.maxPerAccount},
 	} {
-		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
+		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, LoginAttemptWindow)
 		if err != nil {
 			return nil, err
 		}
@@ -644,7 +646,7 @@ func (s *Service) spendAccount(ctx context.Context, cmd LoginCommand, gen string
 // login's, which anyone may type, or an address's, which a hall behind one NAT
 // shares. It waits the whole window, since the exact rest of one would tell
 // the caller when somebody else first tried.
-var lockedOut = retry.After(ErrTooManyAttempts, loginAttemptWindow)
+var lockedOut = retry.After(ErrTooManyAttempts, LoginAttemptWindow)
 
 // AllowPasswordChange counts one attempt to change the account's own password
 // and reports ErrTooManyAttempts once a window is spent (CLAUDE.md rule 4).
@@ -667,12 +669,12 @@ func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID, add
 		{passwordChangeSubject(userID), maxPasswordChangeAttempts, true},
 		{"pwchange-from:" + address, s.maxPerAddress, false},
 	} {
-		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
+		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, LoginAttemptWindow)
 		if err != nil {
 			return err
 		}
 		if !allowed && window.own {
-			return retry.After(ErrTooManyAttempts, s.limiter.Remaining(ctx, window.subject, loginAttemptWindow))
+			return retry.After(ErrTooManyAttempts, s.limiter.Remaining(ctx, window.subject, LoginAttemptWindow))
 		}
 		if !allowed {
 			return lockedOut
@@ -699,7 +701,7 @@ func (s *Service) UnlockSignIn(ctx context.Context, actorID, userID uuid.UUID) e
 	if err != nil {
 		return err
 	}
-	if err := s.limiter.NewGeneration(ctx, accountFamily(user.Login), loginAttemptWindow); err != nil {
+	if err := s.limiter.NewGeneration(ctx, accountFamily(user.Login), LoginAttemptWindow); err != nil {
 		return err
 	}
 	if err := s.audit.Record(ctx, audit.Entry{

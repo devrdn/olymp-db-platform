@@ -110,3 +110,9 @@ export const MAX_QUESTION_TITLE_CHARS = 200;
 
 /** `contests.MaxPenaltyPct`: a question's penalty is a percentage. */
 export const MAX_PENALTY_PCT = 100;
+
+/** `covers.MaxUploadBytes`: the largest cover file taken. */
+export const COVER_MAX_BYTES = 8 * 1024 * 1024;
+
+/** `covers.MaxSourcePixels`: the most pixels on each side of a cover. */
+export const COVER_MAX_PIXELS = 8000;

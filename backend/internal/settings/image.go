@@ -42,12 +42,12 @@ var (
 	ErrNotAnImage       = errors.New("file is not an image this installation accepts")
 )
 
-// maxImageBytes bounds an upload; half a megabyte is generous for a logo.
-const maxImageBytes = 512 << 10
+// MaxImageBytes bounds an upload; half a megabyte is generous for a logo.
+const MaxImageBytes = 512 << 10
 
-// maxImageEdge bounds the decoded picture, not the file: a small file can
+// MaxImageEdge bounds the decoded picture, not the file: a small file can
 // decode enormous, and the process pays for the pixels.
-const maxImageEdge = 4096
+const MaxImageEdge = 4096
 
 // acceptedTypes is what may be stored, decided by reading the bytes.
 //
@@ -89,8 +89,8 @@ func inspect(kind string, data []byte) (Image, error) {
 	if len(data) == 0 {
 		return Image{}, fmt.Errorf("%w: it is empty", ErrNotAnImage)
 	}
-	if len(data) > maxImageBytes {
-		return Image{}, fmt.Errorf("%w: at most %d KiB", ErrImageTooLarge, maxImageBytes>>10)
+	if len(data) > MaxImageBytes {
+		return Image{}, fmt.Errorf("%w: at most %d KiB", ErrImageTooLarge, MaxImageBytes>>10)
 	}
 
 	// Sniffed first, so what is accepted is what a browser would conclude too;
@@ -109,8 +109,8 @@ func inspect(kind string, data []byte) (Image, error) {
 	if "image/"+format != sniffed {
 		return Image{}, fmt.Errorf("%w: it sniffs as %s and decodes as %s", ErrNotAnImage, sniffed, format)
 	}
-	if config.Width > maxImageEdge || config.Height > maxImageEdge {
-		return Image{}, fmt.Errorf("%w: at most %dpx on a side", ErrImageTooLarge, maxImageEdge)
+	if config.Width > MaxImageEdge || config.Height > MaxImageEdge {
+		return Image{}, fmt.Errorf("%w: at most %dpx on a side", ErrImageTooLarge, MaxImageEdge)
 	}
 
 	sum := sha256.Sum256(data)

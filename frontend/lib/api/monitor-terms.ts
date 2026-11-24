@@ -26,6 +26,21 @@ export const SIGNAL_BATCH_MAX = 50;
 /** How much of a paste is kept (`monitor.MaxPasteTextRunes`). */
 export const SIGNAL_PASTE_TEXT_MAX = 500;
 
+/** More time away in total raises the long-absence flag (`monitor.LongAbsenceTotal`). */
+export const LONG_ABSENCE_TOTAL_MS = 5 * 60_000;
+
+/** More absences raise it too (`monitor.LongAbsenceCount`). */
+export const LONG_ABSENCE_COUNT = 10;
+
+/** A larger paste raises the large-paste flag (`monitor.LargePasteChars`). */
+export const LARGE_PASTE_CHARS = 200;
+
+/** Only queries at least this long are compared (`monitor.IdenticalQueryMinChars`). */
+export const IDENTICAL_QUERY_MIN_CHARS = 60;
+
+/** How far behind the feed runs (`monitor.FeedSettle`). */
+export const FEED_SETTLE_MS = 2000;
+
 /** The refusal a monitoring screen shows in place of what it read: the organiser's own read budget. */
 export const MONITOR_SHOWN = ["monitor_too_often"] as const;
 

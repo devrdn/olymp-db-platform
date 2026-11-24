@@ -9,6 +9,7 @@ import {
   EMAIL_MAX_CHARS,
   FULL_NAME_MAX_BYTES,
   LOGIN_MAX_CHARS,
+  LOGIN_MIN_CHARS,
   PASSWORD_MIN_CHARS,
   PLAIN_LOGIN,
   RESEND_COOLDOWN_SECONDS,
@@ -16,7 +17,7 @@ import {
   isPlainLogin,
 } from "@/lib/auth/signup-rules";
 
-import { ACCOUNTS_PAGE, MAX_BULK_ACCOUNTS, MAX_IMPORT_ROWS } from "./accounts-terms";
+import { ACCOUNTS_PAGE, MAX_BULK_ACCOUNTS, MAX_IMPORT_ROWS, SIGN_IN_ATTEMPT_WINDOW_MS } from "./accounts-terms";
 import { ARCHIVE_PAGE_SIZE, ARCHIVE_QUERY_MAX } from "./archive";
 import { AUDIT_PAGE } from "./audit";
 import {
@@ -29,6 +30,8 @@ import {
 } from "./clarifications-terms";
 import { NEXT_STATUSES } from "./contests";
 import {
+  COVER_MAX_BYTES,
+  COVER_MAX_PIXELS,
   MAX_COVER_ATTRIBUTION,
   MAX_GRACE_PERIOD_MIN,
   MAX_ICPC_PENALTY_MIN,
@@ -38,12 +41,23 @@ import {
 } from "./contests-terms";
 import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "./game-terms";
 import { MAX_QUERY_SEARCH } from "./journal-terms";
-import { MAX_FEED_PAGE, SIGNAL_BATCH_MAX, SIGNAL_MIN_AWAY_MS, SIGNAL_PASTE_TEXT_MAX } from "./monitor-terms";
+import { RESULTS_MAX_ROWS } from "./leaderboard-terms";
+import {
+  FEED_SETTLE_MS,
+  IDENTICAL_QUERY_MIN_CHARS,
+  LARGE_PASTE_CHARS,
+  LONG_ABSENCE_COUNT,
+  LONG_ABSENCE_TOTAL_MS,
+  MAX_FEED_PAGE,
+  SIGNAL_BATCH_MAX,
+  SIGNAL_MIN_AWAY_MS,
+  SIGNAL_PASTE_TEXT_MAX,
+} from "./monitor-terms";
 import { MIN_DIRECTORY_QUERY_LENGTH } from "./people-terms";
 import { QUERY_LOG_PAGE_SIZE } from "./querylog-terms";
 import { isResetToken } from "./recovery";
 import { EMAIL_MAX_CHARS as REGISTRATION_EMAIL_MAX, NAME_MAX_CHARS } from "./registrations-terms";
-import { FEEDBACK_URL_MAX } from "./settings-terms";
+import { FEEDBACK_URL_MAX, IMAGE_MAX_BYTES, IMAGE_MAX_EDGE } from "./settings-terms";
 import { MAX_TABS, NOTES_MAX_CHARS, TAB_BODY_MAX_BYTES, TAB_TITLE_MAX_CHARS } from "./workspace-terms";
 
 /**
@@ -84,6 +98,12 @@ const SAME: Record<string, number> = {
   "contests.MaxQuestionTitleRunes": MAX_QUESTION_TITLE_CHARS,
   "contests.MinDirectoryQueryLength": MIN_DIRECTORY_QUERY_LENGTH,
   "covers.MaxAttributionLen": MAX_COVER_ATTRIBUTION,
+  "covers.MaxSourcePixels": COVER_MAX_PIXELS,
+  "covers.MaxUploadBytes": COVER_MAX_BYTES,
+  "leaderboard.DefaultMaxRows": RESULTS_MAX_ROWS,
+  "monitor.IdenticalQueryMinChars": IDENTICAL_QUERY_MIN_CHARS,
+  "monitor.LargePasteChars": LARGE_PASTE_CHARS,
+  "monitor.LongAbsenceCount": LONG_ABSENCE_COUNT,
   "monitor.MaxBatchEvents": SIGNAL_BATCH_MAX,
   "monitor.MaxFeedPage": MAX_FEED_PAGE,
   "monitor.MaxPasteTextRunes": SIGNAL_PASTE_TEXT_MAX,
@@ -92,6 +112,8 @@ const SAME: Record<string, number> = {
   "registrations.MaxEmailBytes": REGISTRATION_EMAIL_MAX,
   "registrations.MaxNameRunes": NAME_MAX_CHARS,
   "settings.MaxFeedbackURLLength": FEEDBACK_URL_MAX,
+  "settings.MaxImageBytes": IMAGE_MAX_BYTES,
+  "settings.MaxImageEdge": IMAGE_MAX_EDGE,
   "signup.CodeDigits": SIGNUP_CODE_DIGITS,
   "users.MaxBulkAccounts": MAX_BULK_ACCOUNTS,
   "users.MaxEmailLength": EMAIL_MAX_CHARS,
@@ -118,6 +140,9 @@ const BY_BEHAVIOUR = ["connector.MaxReturnPathLength", "recovery.TokenLength"];
 
 /** The durations the interface repeats, in milliseconds. */
 const DURATIONS_MS: Record<string, number> = {
+  "auth.LoginAttemptWindow": SIGN_IN_ATTEMPT_WINDOW_MS,
+  "monitor.FeedSettle": FEED_SETTLE_MS,
+  "monitor.LongAbsenceTotal": LONG_ABSENCE_TOTAL_MS,
   "monitor.MinAway": SIGNAL_MIN_AWAY_MS,
   "signup.CodeLifetime": SIGNUP_EMAIL_MAX_AGE_SECONDS * 1000,
   "signup.ResendCooldown": RESEND_COOLDOWN_SECONDS * 1000,
@@ -174,7 +199,9 @@ describe("the limits the API publishes", () => {
     expect(source).toBe(api.patterns[name]);
   });
 
-  test("a chosen login is as long as the field allows", () => {
+  test("a chosen login is as short and as long as the field says", () => {
+    expect(isPlainLogin("a".repeat(LOGIN_MIN_CHARS))).toBe(true);
+    expect(isPlainLogin("a".repeat(LOGIN_MIN_CHARS - 1))).toBe(false);
     expect(isPlainLogin("a".repeat(LOGIN_MAX_CHARS))).toBe(true);
     expect(isPlainLogin("a".repeat(LOGIN_MAX_CHARS + 1))).toBe(false);
   });

@@ -342,8 +342,8 @@ func TestALoginRefusalWaitsTheWholeWindow(t *testing.T) {
 		_, lastErr = f.service.Login(ctx, loginCmd("wrong password"))
 	}
 
-	if wait, ok := retry.Delay(lastErr); !ok || wait != loginAttemptWindow {
-		t.Errorf("the refusal waits %s (%v), want the whole %s", wait, ok, loginAttemptWindow)
+	if wait, ok := retry.Delay(lastErr); !ok || wait != LoginAttemptWindow {
+		t.Errorf("the refusal waits %s (%v), want the whole %s", wait, ok, LoginAttemptWindow)
 	}
 }
 
@@ -608,7 +608,7 @@ func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
 	}
 	// The window is the signed-in account's own, so its exact rest tells the
 	// caller nothing about anybody else.
-	if wait, ok := retry.Delay(err); !ok || wait <= 0 || wait >= loginAttemptWindow {
+	if wait, ok := retry.Delay(err); !ok || wait <= 0 || wait >= LoginAttemptWindow {
 		t.Errorf("the refusal waits %s (%v), want what is left of the account's window", wait, ok)
 	}
 
@@ -632,8 +632,8 @@ func TestPasswordChangesFromOneAddressAreThrottledAcrossAccounts(t *testing.T) {
 		t.Errorf("a fourth account's change from the same address = %v, want ErrTooManyAttempts", err)
 	}
 	// An address is shared by a hall behind one NAT.
-	if wait, ok := retry.Delay(err); !ok || wait != loginAttemptWindow {
-		t.Errorf("the refusal waits %s (%v), want the whole %s", wait, ok, loginAttemptWindow)
+	if wait, ok := retry.Delay(err); !ok || wait != LoginAttemptWindow {
+		t.Errorf("the refusal waits %s (%v), want the whole %s", wait, ok, LoginAttemptWindow)
 	}
 	if err := f.service.AllowPasswordChange(ctx, uuid.New(), "10.0.0.2"); err != nil {
 		t.Errorf("a change from another address = %v, want nil", err)

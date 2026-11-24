@@ -61,17 +61,17 @@ const en = {
     },
     signUp: {
       title: "Create an account",
-      lede: "Sign up with your email address. A six-digit code sent there confirms it.",
+      lede: "Sign up with your email address. A {signupCodeDigits}-digit code sent there confirms it.",
       fullName: "Full name",
       fullNameHint: "Letters, spaces, hyphens, apostrophes and periods.",
       fullNameTooLong: "That name is too long. Shorten it.",
       login: "Login",
       loginHint:
-        "3 to 64 characters: lowercase Latin letters, digits, _ and -, starting with a letter or a digit. Capitals become lowercase as you type.",
+        "{signupLoginMin} to {signupLoginMax} characters: lowercase Latin letters, digits, _ and -, starting with a letter or a digit. Capitals become lowercase as you type.",
       email: "Email",
       emailHint: "The code that confirms the account is sent here.",
       password: "Password",
-      passwordHint: "At least 12 characters.",
+      passwordHint: "At least {passwordMin} characters.",
       confirm: "Repeat the password",
       submit: "Create the account",
       submitting: "Sending the code",
@@ -80,9 +80,9 @@ const en = {
     },
     confirm: {
       title: "Confirm your email",
-      lede: "Check the inbox of {email}. Enter the six-digit code from the message here, in this browser.",
+      lede: "Check the inbox of {email}. Enter the {signupCodeDigits}-digit code from the message here, in this browser.",
       code: "Code",
-      codeHint: "Six digits.",
+      codeHint: "{signupCodeDigits} digits.",
       submit: "Confirm",
       submitting: "Confirming",
       resend: "Send a new code",
@@ -493,7 +493,7 @@ const en = {
       lede: "What every participant is doing while it happens: the table adds it up, the feed lists it line by line.",
       notes: {
         hints: "Flags are hints, not verdicts. Absences and pastes are reported by the participant's own browser, which can be wrong or stay silent.",
-        delay: "The feed runs about two seconds behind, so that nothing recorded late is ever skipped.",
+        delay: "The feed runs about {feedSettleSeconds} seconds behind, so that nothing recorded late is ever skipped.",
         absenceAtEnd: "An absence is written when the participant comes back, so one still going on when the contest ends is not recorded.",
       },
       export: {
@@ -550,7 +550,7 @@ const en = {
         },
         longAbsence: {
           label: "Away",
-          explain: "Long absences: more than 5 minutes away from the page in total, or more than 10 absences. Reported by the browser.",
+          explain: "Long absences: more than {longAbsenceMinutes} minutes away from the page in total, or more than {longAbsenceCount} absences. Reported by the browser.",
         },
         answerWithoutQueries: {
           label: "No query",
@@ -558,11 +558,11 @@ const en = {
         },
         largePaste: {
           label: "Paste",
-          explain: "Large paste: more than 200 characters pasted into the SQL editor or an answer. Reported by the browser.",
+          explain: "Large paste: more than {largePasteChars} characters pasted into the SQL editor or an answer. Reported by the browser.",
         },
         identicalQueries: {
           label: "Same SQL",
-          explain: "Identical queries: a successful query of at least 60 characters matching another participant's, ignoring spaces and case.",
+          explain: "Identical queries: a successful query of at least {identicalQueryMinChars} characters matching another participant's, ignoring spaces and case.",
         },
       },
       feed: {
@@ -1270,7 +1270,7 @@ const en = {
         scoringHelp: "Points sums every question's own points, penalty included. First to solve has only a winner: whoever is first to answer the final question correctly. ICPC ranks by how many questions are solved and, at a tie, by penalty time — a question's own points are not used.",
         winnerIgnoresPenalty: "The per-attempt penalty set on each question is ignored while scoring is first to solve.",
         icpcPenalty: "Penalty per wrong attempt, minutes",
-        icpcPenaltyHint: "Added to a registration's penalty time for every wrong attempt made on a question it later solves. From 0 to 240; cannot change once the contest starts.",
+        icpcPenaltyHint: "Added to a registration's penalty time for every wrong attempt made on a question it later solves. From 0 to {icpcPenaltyMaxMin}; cannot change once the contest starts.",
       },
       leaderboard: {
         heading: "Leaderboard",
@@ -1293,7 +1293,7 @@ const en = {
         first: "First prizes",
         second: "Second prizes",
         third: "Third prizes",
-        hint: "From 0 to 1000 each. Ties share a place, so a tie on a boundary takes the better prize. A participant who scored nothing gets no prize. With all three at 0 nobody gets a prize.",
+        hint: "From 0 to {prizePlacesMax} each. Ties share a place, so a tie on a boundary takes the better prize. A participant who scored nothing gets no prize. With all three at 0 nobody gets a prize.",
         winnerHint: "In winner mode these counts do not apply: the one winner holds the first prize.",
       },
       grace: {
@@ -1302,7 +1302,7 @@ const en = {
         inForce: "In force: {n} minutes",
         inForceDefault: "In force: the installation's default",
         label: "Keep for, minutes from now",
-        hint: "Longer than the period in force, and at most 129,600 minutes (90 days). Databases already deleted do not come back.",
+        hint: "Longer than the period in force, and at most {gracePeriodMaxMin} minutes ({gracePeriodMaxDays} days). Databases already deleted do not come back.",
       },
       deleteDraft: {
         heading: "Delete this draft",
@@ -1365,7 +1365,7 @@ const en = {
       cover: {
         heading: "Cover",
         help: "The picture on this contest's card on the front page, and above its story. Whatever is uploaded is cropped to 16:9, resized and re-encoded, so what visitors receive is a file this service wrote — the location tag on a photograph, and anything else hiding in the original, does not travel with it.",
-        hint: "JPEG, PNG or WebP, up to 8 MB and 8000 pixels on a side. SVG is not accepted, whatever is inside it.",
+        hint: "JPEG, PNG or WebP, up to {coverMaxMb} MB and {coverMaxPixels} pixels on a side. SVG is not accepted, whatever is inside it.",
         file: "Picture",
         choose: "Choose a picture",
         currentAlt: "This contest's cover",
@@ -1460,7 +1460,7 @@ const en = {
     },
     images: {
       heading: "Marks",
-      hint: "PNG, JPEG, GIF or WebP, up to 512 KB and 4096 pixels on a side. SVG is not accepted.",
+      hint: "PNG, JPEG, GIF or WebP, up to {imageMaxKb} KB and {imageMaxEdge} pixels on a side. SVG is not accepted.",
       help: "The format is read from the file itself, so renaming one does not change it. An .ico is not needed — every current browser takes a PNG as a tab icon. SVG is refused because it is an executable document: served from this address, it would run with an administrator's reach.",
       logo: "Logo",
       logoHelp: "In the bar and on the sign-in screen. A wide mark reads best.",
@@ -1535,7 +1535,7 @@ const en = {
       handover: "Hand this over to its owner. It is shown once and cannot be retrieved again.",
       unlockSignIn: "Clear sign-in lockout",
       unlockSignInNote:
-        "Forgets the failed sign-in attempts counted against this account, so its owner can try again now instead of waiting up to 15 minutes. Attempts counted against an address are kept.",
+        "Forgets the failed sign-in attempts counted against this account, so its owner can try again now instead of waiting up to {signInLockoutMinutes} minutes. Attempts counted against an address are kept.",
       unlockSignInConfirmTitle: "Clear the sign-in lockout for {login}?",
       unlockSignInConfirmBody:
         "Do this once you know it is the owner trying to sign in: anybody guessing the password gets their attempts back too.",
@@ -1937,7 +1937,7 @@ const en = {
         label: "Your question",
         counter: "{n} / {max}",
         open: "{n} of {max} waiting for an answer",
-        atCap: "You have 20 questions waiting for an answer. You can ask another once one is answered.",
+        atCap: "You have {openQuestionsMax} questions waiting for an answer. You can ask another once one is answered.",
         send: "Send question",
         sending: "Sending…",
         sent: "Your question was sent.",
@@ -2105,7 +2105,7 @@ const en = {
             retrying: "Not saved yet. Trying again shortly.",
             closed: "The contest is over, so your notes are no longer saved. What you typed last is kept in this browser.",
           },
-          limitReached: "Your notes have reached the 20,000-character limit.",
+          limitReached: "Your notes have reached the {notesMaxChars}-character limit.",
           observed: "The organiser can see your notes.",
         },
         log: {
@@ -2660,7 +2660,7 @@ const en = {
     question_not_found: "Question not found.",
     story_not_found: "The story has not been written yet.",
     image_too_large:
-      "That picture is too heavy or too large. Up to 512 KB, and no more than 4096 pixels on a side.",
+      "That picture is too heavy or too large. Up to {imageMaxKb} KB, and no more than {imageMaxEdge} pixels on a side.",
     image_not_accepted:
       "That file is not a picture this installation stores. PNG, JPEG, GIF or WebP — the format is read from the file itself, not from its name. An .ico is not needed: every current browser takes a PNG as a tab icon.",
     cover_too_often:
@@ -2668,15 +2668,15 @@ const en = {
     cover_busy:
       "Several covers are being processed right now. Nothing was saved — try again in a few seconds.",
     cover_too_large:
-      "That file is too heavy for a cover. Up to 8 MB.",
+      "That file is too heavy for a cover. Up to {coverMaxMb} MB.",
     cover_kind:
       "That file is not a picture this service accepts as a cover. JPEG, PNG or WebP — the format is read from the file itself, not from its name. An SVG is not accepted whatever is inside it: it is a document that can carry scripts, and the cover is shown to every visitor.",
     cover_dimensions:
-      "That picture has too many pixels on a side for a cover. Up to 8000 by 8000.",
+      "That picture has too many pixels on a side for a cover. Up to {coverMaxPixels} by {coverMaxPixels}.",
     cover_attribution_required:
       "An uploaded cover needs a line saying whose picture it is. A contest without an uploaded cover gets a drawn one and needs none.",
     cover_attribution_too_long:
-      "That credit line is too long. Up to 200 characters.",
+      "That credit line is too long. Up to {coverAttributionMax} characters.",
     not_a_participant:
       "You are not taking part in this contest.",
     contest_not_running:
@@ -2870,7 +2870,7 @@ const en = {
       "As many downloads are being prepared at once as this installation allows. Nothing was downloaded — try again in a minute.",
     results_unknown_registration: "Someone in the selection is no longer in this contest. Refresh the list and try again.",
     results_email_forbidden: "Only account administrators can export email addresses.",
-    results_too_many_rows: "This contest has more than 2000 participants, too many to export at once.",
+    results_too_many_rows: "This contest has more than {resultsMaxRows} participants, too many to export at once.",
     results_export_too_often: "Your previous export is still being prepared. Wait for it to finish.",
     query_database_error: "The database refused that query:",
     archive_too_often: "The archive is being opened too often. Wait a moment and try again.",
@@ -2882,7 +2882,7 @@ const en = {
       "The query service is not answering right now. Nothing to do with your query — try again in a moment.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
-    invalid_feedback_url: "The feedback address must be a full https address in plain Latin characters, such as https://forms.gle/…, naming the site by its name rather than an IP address, with no spaces or backslashes and at most 500 characters. Leave it empty to show no link.",
+    invalid_feedback_url: "The feedback address must be a full https address in plain Latin characters, such as https://forms.gle/…, naming the site by its name rather than an IP address, with no spaces or backslashes and at most {feedbackUrlMax} characters. Leave it empty to show no link.",
     mail_off: "Email is off: SMTP is not configured on the server. Nothing was sent and nothing was changed.",
     mail_no_address: "Your account has no email address, so the test message has nowhere to go. Add one to your account on the Accounts screen.",
     mail_relay_failed: "The mail server could not be reached or refused the sending account. Check the SMTP settings and the mailbox's password and permissions.",
@@ -2898,9 +2898,9 @@ const en = {
     workspace_last_tab: "This is your only tab, so it cannot be closed.",
     workspace_tab_not_found: "That tab no longer exists. Reload the page to see your current tabs.",
     workspace_notes_too_long:
-      "Your notes are too long. Shorten them to 20,000 characters to save them.",
+      "Your notes are too long. Shorten them to {notesMaxChars} characters to save them.",
     workspace_tab_too_long: "This tab's text is longer than a query may be. Shorten it to save it.",
-    workspace_title_invalid: "A tab name must have 1 to 40 characters and no line breaks.",
+    workspace_title_invalid: "A tab name must have 1 to {tabTitleMax} characters and no line breaks.",
     workspace_text_invalid:
       "The text contains a character that cannot be saved. Remove it and try again.",
     workspace_order_mismatch:
@@ -2909,14 +2909,14 @@ const en = {
     signals_batch_too_large: "Too much page activity was sent at once. It will be sent in smaller parts.",
     signals_too_many_stored:
       "As much of your page activity has been recorded as this contest keeps. Nothing you have done is lost.",
-    clarification_too_long: "A question can be at most 2,000 characters. Shorten it or ask two.",
-    clarification_answer_too_long: "An answer can be at most 4,000 characters.",
-    announcement_too_long: "An announcement can be at most 4,000 characters.",
+    clarification_too_long: "A question can be at most {questionMaxChars} characters. Shorten it or ask two.",
+    clarification_answer_too_long: "An answer can be at most {answerMaxChars} characters.",
+    announcement_too_long: "An announcement can be at most {announcementMaxChars} characters.",
     clarification_empty: "Write something first.",
     clarification_text_invalid:
       "The text contains a character that cannot be saved. Remove it and try again.",
     clarification_too_many_open:
-      "You already have 20 questions waiting for an answer. You can ask another once one is answered.",
+      "You already have {openQuestionsMax} questions waiting for an answer. You can ask another once one is answered.",
     clarification_too_often: "You are asking questions too often. Wait a minute and try again.",
     clarification_not_found: "This question is not in this contest.",
     clarification_already_answered:
@@ -2935,7 +2935,7 @@ const en = {
     profile_invalid_cursor: "The list could not be continued. Reload the page.",
     profile_invalid_filter: "A filter is not valid. Check the status and the search text.",
     public_too_often: "The home page is being loaded too often. Wait a minute and try again.",
-    registration_invalid_name: "Use letters, spaces, hyphens, apostrophes and periods (put a space after a period), up to 100 characters each.",
+    registration_invalid_name: "Use letters, spaces, hyphens, apostrophes and periods (put a space after a period), up to {registrationNameMax} characters each.",
     registration_invalid_email: "Enter a valid email address, such as name@example.com.",
     registration_full: "Registration is full. Ask the organisers at the entrance.",
     registration_not_found: "This registration no longer exists. Reload the page.",

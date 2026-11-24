@@ -9,6 +9,12 @@ export const SETTING_KEYS = {
   mailLanguage: "installation.mail_language",
 } as const;
 
+/** `settings.MaxImageBytes`: the largest mark file taken. */
+export const IMAGE_MAX_BYTES = 512 * 1024;
+
+/** `settings.MaxImageEdge`: the most pixels on each side of a mark. */
+export const IMAGE_MAX_EDGE = 4096;
+
 /** The languages the API writes its email in (`mailing.Languages`). */
 export const MAIL_LANGUAGES = ["en", "ro", "ru"] as const;
 
