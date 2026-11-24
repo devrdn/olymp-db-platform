@@ -847,6 +847,18 @@ breaks without noticing (by number; the reasons are there):
 And from the layout conventions: no new file named by role, a doc comment on
 any new package, tests mirroring their source file.
 
+And from CLAUDE.md's Code rules, which a review holds every change to as it
+holds the security rules:
+
+| Rule | Check |
+|---|---|
+| 1 | Before writing a check, a normalisation, a predicate or a loop, search for the module that already holds it and call or extend it; a module that replaces a helper moves every caller and deletes the helper. A value repeated across a process boundary is kept only where a check fails when the two drift (`docs/api/limits.json`). |
+| 2 | A comment gives a reason or a contract, and the comments above the code you changed are still true. |
+| 3 | A rule every caller must keep lives inside the module (`participation.Admitter.Admit`, `httpx.Budgets.Charge`); where it cannot, a test walks every caller. |
+| 4 | Every module, interface and hook you add passes the deletion test: removing it would push its complexity into its callers. |
+| 5 | One concept has one name everywhere (a server action's success is `ok`). |
+| 6 | Code two routes share lives in `lib/`, `components/` or the folder that contains both routes. |
+
 Commands, roughly in the order you need them:
 
 | Command | Runs |
