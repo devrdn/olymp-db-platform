@@ -192,7 +192,13 @@ literal.
 **A string.** `lib/i18n/dictionaries/en.ts` first: its shape is the type the
 other locales must satisfy, so adding a key there makes the build fail until
 `ro.ts` and `ru.ts` have it too. Components take a `dict`; they hold no copy of
-their own.
+their own. A sentence that states a bound the API enforces names a placeholder
+from `BOUNDS` in `lib/i18n/bounds.ts` instead of the number, and the
+dictionary arrives with it filled.
+
+**A bound the API enforces.** A constant in the area's `*-terms.ts`, named in
+its comment by the Go identifier, and a case in `lib/api/limits-contract.test.ts`,
+which compares it with `docs/api/limits.json` (written by `make api-contract`).
 
 **A language.** A file in `lib/i18n/dictionaries/` and a code in
 `lib/i18n/config.ts`. No component changes — the same rule the server follows by
