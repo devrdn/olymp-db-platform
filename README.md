@@ -150,7 +150,7 @@ make test-db          # repository tests on a database recreated from zero, and 
 make test-game        # the game cluster's isolation, as the participant's role
 make test-game-build  # the path that crosses both clusters
 make front-check      # the interface's lint, checks, tests and build
-make test-all         # the backend gate CI runs, without database tests
+make test-all         # most of the backend workflow's Go checks, without database tests
 ```
 
 Tests that need a database skip rather than pass quietly. CI runs them, so run
