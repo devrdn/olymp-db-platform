@@ -86,13 +86,15 @@ example:`); they pull released images and need `VERSION=vX.Y.Z`.
 
 **Symptom.** In `frontend/`, `npm run error-codes` stops with
 `Cannot read ../docs/api/error-codes.json. Regenerate it with `make api-contract`.`
-and `npm test` fails reading `../docs/api/audit-actions.json`.
+and `npm test` fails reading `../docs/api/audit-actions.json` or
+`../docs/api/limits.json`.
 
-**Cause.** The interface checks its dictionaries against contract files that the
-Go backend generates under `docs/api/`, outside `frontend/`.
+**Cause.** The interface checks its dictionaries and the bounds it repeats
+against contract files that the Go backend generates under `docs/api/`,
+outside `frontend/`.
 
 **Fix.** Keep the whole repository. The interface alone can still be installed
-and run (`npm ci && npm run dev`); only those two checks need `docs/api/`.
+and run (`npm ci && npm run dev`); only those checks need `docs/api/`.
 
 ### `deploy/.env` is not in the clone
 
