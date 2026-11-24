@@ -842,7 +842,7 @@ Commands, roughly in the order you need them:
 | Command | Runs |
 |---|---|
 | `make check` | `gofmt -w`, `go vet`, the `static-check` that the API builds without cgo, and `go test ./...` (database tests skip) |
-| `make test-db` | the repository tests against a freshly migrated test database (`make dev-up` first) |
+| `make test-db` | the repository tests against a freshly migrated test database, and the cache's TTL contract against a throwaway Redis (`make dev-up` first) |
 | `make test-game` | the game cluster tests against a recreated `pg-game-test` |
 | `make test-game-build` | the cross-cluster tests (`TestAScriptSavedInTheCoreDatabase...` in `internal/provisioning`) |
 | `make api-contract`, `make audit-contract` | regenerate `docs/api/*.json` after changing codes or actions |
