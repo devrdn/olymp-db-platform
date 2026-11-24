@@ -233,7 +233,7 @@ describe("contestSchema", () => {
     ).toEqual({ freezeMin: null, names: "login", revealedAt: undefined });
   });
 
-  // A settings form sends it back, so a save made after the row moved is refused.
+  // A form sends it back, so a save made after the row moved is refused.
   test("reads the version the row was at", () => {
     expect(contestSchema.parse(detail).version).toBe(4);
   });

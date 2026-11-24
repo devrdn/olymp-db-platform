@@ -42,6 +42,22 @@ function save(contestId: string, path: string, init: { method: string; body: unk
 }
 
 /**
+ * A save of the contest row. It carries the version its form was rendered at,
+ * so the server refuses it as `contest_changed` once the contest moved since.
+ */
+async function saveAtVersion(
+  contestId: string,
+  form: FormData,
+  path: string,
+  init: { method: string; body: Record<string, unknown> },
+): Promise<SettingsState> {
+  const expectedVersion = versionFromForm(form.get("expectedVersion"));
+  if (expectedVersion === undefined) return { code: "invalid_request" };
+
+  return save(contestId, path, { method: init.method, body: { ...init.body, expected_version: expectedVersion } });
+}
+
+/**
  * A datetime-local value for the API. The browser gives a wall clock with no
  * zone; `new Date()` would use the process zone (UTC in the container), so the
  * university's zone is named explicitly.
@@ -56,8 +72,7 @@ function moment(value: FormDataEntryValue | null): string | null {
  * editable while the contest runs (extending the window after a power cut), but
  * the shape (format, order, scoring, timing, session length) freezes; its
  * disabled fieldset submits nothing, which is read as "send no key" rather than
- * a default the server would refuse. The form's version goes back with it, so
- * a save over a contest that moved since it was rendered is refused.
+ * a default the server would refuse.
  */
 export async function saveSettingsAction(
   _previous: SettingsState,
@@ -65,9 +80,6 @@ export async function saveSettingsAction(
 ): Promise<SettingsState> {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
-
-  const expectedVersion = versionFromForm(form.get("expectedVersion"));
-  if (expectedVersion === undefined) return { code: "invalid_request" };
 
   const shape = shapeFromForm(form);
   if (!shape.ok) return { code: "invalid_request" };
@@ -99,7 +111,6 @@ export async function saveSettingsAction(
     .filter(Boolean);
 
   const body: Record<string, unknown> = {
-    expected_version: expectedVersion,
     enrollment: enumFromForm<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
     ...shape.value,
     starts_at: moment(form.get("startsAt")),
@@ -122,7 +133,7 @@ export async function saveSettingsAction(
   };
   if (icpcPenalty.value !== undefined) body.icpc_penalty_min = icpcPenalty.value;
 
-  return save(contestId, `/contests/${contestId}`, { method: "PATCH", body });
+  return saveAtVersion(contestId, form, `/contests/${contestId}`, { method: "PATCH", body });
 }
 
 /**
@@ -140,7 +151,7 @@ export async function savePrizePlacesAction(
   const places = prizePlacesFromForm(form);
   if (!places.ok) return { code: "invalid_request" };
 
-  return save(contestId, `/contests/${contestId}/prize-places`, { method: "PUT", body: places.value });
+  return saveAtVersion(contestId, form, `/contests/${contestId}/prize-places`, { method: "PUT", body: places.value });
 }
 
 /**
@@ -182,8 +193,9 @@ export async function saveArchiveSettingsAction(
   if (!settings.ok) return { code: "invalid_request" };
 
   const { visibility, archiveTasks } = settings.value;
-  return save(
+  return saveAtVersion(
     contestId,
+    form,
     `/contests/${contestId}/archive-settings`,
     { method: "PUT", body: { visibility, archive_tasks: archiveTasks } },
   );

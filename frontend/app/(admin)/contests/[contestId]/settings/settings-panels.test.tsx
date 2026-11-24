@@ -234,23 +234,44 @@ describe("ContestPanel, the version it was loaded at", () => {
   });
 });
 
-describe("a prize or archive save over a contest that moved since", () => {
-  test.each([
-    ["the prize places", () => <PrizePanel contest={contest()} editable dict={dict} />],
-    ["the archive settings", () => <ArchivePanel contest={contest({ visibility: "open" })} archiveOn dict={dict} />],
-  ])("%s offer to reload, and the reload starts the form over", async (_name, panel) => {
+describe.each([
+  ["the prize places", (at: Partial<Contest>) => <PrizePanel contest={contest(at)} editable dict={dict} />],
+  ["the archive settings", (at: Partial<Contest>) => <ArchivePanel contest={contest({ visibility: "open", ...at })} archiveOn dict={dict} />],
+])("%s, the version they were loaded at", (_name, panel) => {
+  function sentVersions(): unknown[] {
+    return serverRequest.mock.calls.map(([, init]) => (init as { body: Record<string, unknown> }).body.expected_version);
+  }
+
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
     serverRequest.mockReset();
     serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
     refresh.mockReset();
     const user = userEvent.setup();
-    render(panel());
+    render(panel({}));
 
     await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
     expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    expect(sentVersions()).toEqual([3]);
     await user.click(screen.getByRole("button", { name: dict.workspace.reload }));
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version;
+  // a second save from the same screen must send that one, not the first.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockResolvedValue({});
+    const user = userEvent.setup();
+    const { rerender } = render(panel({}));
+
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    expect(await screen.findByText(dict.workspace.settings.saved)).toBeInTheDocument();
+    rerender(panel({ version: 4 }));
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+
+    await vi.waitFor(() => expect(sentVersions()).toEqual([3, 4]));
   });
 });
 

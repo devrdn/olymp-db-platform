@@ -329,12 +329,28 @@ async function press(button: Locator): Promise<void> {
   await expect(button).toBeEnabled();
 }
 
+/** Saves one panel's form and expects "Saved.", never a refusal. */
+async function savePanel(form: Locator): Promise<void> {
+  await press(form.getByRole("button", { name: "Save", exact: true }));
+  await expect(form.getByRole("alert")).toHaveCount(0);
+  await expect(form.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+}
+
 /** Saves the contest's settings and expects "Saved.", never a refusal. */
 async function saveSettings(page: Page): Promise<void> {
-  const fields = contestFields(page);
-  await press(fields.getByRole("button", { name: "Save", exact: true }));
-  await expect(fields.getByRole("alert")).toHaveCount(0);
-  await expect(fields.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+  await savePanel(contestFields(page));
+}
+
+/** Writes the contest from a session of its own, so the page's copy goes stale. */
+async function changeElsewhere(contestId: string): Promise<void> {
+  const { organiser } = seed().accounts;
+  const other = await Api.open();
+  try {
+    await other.signIn(organiser.login, organiser.password);
+    await other.call("PUT", `/contests/${contestId}/story`, { translations: { en: "Changed from another session." } });
+  } finally {
+    await other.close();
+  }
 }
 
 /** Opens the organiser's settings screen; every later screen is reached from it in the same session. */
@@ -367,10 +383,7 @@ test.describe("a settings save follows every content save", () => {
 
   test("a language save, then the settings", async ({ page }) => {
     await openSettings(page);
-    const languages = panel(page, "Languages");
-    await press(languages.getByRole("button", { name: "Save", exact: true }));
-    await expect(languages.getByRole("alert")).toHaveCount(0);
-    await expect(languages.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+    await savePanel(panel(page, "Languages"));
     await saveSettings(page);
   });
 
@@ -402,15 +415,7 @@ test.describe("a settings save follows every content save", () => {
   });
 
   test("a change from another session is refused with a reload, and the reloaded form saves", async ({ page }) => {
-    const id = await openSettings(page);
-    const { organiser } = seed().accounts;
-    const other = await Api.open();
-    try {
-      await other.signIn(organiser.login, organiser.password);
-      await other.call("PUT", `/contests/${id}/story`, { translations: { en: "Changed from another session." } });
-    } finally {
-      await other.close();
-    }
+    await changeElsewhere(await openSettings(page));
 
     const fields = contestFields(page);
     await press(fields.getByRole("button", { name: "Save", exact: true }));
@@ -443,6 +448,42 @@ test.describe("a settings save follows every content save", () => {
     await expect.soft(networks).toHaveValue("not-a-network");
     await expect.soft(rate).toHaveValue("37");
   });
+});
+
+/**
+ * The settings, the prize places and the archive save the one contest row and
+ * move its one version, so each save must hand the other two forms the new one.
+ */
+test.describe("the settings, the prize places and the archive share one version", () => {
+  test("the prize places, then the archive, then the settings", async ({ page }) => {
+    await openSettings(page);
+    await savePanel(panel(page, "Prize places"));
+    await savePanel(panel(page, "Archive"));
+    await saveSettings(page);
+  });
+
+  test("the settings, then the archive, then the prize places", async ({ page }) => {
+    await openSettings(page);
+    await saveSettings(page);
+    await savePanel(panel(page, "Archive"));
+    await savePanel(panel(page, "Prize places"));
+  });
+
+  for (const heading of ["Prize places", "Archive"]) {
+    test(`${heading} over a change from another session is refused with a reload, and the reloaded form saves`, async ({
+      page,
+    }) => {
+      await changeElsewhere(await openSettings(page));
+
+      const form = panel(page, heading);
+      await press(form.getByRole("button", { name: "Save", exact: true }));
+      await expect(form.getByRole("alert")).toContainText(CONTEST_CHANGED);
+
+      await form.getByRole("button", { name: "Reload the page" }).click();
+      await expect(form.getByRole("alert")).toHaveCount(0);
+      await savePanel(form);
+    });
+  }
 });
 
 test("the roles dialog's own question is answered, and the roles dialog stays usable with focus back in it", async ({

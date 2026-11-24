@@ -196,8 +196,9 @@ export const contestSchema = z
     translations: z.record(z.string(), translationSchema),
     created_at: z.string(),
     updated_at: z.string(),
-    // Moves on every write of the row, content included; a settings save
-    // sends it back and is refused as `contest_changed` once it has moved.
+    // Moves on every write of the row, content included; the settings, prize
+    // and archive saves send it back and are refused as `contest_changed`
+    // once it has moved.
     version: contestVersionSchema,
     // Whether the caller holds contest.monitor here. Only the single-contest
     // read sends it; a write's answer omits it, which reads as "no".
@@ -359,7 +360,7 @@ export function icpcPenaltyFromForm(
   return { ok: true, value: whole };
 }
 
-/** The version a settings form was rendered at, or undefined unless it is plain digits the contest schema accepts. */
+/** The contest version a form was rendered at, or undefined unless it is plain digits the contest schema accepts. */
 export function versionFromForm(value: FormDataEntryValue | null): number | undefined {
   if (typeof value !== "string" || !/^\d+$/.test(value)) return undefined;
   const version = contestVersionSchema.safeParse(Number(value));

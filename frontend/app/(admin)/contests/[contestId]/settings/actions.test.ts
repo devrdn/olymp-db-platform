@@ -35,8 +35,8 @@ function form(fields: Record<string, string>): FormData {
   return data;
 }
 
-/** The contest's own fields, as a form rendered at version 7 submits them. */
-function settingsForm(fields: Record<string, string>): FormData {
+/** What a form rendered at contest version 7 submits. */
+function renderedForm(fields: Record<string, string>): FormData {
   return form({ expectedVersion: "7", ...fields });
 }
 
@@ -57,7 +57,7 @@ describe("saveSettingsAction, a running contest's locked shape", () => {
     // A locked shape submits nothing; the open panels submit as usual.
     await saveSettingsAction(
       {},
-      settingsForm({
+      renderedForm({
         startsAt: "2026-11-08T19:00",
         endsAt: "2026-11-08T23:00",
         enrollment: "open",
@@ -81,7 +81,7 @@ describe("saveSettingsAction, a running contest's locked shape", () => {
   test("still refuses an invalid rate or grace on the same locked-shape save", async () => {
     // An absent shape must not skip validation of the rest of the form.
     serverRequest.mockResolvedValueOnce({});
-    await saveSettingsAction({}, settingsForm({ queryRateLimitPerMin: "-5" }));
+    await saveSettingsAction({}, renderedForm({ queryRateLimitPerMin: "-5" }));
     expect(serverRequest).toHaveBeenCalledTimes(1);
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
     // A negative rate degrades to no limit rather than being sent.
@@ -95,7 +95,7 @@ describe("saveSettingsAction, an open shape", () => {
 
     await saveSettingsAction(
       {},
-      settingsForm({
+      renderedForm({
         questionMode: "single",
         progression: "sequential",
         scoring: "icpc",
@@ -117,7 +117,7 @@ describe("saveSettingsAction, an open shape", () => {
   });
 
   test("still refuses individual timing with no valid duration", async () => {
-    const state = await saveSettingsAction({}, settingsForm({ timing: "individual" }));
+    const state = await saveSettingsAction({}, renderedForm({ timing: "individual" }));
 
     expect(state).toEqual({ code: "invalid_request" });
     expect(serverRequest).not.toHaveBeenCalled();
@@ -128,7 +128,7 @@ describe("saveSettingsAction, an open shape", () => {
 
     await saveSettingsAction(
       {},
-      settingsForm({ questionMode: "multi", progression: "free", scoring: "points", timing: "fixed" }),
+      renderedForm({ questionMode: "multi", progression: "free", scoring: "points", timing: "fixed" }),
     );
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
@@ -140,7 +140,7 @@ describe("saveSettingsAction, the leaderboard's names", () => {
   test("keeps the choice the form carried", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ leaderboardNames: "login" }));
+    await saveSettingsAction({}, renderedForm({ leaderboardNames: "login" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { leaderboard: { names: string } } }];
     expect(init.body.leaderboard.names).toBe("login");
@@ -150,22 +150,29 @@ describe("saveSettingsAction, the leaderboard's names", () => {
   test("shows full names when the form carries no readable choice", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ leaderboardNames: "nickname" }));
+    await saveSettingsAction({}, renderedForm({ leaderboardNames: "nickname" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { leaderboard: { names: string } } }];
     expect(init.body.leaderboard.names).toBe("full_name");
   });
 });
 
-describe("saveSettingsAction, the version the form was loaded at", () => {
+/** The three saves of the contest row, each with the least its form submits besides the version. */
+const versionGuardedSaves = [
+  ["saveSettingsAction", saveSettingsAction, "", "PATCH", {}],
+  ["savePrizePlacesAction", savePrizePlacesAction, "/prize-places", "PUT", { prizeFirst: "1" }],
+  ["saveArchiveSettingsAction", saveArchiveSettingsAction, "/archive-settings", "PUT", { visibility: "open" }],
+] as const;
+
+describe.each(versionGuardedSaves)("%s, the version the form was loaded at", (_name, action, suffix, method, fields) => {
   test("sends it back, so a save made after the contest moved is refused", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ expectedVersion: "12" }));
+    await action({}, renderedForm({ ...fields, expectedVersion: "12" }));
 
     const [path, init] = serverRequest.mock.calls[0] as [string, { method: string; body: Record<string, unknown> }];
-    expect(path).toBe(`/contests/${contestId}`);
-    expect(init.method).toBe("PATCH");
+    expect(path).toBe(`/contests/${contestId}${suffix}`);
+    expect(init.method).toBe(method);
     expect(init.body.expected_version).toBe(12);
   });
 
@@ -173,10 +180,19 @@ describe("saveSettingsAction, the version the form was loaded at", () => {
   test("sends a never-written contest's version, zero", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ expectedVersion: "0" }));
+    await action({}, renderedForm({ ...fields, expectedVersion: "0" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.expected_version).toBe(0);
+  });
+
+  // All three saves move the one version the other forms on the page send.
+  test("re-reads the workspace once saved, so every form on the page sends the moved version", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    expect(await action({}, renderedForm(fields))).toEqual({ ok: true });
+
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
   test.each([
@@ -188,25 +204,26 @@ describe("saveSettingsAction, the version the form was loaded at", () => {
     ["signed", "+7"],
     ["past what a number holds exactly", "9007199254740993"],
   ])("refuses a form whose version is %s without asking the server", async (_, version) => {
-    const data = settingsForm({});
+    const data = renderedForm(fields);
     if (version === undefined) data.delete("expectedVersion");
     else data.set("expectedVersion", version);
 
-    expect(await saveSettingsAction({}, data)).toEqual({ code: "invalid_request" });
+    expect(await action({}, data)).toEqual({ code: "invalid_request" });
     expect(serverRequest).not.toHaveBeenCalled();
   });
 
   test("hands back the server's refusal of a contest that moved since", async () => {
     serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
 
-    expect(await saveSettingsAction({}, settingsForm({}))).toEqual({ code: "contest_changed" });
+    expect(await action({}, renderedForm(fields))).toEqual({ code: "contest_changed" });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 
 describe("saveLanguagesAction", () => {
-  // The language set moves the contest's version, and the settings form on
-  // the same page sends the version back: it must read the new one.
+  // The language set moves the contest's version, and the settings, prize
+  // places and archive forms on the same page send the version back: they
+  // must read the new one.
   test("re-reads the contest's pages, the settings form's version among them", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
     const data = form({ defaultLanguage: "ro" });
@@ -232,7 +249,7 @@ describe("saveSettingsAction, the result download", () => {
   test("offers the CSV file when the box is ticked", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ resultDownload: "on" }));
+    await saveSettingsAction({}, renderedForm({ resultDownload: "on" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.result_download).toBe(true);
@@ -241,7 +258,7 @@ describe("saveSettingsAction, the result download", () => {
   test("withdraws it when the box is cleared", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({}));
+    await saveSettingsAction({}, renderedForm({}));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.result_download).toBe(false);
@@ -252,7 +269,7 @@ describe("saveSettingsAction, the schema diagram", () => {
   test("offers the diagram when the box is ticked", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ schemaDiagram: "on" }));
+    await saveSettingsAction({}, renderedForm({ schemaDiagram: "on" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.schema_diagram).toBe(true);
@@ -261,7 +278,7 @@ describe("saveSettingsAction, the schema diagram", () => {
   test("withdraws it when the box is cleared", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({}));
+    await saveSettingsAction({}, renderedForm({}));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.schema_diagram).toBe(false);
@@ -272,18 +289,17 @@ describe("savePrizePlacesAction", () => {
   test("replaces the three counts on their own endpoint, a blank one as none", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    const state = await savePrizePlacesAction({}, form({ prizeFirst: "1", prizeSecond: "2", prizeThird: "" }));
+    const state = await savePrizePlacesAction({}, renderedForm({ prizeFirst: "1", prizeSecond: "2", prizeThird: "" }));
 
     expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/prize-places`, {
       method: "PUT",
-      body: { first: 1, second: 2, third: 0 },
+      body: { first: 1, second: 2, third: 0, expected_version: 7 },
     });
-    expect(revalidatePath).toHaveBeenCalled();
   });
 
   test("refuses a count past the bound before asking the server", async () => {
-    const state = await savePrizePlacesAction({}, form({ prizeFirst: "1001" }));
+    const state = await savePrizePlacesAction({}, renderedForm({ prizeFirst: "1001" }));
 
     expect(state).toEqual({ code: "invalid_request" });
     expect(serverRequest).not.toHaveBeenCalled();
@@ -301,7 +317,7 @@ describe("savePrizePlacesAction", () => {
     const { ApiError } = await import("@/lib/api/client");
     serverRequest.mockRejectedValueOnce(new ApiError("not_editable", 409, "archived"));
 
-    expect(await savePrizePlacesAction({}, form({ prizeFirst: "1" }))).toEqual({ code: "not_editable" });
+    expect(await savePrizePlacesAction({}, renderedForm({ prizeFirst: "1" }))).toEqual({ code: "not_editable" });
   });
 });
 
@@ -313,7 +329,7 @@ describe("saveSettingsAction, the trusted-domain limit", () => {
   test("sends it on when the form carries it", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ queryRateLimitPerMin: "10", trustedDomainOnly: "on" }));
+    await saveSettingsAction({}, renderedForm({ queryRateLimitPerMin: "10", trustedDomainOnly: "on" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
     expect(init.body.settings.trusted_domain_only).toBe(true);
@@ -322,7 +338,7 @@ describe("saveSettingsAction, the trusted-domain limit", () => {
   test("sends it off, explicitly, when the form does not", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, settingsForm({ queryRateLimitPerMin: "10" }));
+    await saveSettingsAction({}, renderedForm({ queryRateLimitPerMin: "10" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
     expect(init.body.settings).toHaveProperty("trusted_domain_only", false);
@@ -341,27 +357,26 @@ describe("saveArchiveSettingsAction", () => {
   test("replaces both choices on their own endpoint", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    const state = await saveArchiveSettingsAction({}, form({ visibility: "closed", archiveTasks: "on" }));
+    const state = await saveArchiveSettingsAction({}, renderedForm({ visibility: "closed", archiveTasks: "on" }));
 
     expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/archive-settings`, {
       method: "PUT",
-      body: { visibility: "closed", archive_tasks: true },
+      body: { visibility: "closed", archive_tasks: true, expected_version: 7 },
     });
-    expect(revalidatePath).toHaveBeenCalled();
   });
 
   test("sends the tasks off when the box is absent", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveArchiveSettingsAction({}, form({ visibility: "open" }));
+    await saveArchiveSettingsAction({}, renderedForm({ visibility: "open" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
-    expect(init.body).toEqual({ visibility: "open", archive_tasks: false });
+    expect(init.body).toEqual({ visibility: "open", archive_tasks: false, expected_version: 7 });
   });
 
   test("refuses a visibility outside the list before asking the server", async () => {
-    expect(await saveArchiveSettingsAction({}, form({ visibility: "public" }))).toEqual({ code: "invalid_request" });
+    expect(await saveArchiveSettingsAction({}, renderedForm({ visibility: "public" }))).toEqual({ code: "invalid_request" });
     expect(serverRequest).not.toHaveBeenCalled();
   });
 
@@ -377,7 +392,7 @@ describe("saveArchiveSettingsAction", () => {
     const { ApiError } = await import("@/lib/api/client");
     serverRequest.mockRejectedValueOnce(new ApiError("visibility_needs_invite_only", 409, "open enrolment"));
 
-    expect(await saveArchiveSettingsAction({}, form({ visibility: "closed" }))).toEqual({
+    expect(await saveArchiveSettingsAction({}, renderedForm({ visibility: "closed" }))).toEqual({
       code: "visibility_needs_invite_only",
     });
   });

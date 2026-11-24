@@ -206,6 +206,16 @@ function TrustedDomainSwitch({
   );
 }
 
+/**
+ * The hidden fields of a form that saves the contest row: the contest, and the
+ * version it was rendered at, which the action sends back as `expected_version`.
+ * Read from the page's one contest, so a save that re-reads the page hands every
+ * such form the moved version.
+ */
+function atVersion(contest: Contest): { contestId: string; expectedVersion: number } {
+  return { contestId: contest.id, expectedVersion: contest.version };
+}
+
 type ContestPanelProps = {
   contest: Contest;
   editable: boolean;
@@ -225,7 +235,7 @@ export function ContestPanel(props: ContestPanelProps) {
   return (
     <ActionForm
       action={saveSettingsAction}
-      fields={{ contestId: contest.id, expectedVersion: contest.version }}
+      fields={atVersion(contest)}
       errors={dict.errors}
       revision={contest.updatedAt}
       className="contents"
@@ -613,7 +623,7 @@ export function PrizePanel({
   return (
     <ActionForm
       action={savePrizePlacesAction}
-      fields={{ contestId: contest.id }}
+      fields={atVersion(contest)}
       errors={dict.errors}
       revision={`${first}-${second}-${third}`}
       className="contents"
@@ -685,7 +695,7 @@ export function ArchivePanel({
   return (
     <ActionForm
       action={saveArchiveSettingsAction}
-      fields={{ contestId: contest.id }}
+      fields={atVersion(contest)}
       errors={dict.errors}
       revision={`${contest.visibility}-${contest.archiveTasks}`}
       className="contents"
