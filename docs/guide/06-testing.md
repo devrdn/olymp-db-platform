@@ -291,7 +291,7 @@ or readable by other accounts.
 | `make cover` | the tests with a coverage summary | Go and a C compiler |
 | `make test-db` | recreates and migrates the test database and recreates `redis-test` (`127.0.0.1:${REDIS_TEST_PORT}`, 56379 by default, nothing persisted), then the repository packages and the cache's TTL contract with `-count=1` | Docker: `make dev-up` first, for `pg-core` |
 | `make test-game` | recreates `pg-game-test`, then `internal/gamedb`, `internal/queryrunner`, `internal/rpc` | Docker |
-| `make test-game-cluster` | only recreates `pg-game-test`, the step `test-game` and `test-game-build` begin with, for running one game test by hand | Docker |
+| `make test-game-cluster` | only recreates `pg-game-test`: the step `test-game` begins with and `test-game-build` takes after resetting the core test database; for running one game test by hand | Docker |
 | `make test-game-build` | the cross-cluster tests | Docker: `pg-core` running; recreates both test databases |
 | `make test-all` | `fmt-check`, `tidy-check`, `vet`, `test-race`, `build`, `vuln`, `sec` | Go and a C compiler; installs `govulncheck` and `gosec` if missing |
 | `make front-test` | `npm test` (`vitest run`) | Node; installs dependencies if missing |
@@ -396,6 +396,12 @@ so no database or Redis test skips. Steps:
    this one command covers what `make test`, `make test-db`, `make test-game`
    and `make test-game-build` run locally.
 9. Print the coverage summary, then `go build ./...`.
+
+**Job `observability` ("alert rules and dashboard").** `make
+observability-check`: the Go tests that hold the alert rules and the
+dashboard's queries to the metrics the code exports, then promtool, in a
+throwaway `prom/prometheus` container, loading and unit-testing the rules
+under `deploy/observability/import` and checking the dashboard's queries.
 
 **Job `security` ("security scan").** `govulncheck ./...` and
 `gosec -exclude-generated ./...`.
