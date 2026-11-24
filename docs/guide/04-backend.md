@@ -179,7 +179,8 @@ decide who may call an operation (`internal/rbac`) or hold any SQL.
 | File | Holds |
 |---|---|
 | `contests.go` | `Contest`, the lifecycle statuses and transitions, settings, `Repository`, the package's core sentinels |
-| `service.go` | `Service`, `ServiceConfig` (every dependency it is built from), `NewService`, `UserDirectory`, `ErrNotEditable`, the shared helpers `editableContest` and `record` |
+| `service.go` | `Service`, `ServiceConfig` (every dependency it is built from), `NewService`, `UserDirectory`, `ErrNotEditable`, `ContentRows` and `BeginContentEdit` (the first step of every content edit, a game edit in `provisioning` included), the shared helper `record` |
+| `patch.go` | `Patch`: every contest setting declared once, the one shape `Create` and `Update` take; `DefaultContest` and `Patch.ApplyTo` |
 | `errors.go` | `Errors()`: every sentinel that reaches the HTTP layer |
 | `story.go` | `Story` and `Story.Body`, `StoryRepository`, `ErrStoryNotFound`, `Service.Story` and `Service.SetStory` |
 | `question.go` | `Question`, `Answer`, their validation and matching, `QuestionRepository` |
