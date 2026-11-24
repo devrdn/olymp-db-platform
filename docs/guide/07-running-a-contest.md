@@ -597,21 +597,19 @@ ones you hear about, and what to do
 
 #### A save says the contest changed
 
-A settings save made on a form loaded before another organiser's save, a
-content edit, or the scheduler's start or finish meets "This contest changed
-while you were deciding" (`contest_changed`); prize places, archive settings,
-a status change and the reveal meet it only when the contest moves while
-they are being saved. Nothing was saved. Press **Reload the page** under the
-sentence, check the contest as it now is, and save again
+A settings, prize-places or archive save made on a form loaded before another
+organiser's save, a content edit, or the scheduler's start or finish meets
+"This contest changed while you were deciding" (`contest_changed`); a status
+change and the reveal meet it only when the contest moves while they are
+being saved. Nothing was saved. Press **Reload the page** under the sentence,
+check the contest as it now is, and save again
 ([8. Troubleshooting](08-troubleshooting.md#a-save-says-the-contest-changed-while-you-were-deciding)).
 
-A prize-places or archive screen left open while a colleague saved them
-overwrites their values. A stale status change is refused unless the move is
-still allowed from where the contest now is (`invalid_transition`, or
-`status_changed` when the status moves during the save), and no reload is
-offered under either: reload the page yourself. A stale **Archive** still
-archives a contest the scheduler has finished since, because a finished
-contest may be archived.
+A stale status change is refused unless the move is still allowed from where
+the contest now is (`invalid_transition`, or `status_changed` when the status
+moves during the save), and no reload is offered under either: reload the page
+yourself. A stale **Archive** still archives a contest the scheduler has
+finished since, because a finished contest may be archived.
 
 #### A participant broke their database
 

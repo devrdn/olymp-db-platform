@@ -1108,20 +1108,21 @@ status change, or the reveal of the standings answers "This contest changed
 while you were deciding: somebody saved it, or it started or ended"
 (`contest_changed`), with a **Reload the page** button under it.
 
-**Cause.** The settings form sends the version of the contest it was loaded
-at, so its save is refused when another organiser saved the contest, a
-content edit moved it, or the scheduler started or finished it since the form
-was rendered. The other saves (prize places, archive settings, a status
-change, the reveal) carry no version from the screen: they are checked against
-the row they read while the save is decided, so they are refused only when
-the contest moved during the save itself. A prize-places or archive screen
-left open while somebody else saved them overwrites what was saved. A status
-change and the reveal are decided against the contest as it now is: a stale
+**Cause.** The settings, prize-places and archive forms send the version of
+the contest they were loaded at, so a save from any of them is refused when
+another organiser saved the contest, a content edit moved it, or the
+scheduler started or finished it since the form was rendered. The three move
+one version: a prize-places save makes a settings form loaded before it
+stale, and the other way round, while a save on the same page re-reads it and
+hands the other forms the new version. A status change and the reveal carry
+no version from the screen: they are checked against the row they read while
+the save is decided, so they are refused only when the contest moved during
+the save itself. They are decided against the contest as it now is: a stale
 status change is refused unless the move is still allowed from where the
 contest now is (`invalid_transition`), or as `status_changed` when the status
-itself moves during the save, with no reload offered under either; a stale reveal finds
-the standings already revealed and writes nothing. Either way, a refused save
-wrote nothing.
+itself moves during the save, with no reload offered under either; a stale
+reveal finds the standings already revealed and writes nothing. Either way, a
+refused save wrote nothing.
 
 **Fix.** Press **Reload the page**, which reads the contest as it now is and
 starts the form over, then make the change again.

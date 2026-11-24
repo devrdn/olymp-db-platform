@@ -354,10 +354,11 @@ Patterns an action must follow:
   revalidated only once the call worked. Every action that writes a contest
   revalidates through `contestChanged(contestId)` from
   `app/(admin)/contests/[contestId]/revalidation.ts`: the workspace header,
-  the publish gate and the settings form's version all read the contest, and
-  a stale version refuses the organiser's next settings save. To move to the
-  next screen, run the call with `serverOutcome` and call `redirect()` once it
-  has returned, outside the call.
+  the publish gate and the version the settings, prize-places and archive
+  forms send all read the contest, and a stale version refuses the
+  organiser's next save from any of them. To move to the next screen, run the
+  call with `serverOutcome` and call `redirect()` once it has returned,
+  outside the call.
 - **The form shows the sentence.** Inside `ActionForm`, `ActionButton` is the
   submit button, disabled while the action runs; `ActionOutcome` shows the
   refusal's sentence, or the screen's "saved" once the save worked;
@@ -391,9 +392,13 @@ What `ActionForm` keeps for every form, so a screen does not handle it:
   through `isolate` (section 4). If the dialog cannot be loaded, nothing is
   sent and the form says so.
 - **A contest that moved meanwhile** is refused with `contest_changed`: for
-  the settings form, which sends the `version` it was loaded at, since it was
-  rendered; for prize places, archive settings, status actions and the
-  reveal, which send none, only while the save is decided. A status action
+  the settings, prize-places and archive forms, which send the `version` they
+  were loaded at, since they were rendered; for status actions and the
+  reveal, which send none, only while the save is decided. The three forms
+  take their hidden fields from `atVersion` in `settings-panels.tsx`, their
+  actions send the version through `saveAtVersion` in the settings
+  `actions.ts`, and all three move the one version, so each save revalidates
+  the page and hands the other two the new one. A status action
   whose status moved during the save is refused as `status_changed` instead,
   which offers no reload. Under `contest_changed`, `ReloadWhenChanged`
   (`app/(admin)/contests/[contestId]/reload-when-changed.tsx`) offers a
