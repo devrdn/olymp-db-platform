@@ -364,8 +364,9 @@ on pushes to `main` and published from tags.
 ### `backend.yml`
 
 Runs on pushes to `main` and pull requests that touch `backend/**`,
-`deploy/observability/import/**`, the workflow itself or `image.yml`, and on
-every `v*` tag.
+`docs/api/**` (a generated contract changed alone still runs
+`TestTheCommittedContractIsCurrent`), `deploy/observability/import/**`, the
+workflow itself or `image.yml`, and on every `v*` tag.
 
 **Job `build` ("build and test").** A `postgres:16.16-alpine` service holds
 `dbcontest_core_test`, and a `redis:7.4.12-alpine` service, the product's
