@@ -68,7 +68,9 @@ columns. Name what a reader bisecting this in a year needs.>
   package, the handler's own `fail` when one does (CLAUDE.md, security rule
   1) — the code in `docs/api/error-codes.json` and a message in every locale.
 - **Every field and list that reaches storage has a bound**, and a new filter
-  lands with the index that serves it (CLAUDE.md, security rules 2 and 7).
+  lands with the index that serves it (CLAUDE.md, security rules 2 and 7). A
+  bound the interface repeats is published in `docs/api/limits.json` by
+  `make api-contract`, and the interface's copy is pinned to it.
 
 ## Checks to run
 
