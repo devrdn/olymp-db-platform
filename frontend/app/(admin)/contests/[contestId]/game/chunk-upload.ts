@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { browserRequest } from "@/lib/api/browser";
-import { ApiError, isAbortError } from "@/lib/api/client";
+import { ApiError, CLIENT_ERROR_CODES, isAbortError } from "@/lib/api/client";
 
 /**
  * A chunk refused as busy was not stored, so it is sent again after the
@@ -82,9 +82,12 @@ export type CancelQuestion = {
   now: () => { cancellable: boolean; uploadId: string | null };
   /** Puts the panel back to its picker. */
   reset: () => void;
+  /** Says, at the picker, why the server did not end the upload. */
+  refused: (code: string) => void;
 };
 
-type Running = { controller: AbortController; cancelled: boolean };
+/** An attempt, and the Cancel that ended it, if one did. */
+type Running = { controller: AbortController; cancelledBy: CancelQuestion | null };
 
 /**
  * Sends a file's chunks for one screen and cancels them. `start()` opens an
@@ -95,7 +98,7 @@ type Running = { controller: AbortController; cancelled: boolean };
  * on the server (`abortOnServer`); a screen that goes leaves its upload
  * resumable.
  */
-export function useChunkLoop(abortOnServer: (uploadId: string) => Promise<unknown>) {
+export function useChunkLoop(abortOnServer: (uploadId: string) => Promise<{ code?: string }>) {
   const currentRef = useRef<Running | null>(null);
   const abortRef = useRef(abortOnServer);
   useEffect(() => {
@@ -105,13 +108,13 @@ export function useChunkLoop(abortOnServer: (uploadId: string) => Promise<unknow
 
   function start(): UploadAttempt {
     currentRef.current?.controller.abort();
-    const running: Running = { controller: new AbortController(), cancelled: false };
+    const running: Running = { controller: new AbortController(), cancelledBy: null };
     currentRef.current = running;
     const { signal } = running.controller;
     return {
       proceed: (createdUploadId) => {
         if (!signal.aborted) return true;
-        if (running.cancelled && createdUploadId) void abortRef.current(createdUploadId);
+        if (running.cancelledBy && createdUploadId) void endOnServer(createdUploadId, running.cancelledBy, running);
         return false;
       },
       send: (target, run) => sendChunks(target, run, signal),
@@ -137,11 +140,21 @@ export function useChunkLoop(abortOnServer: (uploadId: string) => Promise<unknow
     if (!(sameAttempt || sameUpload) || !cancellable) return;
     const running = currentRef.current;
     if (running) {
-      running.cancelled = true;
+      running.cancelledBy = question;
       running.controller.abort();
     }
     question.reset();
-    if (uploadId) await abortRef.current(uploadId);
+    if (uploadId) await endOnServer(uploadId, question, running);
+  }
+
+  /**
+   * Ends a cancelled upload on the server, and has the panel say why when the
+   * server refuses, unless an upload begun since `cancelled`, the attempt the
+   * Cancel ended, holds the panel by then.
+   */
+  async function endOnServer(uploadId: string, question: CancelQuestion, cancelled: Running | null): Promise<void> {
+    const answer = await abortRef.current(uploadId).catch(() => ({ code: CLIENT_ERROR_CODES.unreachable }));
+    if (answer.code && currentRef.current === cancelled) question.refused(answer.code);
   }
 
   return { start, cancel };

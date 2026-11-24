@@ -396,6 +396,7 @@ describe("a Cancel asked before the upload had an id", () => {
         confirm: () => new Promise<boolean>((resolve) => (answer = resolve)),
         now: () => ({ cancellable: true, uploadId: null }),
         reset,
+        refused: vi.fn(),
       });
     });
     let newer: ReturnType<typeof result.current.start> | undefined;
@@ -408,5 +409,83 @@ describe("a Cancel asked before the upload had an id", () => {
     expect(reset).not.toHaveBeenCalled();
     expect(abortOnServer).not.toHaveBeenCalled();
     expect(newer?.proceed()).toBe(true);
+  });
+});
+
+describe("a Cancel the server refuses", () => {
+  function question(refused: (code: string) => void) {
+    return { confirm: async () => true, now: () => ({ cancellable: true, uploadId: id }), reset: vi.fn(), refused };
+  }
+
+  test("says why, by the refusal's code, once the panel is back at its picker", async () => {
+    const refused = vi.fn();
+    const { result } = renderHook(() => useChunkLoop(async () => ({ code: "game_upload_already_complete" })));
+    act(() => void result.current.start());
+
+    await act(() => result.current.cancel(question(refused)));
+
+    expect(refused).toHaveBeenCalledWith("game_upload_already_complete");
+  });
+
+  test("says the server could not be reached when the abort itself fails", async () => {
+    const refused = vi.fn();
+    const { result } = renderHook(() =>
+      useChunkLoop(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    act(() => void result.current.start());
+
+    await act(() => result.current.cancel(question(refused)));
+
+    expect(refused).toHaveBeenCalledWith("unreachable");
+  });
+
+  test("says nothing over an upload the organiser began while the abort was answered", async () => {
+    const refused = vi.fn();
+    let answer: (state: { code?: string }) => void = () => {};
+    const { result } = renderHook(() => useChunkLoop(() => new Promise((resolve) => (answer = resolve))));
+    act(() => void result.current.start());
+
+    let cancelled: Promise<void> = Promise.resolve();
+    await act(async () => {
+      cancelled = result.current.cancel(question(refused));
+    });
+    act(() => void result.current.start());
+    await act(async () => {
+      answer({ code: "game_upload_already_complete" });
+      await cancelled;
+    });
+
+    expect(refused).not.toHaveBeenCalled();
+  });
+
+  test("says nothing over a newer upload when a cancelled begin's late abort is refused", async () => {
+    const refused = vi.fn();
+    const { result } = renderHook(() => useChunkLoop(async () => ({ code: "unreachable" })));
+    let cancelledBegin: ReturnType<typeof result.current.start> | undefined;
+    act(() => void (cancelledBegin = result.current.start()));
+
+    await act(() =>
+      result.current.cancel({ ...question(refused), now: () => ({ cancellable: true, uploadId: null }) }),
+    );
+    act(() => void result.current.start());
+    await act(async () => void cancelledBegin?.proceed(id));
+
+    expect(refused).not.toHaveBeenCalled();
+  });
+
+  test("says why when it ends an upload whose begin answered after the yes", async () => {
+    const refused = vi.fn();
+    const { result } = renderHook(() => useChunkLoop(async () => ({ code: "unreachable" })));
+    let attempt: ReturnType<typeof result.current.start> | undefined;
+    act(() => void (attempt = result.current.start()));
+
+    await act(() =>
+      result.current.cancel({ ...question(refused), now: () => ({ cancellable: true, uploadId: null }) }),
+    );
+    await act(async () => void attempt?.proceed(id));
+
+    expect(refused).toHaveBeenCalledWith("unreachable");
   });
 });

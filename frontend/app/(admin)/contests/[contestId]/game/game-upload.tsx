@@ -286,6 +286,7 @@ export function GameUpload({
         setMismatch(false);
         setErrorCode(null);
       },
+      refused: setErrorCode,
     });
   }
 
@@ -370,6 +371,8 @@ export function GameUpload({
           </span>
         </div>
       ) : null}
+
+      {phase === "idle" && errorCode ? <FailureAlert code={errorCode} errors={errors} /> : null}
 
       {phase === "resumable" && resumable ? (
         <div className="flex flex-col gap-2 border-l-2 border-warn pl-4">

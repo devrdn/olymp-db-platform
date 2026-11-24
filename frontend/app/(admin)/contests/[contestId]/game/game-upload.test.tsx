@@ -119,6 +119,8 @@ beforeEach(() => {
   currentGameUploadAction.mockReset();
   completeGameUploadAction.mockReset();
   abortGameUploadAction.mockReset();
+  // An abort answers like the action: a state, an empty one when it worked.
+  abortGameUploadAction.mockResolvedValue({});
   gameUploadWindowAction.mockReset();
   gameStatusAction.mockReset();
   request.mockReset();
@@ -278,6 +280,25 @@ describe("the game upload panel", () => {
 
   // Cancel must both tell the server and abort the chunk on the wire; a stub
   // ignoring `signal` would let a removed `abort()` pass.
+  test("says why when the server refuses the cancel, with the picker back", async () => {
+    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
+    request.mockImplementationOnce(
+      (_path: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) =>
+          init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+        ),
+    );
+    abortGameUploadAction.mockResolvedValueOnce({ code: "game_upload_already_complete" });
+
+    show();
+    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
+    await userEvent.click(await screen.findByRole("button", { name: tu.cancel }));
+    await answerYes(tu.cancel);
+
+    expect(await screen.findByText(en.errors.game_upload_already_complete)).toBeInTheDocument();
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+  });
+
   test("cancels an upload in progress and lets the server know", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
     // The chunk stays in flight until aborted, the only state where aborting is

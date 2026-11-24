@@ -130,6 +130,8 @@ beforeEach(() => {
   currentTableUploadAction.mockReset();
   completeTableUploadAction.mockReset();
   abortTableUploadAction.mockReset();
+  // An abort answers like the action: a state, an empty one when it worked.
+  abortTableUploadAction.mockResolvedValue({});
   gameTableDataWindowAction.mockReset();
   appendTableRowAction.mockReset();
   deleteTableRowAction.mockReset();
@@ -342,6 +344,25 @@ describe("the table builder's own data panel", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.getByText(en.errors.game_table_value_invalid)).toBeInTheDocument();
+  });
+
+  test("says why when the server refuses the cancel, with the picker back", async () => {
+    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
+    request.mockImplementationOnce(
+      (_path: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) =>
+          init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+        ),
+    );
+    abortTableUploadAction.mockResolvedValueOnce({ code: "game_table_data_already_complete" });
+
+    show();
+    await userEvent.upload(screen.getByLabelText(td.pick), new File([new Uint8Array(12)], "suspects.csv"));
+    await userEvent.click(await screen.findByRole("button", { name: td.cancel }));
+    await answerYes(td.cancel);
+
+    expect(await screen.findByText(en.errors.game_table_data_already_complete)).toBeInTheDocument();
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
   });
 
   test("cancels an upload in progress and lets the server know", async () => {

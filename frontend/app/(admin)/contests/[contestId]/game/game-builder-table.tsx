@@ -309,6 +309,7 @@ export function GameBuilderTable({
         setErrorCode(null);
         setErrorDetail(null);
       },
+      refused: setErrorCode,
     });
   }
 
@@ -532,6 +533,8 @@ export function GameBuilderTable({
                 </span>
               </div>
             ) : null}
+
+            {phase === "idle" && errorCode ? <FailureAlert code={errorCode} errors={errors} /> : null}
 
             {phase === "resumable" && resumable ? (
               <div className="flex flex-col gap-2 border-l-2 border-warn pl-4">
