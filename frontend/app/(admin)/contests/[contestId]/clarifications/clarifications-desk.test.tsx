@@ -327,11 +327,14 @@ describe("the staff desk", () => {
     await userEvent.click(screen.getByRole("button", { name: fill(t.answered, { n: "2" }) }));
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(50));
 
+    // Found once: a lookup by name computes the name of every button in the
+    // list, and the list grows to 160 items.
+    const older = screen.getByRole("button", { name: t.older });
     for (const expected of [100, 150, 160]) {
-      await userEvent.click(screen.getByRole("button", { name: t.older }));
+      await userEvent.click(older);
       await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(expected));
     }
-    expect(screen.queryByRole("button", { name: t.older })).toBeNull();
+    expect(screen.queryByText(t.older)).toBeNull();
     expect(api.reads.slice(-3).map((r) => [r.after, r.limit])).toEqual([
       [undefined, 100],
       ["a99", 50],
