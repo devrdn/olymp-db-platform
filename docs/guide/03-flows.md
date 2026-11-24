@@ -753,8 +753,8 @@ sequenceDiagram
 
     B->>W: submit the answer
     W->>H: POST /contests/ID/questions/QID/answer with value
-    H->>H: participation.Admit - the read budget, then the participation gate
-    H->>L: answer budget per registration, before parsing
+    H->>L: participation.Admit - read budget per account, lookup, answer budget per registration
+    H->>H: then the participation gate, all before the body is parsed
     H->>S: Submit(SubmitCommand)
     S->>S: participation gate again, at most 1000 characters, question in this contest
     S->>DB: sequential mode - is every earlier question closed
