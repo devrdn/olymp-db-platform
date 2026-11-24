@@ -47,7 +47,7 @@ flowchart TB
   api["internal/api (HTTP adapters, error table, codes)"]
 
   subgraph domain["Domain packages"]
-    dom["contests, participation, users, auth, rbac, audit, settings, workspace, monitor, leaderboard, profile, showcase, covers, mailing, health"]
+    dom["contests, participation, users, auth, rbac, audit, settings, workspace, monitor, clarifications, leaderboard, profile, archive, showcase, covers, mailing, signup, recovery, registrations, federation, connector, retention, health"]
     game["provisioning, queryproxy, gamefile"]
   end
 
@@ -63,7 +63,7 @@ flowchart TB
     chk["internal/sqlpolicy/checker (cgo parser)"]
   end
 
-  platform["internal/platform/* (config, httpx, storage, cache, logging, metrics, i18n, password, server, filestore, flight, mail, retry)"]
+  platform["internal/platform/* (config, httpx, storage, cache, logging, metrics, i18n, password, server, filestore, flight, mail, retry, fanout, sentineltest)"]
 
   cmdapi --> app
   app --> api
@@ -380,7 +380,10 @@ Example: a new operation on a contest's story.
    If it needs a request budget, declare the budget once beside the routes
    that spend it (`httpx.PerAddress`, `PerKey` or `PerTypedKey`: a name, whom
    it counts, how many in what window, and its refusal's code) and charge it
-   with the handler's `budgets.spend` before the expensive step.
+   with the handler's `budgets.spend` before the expensive step. A budget
+   keyed by the signed-in account is charged as `ofAccount(r, budget)`, or for
+   a whole group of routes by the `budgets.perAccount(budget)` middleware
+   after authentication (`internal/api/budget.go`).
    `httpx.Budgets.Charge` spends the address before any key, counts refusals,
    refuses an unreadable address or an empty typed key, and answers with the
    budget's window as `Retry-After`. A participant route is charged by
@@ -832,7 +835,7 @@ breaks without noticing (by number; the reasons are there):
 | 1 | Every error you return to a handler is a declared sentinel with a declared answer and a message in every locale. |
 | 2 | Every new string field and every list a request carries has a bound in the domain. |
 | 3 | A `LIKE`/`ILIKE` pattern built from user text goes through `escapeLike`. |
-| 4, 5 | Anything that verifies a password uses `auth.Limiter`; the bounded key (the address) is checked before the unbounded one (the login). A request budget is declared once and charged through `httpx.Budgets.Charge`, which keeps that order. |
+| 4, 5 | Anything that verifies a password uses `auth.Limiter`; the bounded key (the address) is checked before the unbounded one (the login). A request budget a handler charges is declared once and charged through `httpx.Budgets.Charge`, which keeps that order. Four budgets keyed by an account or registration the service has already resolved are still a domain service's own `auth.Limiter` call: workspace writes, questions to the organisers, signal batches and test mails. |
 | 6 | No write on a hot path (middleware, every request) unless something observable changes. |
 | 7 | A new filter on a list endpoint lands with the index that serves it, in the same change. |
 | 8 | A partial-success import classifies errors: only row-level sentinels become "skipped". |
