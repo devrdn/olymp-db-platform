@@ -167,6 +167,21 @@ describe("the staff table", () => {
     await vi.waitFor(() => expect(revealStandingsAction).toHaveBeenCalledOnce());
   });
 
+  test("offers to reload when the reveal is refused for a contest that moved since", async () => {
+    revealStandingsAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
+    routerRefresh.mockReset();
+    const user = userEvent.setup();
+    show(board(), "finished");
+
+    await user.click(screen.getByRole("button", { name: t().reveal }));
+    await answerYes(t().revealConfirm);
+    expect(await screen.findByText(dict.errors.contest_changed)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(routerRefresh).toHaveBeenCalled();
+    expect(screen.queryByText(dict.errors.contest_changed)).not.toBeInTheDocument();
+  });
+
   test("uses a fixed table layout so a long name truncates rather than growing the table", () => {
     show(board(), "running");
 

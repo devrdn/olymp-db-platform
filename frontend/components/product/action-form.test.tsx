@@ -8,7 +8,10 @@ import type { ActionState } from "@/lib/api/server";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 
-import { ActionButton, ActionFooter, ActionForm, ActionOutcome, useActionStatus } from "./action-form";
+import { ActionButton, ActionFooter, ActionForm, ActionOutcome, ActionReload, useActionStatus } from "./action-form";
+
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 // The dialog chunk's first load waits for the test, which fails it; later
 // loads go through.
@@ -497,5 +500,63 @@ describe("ActionForm's children", () => {
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     expect(await screen.findByText("added 3")).toBeInTheDocument();
+  });
+});
+
+describe("ActionReload", () => {
+  function Stale({ answer }: { answer: ActionState }) {
+    return (
+      <ActionForm action={recording(answer).action} errors={dict.errors}>
+        <input aria-label="Rate" name="rate" defaultValue="0" />
+        <ActionButton>Save</ActionButton>
+        <ActionOutcome />
+        <ActionReload code="contest_changed" label="Reload" />
+      </ActionForm>
+    );
+  }
+
+  test("is offered under its refusal only", async () => {
+    render(<Stale answer={{ code: "invalid_cidr" }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload" })).not.toBeInTheDocument();
+  });
+
+  test("is not offered while the form is sending again, so a reload cannot drop that answer", async () => {
+    let settle: (state: ActionState) => void = () => {};
+    const action = vi
+      .fn<(previous: ActionState, form: FormData) => Promise<ActionState>>()
+      .mockResolvedValueOnce({ code: "contest_changed" })
+      .mockImplementationOnce(() => new Promise((resolve) => (settle = resolve)));
+    render(
+      <ActionForm action={action} errors={dict.errors}>
+        <ActionButton>Save</ActionButton>
+        <ActionReload code="contest_changed" label="Reload" />
+      </ActionForm>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("button", { name: "Reload" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(screen.queryByRole("button", { name: "Reload" })).not.toBeInTheDocument();
+    settle({ code: "contest_changed" });
+    expect(await screen.findByRole("button", { name: "Reload" })).toBeInTheDocument();
+  });
+
+  test("re-reads the page and starts the form over: nothing typed kept, the refusal gone", async () => {
+    refresh.mockReset();
+    render(<Stale answer={{ code: "contest_changed" }} />);
+
+    await userEvent.clear(screen.getByLabelText("Rate"));
+    await userEvent.type(screen.getByLabelText("Rate"), "12");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Rate")).toHaveValue("0");
   });
 });

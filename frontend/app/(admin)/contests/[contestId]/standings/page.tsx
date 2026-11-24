@@ -28,7 +28,7 @@ export default async function StandingsPage(props: PageProps<"/contests/[contest
           contestId={contest.id}
           status={contest.status}
           standings={standings}
-          dict={{ leaderboard: dict.leaderboard, errors: dict.errors }}
+          dict={{ leaderboard: dict.leaderboard, errors: dict.errors, workspace: { reload: dict.workspace.reload } }}
           locale={locale}
         />
       ) : null}

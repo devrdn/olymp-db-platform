@@ -183,7 +183,7 @@ describe("ContestPanel, the version it was loaded at", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.expected_version).toBe(3);
-    expect(screen.getByRole("button", { name: t().reload })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: dict.workspace.reload })).toBeInTheDocument();
   });
 
   test("reloads into the contest as it is now: re-read, nothing typed kept, the refusal gone", async () => {
@@ -197,7 +197,7 @@ describe("ContestPanel, the version it was loaded at", () => {
     await user.clear(rate);
     await user.type(rate, "12");
     await user.click(screen.getByRole("button", { name: t().save }));
-    await user.click(await screen.findByRole("button", { name: t().reload }));
+    await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -213,7 +213,27 @@ describe("ContestPanel, the version it was loaded at", () => {
     await user.click(screen.getByRole("button", { name: t().save }));
 
     expect(await screen.findByRole("alert")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: t().reload })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: dict.workspace.reload })).not.toBeInTheDocument();
+  });
+});
+
+describe("a prize or archive save over a contest that moved since", () => {
+  test.each([
+    ["the prize places", () => <PrizePanel contest={contest()} editable dict={dict} />],
+    ["the archive settings", () => <ArchivePanel contest={contest({ visibility: "open" })} archiveOn dict={dict} />],
+  ])("%s offer to reload, and the reload starts the form over", async (_name, panel) => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    refresh.mockReset();
+    const user = userEvent.setup();
+    render(panel());
+
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    await user.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 

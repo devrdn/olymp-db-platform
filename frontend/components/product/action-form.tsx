@@ -13,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { ReloadButton } from "@/components/product/reload-button";
 import { Button } from "@/components/ui/button";
 import { type Question, useConfirm } from "@/components/ui/use-confirm";
 import type { ActionState } from "@/lib/api/server";
@@ -36,6 +37,8 @@ type Bound = {
   /** A code the form refused itself before sending: its question could not be asked. */
   unasked?: string;
   errors: ErrorSentences;
+  /** Mounts the form afresh: its fields, its state and how the last submission went. */
+  restart: () => void;
 };
 
 const BoundForm = createContext<Bound | null>(null);
@@ -95,26 +98,7 @@ function sent(form: FormData): string {
 
 const EMPTY = {};
 
-/**
- * A form bound to a server action: the action's state, its hidden `fields`,
- * and, given `confirm`, the destructive form that asks first. Its parts
- * (`ActionButton`, `ActionOutcome`, `ActionFooter`) read the binding, so a
- * screen lays them out and never handles pending, hydration or a refusal's
- * code itself. `children` may be a function of the state, for a screen that
- * shows what the action returned.
- */
-export function ActionForm<S extends ActionState>({
-  action,
-  initial,
-  fields = {},
-  confirm,
-  errors,
-  revision,
-  onSubmit,
-  className,
-  noValidate,
-  children,
-}: {
+type ActionFormProps<S extends ActionState> = {
   action: (previous: Awaited<S>, form: FormData) => Promise<S>;
   /** The state before anything is sent; empty unless the action's state needs more. */
   initial?: Awaited<S>;
@@ -132,7 +116,34 @@ export function ActionForm<S extends ActionState>({
   className?: string;
   noValidate?: boolean;
   children: ReactNode | ((state: Awaited<S>, pending: boolean) => ReactNode);
-}) {
+};
+
+/**
+ * A form bound to a server action: the action's state, its hidden `fields`,
+ * and, given `confirm`, the destructive form that asks first. Its parts
+ * (`ActionButton`, `ActionOutcome`, `ActionFooter`, `ActionReload`) read the
+ * binding, so a screen lays them out and never handles pending, hydration or
+ * a refusal's code itself. `children` may be a function of the state, for a
+ * screen that shows what the action returned.
+ */
+export function ActionForm<S extends ActionState>(props: ActionFormProps<S>) {
+  const [restarts, setRestarts] = useState(0);
+  return <BoundActionForm key={restarts} {...props} restart={() => setRestarts((count) => count + 1)} />;
+}
+
+function BoundActionForm<S extends ActionState>({
+  action,
+  initial,
+  fields = {},
+  confirm,
+  errors,
+  revision,
+  onSubmit,
+  className,
+  noValidate,
+  children,
+  restart,
+}: ActionFormProps<S> & { restart: () => void }) {
   const [state, formAction, pending] = useActionState<S, FormData>(action, initial ?? (EMPTY as Awaited<S>));
   const hydrated = useHydrated();
   // React replays a submission queued before hydration without `onSubmit`,
@@ -144,7 +155,7 @@ export function ActionForm<S extends ActionState>({
   const [unasked, setUnasked] = useState<string | undefined>(undefined);
 
   return (
-    <BoundForm.Provider value={{ state, pending, locked, unasked, errors }}>
+    <BoundForm.Provider value={{ state, pending, locked, unasked, errors, restart }}>
       <form
         action={formAction}
         className={className}
@@ -298,6 +309,18 @@ export function FailureAlert({
       {children}
     </div>
   );
+}
+
+/**
+ * Offered under one refusal, `code`, that a fresh copy of the page answers:
+ * re-reads the page and starts the form over with it, so the refusal goes
+ * with what was typed. Not while the form sends again, whose answer the
+ * restart would drop.
+ */
+export function ActionReload({ code, label }: { code: string; label: string }) {
+  const { state, pending, restart } = useBound("ActionReload");
+
+  return state.code === code && !pending ? <ReloadButton label={label} onReload={restart} /> : null;
 }
 
 /**

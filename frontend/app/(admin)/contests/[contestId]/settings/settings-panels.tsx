@@ -2,8 +2,7 @@
 
 import { useId, useState } from "react";
 
-import { ActionFooter, ActionForm, useActionStatus } from "@/components/product/action-form";
-import { ReloadButton } from "@/components/product/reload-button";
+import { ActionFooter, ActionForm } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
@@ -19,6 +18,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
+import { ReloadWhenChanged } from "../reload-when-changed";
 import {
   saveArchiveSettingsAction,
   saveLanguagesAction,
@@ -208,33 +208,22 @@ type ContestPanelProps = {
 
 /**
  * The contest's fields. While the contest runs settings stay editable but the
- * shape freezes; frozen controls stay in the form, disabled. A reload after a
- * save refused for a contest that moved starts the form over, so it shows the
- * contest as it is now and the refusal goes with what was typed.
+ * shape freezes; frozen controls stay in the form, disabled.
  */
 export function ContestPanel(props: ContestPanelProps) {
   const { contest, dict } = props;
-  const [reloads, setReloads] = useState(0);
 
   return (
     <ActionForm
-      key={reloads}
       action={saveSettingsAction}
       fields={{ contestId: contest.id, expectedVersion: contest.version }}
       errors={dict.errors}
       revision={contest.updatedAt}
       className="contents"
     >
-      <ContestFields {...props} onReload={() => setReloads((count) => count + 1)} />
+      <ContestFields {...props} />
     </ActionForm>
   );
-}
-
-/** Offered under one refusal only: a save over a contest that moved since the form was rendered. */
-function ReloadWhenChanged({ label, onReload }: { label: string; onReload: () => void }) {
-  const { code } = useActionStatus();
-
-  return code === "contest_changed" ? <ReloadButton label={label} onReload={onReload} /> : null;
 }
 
 /**
@@ -247,8 +236,7 @@ function ContestFields({
   shapeOpen,
   trustedDomain = null,
   dict,
-  onReload,
-}: ContestPanelProps & { onReload: () => void }) {
+}: ContestPanelProps) {
   const t = dict.workspace.settings;
   const [timing, setTiming] = useState<string>(contest.timing);
   const [progression, setProgression] = useState<string>(contest.progression);
@@ -581,7 +569,7 @@ function ContestFields({
         </div>
 
         <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
-          <ReloadWhenChanged label={t.reload} onReload={onReload} />
+          <ReloadWhenChanged label={dict.workspace.reload} />
         </ActionFooter>
       </Panel>
     </>
@@ -653,7 +641,9 @@ export function PrizePanel({
           </p>
         </div>
 
-        <ActionFooter labels={dict.workspace.settings} disabled={!editable} />
+        <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
+          <ReloadWhenChanged label={dict.workspace.reload} />
+        </ActionFooter>
       </Panel>
     </ActionForm>
   );
@@ -728,7 +718,9 @@ export function ArchivePanel({
           </p>
         </div>
 
-        <ActionFooter labels={dict.workspace.settings} />
+        <ActionFooter labels={dict.workspace.settings}>
+          <ReloadWhenChanged label={dict.workspace.reload} />
+        </ActionFooter>
       </Panel>
     </ActionForm>
   );

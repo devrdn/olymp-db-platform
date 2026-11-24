@@ -5,6 +5,7 @@ import type { ContestStatus } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { setStatusAction } from "./actions";
+import { ReloadWhenChanged } from "./reload-when-changed";
 
 /**
  * Status transitions as buttons, offered when the mirrored table allows.
@@ -52,6 +53,7 @@ export function StatusActions({
       </div>
 
       <ActionOutcome />
+      <ReloadWhenChanged label={t.reload} />
     </ActionForm>
   );
 }

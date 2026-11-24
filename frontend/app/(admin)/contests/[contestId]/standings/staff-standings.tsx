@@ -17,10 +17,13 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
+import { ReloadWhenChanged } from "../reload-when-changed";
 import { revealStandingsAction } from "./actions";
 import { fetchStaffStandings } from "./requests";
 
-type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors">;
+type StaffStandingsDictionary = Pick<Dictionary, "leaderboard" | "errors"> & {
+  workspace: Pick<Dictionary["workspace"], "reload">;
+};
 
 /** Poll interval for a running contest's staff table. */
 export const STAFF_REFRESH_MS = 15_000;
@@ -330,6 +333,7 @@ function Reveal({ contestId, dict }: { contestId: string; dict: StaffStandingsDi
         {t.reveal}
       </ActionButton>
       <ActionOutcome narrow />
+      <ReloadWhenChanged label={dict.workspace.reload} />
     </ActionForm>
   );
 }

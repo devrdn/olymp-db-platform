@@ -1235,13 +1235,14 @@ const en = {
         },
       },
     },
+    /** Re-reads the page, offered under a refusal that a fresh copy answers. */
+    reload: "Reload the page",
     settings: {
       heading: "Settings",
       lede: "Everything about this contest that is configuration rather than content.",
     save: "Save",
       saving: "Saving",
       saved: "Saved.",
-      reload: "Reload the page",
       schedule: {
         heading: "When it runs",
         help: "The window stays editable while the contest is running: extending it after a power cut is exactly what a running contest needs.",

@@ -1125,13 +1125,13 @@ const ro = {
         },
       },
     },
+    reload: "Reîncărcați pagina",
     settings: {
       heading: "Setări",
       lede: "Tot ce ține de configurarea olimpiadei, nu de conținutul ei.",
     save: "Salvați",
       saving: "Se salvează",
       saved: "Salvat.",
-      reload: "Reîncărcați pagina",
       schedule: {
         heading: "Când se desfășoară",
         help: "Fereastra rămâne editabilă în timpul desfășurării: prelungirea ei după o pană de curent este exact ce îi trebuie unei olimpiade în curs.",
