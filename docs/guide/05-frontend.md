@@ -393,8 +393,9 @@ What `ActionForm` keeps for every form, so a screen does not handle it:
 - **A contest that moved meanwhile** is refused with `contest_changed`: for
   the settings form, which sends the `version` it was loaded at, since it was
   rendered; for prize places, archive settings, status actions and the
-  reveal, which send none, only while the save is decided. Under that refusal
-  `ReloadWhenChanged`
+  reveal, which send none, only while the save is decided. A status action
+  whose status moved during the save is refused as `status_changed` instead,
+  which offers no reload. Under `contest_changed`, `ReloadWhenChanged`
   (`app/(admin)/contests/[contestId]/reload-when-changed.tsx`) offers a
   reload, which re-reads the page and starts the form over with the fresh
   copy. All five forms carry it.

@@ -1114,8 +1114,13 @@ content edit moved it, or the scheduler started or finished it since the form
 was rendered. The other saves (prize places, archive settings, a status
 change, the reveal) carry no version from the screen: they are checked against
 the row they read while the save is decided, so they are refused only when
-the contest moved during the save itself, and a screen left open while
-somebody else saved overwrites what was saved. Either way, a refused save
+the contest moved during the save itself. A prize-places or archive screen
+left open while somebody else saved them overwrites what was saved. A status
+change and the reveal are decided against the contest as it now is: a stale
+status change is refused unless the move is still allowed from where the
+contest now is (`invalid_transition`), or as `status_changed` when the status
+itself moves during the save, with no reload offered under either; a stale reveal finds
+the standings already revealed and writes nothing. Either way, a refused save
 wrote nothing.
 
 **Fix.** Press **Reload the page**, which reads the contest as it now is and

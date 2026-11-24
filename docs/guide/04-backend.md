@@ -41,7 +41,8 @@ flowchart TB
     cmdapi["cmd/api"]
     cmdjobs["cmd/migrate, bootstrap, gamedb, gameorphans, gamecheck, testdb"]
     cmdqr["cmd/queryrunner"]
-    cmdtools["cmd/apicontract, auditcontract (generated contracts), consoleload (load test over HTTP)"]
+    cmdtools["cmd/apicontract, auditcontract (generated contracts)"]
+    cmdload["cmd/consoleload (load test over HTTP; builds its fixture in both databases)"]
   end
 
   app["internal/app (composition root)"]
@@ -85,6 +86,8 @@ flowchart TB
   qr --> sp
   chk --> sp
   cmdjobs --> pg
+  cmdload --> pg
+  cmdload --> gamedb
   cmdjobs --> mig
   dom --> platform
   api --> platform

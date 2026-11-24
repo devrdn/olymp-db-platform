@@ -605,6 +605,14 @@ they are being saved. Nothing was saved. Press **Reload the page** under the
 sentence, check the contest as it now is, and save again
 ([8. Troubleshooting](08-troubleshooting.md#a-save-says-the-contest-changed-while-you-were-deciding)).
 
+A prize-places or archive screen left open while a colleague saved them
+overwrites their values. A stale status change is refused unless the move is
+still allowed from where the contest now is (`invalid_transition`, or
+`status_changed` when the status moves during the save), and no reload is
+offered under either: reload the page yourself. A stale **Archive** still
+archives a contest the scheduler has finished since, because a finished
+contest may be archived.
+
 #### A participant broke their database
 
 1. In a `read_write` contest, ask them to press **Reset database** on the play
