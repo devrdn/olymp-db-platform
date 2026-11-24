@@ -390,12 +390,14 @@ What `ActionForm` keeps for every form, so a screen does not handle it:
   double-click cannot land on it. A name the user chose goes into the question
   through `isolate` (section 4). If the dialog cannot be loaded, nothing is
   sent and the form says so.
-- **A contest that moved meanwhile** is refused with `contest_changed`. Under
-  that refusal `ReloadWhenChanged`
+- **A contest that moved meanwhile** is refused with `contest_changed`: for
+  the settings form, which sends the `version` it was loaded at, since it was
+  rendered; for prize places, archive settings, status actions and the
+  reveal, which send none, only while the save is decided. Under that refusal
+  `ReloadWhenChanged`
   (`app/(admin)/contests/[contestId]/reload-when-changed.tsx`) offers a
   reload, which re-reads the page and starts the form over with the fresh
-  copy. The settings, prize places, archive settings, status actions and the
-  reveal carry it.
+  copy. All five forms carry it.
 
 ### A form submitted through a server action, traced
 
