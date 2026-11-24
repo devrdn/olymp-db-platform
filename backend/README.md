@@ -833,6 +833,12 @@ and prints the password to stdout, apart from the logs:
 CORE_DB_DSN=... go run ./cmd/bootstrap -login root -name "Root Administrator"
 ```
 
+A live account already holding the login is found and left as it is. Only a
+new one is created, under the rule every new login keeps: no dot, since the
+sign-in letter mails the login and a mail client turns a dotted one into a
+link. A dotted `-login` (the Makefile's `ADMIN_LOGIN`) is therefore refused
+whenever the account has to be made.
+
 The account is flagged so the first sign-in ends in choosing a real password —
 and the flag is enforced: until the password is changed, every endpoint except
 `/auth/password`, `/auth/logout` and `/auth/me` answers 403
