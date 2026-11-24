@@ -1557,6 +1557,7 @@ const ru = {
       one: {
         title: "Новый аккаунт",
         login: "Логин",
+        loginHint: "Логин не может содержать точку: используйте дефис или подчёркивание, например ion-popescu.",
         fullName: "Полное имя",
         email: "Почта",
         rolesLabel: "Роли",
@@ -1569,7 +1570,7 @@ const ru = {
         title: "Импорт списка",
         hint: "По одному человеку на строку: логин, полное имя и, при желании, почта — через запятую.",
         rosterLabel: "Список",
-        placeholder: "s.popescu, Sergiu Popescu\ni.ivanov, Ivan Ivanov, i@example.edu",
+        placeholder: "s-popescu, Sergiu Popescu\ni-ivanov, Ivan Ivanov, i@example.edu",
         rolesLabel: "Роли",
         submit: "Импортировать",
         importing: "Импортируем",

@@ -27,10 +27,12 @@ vi.mock("./create-actions", () => ({ createAccountAction, importAccountsAction }
 import { AccountCreateControls } from "./account-create";
 
 let en: Dictionary;
+let ro: Dictionary;
 let ru: Dictionary;
 
 beforeAll(async () => {
   en = await getDictionary("en");
+  ro = await getDictionary("ro");
   ru = await getDictionary("ru");
 });
 
@@ -149,6 +151,66 @@ describe("new account: the one-time password must survive the dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: ru.accounts.create.one.submit }));
 
     expect(await screen.findByText(ru.errors.login_taken)).toBeVisible();
+  });
+});
+
+describe("the login rule, stated where a login is typed", () => {
+  const locales = () => [en, ro, ru];
+
+  test("the one-account form says a login holds no dot, beneath the field", async () => {
+    render(<AccountCreateControls roles={roles} dict={en} locale="en" mail={{ status: "off" }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.new }));
+
+    expect(screen.getByLabelText(en.accounts.create.one.login)).toHaveAccessibleDescription(
+      en.accounts.create.one.loginHint,
+    );
+  });
+
+  test("a dotted login refused by the server is said by its sentence and blamed on the field", async () => {
+    createAccountAction.mockResolvedValueOnce({ code: "login_has_dot" });
+    render(<AccountCreateControls roles={roles} dict={ro} locale="ro" mail={{ status: "off" }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: ro.accounts.create.new }));
+    await userEvent.type(screen.getByLabelText(ro.accounts.create.one.login), "s.popescu");
+    await userEvent.type(screen.getByLabelText(ro.accounts.create.one.fullName), "Sergiu Popescu");
+    await userEvent.click(screen.getByRole("button", { name: ro.accounts.create.one.submit }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(ro.errors.login_has_dot);
+    const login = screen.getByLabelText(ro.accounts.create.one.login);
+    expect(login).toHaveAttribute("aria-invalid", "true");
+    expect(login).toHaveAccessibleDescription(expect.stringContaining(ro.errors.login_has_dot));
+  });
+
+  test("the roster's example logins hold no dot in any locale", () => {
+    for (const dict of locales()) {
+      const logins = dict.accounts.create.roster.placeholder.split("\n").map((line) => line.split(",")[0].trim());
+      expect(logins.length).toBeGreaterThan(0);
+      for (const login of logins) expect(login).not.toContain(".");
+    }
+  });
+
+  test("the roster says the login rule after how to write a line", async () => {
+    render(<AccountCreateControls roles={roles} dict={ru} locale="ru" mail={{ status: "off" }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.create.import }));
+
+    expect(screen.getByRole("dialog")).toHaveAccessibleDescription(
+      `${ru.accounts.create.roster.hint} ${ru.accounts.create.one.loginHint}`,
+    );
+  });
+
+  test("a row skipped for a dot in its login says so", async () => {
+    importAccountsAction.mockResolvedValueOnce({
+      result: { created: [], skipped: [{ login: "i.ivanov", reason: "login_has_dot" }] },
+    });
+    render(<AccountCreateControls roles={roles} dict={en} locale="en" mail={{ status: "off" }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
+    await userEvent.type(screen.getByLabelText(en.accounts.create.roster.rosterLabel), "i.ivanov, Ivan Ivanov");
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.roster.submit }));
+
+    expect(await screen.findByText(en.accounts.create.roster.reason.login_has_dot)).toBeVisible();
   });
 });
 

@@ -183,6 +183,11 @@ function NotImportedRows({ logins, title, why }: { logins: readonly string[]; ti
   );
 }
 
+const FAILURE_ID = "create-account-failure";
+
+/** Refusals about the login alone, so the form points at that field. */
+const LOGIN_REFUSALS: ReadonlySet<string> = new Set(["login_has_dot", "login_taken"]);
+
 type FormDialogProps = {
   roles: Role[];
   dict: Dictionary;
@@ -257,13 +262,21 @@ function NewAccount({
     );
   }
 
+  const blamesLogin = state.code !== undefined && LOGIN_REFUSALS.has(state.code);
+
   return (
     <>
       <DialogHeader>
         <DialogTitle>{t.one.title}</DialogTitle>
       </DialogHeader>
 
-      <Field id="create-account-login" label={t.one.login}>
+      <Field
+        id="create-account-login"
+        label={t.one.login}
+        hint={t.one.loginHint}
+        invalid={blamesLogin}
+        describedBy={blamesLogin ? FAILURE_ID : undefined}
+      >
         <Input name="login" required />
       </Field>
 
@@ -279,7 +292,7 @@ function NewAccount({
 
       <SendByEmailOption mail={mail} dict={dict} />
 
-      <ActionOutcome />
+      <ActionOutcome id={FAILURE_ID} />
 
       <DialogFooter>
         <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
@@ -392,7 +405,7 @@ function ImportRoster({
           <NotImportedRows
             logins={notImported}
             title={fill(t.roster.notImported, { n: notImported.length })}
-            why={stopped ? (messageForCode(stopped, dict.errors)) : null}
+            why={stopped ? messageForCode(stopped, dict.errors) : null}
           />
         ) : null}
 
@@ -413,7 +426,9 @@ function ImportRoster({
     <>
       <DialogHeader>
         <DialogTitle>{t.roster.title}</DialogTitle>
-        <DialogDescription>{t.roster.hint}</DialogDescription>
+        <DialogDescription>
+          {t.roster.hint} {t.one.loginHint}
+        </DialogDescription>
       </DialogHeader>
 
       <div className="flex flex-col gap-2">

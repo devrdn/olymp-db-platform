@@ -1704,6 +1704,7 @@ const en = {
       one: {
         title: "New account",
         login: "Login",
+        loginHint: "A login cannot contain a dot: use a hyphen or an underscore, as in ion-popescu.",
         fullName: "Full name",
         email: "Email",
         rolesLabel: "Roles",
@@ -1716,7 +1717,7 @@ const en = {
         title: "Import a roster",
         hint: "One line per person: login, full name, and optionally email, separated by commas.",
         rosterLabel: "Roster",
-        placeholder: "s.popescu, Sergiu Popescu\ni.ivanov, Ivan Ivanov, i@example.edu",
+        placeholder: "s-popescu, Sergiu Popescu\ni-ivanov, Ivan Ivanov, i@example.edu",
         rolesLabel: "Roles",
         submit: "Import",
         importing: "Importing",

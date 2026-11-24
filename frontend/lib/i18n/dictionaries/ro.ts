@@ -1558,6 +1558,7 @@ const ro = {
       one: {
         title: "Cont nou",
         login: "Login",
+        loginHint: "Login-ul nu poate conține un punct: folosiți o cratimă sau o liniuță de subliniere, ca în ion-popescu.",
         fullName: "Nume complet",
         email: "E-mail",
         rolesLabel: "Roluri",
@@ -1570,7 +1571,7 @@ const ro = {
         title: "Importați o listă",
         hint: "Câte o persoană pe linie: login, nume complet și, opțional, e-mail, separate prin virgulă.",
         rosterLabel: "Listă",
-        placeholder: "s.popescu, Sergiu Popescu\ni.ivanov, Ivan Ivanov, i@example.edu",
+        placeholder: "s-popescu, Sergiu Popescu\ni-ivanov, Ivan Ivanov, i@example.edu",
         rolesLabel: "Roluri",
         submit: "Importați",
         importing: "Se importă",
