@@ -597,9 +597,11 @@ ones you hear about, and what to do
 
 #### A save says the contest changed
 
-Two organisers editing one contest, or a save made just as the scheduler
-starts or finishes it, meet "This contest changed while you were deciding"
-(`contest_changed`). Nothing was saved. Press **Reload the page** under the
+A settings save made on a form loaded before another organiser's save, a
+content edit, or the scheduler's start or finish meets "This contest changed
+while you were deciding" (`contest_changed`); prize places, archive settings,
+a status change and the reveal meet it only when the contest moves while
+they are being saved. Nothing was saved. Press **Reload the page** under the
 sentence, check the contest as it now is, and save again
 ([8. Troubleshooting](08-troubleshooting.md#a-save-says-the-contest-changed-while-you-were-deciding)).
 
