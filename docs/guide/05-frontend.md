@@ -368,11 +368,13 @@ Patterns an action must follow:
 
 What `ActionForm` keeps for every form, so a screen does not handle it:
 
-- **A refusal keeps what was typed.** Only password fields are cleared, so a
-  password is not left on screen for the next person at the machine. The
-  fields start over only after a save that worked, from the server's copy
-  (`revision` names the version they show), or on a reload under a refusal
-  (`ActionReload`, below).
+- **A refusal keeps what was typed**, once the page has hydrated. Only
+  password fields are cleared, so a password is not left on screen for the
+  next person at the machine. The fields start over only after a save that
+  worked, from the server's copy (`revision` names the version they show), or
+  on a reload under a refusal (`ActionReload`, below). A submission before
+  hydration, or without JavaScript, is a native POST, and the page the server
+  sends back starts its fields afresh.
 - **It works without JavaScript.** The form renders as a native POST to its
   server action, so one submitted before the page hydrates, or with no
   JavaScript at all, still reaches the action. An end-to-end test signs in
@@ -569,7 +571,10 @@ is filled from, in the unit the sentence speaks of. `getDictionary` fills these
 placeholders once per locale when the dictionary loads, writing each number as
 the locale writes it, and leaves every other placeholder for `fill` at render.
 `lib/i18n/bounds.test.ts` fails on a bound left unfilled, on one no sentence
-states, and on a locale whose sentence names other bounds than English.
+states, on a locale whose sentence names other bounds than English, on a
+bound whose value moved a Romanian or Russian sentence into another plural
+category, and on a placeholder that is neither a bound nor a name a screen
+fills.
 
 ## 5. The design system in practice
 
