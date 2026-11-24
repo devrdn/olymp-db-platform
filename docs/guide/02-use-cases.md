@@ -296,7 +296,7 @@ flowchart LR
 | Write the game script and build it | `/contests/{contestID}/game` | `GET /game`, `GET`, `PUT /game/script`, `POST /game/build` | `provisioning` | `contest.view` to read, `contest.edit` to write; replacing the game of a live contest is refused (`game_not_editable`), and so is rebuilding it unless its template is missing from the game cluster |
 | Upload a finished dump | `/contests/{contestID}/game` | `POST /game/uploads`, `PUT /game/uploads/{uploadID}/chunk`, `POST .../complete`, `POST .../abort`, `GET /game/uploads/current`, `GET .../window` | `provisioning`, `gamefile` | As above; needs `GAME_UPLOAD_DIR`; starting an upload is rate-limited |
 | Describe tables and load their data | `/contests/{contestID}/game` | `GET`, `PUT /game/definition`; `POST /game/tables/{table}/data`, `PUT .../data/{dataID}/chunk`, `POST .../complete`, `POST .../abort`, `GET .../data/current`, `GET .../data/window`; `POST /game/tables/{table}/rows`, `DELETE .../rows/{row}` | `provisioning`, `gamefile` | As above |
-| Change settings, languages and SQL policy | `/contests/{contestID}/settings` | `PATCH /contests/{contestID}`, `PUT .../languages`, `GET`, `PUT .../sql-policy` | `contests` | `contest.view` to read, `contest.edit` to write; the shape, the languages and the SQL policy freeze at the start |
+| Change settings, languages and SQL policy | `/contests/{contestID}/settings` | `PATCH /contests/{contestID}`, `PUT .../languages`, `GET`, `PUT .../sql-policy` | `contests` | `contest.view` to read, `contest.edit` to write; the shape, the languages and the SQL policy freeze at the start; a save that sends the `version` it was loaded at as `expected_version` (optional; the settings form always does) is refused when the contest was written since (`contest_changed`) |
 | Upload or remove a cover | `/contests/{contestID}/settings` | `GET`, `PUT`, `DELETE /contests/{contestID}/cover`, `GET .../cover/file` | `covers` | `contest.view` to read, `contest.edit` to write; uploads per minute capped |
 
 In the game rows, `/game` stands for `/contests/{contestID}/game`.
@@ -345,7 +345,7 @@ flowchart LR
 | Appoint or revoke a manager | `/contests/{contestID}/people` | `PUT`, `DELETE /contests/{contestID}/managers/{userID}` | `contests` | `contest.manage`: the owner only; the owner row cannot change (`owner_immutable`); a participant cannot become staff |
 | Find an account to add | `/contests/{contestID}/people` | `GET /contests/{contestID}/people/directory?q=` | `contests` | `participant.manage` |
 | List and add participants | `/contests/{contestID}/people` | `GET`, `POST /contests/{contestID}/participants` | `contests` | `participant.manage`; staff, blocked and deleted accounts are skipped with a reason |
-| Remove a participant | `/contests/{contestID}/people` | `DELETE /contests/{contestID}/participants/{userID}` | `contests` | `participant.manage`; only before they have a record (`participant_started`) |
+| Remove a participant | `/contests/{contestID}/people` | `DELETE /contests/{contestID}/participants/{userID}` | `contests` | `participant.manage`; only before they have a record (`participant_started`); once the contest is over the screen asks first |
 | Disqualify a participant | `/contests/{contestID}/people` | `POST /contests/{contestID}/participants/{userID}/disqualify` | `contests` | `participant.manage`; keeps everything they did |
 | Watch every participant | `/contests/{contestID}/monitor` | `GET .../monitor/participants`, `GET .../monitor/feed`, `GET .../monitor/export.csv` | `monitor` | `contest.monitor`; reads per minute capped (`monitor_too_often`) |
 | Answer participants' questions, post announcements | `/contests/{contestID}/clarifications` | `GET .../clarifications`, `POST` and `PUT .../clarifications/{clarificationID}/answer`, `GET` and `POST .../announcements` | `clarifications` | `contest.clarify`; writes only while the contest runs (`clarifications_closed`) |
@@ -403,8 +403,8 @@ flowchart LR
 
 | Use case | Screen | API | Package | Permission or condition |
 |---|---|---|---|---|
-| List, find and create accounts | `/users` | `GET`, `POST /users`; `GET /roles`; `GET /users/mail-status` | `users` | `users.manage`; `send_by_email` also emails the sign-in details (`mail_off` while mail is off) |
-| Import a roster of accounts | `/users` | `POST /users/import` | `users` | `users.manage`; partial success, a skipped row carries its reason; `send_by_email` as for one account |
+| List, find and create accounts | `/users` | `GET`, `POST /users`; `GET /roles`; `GET /users/mail-status` | `users` | `users.manage`; a new login holds no dot (`login_has_dot`); `send_by_email` also emails the sign-in details (`mail_off` while mail is off) |
+| Import a roster of accounts | `/users` | `POST /users/import` | `users` | `users.manage`; partial success, a skipped row carries its reason (a dotted login is `login_has_dot`); `send_by_email` as for one account |
 | Act on many accounts at once | `/users` | `POST /users/bulk/status`, `/bulk/roles`, `/bulk/password-reset` | `users` | `users.manage`; a bounded selection (`too_many_accounts`) |
 | See and edit one account | `/users/{userID}` | `GET`, `PATCH /users/{userID}` | `users` | `users.manage` |
 | Block, unblock, delete, restore | `/users/{userID}` | `POST /users/{userID}/block`, `/unblock`, `/delete`, `/restore` | `users` | `users.manage`; blocking and deleting need a reason; never on oneself; never the last administrator |
@@ -520,8 +520,8 @@ participant's own time, then the address, then "not yet". The rule is
 is described in the [glossary](01-overview.md#the-glossary) and in
 [ARCHITECTURE.md §8.1](../ARCHITECTURE.md#81-the-participation-gate). The
 HTTP answers are rows in
-[`errortable.go`](../../backend/internal/api/errortable.go) (`standingErrors`
-and `queryproxyErrors`); the sentences are in the locale dictionaries, for
+[`errortable.go`](../../backend/internal/api/errortable.go) (`standingErrors`,
+`participationErrors` and `queryproxyErrors`); the sentences are in the locale dictionaries, for
 example [`en.ts`](../../frontend/lib/i18n/dictionaries/en.ts). How the play
 screen treats each kind is in
 [`refusals.ts`](../../frontend/app/(participant)/contests/[contestId]/play/refusals.ts).
