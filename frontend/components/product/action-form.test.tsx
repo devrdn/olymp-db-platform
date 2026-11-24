@@ -595,6 +595,28 @@ describe("ActionForm refused", () => {
     expect(screen.getByLabelText("Password")).toHaveValue("");
   });
 
+  // The page a refused native POST comes back to: the visitor may already be
+  // retyping the password when the page hydrates.
+  test("leaves alone a password typed into a page that came back refused, at hydration", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const Refused = () => (
+      <ActionForm action={recording().action} initial={{ code: "invalid_credentials" }} errors={dict.errors}>
+        <input aria-label="Password" name="password" type="password" defaultValue="" />
+        <ActionButton>Sign in</ActionButton>
+        <ActionOutcome />
+      </ActionForm>
+    );
+    container.innerHTML = renderToString(<Refused />);
+    within(container).getByLabelText<HTMLInputElement>("Password").value = "a-second-try";
+
+    render(<Refused />, { container, hydrate: true });
+
+    expect(await within(container).findByRole("alert")).toHaveTextContent(dict.errors.invalid_credentials);
+    expect(within(container).getByLabelText("Password")).toHaveValue("a-second-try");
+    container.remove();
+  });
+
   test("starts over from the saved values once a save worked", async () => {
     render(
       <ActionForm action={recording({ ok: true }).action} errors={dict.errors}>
