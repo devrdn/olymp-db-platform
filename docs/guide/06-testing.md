@@ -175,7 +175,9 @@ The frontend checks the other side of the same files:
   interface repeats differs from its entry in `docs/api/limits.json`, or when
   an entry has no case there. `frontend/lib/i18n/bounds.test.ts` fails when a
   sentence's bound placeholder is left unfilled, a bound in `BOUNDS` is stated
-  nowhere, or a locale states other bounds than English.
+  nowhere, a locale states other bounds than English, a bound's value moves a
+  Romanian or Russian sentence into another plural category, or a sentence
+  holds a placeholder that is neither a bound nor a name a screen fills.
 
 ### Frontend tests
 
