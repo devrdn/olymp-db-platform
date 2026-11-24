@@ -321,8 +321,13 @@ installation's settings decide which exist
 For accounts made by staff: on **Accounts** (`/users`), choose
 **Import a roster** and paste one line per person: login, full name and,
 optionally, email, separated by commas; only an account with an address can be
-emailed. Tick no role: a participant needs none. At most 500 lines a time; a
-line that cannot be used is reported with its reason and the rest go in. Tick
+emailed. A login may not contain a dot: write `s-popescu`, not `s.popescu`,
+since the sign-in letter mails the login and a mail client would turn a dotted
+one into a link. Tick no role: a participant needs none. At most 500 lines a
+time; a line that cannot be used is reported with its reason and the rest go
+in. A dotted login is reported as such; a name holding an invisible formatting
+character, such as a text-direction mark pasted from a spreadsheet, is
+reported as not a usable row. Tick
 **Send sign-in details by email**: each account with an address is sent its
 login, its one-time password and the sign-in link. The one-time passwords are
 also shown once, emailed or not. The first sign-in makes each participant
