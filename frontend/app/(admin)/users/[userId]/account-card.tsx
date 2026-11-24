@@ -1,11 +1,8 @@
 "use client";
 
-import { useState } from "react";
-
 import { ActionButton, ActionFooter, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { Account, Role } from "@/lib/api/accounts";
 import type { Locale } from "@/lib/i18n/config";
@@ -23,6 +20,7 @@ import {
   updateProfileAction,
 } from "./actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "../email-delivery";
+import { ReasonField, useRequiredReason } from "../required-reason";
 import { offeredActions } from "./offered";
 
 /**
@@ -55,39 +53,6 @@ function Panel({
       </div>
       {children}
     </section>
-  );
-}
-
-/**
- * A reason field that refuses empty or whitespace-only input, as the bulk
- * dialogs do. The form is `noValidate`, so this check, not the browser bubble,
- * decides.
- */
-function ReasonField({
-  id,
-  label,
-  missing,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  missing: boolean;
-  onChange: (empty: boolean) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <label htmlFor={id} className="font-mono text-label text-ink-3 uppercase">
-        {label}
-      </label>
-      <Textarea
-        id={id}
-        name="reason"
-        required
-        aria-invalid={missing || undefined}
-        className="min-h-24 font-sans text-body"
-        onChange={(event) => onChange(event.currentTarget.value.trim() === "")}
-      />
-    </div>
   );
 }
 
@@ -145,8 +110,8 @@ export function AccountCard({
   const t = dict.accounts.card;
   const offered = offeredActions(account, viewerId);
 
-  const [blockReasonMissing, setBlockReasonMissing] = useState(false);
-  const [deleteReasonMissing, setDeleteReasonMissing] = useState(false);
+  const blockReason = useRequiredReason(offered.block);
+  const deleteReason = useRequiredReason();
 
   const offersDanger =
     offered.block ||
@@ -234,36 +199,19 @@ export function AccountCard({
                 action={account.status === "active" ? blockAction : unblockAction}
                 fields={{ userId: account.id }}
                 errors={dict.errors}
-                onSubmit={(event) => {
-                  // Only a block needs a reason.
-                  if (!offered.block) return;
-                  const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
-                  if (reason === "") {
-                    event.preventDefault();
-                    setBlockReasonMissing(true);
-                  } else {
-                    setBlockReasonMissing(false);
-                  }
-                }}
+                onSubmit={blockReason.onSubmit}
                 className="flex flex-col gap-2.5"
                 noValidate
               >
                 <p className="max-w-body text-small text-ink-2">{t.blockNote}</p>
 
                 {offered.block ? (
-                  <ReasonField
-                    id="block-reason"
-                    label={t.reasonLabel}
-                    missing={blockReasonMissing}
-                    onChange={(empty) => {
-                      if (blockReasonMissing && !empty) setBlockReasonMissing(false);
-                    }}
-                  />
+                  <ReasonField id="block-reason" label={t.reasonLabel} reason={blockReason} />
                 ) : null}
 
                 <div className="flex flex-wrap items-center gap-4">
                   <ActionButton variant="danger">{offered.block ? t.block : t.unblock}</ActionButton>
-                  <ActionOutcome saved={t.saved} refusal={blockReasonMissing ? "reason_required" : undefined} />
+                  <ActionOutcome saved={t.saved} refusal={blockReason.refusal} />
                 </div>
               </ActionForm>
             ) : null}
@@ -273,34 +221,19 @@ export function AccountCard({
                 action={deleteAction}
                 fields={{ userId: account.id }}
                 errors={dict.errors}
-                onSubmit={(event) => {
-                  const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
-                  if (reason === "") {
-                    event.preventDefault();
-                    setDeleteReasonMissing(true);
-                  } else {
-                    setDeleteReasonMissing(false);
-                  }
-                }}
+                onSubmit={deleteReason.onSubmit}
                 className="flex flex-col gap-2.5"
                 noValidate
               >
                 <p className="max-w-body text-small text-ink-2">{t.deleteNote}</p>
 
-                <ReasonField
-                  id="delete-reason"
-                  label={t.reasonLabel}
-                  missing={deleteReasonMissing}
-                  onChange={(empty) => {
-                    if (deleteReasonMissing && !empty) setDeleteReasonMissing(false);
-                  }}
-                />
+                <ReasonField id="delete-reason" label={t.reasonLabel} reason={deleteReason} />
 
                 <div className="flex flex-wrap items-center gap-4">
                   <ActionButton variant="danger" pendingLabel={t.saving}>
                     {t.delete}
                   </ActionButton>
-                  <ActionOutcome saved={t.saved} refusal={deleteReasonMissing ? "reason_required" : undefined} />
+                  <ActionOutcome saved={t.saved} refusal={deleteReason.refusal} />
                 </div>
               </ActionForm>
             ) : null}

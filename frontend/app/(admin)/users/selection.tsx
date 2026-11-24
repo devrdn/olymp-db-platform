@@ -21,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import type { IssuedPassword, Role, SkippedAccount } from "@/lib/api/accounts";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
 import type { Locale } from "@/lib/i18n/config";
@@ -39,6 +38,7 @@ import {
   type BulkState,
 } from "./bulk-actions";
 import { EmailSummary, SendByEmailOption, sendingRate, type MailOffer } from "./email-delivery";
+import { ReasonField, useRequiredReason } from "./required-reason";
 
 export type SelectedAccount = { id: string; display: string };
 
@@ -438,24 +438,14 @@ function StatusForm({
   // screen must not change under it.
   const [frozenIds] = useState(ids);
   const title = fill(titleTemplate, { n: frozenIds.length });
-  const [reasonMissing, setReasonMissing] = useState(false);
+  const reason = useRequiredReason(requireReason);
 
   return (
     <ActionForm
       action={action}
       fields={{ ids: frozenIds }}
       errors={dict.errors}
-      onSubmit={(event) => {
-        if (!requireReason) return;
-        const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
-        if (reason === "") {
-          // An empty or whitespace-only reason never reaches the server.
-          event.preventDefault();
-          setReasonMissing(true);
-        } else {
-          setReasonMissing(false);
-        }
-      }}
+      onSubmit={reason.onSubmit}
       className="flex flex-col gap-5"
       noValidate
     >
@@ -489,30 +479,9 @@ function StatusForm({
                 <DialogDescription>{description}</DialogDescription>
               </DialogHeader>
 
-              {requireReason ? (
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="bulk-reason" className="font-mono text-label text-ink-3 uppercase">
-                    {t.reasonLabel}
-                  </label>
-                  {/* `required` for ARIA only: the form is `noValidate`, so the
-                     browser's unlocalised bubble never fires. */}
-                  <Textarea
-                    id="bulk-reason"
-                    name="reason"
-                    required
-                    aria-invalid={reasonMissing || undefined}
-                    className="min-h-24 font-sans text-body"
-                    onChange={(event) => {
-                      // Clear the error as soon as it is corrected.
-                      if (reasonMissing && event.currentTarget.value.trim() !== "") {
-                        setReasonMissing(false);
-                      }
-                    }}
-                  />
-                </div>
-              ) : null}
+              {requireReason ? <ReasonField id="bulk-reason" label={t.reasonLabel} reason={reason} /> : null}
 
-              <ActionOutcome refusal={reasonMissing ? "reason_required" : undefined} />
+              <ActionOutcome refusal={reason.refusal} />
 
               <DialogFooter>
                 <Button type="button" variant="quiet" onClick={onClose} disabled={pending}>
