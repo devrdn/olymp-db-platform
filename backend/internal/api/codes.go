@@ -284,6 +284,8 @@ var (
 
 	codeLoginTaken = httpx.NewCode("login_taken",
 		"Another account already uses this login.")
+	codeLoginHasDot = httpx.NewCode("login_has_dot",
+		"A new login holds a dot, or a character a domain name reads as one; a mail client would turn it into a link. Logins made before the rule keep theirs. An import skips such a row with the reason login_has_dot.")
 	codeEmailTaken = httpx.NewCode("email_taken",
 		"Another account already uses this email address.")
 	codeLastAdministrator = httpx.NewCode("last_administrator",

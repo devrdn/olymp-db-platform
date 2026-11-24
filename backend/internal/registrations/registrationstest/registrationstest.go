@@ -7,6 +7,7 @@ package registrationstest
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -216,7 +217,9 @@ func (a *Accounts) Create(_ context.Context, n registrations.NewAccount) (regist
 	if a.Err != nil {
 		return registrations.Account{}, a.Err
 	}
-	if a.Taken[n.Login] {
+	// The login users.Service derives from the address.
+	login := strings.ToLower(n.Email)
+	if a.Taken[login] {
 		if n.ByEmail {
 			a.Hashes++
 		}
@@ -230,8 +233,8 @@ func (a *Accounts) Create(_ context.Context, n registrations.NewAccount) (regist
 	if a.Taken == nil {
 		a.Taken = map[string]bool{}
 	}
-	a.Taken[n.Login] = true
-	account := registrations.Account{ID: uuid.New(), Login: n.Login, OneTimePassword: "one-time-" + n.Login}
+	a.Taken[login] = true
+	account := registrations.Account{ID: uuid.New(), Login: login, OneTimePassword: "one-time-" + login}
 	if a.Store != nil {
 		a.Store.mu.Lock()
 		a.Store.Logins[account.ID] = account.Login

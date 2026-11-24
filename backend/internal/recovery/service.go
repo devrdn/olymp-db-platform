@@ -314,7 +314,7 @@ func (s *Service) Request(ctx context.Context, loginOrEmail, lang string) error 
 // find resolves what a person typed to an account and reports whether a
 // link may reach it. Anything longer than an address names no account.
 func (s *Service) find(ctx context.Context, loginOrEmail string) (users.User, bool, error) {
-	typed := strings.ToLower(strings.TrimSpace(loginOrEmail))
+	typed := users.TypedKey(loginOrEmail)
 	if typed == "" || len(typed) > users.MaxEmailLength {
 		return users.User{}, false, nil
 	}

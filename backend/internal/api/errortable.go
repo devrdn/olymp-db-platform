@@ -293,6 +293,9 @@ var usersErrors = errorTable{
 	{err: users.ErrUnknownRole, status: http.StatusBadRequest, code: codeUnknownRole,
 		message: "One of the roles does not exist"},
 	{err: users.ErrRosterTooLarge, status: http.StatusBadRequest, code: codeInvalidRequest},
+	// Above ErrInvalidAccount, which it wraps.
+	{err: users.ErrLoginHasDot, status: http.StatusBadRequest, code: codeLoginHasDot,
+		message: "A new login must not contain a dot"},
 	{err: users.ErrInvalidAccount, status: http.StatusBadRequest, code: codeInvalidRequest},
 	// Only changing one's own password can be refused for strength; resets and
 	// imports generate theirs. The unchanged-password case gets a sentence,
@@ -394,6 +397,10 @@ var registrationsErrors = errorTable{
 	{err: registrations.ErrInvalidEmail, status: http.StatusBadRequest, code: codeRegistrationInvalidEmail},
 	{err: registrations.ErrFull, status: http.StatusConflict, code: codeRegistrationFull},
 	{err: registrations.ErrNotFound, status: http.StatusNotFound, code: codeRegistrationNotFound},
+	// Parse refuses what the account would; this keeps a rule added to users
+	// alone the person's mistake rather than a 500.
+	{err: users.ErrInvalidAccount, status: http.StatusBadRequest, code: codeInvalidRequest,
+		message: "the registration details are not valid"},
 }
 
 // signupErrors answers every error in signup.Errors() (walked by

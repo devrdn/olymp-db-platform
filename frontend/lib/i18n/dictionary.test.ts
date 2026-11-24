@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, test } from "vitest";
 
-import { EMAIL_SKIP_REASONS } from "../api/accounts-terms";
+import { EMAIL_SKIP_REASONS, IMPORT_SKIP_REASONS } from "../api/accounts-terms";
 import { LOGIN_FAILURE_REASONS } from "../api/audit";
 import { PUBLISH_PROBLEMS } from "../api/publish-gate";
 import { LOCALES } from "./config";
@@ -99,6 +99,17 @@ describe("getDictionary", () => {
     for (const dict of dictionaries) {
       const translated = dict.accounts.emailSkipped as Record<string, string>;
       for (const code of EMAIL_SKIP_REASONS) {
+        expect(translated[code], `missing translation for "${code}"`).toBeTypeOf("string");
+      }
+    }
+  });
+
+  test("every reason an import skipped a row has a translation in every locale", async () => {
+    const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
+
+    for (const dict of dictionaries) {
+      const translated = dict.accounts.create.roster.reason as Record<string, string>;
+      for (const code of IMPORT_SKIP_REASONS) {
         expect(translated[code], `missing translation for "${code}"`).toBeTypeOf("string");
       }
     }

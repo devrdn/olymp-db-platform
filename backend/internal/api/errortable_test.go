@@ -261,6 +261,8 @@ func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 			message: "User not found"},
 		users.ErrInvalidAccount: {status: http.StatusBadRequest, code: "invalid_request",
 			message: "account details are not valid"},
+		users.ErrLoginHasDot: {status: http.StatusBadRequest, code: "login_has_dot",
+			message: "A new login must not contain a dot"},
 		users.ErrLoginTaken: {status: http.StatusConflict, code: "login_taken",
 			message: "This login is already in use"},
 		users.ErrEmailTaken: {status: http.StatusConflict, code: "email_taken",
@@ -714,6 +716,16 @@ func TestEveryRegistrationsErrorHasItsAnswer(t *testing.T) {
 				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
 			}
 		})
+	}
+}
+
+// Parse is meant to refuse whatever the account would, but a rule added to
+// users alone must still reach the person as their own mistake, not a 500.
+func TestARegistrationAnswersAnAccountRefusalAsABadRequest(t *testing.T) {
+	got, ok := answer(t, registrationsErrors, fmt.Errorf("create the account: %w", users.ErrInvalidAccount))
+	if !ok || got.status != http.StatusBadRequest || got.code != "invalid_request" ||
+		got.message != "the registration details are not valid" {
+		t.Errorf("answered %+v (matched %v), want 400 invalid_request with a fixed message", got, ok)
 	}
 }
 

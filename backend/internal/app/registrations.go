@@ -29,12 +29,12 @@ var _ registrations.Accounts = registrationAccounts{}
 // records a nil actor for it.
 func (a registrationAccounts) Create(ctx context.Context, n registrations.NewAccount) (registrations.Account, error) {
 	created, err := a.users.Create(ctx, users.CreateCommand{
-		Login:       n.Login,
-		Email:       n.Email,
-		FullName:    n.FullName,
-		Roles:       []string{registrationRole},
-		Delivery:    users.Delivery{ByEmail: n.ByEmail},
-		SelfService: true,
+		Email:          n.Email,
+		FullName:       n.FullName,
+		Roles:          []string{registrationRole},
+		Delivery:       users.Delivery{ByEmail: n.ByEmail},
+		SelfService:    true,
+		LoginFromEmail: true,
 	})
 	// A taken email is found only when the account is inserted, after its
 	// password was hashed; a taken login is refused before any hashing, so

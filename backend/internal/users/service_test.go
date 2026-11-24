@@ -1543,8 +1543,8 @@ func TestImportCreatesAnAccountForEveryRow(t *testing.T) {
 	result, err := svc.Import(context.Background(), users.ImportCommand{
 		ActorID: f.actor,
 		Rows: []users.ImportRow{
-			{Login: "s.popescu", FullName: "Sergiu Popescu"},
-			{Login: "i.ivanov", FullName: "Ivan Ivanov", Email: "i@example.edu"},
+			{Login: "s-popescu", FullName: "Sergiu Popescu"},
+			{Login: "i-ivanov", FullName: "Ivan Ivanov", Email: "i@example.edu"},
 		},
 		Roles: []string{"student"},
 	})
@@ -1563,7 +1563,7 @@ func TestImportCreatesAnAccountForEveryRow(t *testing.T) {
 			t.Errorf("%s may keep the password an administrator saw", created.User.Login)
 		}
 	}
-	if _, err := repo.ByLogin(context.Background(), "s.popescu"); err != nil {
+	if _, err := repo.ByLogin(context.Background(), "s-popescu"); err != nil {
 		t.Errorf("the account was not stored: %v", err)
 	}
 }
@@ -1572,7 +1572,7 @@ func TestImportReportsTheRowsItCouldNotUse(t *testing.T) {
 	f := newFixture(t)
 	svc := f.service
 	if _, err := svc.Create(context.Background(), users.CreateCommand{
-		Login: "s.popescu", FullName: "Sergiu Popescu",
+		Login: "s-popescu", FullName: "Sergiu Popescu",
 	}); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
@@ -1580,8 +1580,8 @@ func TestImportReportsTheRowsItCouldNotUse(t *testing.T) {
 	result, err := svc.Import(context.Background(), users.ImportCommand{
 		ActorID: f.actor,
 		Rows: []users.ImportRow{
-			{Login: "s.popescu", FullName: "Sergiu Popescu"},
-			{Login: "i.ivanov", FullName: "Ivan Ivanov"},
+			{Login: "s-popescu", FullName: "Sergiu Popescu"},
+			{Login: "i-ivanov", FullName: "Ivan Ivanov"},
 			{Login: "  ", FullName: "Nobody"},
 		},
 	})
@@ -1596,8 +1596,8 @@ func TestImportReportsTheRowsItCouldNotUse(t *testing.T) {
 	for _, skipped := range result.Skipped {
 		reasons[skipped.Login] = skipped.Reason
 	}
-	if reasons["s.popescu"] != users.SkipLoginTaken {
-		t.Errorf("the duplicate was skipped as %q, want %q", reasons["s.popescu"], users.SkipLoginTaken)
+	if reasons["s-popescu"] != users.SkipLoginTaken {
+		t.Errorf("the duplicate was skipped as %q, want %q", reasons["s-popescu"], users.SkipLoginTaken)
 	}
 	if len(result.Skipped) != 2 {
 		t.Errorf("skipped %+v, want the duplicate and the empty row", result.Skipped)
@@ -1626,7 +1626,7 @@ func TestImportRecordsEachAccountItCreated(t *testing.T) {
 
 	if _, err := svc.Import(context.Background(), users.ImportCommand{
 		ActorID: f.actor,
-		Rows:    []users.ImportRow{{Login: "s.popescu", FullName: "Sergiu Popescu"}},
+		Rows:    []users.ImportRow{{Login: "s-popescu", FullName: "Sergiu Popescu"}},
 	}); err != nil {
 		t.Fatalf("Import() = %v", err)
 	}
@@ -1808,8 +1808,8 @@ func TestImportSkipsARowWithAControlCharacter(t *testing.T) {
 	result, err := f.service.Import(context.Background(), users.ImportCommand{
 		ActorID: f.actor,
 		Rows: []users.ImportRow{
-			{Login: "s.popescu", FullName: "\x00"},
-			{Login: "i.ivanov", FullName: "Ivan Ivanov"},
+			{Login: "s-popescu", FullName: "\x00"},
+			{Login: "i-ivanov", FullName: "Ivan Ivanov"},
 		},
 	})
 	if err != nil {
@@ -2393,4 +2393,370 @@ func TestARefusedPasswordChangeKeepsTheResetLink(t *testing.T) {
 	})
 
 	assertLinksForgotten(t, links)
+}
+
+func TestCreateRefusesADottedLoginAndStoresNothing(t *testing.T) {
+	f := newFixture(t)
+
+	_, err := f.service.Create(t.Context(), users.CreateCommand{
+		ActorID: f.actor, Login: "ion.popescu", FullName: "Ion Popescu",
+	})
+
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("Create() = %v, want ErrInvalidAccount", err)
+	}
+	if f.repo.Len() != 0 {
+		t.Errorf("accounts = %d, want none stored", f.repo.Len())
+	}
+}
+
+// A dotted login is the row's fault (CLAUDE.md rule 8), and the reason names
+// the dot, so a roster of name.surname logins says what to change.
+func TestImportSkipsADottedLoginForItsDot(t *testing.T) {
+	f := newFixture(t)
+
+	result, err := f.service.Import(t.Context(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows: []users.ImportRow{
+			{Login: "ion.popescu", FullName: "Ion Popescu"},
+			{Login: "ana-rusu", FullName: "Ana Rusu"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Import() = %v, want the row skipped, not the import stopped", err)
+	}
+
+	want := []users.SkippedRow{{Login: "ion.popescu", Reason: users.SkipLoginHasDot}}
+	if len(result.Created) != 1 || !slices.Equal(result.Skipped, want) {
+		t.Errorf("created %d, skipped %+v; want ana-rusu created and %+v", len(result.Created), result.Skipped, want)
+	}
+}
+
+func TestCreateVerifiedRefusesADottedLogin(t *testing.T) {
+	f := newFixture(t)
+
+	if _, err := f.service.CreateVerified(t.Context(), verifiedCommand(t, "ion.popescu")); !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("CreateVerified() = %v, want ErrInvalidAccount", err)
+	}
+}
+
+func TestCreateExternalRefusesADottedLogin(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+
+	if _, err := f.service.CreateExternal(t.Context(), externalCommand("ion.popescu")); !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("CreateExternal() = %v, want ErrInvalidAccount", err)
+	}
+}
+
+func TestBootstrapRefusesADottedLogin(t *testing.T) {
+	f := newFixture(t)
+
+	if _, err := f.service.BootstrapAdmin(t.Context(), "site.admin", "Administrator"); !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("BootstrapAdmin() = %v, want ErrInvalidAccount", err)
+	}
+}
+
+// An event registration's login is the address the person registered with,
+// lower-cased, and keeps its dots.
+func TestLoginFromEmailMakesTheAddressTheLogin(t *testing.T) {
+	f := newFixture(t)
+
+	created, err := f.service.Create(t.Context(), users.CreateCommand{
+		Email: " Ion.Popescu@usm.md ", FullName: "Ion Popescu", LoginFromEmail: true, SelfService: true,
+	})
+
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if created.User.Login != "ion.popescu@usm.md" || created.User.Email != "Ion.Popescu@usm.md" {
+		t.Errorf("login %q, email %q; want the address lower-cased as the login", created.User.Login, created.User.Email)
+	}
+}
+
+// Both are a caller's mistake, never the person's, so neither is answered as
+// the request's fault.
+func TestLoginFromEmailWithALoginOrWithoutAnAddressIsAProgrammingError(t *testing.T) {
+	for name, cmd := range map[string]users.CreateCommand{
+		"a login as well": {Login: "ion.popescu@usm.md", Email: "ion.popescu@usm.md", FullName: "Ion Popescu"},
+		"no address":      {FullName: "Ion Popescu"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			cmd.LoginFromEmail = true
+
+			_, err := f.service.Create(t.Context(), cmd)
+			if err == nil || errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("Create() = %v, want a programming error, not ErrInvalidAccount", err)
+			}
+			if f.repo.Len() != 0 {
+				t.Errorf("accounts = %d, want none stored", f.repo.Len())
+			}
+		})
+	}
+}
+
+// Lower-casing folds U+0130 and the Kelvin sign to ASCII letters, so the
+// login would name another mailbox than the one the letter goes to.
+func TestLoginFromEmailRefusesAnAddressLowerCasingWouldChange(t *testing.T) {
+	for _, email := range []string{"\u0130on.popescu@usm.md", "\u212Aate@usm.md", "\u0130on\u023A@usm.md"} {
+		f := newFixture(t)
+
+		_, err := f.service.Create(t.Context(), users.CreateCommand{Email: email, FullName: "Ion Popescu", LoginFromEmail: true})
+		if !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("Create(%q) = %v, want ErrInvalidAccount", email, err)
+		}
+	}
+}
+
+// Nothing rewrites a login made before the dot was refused, and its account
+// stays editable.
+func TestUpdateProfileOfAnAccountWithADottedLogin(t *testing.T) {
+	f := newFixture(t)
+	user := f.addUser(t, "ion.popescu", "correct horse battery staple")
+
+	if err := f.service.UpdateProfile(t.Context(), f.actor, user.ID, "Ion Popescu", "ion@usm.md"); err != nil {
+		t.Fatalf("UpdateProfile() = %v", err)
+	}
+	if got, _ := f.repo.Get(user.ID); got.Login != "ion.popescu" || got.FullName != "Ion Popescu" {
+		t.Errorf("account = %q named %q, want ion.popescu named Ion Popescu", got.Login, got.FullName)
+	}
+}
+
+// unfitNames are display names carrying a character that reorders,
+// hides or breaks the text around the name wherever staff read it, or shows
+// as nothing at all.
+var unfitNames = map[string]string{
+	"a bidi override":                         "Ana \u202eucsepoP",
+	"a bidi embedding":                        "Ana \u202aPopescu",
+	"a bidi isolate":                          "Ana \u2067Popescu\u2069",
+	"a zero-width space":                      "Ana\u200bPopescu",
+	"a byte order mark":                       "\ufeffAna Popescu",
+	"a line separator":                        "Ana\u2028Popescu",
+	"a paragraph sep.":                        "Ana\u2029Popescu",
+	"a Hangul filler":                         "\u3164",
+	"a halfwidth filler":                      "Ana \uffa0",
+	"a choseong filler":                       "\u115fAna",
+	"a jungseong filler":                      "Ana\u1160",
+	"a Mongolian selector":                    "Ana\u180b",
+	"a Khmer inherent vowel":                  "Ana\u17b4",
+	"only a braille blank":                    "\u2800",
+	"a braille blank and a mark":              "\u2800\u0301",
+	"a joiner in a Latin name":                "Ion\u200cPopescu",
+	"a joiner in a Cyrillic name":             "\u0418\u0432\u0430\u043d\u200d\u043e\u0432",
+	"a leading joiner":                        "\u200c\u0639\u0644\u06cc",
+	"a trailing joiner":                       "\u0639\u0644\u06cc\u200c",
+	"a doubled joiner":                        "\u0639\u0644\u06cc\u200c\u200c\u0631\u0636\u0627",
+	"a joiner after a combining mark":         "Ana\u0301\u200cPopescu",
+	"a final joiner after a combining accent": "Jose\u0301\u200d",
+	"a final joiner after a Latin letter":     "Ana\u200d",
+	"a Mongolian selector in a Latin name":    "Ana\u180bPopescu",
+	"a vowel separator in a Latin name":       "Ana\u180eb",
+	"a Mongolian selector after a mark":       "\u1820\u0301\u180b",
+	"a leading Mongolian selector":            "\u180b\u1820",
+	"a grapheme joiner":                       "Ana\u034f",
+	"a variation sel.":                        "Ana\ufe0f",
+	"a supplementary sel.":                    "Ana\U000E0100",
+	"an ideographic selector after a kana":    "\u3042\U000E0100",
+	"two ideographic selectors":               "\u845b\U000E0100\U000E0100",
+	"a vowel separator after two selectors":   "\u1820\u180b\u180b\u180e",
+	"only a combining mark":                   "\u0301",
+	"only marks":                              "\u0301 \u0302",
+}
+
+// A format character in an address shows in the staff's tables as it does in
+// a name.
+func TestCreateAndUpdateProfileRefuseAnEmailWithAFormatCharacter(t *testing.T) {
+	for _, email := range []string{"a\u200bna@usm.md", "ana@us\u202em.md", "ana\u034f@usm.md", "ana\ufe0f@usm.md", "ana\u2028@usm.md", "ana\u180b@usm.md", "ana\u17b5@usm.md", "a\u200cna@usm.md", "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627@usm.md", "\u1820\u180b@usm.md", "\u0d28\u0d4d\u200d@usm.md"} {
+		f := newFixture(t)
+		if _, err := f.service.Create(t.Context(), users.CreateCommand{Login: "ana", FullName: "Ana", Email: email}); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("Create(email %q) = %v, want ErrInvalidAccount", email, err)
+		}
+		user := f.addUser(t, "ion", "correct horse battery staple")
+		if err := f.service.UpdateProfile(t.Context(), f.actor, user.ID, "Ion", email); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("UpdateProfile(email %q) = %v, want ErrInvalidAccount", email, err)
+		}
+	}
+}
+
+func TestCreateRefusesANameWithAnUnfitCharacter(t *testing.T) {
+	for name, fullName := range unfitNames {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+
+			_, err := f.service.Create(t.Context(), users.CreateCommand{ActorID: f.actor, Login: "ana", FullName: fullName})
+			if !errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("Create() = %v, want ErrInvalidAccount", err)
+			}
+		})
+	}
+}
+
+func TestCreateVerifiedRefusesANameWithAnUnfitCharacter(t *testing.T) {
+	for name, fullName := range unfitNames {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			cmd := verifiedCommand(t, "ana")
+			cmd.FullName = fullName
+
+			if _, err := f.service.CreateVerified(t.Context(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("CreateVerified() = %v, want ErrInvalidAccount", err)
+			}
+		})
+	}
+}
+
+// Federation strips these characters before it gets here; a caller that
+// does not is refused.
+func TestCreateExternalRefusesANameWithAnUnfitCharacter(t *testing.T) {
+	for name, fullName := range unfitNames {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			cmd := externalCommand("ana")
+			cmd.FullName = fullName
+
+			if _, err := f.service.CreateExternal(t.Context(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("CreateExternal() = %v, want ErrInvalidAccount", err)
+			}
+		})
+	}
+}
+
+func TestImportSkipsANameWithAnUnfitCharacterAsAnInvalidRow(t *testing.T) {
+	for name, fullName := range unfitNames {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+
+			result, err := f.service.Import(t.Context(), users.ImportCommand{
+				ActorID: f.actor,
+				Rows:    []users.ImportRow{{Login: "ana", FullName: fullName}, {Login: "ion", FullName: "Ion Popescu"}},
+			})
+			if err != nil {
+				t.Fatalf("Import() = %v, want the row skipped", err)
+			}
+			want := []users.SkippedRow{{Login: "ana", Reason: users.SkipInvalidRow}}
+			if len(result.Created) != 1 || !slices.Equal(result.Skipped, want) {
+				t.Errorf("created %d, skipped %+v; want ion created and %+v", len(result.Created), result.Skipped, want)
+			}
+		})
+	}
+}
+
+func TestUpdateProfileRefusesANameWithAnUnfitCharacter(t *testing.T) {
+	for name, fullName := range unfitNames {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			user := f.addUser(t, "ana", "correct horse battery staple")
+
+			if err := f.service.UpdateProfile(t.Context(), f.actor, user.ID, fullName, ""); !errors.Is(err, users.ErrInvalidAccount) {
+				t.Errorf("UpdateProfile() = %v, want ErrInvalidAccount", err)
+			}
+			if got, _ := f.repo.Get(user.ID); got.FullName != "Test User" {
+				t.Errorf("name = %q, want it unchanged", got.FullName)
+			}
+		})
+	}
+}
+
+// Existing names and addresses stay as they are: a stored value that a rule
+// added since would refuse must not block editing the other field.
+func TestUpdateProfileKeepsAStoredNameTheRulesNowRefuseWhileTheEmailChanges(t *testing.T) {
+	f := newFixture(t)
+	stored := f.repo.Add(users.User{Login: "ana", FullName: "Ana \u202ePopescu", Status: users.StatusActive})
+
+	if err := f.service.UpdateProfile(t.Context(), f.actor, stored.ID, "Ana \u202ePopescu", "ana@usm.md"); err != nil {
+		t.Fatalf("UpdateProfile() = %v, want the address changed beside the stored name", err)
+	}
+	if got, _ := f.repo.Get(stored.ID); got.Email != "ana@usm.md" || got.FullName != "Ana \u202ePopescu" {
+		t.Errorf("account = %q <%s>, want the name kept and the address changed", got.FullName, got.Email)
+	}
+}
+
+func TestUpdateProfileKeepsAStoredEmailTheRulesNowRefuseWhileTheNameChanges(t *testing.T) {
+	f := newFixture(t)
+	stored := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "a\u200bna@usm.md", Status: users.StatusActive})
+
+	if err := f.service.UpdateProfile(t.Context(), f.actor, stored.ID, "Ana Popescu", "a\u200bna@usm.md"); err != nil {
+		t.Fatalf("UpdateProfile() = %v, want the name changed beside the stored address", err)
+	}
+	if got, _ := f.repo.Get(stored.ID); got.FullName != "Ana Popescu" || got.Email != "a\u200bna@usm.md" {
+		t.Errorf("account = %q <%s>, want the name changed and the address kept", got.FullName, got.Email)
+	}
+}
+
+// A field the edit changes is checked as any new value is, whatever was
+// stored before.
+func TestUpdateProfileChecksAStoredBadFieldOnceItChanges(t *testing.T) {
+	f := newFixture(t)
+	stored := f.repo.Add(users.User{
+		Login: "ana", FullName: "Ana \u202ePopescu", Email: "a\u200bna@usm.md", Status: users.StatusActive,
+	})
+
+	for name, edit := range map[string][2]string{
+		"another bad name":    {"Ana \u2066Popescu", "a\u200bna@usm.md"},
+		"another bad address": {"Ana \u202ePopescu", "an\u200ba@usm.md"},
+		"a malformed address": {"Ana \u202ePopescu", "nope@"},
+	} {
+		if err := f.service.UpdateProfile(t.Context(), f.actor, stored.ID, edit[0], edit[1]); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("%s: UpdateProfile() = %v, want ErrInvalidAccount", name, err)
+		}
+	}
+}
+
+// joinedNames are names written with a character their script needs and every
+// other name refuses: a zero-width joiner or non-joiner (Persian, Hindi with an
+// explicit virama and with a half form, Bengali ya-phalaa, Sinhala, Kannada,
+// the word-final Malayalam chillu and Bengali khanda ta), a Mongolian selector
+// or vowel separator, and a Japanese ideographic variation selector.
+var joinedNames = map[string]string{
+	"Persian":                    "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627",
+	"Hindi, virama":              "\u0930\u093e\u091c\u094d\u200c\u0915\u0941\u092e\u093e\u0930",
+	"Hindi, half form":           "\u0936\u094d\u200d\u0930\u0940",
+	"Bengali":                    "\u09b0\u200d\u09cd\u09af\u09be\u099a\u09c7\u09b2",
+	"Sinhala":                    "\u0dc1\u0dca\u200d\u0dbb\u0dd3",
+	"Kannada":                    "\u0cb0\u0cbe\u0c9c\u0ccd\u200c\u0c95\u0cc1\u0cae\u0cbe\u0cb0\u0ccd",
+	"Malayalam chillu":           "\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d",
+	"Bengali khanda ta":          "\u09b6\u09b0\u09a4\u09cd\u200d",
+	"Mongolian, selector":        "\u182e\u1823\u180b\u1829\u182d\u1823\u182f",
+	"Mongolian, vowel separator": "\u182d\u1820\u180e\u1820",
+	"Mongolian, selector then vowel separator": "\u182d\u1820\u180b\u180e\u1820",
+	"Japanese, ideographic variation selector": "\u845b\U000E0100\u57ce",
+}
+
+// The joiner is refused everywhere else, but a name that is spelt with one
+// is a person's own name and is taken on every path as written.
+func TestEveryNamePathTakesANameItsScriptJoins(t *testing.T) {
+	for script, fullName := range joinedNames {
+		t.Run(script, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			created, err := f.service.Create(t.Context(), users.CreateCommand{ActorID: f.actor, Login: "created", FullName: fullName})
+			if err != nil || created.User.FullName != fullName {
+				t.Errorf("Create() = %q, %v; want the name as written", created.User.FullName, err)
+			}
+			if _, err := f.service.CreateVerified(t.Context(), func() users.CreateVerifiedCommand {
+				c := verifiedCommand(t, "verified")
+				c.FullName = fullName
+				return c
+			}()); err != nil {
+				t.Errorf("CreateVerified() = %v", err)
+			}
+			external := externalCommand("external")
+			external.FullName = fullName
+			if _, err := f.service.CreateExternal(t.Context(), external); err != nil {
+				t.Errorf("CreateExternal() = %v", err)
+			}
+			imported, err := f.service.Import(t.Context(), users.ImportCommand{
+				ActorID: f.actor, Rows: []users.ImportRow{{Login: "imported", FullName: fullName}},
+			})
+			if err != nil || len(imported.Created) != 1 {
+				t.Errorf("Import() = %+v, %v; want the row created", imported, err)
+			}
+			edited := f.addUser(t, "edited", "correct horse battery staple")
+			if err := f.service.UpdateProfile(t.Context(), f.actor, edited.ID, fullName, ""); err != nil {
+				t.Errorf("UpdateProfile() = %v", err)
+			}
+		})
+	}
 }

@@ -486,6 +486,10 @@
       "meaning": "The leaderboard was asked for faster than one address or one account may ask. The table only changes every few seconds, so waiting costs nothing."
     },
     {
+      "code": "login_has_dot",
+      "meaning": "A new login holds a dot, or a character a domain name reads as one; a mail client would turn it into a link. Logins made before the rule keep theirs. An import skips such a row with the reason login_has_dot."
+    },
+    {
       "code": "login_taken",
       "meaning": "Another account already uses this login."
     },

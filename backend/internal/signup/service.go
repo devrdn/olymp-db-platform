@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -49,8 +48,7 @@ type Store interface {
 
 // Directory finds accounts (users.Repository).
 type Directory interface {
-	// ByLogin may return a deleted account, whose login is free.
-	ByLogin(ctx context.Context, login string) (users.User, error)
+	users.LoginFinder
 	// ByEmail ignores case and finds live accounts only.
 	ByEmail(ctx context.Context, email string) (users.User, error)
 	users.ContestManagers
@@ -181,16 +179,16 @@ func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 	if !s.Offered() {
 		return "", ErrNotAvailable
 	}
-	login, fullName := strings.ToLower(strings.TrimSpace(cmd.Login)), strings.TrimSpace(cmd.FullName)
+	fullName := strings.TrimSpace(cmd.FullName)
 	email, err := normalizeEmail(cmd.Email)
 	if err != nil {
 		return "", err
 	}
-	if !plainLogin.MatchString(login) {
-		return "", fmt.Errorf("%w: the login must be 3 to 64 lowercase letters, digits, hyphens or underscores, "+
-			"starting with a letter or a digit", users.ErrInvalidAccount)
+	login, err := users.ParseChosenLogin(cmd.Login)
+	if err != nil {
+		return "", err
 	}
-	if err := users.ValidateAccount(login, fullName, email); err != nil {
+	if err := users.ValidateProfile(fullName, email); err != nil {
 		return "", err
 	}
 	// The name greets the reader of a message sent to whatever address was
@@ -236,7 +234,7 @@ func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 		return "", err
 	}
 	p := Pending{
-		Email: email, Login: login, FullName: fullName, PasswordHash: passwordHash,
+		Email: email, Login: login.String(), FullName: fullName, PasswordHash: passwordHash,
 		CodeHash: codeHash, TokenHash: tokenHash, SentAt: now, ExpiresAt: now.Add(CodeLifetime),
 	}
 	message, err := s.message(ctx, p, code, cmd.Lang)
@@ -256,18 +254,13 @@ func (s *Service) start(ctx context.Context, cmd StartCommand) (string, error) {
 	return token, nil
 }
 
-// plainLogin is what a self-chosen login may be. The login is mailed to
-// whatever address was typed, so it must not carry a pitch, and a dot would
-// let a mail client turn it into a link to a domain.
-var plainLogin = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
-
 // refuseTakenLogin refuses a login an account or another address's unexpired
 // sign-up holds. Put checks the sign-ups again under its lock.
-func (s *Service) refuseTakenLogin(ctx context.Context, login, email string, now time.Time) error {
-	if err := s.refuseAccountLogin(ctx, login); err != nil {
+func (s *Service) refuseTakenLogin(ctx context.Context, login users.Login, email string, now time.Time) error {
+	if err := users.RefuseTakenLogin(ctx, s.cfg.Directory, login); err != nil {
 		return err
 	}
-	held, err := s.cfg.Store.LoginHeld(ctx, login, email, now)
+	held, err := s.cfg.Store.LoginHeld(ctx, login.String(), email, now)
 	if err != nil {
 		return err
 	}
@@ -380,22 +373,10 @@ func (s *Service) Confirm(ctx context.Context, cmd ConfirmCommand) (users.User, 
 	return created, nil
 }
 
-// refuseAccountLogin refuses a login a live account holds.
-func (s *Service) refuseAccountLogin(ctx context.Context, login string) error {
-	account, err := s.cfg.Directory.ByLogin(ctx, login)
-	switch {
-	case err == nil && account.Status != users.StatusDeleted:
-		return users.ErrLoginTaken
-	case err != nil && !errors.Is(err, users.ErrNotFound):
-		return err
-	}
-	return nil
-}
-
 // refuseTakenAccount refuses p when a live account holds its login or its
 // address.
 func (s *Service) refuseTakenAccount(ctx context.Context, p Pending) error {
-	if err := s.refuseAccountLogin(ctx, p.Login); err != nil {
+	if err := users.RefuseTakenLogin(ctx, s.cfg.Directory, users.ParseTypedLogin(p.Login)); err != nil {
 		return err
 	}
 	_, err := s.cfg.Directory.ByEmail(ctx, p.Email)
@@ -528,7 +509,7 @@ func (s *Service) Offered() bool { return s.cfg.Enabled && s.cfg.Outbox.Enabled(
 // normalizeEmail trims and lowercases an address, refusing one longer than an
 // account's: lowercasing can lengthen a letter in bytes.
 func normalizeEmail(raw string) (string, error) {
-	email := strings.ToLower(strings.TrimSpace(raw))
+	email := users.TypedKey(raw)
 	switch {
 	case email == "":
 		return "", fmt.Errorf("%w: email must not be empty", users.ErrInvalidAccount)

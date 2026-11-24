@@ -1,8 +1,9 @@
-// Package users owns accounts: who exists, what global roles they hold, and
-// the operations an administrator performs on them, including emailing an
-// issued one-time password through the outbox it is given. It declares the
-// storage it needs and never imports a database driver. Signing in belongs
-// to auth, and writing and sending email to mailing.
+// Package users owns accounts: who exists, what global roles they hold, what
+// a new login may look like, and the operations an administrator performs on
+// them, including emailing an issued one-time password through the outbox it
+// is given. It declares the storage it needs and never imports a database
+// driver. Signing in belongs to auth, and writing and sending email to
+// mailing.
 package users
 
 import (
@@ -47,13 +48,19 @@ const MaxRolesPerAccount = 16
 var (
 	ErrNotFound = errors.New("user not found")
 	// ErrInvalidAccount reports an empty login or name, a field over its
-	// bound, an invalid email, or a listing query over MaxQueryLength.
+	// bound or holding a character it may not, a new login with a dot
+	// (ErrLoginHasDot), an invalid email, or a listing query over
+	// MaxQueryLength.
 	ErrInvalidAccount = errors.New("account details are not valid")
-	ErrLoginTaken     = errors.New("login already in use")
-	ErrEmailTaken     = errors.New("email already in use")
-	ErrWeakPassword   = errors.New("password does not meet the policy")
-	ErrSamePassword   = errors.New("new password must differ from the current one")
-	ErrWrongPassword  = errors.New("current password is incorrect")
+	// ErrLoginHasDot refuses a new login holding a dot (ParseNewLogin). It
+	// wraps ErrInvalidAccount, so every caller that answers that one still
+	// does, and the administrator's form and import can name the cause.
+	ErrLoginHasDot   = fmt.Errorf("%w: a new login must not contain a dot", ErrInvalidAccount)
+	ErrLoginTaken    = errors.New("login already in use")
+	ErrEmailTaken    = errors.New("email already in use")
+	ErrWeakPassword  = errors.New("password does not meet the policy")
+	ErrSamePassword  = errors.New("new password must differ from the current one")
+	ErrWrongPassword = errors.New("current password is incorrect")
 	// ErrLastAdministrator refuses a change that would leave nobody able to
 	// manage accounts. Recovery would need hand-written SQL: bootstrap does
 	// not touch an existing login's roles.
@@ -91,7 +98,7 @@ var (
 // those packages.
 func Errors() []error {
 	return []error{
-		ErrNotFound, ErrInvalidAccount, ErrLoginTaken, ErrEmailTaken,
+		ErrNotFound, ErrInvalidAccount, ErrLoginHasDot, ErrLoginTaken, ErrEmailTaken,
 		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
@@ -194,22 +201,140 @@ func (u User) HasVerifiedEmailIn(domain string) bool {
 	return ok && (host == domain || strings.HasSuffix(host, "."+domain))
 }
 
-// IsWrittenAsAName reports whether s holds only what a person's name is
-// written with: letters, marks, spaces, hyphens, apostrophes and periods. A
-// name greets the reader of mail sent to an address anyone may type, so it
-// must not carry a link or a pitch; a period directly followed by a letter is
-// refused too, since mail clients turn "evil.com" into a link, while "Jr."
-// and "J. R. R." stay. It does not bound the length.
-func IsWrittenAsAName(s string) bool {
-	return s != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, notOfAName) && !periodBeforeLetter(s)
+// IsUnfitForName reports whether r may not appear in a typed address, nor in
+// a name except as unfitInName allows: a control or format character; a line
+// or paragraph separator, which breaks the line in some renderers; or a
+// variation selector or another default ignorable code point (the Hangul
+// fillers, the combining grapheme joiner, the Khmer inherent vowels), each of
+// which shows as nothing, so a name of them is blank and an address with one
+// reads as another.
+func IsUnfitForName(r rune) bool {
+	return IsControlOrFormat(r) ||
+		unicode.In(r, unicode.Zl, unicode.Zp, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
 }
 
-func notOfAName(r rune) bool {
-	switch r {
-	case ' ', '-', '\'', '’', '.':
+// unfitInName reports whether name[i] may not stand in a name: what
+// IsUnfitForName names, except a format character a script needs, in that
+// script's own context only:
+//   - a zero-width non-joiner or joiner after a letter or mark of a script
+//     that spells with one, such as Persian, Hindi or Sinhala, and before a
+//     letter or mark (a simpler form of IDNA2008's CONTEXTJ rule);
+//   - a zero-width joiner after a nonspacing mark of such a script, whatever
+//     follows, as a word-final legacy Malayalam chillu or Bengali khanda ta
+//     is written;
+//   - a Mongolian free variation selector right after a Mongolian letter,
+//     and the vowel separator after one, or after such a selector;
+//   - an ideographic variation selector (U+E0100 to U+E01EF) right after a
+//     Han letter, as a Japanese family name is written in its registered
+//     glyph.
+//
+// Latin, Cyrillic and Greek need none of them, and a character of the Common
+// or Inherited script, such as a combining accent, is no context for one.
+func unfitInName(name []rune, i int) bool {
+	r := name[i]
+	if !IsUnfitForName(r) {
 		return false
 	}
-	return !unicode.IsLetter(r) && !unicode.IsMark(r)
+	if i == 0 {
+		return true
+	}
+	before := name[i-1]
+	switch {
+	case r == '\u180e' && isMongolianSelector(before) && i >= 2:
+		return !isMongolianLetter(name[i-2])
+	case isMongolianSelector(r) || r == '\u180e':
+		return !isMongolianLetter(before)
+	case r >= '\U000E0100' && r <= '\U000E01EF':
+		return !unicode.IsLetter(before) || !unicode.Is(unicode.Han, before)
+	case r == '\u200c' || r == '\u200d':
+		if !isNameLetterOrMark(before) || unicode.In(before, unicode.Latin, unicode.Cyrillic, unicode.Greek, unicode.Common, unicode.Inherited) {
+			return true
+		}
+		if r == '\u200d' && unicode.Is(unicode.Mn, before) {
+			return false
+		}
+		return i == len(name)-1 || !isNameLetterOrMark(name[i+1])
+	}
+	return true
+}
+
+func isMongolianSelector(r rune) bool {
+	return r == '\u180b' || r == '\u180c' || r == '\u180d' || r == '\u180f'
+}
+
+func isMongolianLetter(r rune) bool { return unicode.IsLetter(r) && unicode.Is(unicode.Mongolian, r) }
+
+func isNameLetterOrMark(r rune) bool {
+	return (unicode.IsLetter(r) || unicode.IsMark(r)) && !IsUnfitForName(r)
+}
+
+// holdsUnfitInName reports whether a name holds a rune unfitInName refuses.
+func holdsUnfitInName(name string) bool {
+	runes := []rune(name)
+	for i := range runes {
+		if unfitInName(runes, i) {
+			return true
+		}
+	}
+	return false
+}
+
+// StripUnfitFromName returns name without the runes unfitInName refuses, for
+// a name its holder cannot correct, such as a provider's display name. A
+// joiner it keeps stands between two letters or marks it keeps too.
+func StripUnfitFromName(name string) string {
+	runes := []rune(name)
+	kept := make([]rune, 0, len(runes))
+	for i, r := range runes {
+		if !unfitInName(runes, i) {
+			kept = append(kept, r)
+		}
+	}
+	return string(kept)
+}
+
+// showsSomething reports whether s holds a character that is seen: a letter,
+// a digit, a punctuation mark or a symbol. A mark alone renders as nothing,
+// and so does the braille blank, a symbol that prints as a space.
+func showsSomething(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return r != '\u2800' && !IsUnfitForName(r) &&
+			(unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsPunct(r) || unicode.IsSymbol(r))
+	})
+}
+
+// IsWrittenAsAName reports whether s holds only what a person's name is
+// written with, and at least one letter: letters other than a filler
+// (IsUnfitForName), marks, the joiners and selectors unfitInName allows,
+// spaces, hyphens, apostrophes and periods. A name greets the reader of mail
+// sent to an address anyone may type, so it must not carry a link or a pitch;
+// a period directly followed by a letter is refused too, since mail clients
+// turn "evil.com" into a link, while "Jr." and "J. R. R." stay. It does not
+// bound the length.
+func IsWrittenAsAName(s string) bool {
+	if !utf8.ValidString(s) || !strings.ContainsFunc(s, isNameLetter) || periodBeforeLetter(s) {
+		return false
+	}
+	runes := []rune(s)
+	for i, r := range runes {
+		if unfitInName(runes, i) || !ofAWrittenName(r) && !IsUnfitForName(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isNameLetter(r rune) bool { return unicode.IsLetter(r) && !IsUnfitForName(r) }
+
+// ofAWrittenName reports whether r is a letter, a mark or one of the
+// punctuation a written name holds. A character IsUnfitForName names is of a
+// written name exactly where unfitInName allows it.
+func ofAWrittenName(r rune) bool {
+	switch r {
+	case ' ', '-', '\'', '’', '.':
+		return true
+	}
+	return unicode.IsLetter(r) || unicode.IsMark(r)
 }
 
 func periodBeforeLetter(s string) bool {

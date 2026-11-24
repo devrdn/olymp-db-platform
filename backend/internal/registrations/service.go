@@ -39,9 +39,9 @@ type Store interface {
 	SetCheckedIn(ctx context.Context, id uuid.UUID, checkedIn bool) (Registration, error)
 }
 
-// NewAccount is the participant account a first registration asks for.
+// NewAccount is the participant account a first registration asks for. Its
+// login is the address, lower-cased, which Accounts derives.
 type NewAccount struct {
-	Login    string
 	Email    string
 	FullName string
 	// ByEmail also mails the sign-in details; only while mail is on.
@@ -177,7 +177,7 @@ func (s *Service) register(ctx context.Context, a Applicant) (Outcome, error) {
 		}
 	}
 	account, err := s.cfg.Accounts.Create(ctx, NewAccount{
-		Login: a.EmailKey, Email: a.Email, FullName: a.FullName(), ByEmail: mailOn,
+		Email: a.Email, FullName: a.FullName(), ByEmail: mailOn,
 	})
 	if err != nil {
 		return Outcome{}, fmt.Errorf("create the account: %w", err)

@@ -1682,9 +1682,10 @@ const en = {
      * `roster.reason` is the closed vocabulary `POST /users/import` answers
      * with (`IMPORT_SKIP_REASONS` in `lib/api/accounts-terms.ts`) — a
      * smaller one than `selection.bulk.reason` above, because import can
-     * only ever collide with an existing login or email, or carry a row
-     * that never made a usable account. A reason this list does not name is
-     * shown raw rather than dropped, the same rule that list follows.
+     * only ever collide with an existing login or email, carry a login with
+     * a dot, or carry a row that never made a usable account. A reason this
+     * list does not name is shown raw rather than dropped, the same rule
+     * that list follows.
      */
     create: {
       new: "New account",
@@ -1724,6 +1725,7 @@ const en = {
         reason: {
           login_taken: "the login is already taken",
           email_taken: "the email is already in use",
+          login_has_dot: "the login contains a dot — use a hyphen or an underscore instead",
           invalid_row: "not a usable row — check the login and the full name",
         },
       },
@@ -2613,6 +2615,7 @@ const en = {
     password_mismatch: "The two new passwords do not match.",
     same_password: "The new password matches the old one.",
     login_taken: "That login is already taken.",
+    login_has_dot: "A login cannot contain a dot. Use a hyphen or an underscore instead, for example ion-popescu.",
     email_taken: "That email is already in use.",
     forbidden: "You do not have the rights for this action.",
     last_administrator: "This would leave the installation with nobody able to manage accounts. Give another account the administrator role first.",

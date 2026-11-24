@@ -441,8 +441,8 @@ func TestImportEndpointReturnsAPasswordForEveryAccountItCreated(t *testing.T) {
 	rec := f.do(http.MethodPost, "/users/import", `{
 		"roles": ["student"],
 		"rows": [
-			{"login": "s.popescu", "full_name": "Sergiu Popescu"},
-			{"login": "i.ivanov", "full_name": "Ivan Ivanov", "email": "i@example.edu"}
+			{"login": "s-popescu", "full_name": "Sergiu Popescu"},
+			{"login": "i-ivanov", "full_name": "Ivan Ivanov", "email": "i@example.edu"}
 		]
 	}`)
 
@@ -474,10 +474,10 @@ func TestImportEndpointReturnsAPasswordForEveryAccountItCreated(t *testing.T) {
 
 func TestImportEndpointReportsTheRowsItSkipped(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
-	f.repo.Add(users.User{Login: "s.popescu", FullName: "Sergiu Popescu", Status: users.StatusActive})
+	f.repo.Add(users.User{Login: "s-popescu", FullName: "Sergiu Popescu", Status: users.StatusActive})
 
 	rec := f.do(http.MethodPost, "/users/import",
-		`{"rows": [{"login": "s.popescu", "full_name": "Sergiu Popescu"}]}`)
+		`{"rows": [{"login": "s-popescu", "full_name": "Sergiu Popescu"}]}`)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
@@ -599,6 +599,62 @@ func TestCreateEndpointAnswersABadRequestForUnusableDetails(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A new login may not hold a dot, and the refusal says so: name.surname was a
+// valid login until the rule was added.
+func TestCreateEndpointRefusesADottedLogin(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	before := f.repo.Len()
+
+	rec := f.do(http.MethodPost, "/users", `{"login":"ion.popescu","full_name":"Ion Popescu"}`)
+
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "login_has_dot" {
+		t.Errorf("status = %d, want 400 login_has_dot (body: %s)", rec.Code, rec.Body.String())
+	}
+	if f.repo.Len() != before {
+		t.Errorf("accounts = %d, want %d: none created", f.repo.Len(), before)
+	}
+}
+
+func TestImportEndpointSkipsADottedLoginForItsDot(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodPost, "/users/import",
+		`{"rows": [{"login": "ion.popescu", "full_name": "Ion Popescu"}, {"login": "ana-rusu", "full_name": "Ana Rusu"}]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Created []json.RawMessage `json:"created"`
+		Skipped []struct {
+			Login  string `json:"login"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v", err)
+	}
+	if len(body.Created) != 1 || len(body.Skipped) != 1 ||
+		body.Skipped[0].Login != "ion.popescu" || body.Skipped[0].Reason != "login_has_dot" {
+		t.Errorf("created %d, skipped %+v; want ana-rusu created and ion.popescu skipped as login_has_dot", len(body.Created), body.Skipped)
+	}
+}
+
+// The name is the request's fault, answered as a control character is.
+func TestProfileEndpointRefusesANameWithABidiControl(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "ion.popescu", FullName: "Ion Popescu", Status: users.StatusActive})
+
+	rec := f.do(http.MethodPatch, "/users/"+target.ID.String(), `{"full_name":"Ion \u202eucsepoP"}`)
+
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+		t.Errorf("status = %d, want 400 invalid_request (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got, _ := f.repo.Get(target.ID); got.FullName != "Ion Popescu" {
+		t.Errorf("name = %q, want it unchanged", got.FullName)
 	}
 }
 
@@ -742,9 +798,9 @@ func TestAnImportStoppedForLoadStillHandsOverThePasswordsItIssued(t *testing.T) 
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/users/import", strings.NewReader(`{
 		"roles": ["student"],
 		"rows": [
-			{"login": "s.popescu", "full_name": "Sergiu Popescu"},
-			{"login": "i.ivanov", "full_name": "Ivan Ivanov"},
-			{"login": "a.rusu", "full_name": "Ana Rusu"}
+			{"login": "s-popescu", "full_name": "Sergiu Popescu"},
+			{"login": "i-ivanov", "full_name": "Ivan Ivanov"},
+			{"login": "a-rusu", "full_name": "Ana Rusu"}
 		]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -766,11 +822,11 @@ func TestAnImportStoppedForLoadStillHandsOverThePasswordsItIssued(t *testing.T) 
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
 	}
-	if len(body.Created) != 1 || body.Created[0].User.Login != "s.popescu" || body.Created[0].OneTimePassword == "" {
-		t.Errorf("created = %+v, want s.popescu with a password to hand over", body.Created)
+	if len(body.Created) != 1 || body.Created[0].User.Login != "s-popescu" || body.Created[0].OneTimePassword == "" {
+		t.Errorf("created = %+v, want s-popescu with a password to hand over", body.Created)
 	}
-	if strings.Join(body.NotImported, ",") != "i.ivanov,a.rusu" {
-		t.Errorf("not_imported = %v, want [i.ivanov a.rusu]", body.NotImported)
+	if strings.Join(body.NotImported, ",") != "i-ivanov,a-rusu" {
+		t.Errorf("not_imported = %v, want [i-ivanov a-rusu]", body.NotImported)
 	}
 	if body.Stopped != "sign_in_busy" {
 		t.Errorf("stopped = %q, want sign_in_busy", body.Stopped)
@@ -881,7 +937,7 @@ func TestCreateEndpointEmailsTheSignInDetailsWhenAsked(t *testing.T) {
 	f, queue := newEmailingFixture(t, true)
 
 	rec := f.do(http.MethodPost, "/users",
-		`{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
+		`{"login":"a-rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
@@ -899,7 +955,7 @@ func TestCreateEndpointEmailsTheSignInDetailsWhenAsked(t *testing.T) {
 func TestCreateEndpointNamesAnAccountWithNoAddress(t *testing.T) {
 	f, queue := newEmailingFixture(t, true)
 
-	rec := f.do(http.MethodPost, "/users", `{"login":"a.rusu","full_name":"Ana Rusu","send_by_email":true}`)
+	rec := f.do(http.MethodPost, "/users", `{"login":"a-rusu","full_name":"Ana Rusu","send_by_email":true}`)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
@@ -919,7 +975,7 @@ func TestCreateEndpointNamesAnAccountWithNoAddress(t *testing.T) {
 func TestCreateEndpointEmailsNothingUnlessAsked(t *testing.T) {
 	f, queue := newEmailingFixture(t, true)
 
-	rec := f.do(http.MethodPost, "/users", `{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md"}`)
+	rec := f.do(http.MethodPost, "/users", `{"login":"a-rusu","full_name":"Ana Rusu","email":"ana@usm.md"}`)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
@@ -965,8 +1021,8 @@ func TestImportEndpointEmailsEachCreatedAccountWithAnAddress(t *testing.T) {
 	rec := f.do(http.MethodPost, "/users/import", `{
 		"send_by_email": true,
 		"rows": [
-			{"login": "s.popescu", "full_name": "Sergiu Popescu", "email": "sergiu@usm.md"},
-			{"login": "i.ivanov", "full_name": "Ivan Ivanov"}
+			{"login": "s-popescu", "full_name": "Sergiu Popescu", "email": "sergiu@usm.md"},
+			{"login": "i-ivanov", "full_name": "Ivan Ivanov"}
 		]
 	}`)
 
@@ -981,14 +1037,14 @@ func TestImportEndpointEmailsEachCreatedAccountWithAnAddress(t *testing.T) {
 	}
 	for _, c := range body.Created {
 		switch c.User.Login {
-		case "s.popescu":
+		case "s-popescu":
 			if !c.Emailed || c.SkippedReason != nil {
-				t.Errorf("s.popescu reads emailed %v, reason %v", c.Emailed, c.SkippedReason)
+				t.Errorf("s-popescu reads emailed %v, reason %v", c.Emailed, c.SkippedReason)
 			}
 			assertQueuedTo(t, queue, "sergiu@usm.md", c.OneTimePassword)
-		case "i.ivanov":
+		case "i-ivanov":
 			if c.Emailed || c.SkippedReason == nil || *c.SkippedReason != "no_address" {
-				t.Errorf("i.ivanov reads emailed %v, reason %v; want no_address", c.Emailed, c.SkippedReason)
+				t.Errorf("i-ivanov reads emailed %v, reason %v; want no_address", c.Emailed, c.SkippedReason)
 			}
 		}
 	}
@@ -1039,12 +1095,12 @@ func TestAMessageThatCannotBeWrittenIsAServerError(t *testing.T) {
 	}, api.MailStatus{Enabled: true, PerMinute: 25}, rbac.PermissionUsersManage)
 
 	rec := f.do(http.MethodPost, "/users",
-		`{"login":"a.rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
+		`{"login":"a-rusu","full_name":"Ana Rusu","email":"ana@usm.md","send_by_email":true}`)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (%s)", rec.Code, rec.Body.String())
 	}
-	if _, err := f.repo.ByLogin(context.Background(), "a.rusu"); err == nil {
+	if _, err := f.repo.ByLogin(context.Background(), "a-rusu"); err == nil {
 		t.Error("the account was created without its message")
 	}
 }

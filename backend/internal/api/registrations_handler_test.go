@@ -255,6 +255,10 @@ func TestARegistrationAnswersItsRefusals(t *testing.T) {
 	}{
 		{"empty name", " ", "ana@example.com", http.StatusBadRequest, "registration_invalid_name"},
 		{"display name", "Ana", "Ana <ana@example.com>", http.StatusBadRequest, "registration_invalid_email"},
+		{"a format character in the email", "Ana", "a\u200bna@example.com", http.StatusBadRequest, "registration_invalid_email"},
+		{"a bidi control in the email", "Ana", "ana@exa\u202emple.com", http.StatusBadRequest, "registration_invalid_email"},
+		{"a lookalike capital in the email", "Ana", "\u0130na@example.com", http.StatusBadRequest, "registration_invalid_email"},
+		{"a blank name", "\u3164", "ana@example.com", http.StatusBadRequest, "registration_invalid_name"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

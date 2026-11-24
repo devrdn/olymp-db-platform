@@ -153,7 +153,7 @@ func (d *DeviceTrust) mac(payload []byte, login string) []byte {
 	h := hmac.New(sha256.New, d.secret)
 	h.Write([]byte(deviceMACContext))
 	h.Write(payload)
-	h.Write([]byte(normalizeLogin(login)))
+	h.Write([]byte(users.ParseTypedLogin(login).String()))
 	return h.Sum(nil)
 }
 

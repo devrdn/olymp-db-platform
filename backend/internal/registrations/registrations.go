@@ -13,7 +13,6 @@ import (
 	"net/mail"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -55,7 +54,7 @@ type Applicant struct {
 	FirstName string
 	LastName  string
 	// Email is trimmed and otherwise as typed; EmailKey is it lowercased, the
-	// registration's identity and the account's login.
+	// registration's identity.
 	Email    string
 	EmailKey string
 }
@@ -76,11 +75,10 @@ func Parse(firstName, lastName, email string) (Applicant, error) {
 	if !validEmail(a.Email) {
 		return Applicant{}, ErrInvalidEmail
 	}
-	// Lowercasing can lengthen a letter in bytes.
-	a.EmailKey = strings.ToLower(a.Email)
-	if len(a.EmailKey) > MaxEmailBytes {
+	if !users.LowerCaseKeepsWidth(a.Email) {
 		return Applicant{}, ErrInvalidEmail
 	}
+	a.EmailKey = strings.ToLower(a.Email)
 	return a, nil
 }
 
@@ -94,7 +92,7 @@ func validName(s string) bool {
 // validEmail wants the address to parse back to itself: net/mail also accepts
 // a display name, a list's first entry and a quoted local part holding an @.
 func validEmail(s string) bool {
-	if len(s) > MaxEmailBytes || strings.Count(s, "@") != 1 || strings.ContainsFunc(s, unicode.IsControl) {
+	if len(s) > MaxEmailBytes || strings.Count(s, "@") != 1 || strings.ContainsFunc(s, users.IsUnfitForName) {
 		return false
 	}
 	parsed, err := mail.ParseAddress(s)

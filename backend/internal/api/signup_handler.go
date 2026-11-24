@@ -125,7 +125,7 @@ func (h *SignupHandler) start(w http.ResponseWriter, r *http.Request) {
 	if !decodeBodyWithin(w, r, &req, signupBodyBytes) {
 		return
 	}
-	email := signupEmail(req.Email)
+	email := users.TypedKey(req.Email)
 	if !withinBounds(w, r,
 		fieldBound{"full_name", strings.TrimSpace(req.FullName), users.MaxFullNameLength},
 		fieldBound{"login", strings.TrimSpace(req.Login), users.MaxLoginLength},
@@ -157,7 +157,7 @@ func (h *SignupHandler) confirm(w http.ResponseWriter, r *http.Request) {
 	if !decodeBodyWithin(w, r, &req, signupBodyBytes) {
 		return
 	}
-	email := signupEmail(req.Email)
+	email := users.TypedKey(req.Email)
 	if !withinBounds(w, r,
 		fieldBound{"email", email, users.MaxEmailLength},
 		fieldBound{"code", req.Code, signup.CodeDigits},
@@ -202,7 +202,7 @@ func (h *SignupHandler) resend(w http.ResponseWriter, r *http.Request) {
 	if !decodeBodyWithin(w, r, &req, signupBodyBytes) {
 		return
 	}
-	email := signupEmail(req.Email)
+	email := users.TypedKey(req.Email)
 	if !withinBounds(w, r, fieldBound{"email", email, users.MaxEmailLength}) {
 		return
 	}
@@ -229,12 +229,6 @@ func (h *SignupHandler) signupToken(r *http.Request) string {
 		return ""
 	}
 	return cookie.Value
-}
-
-// signupEmail is the address as the service keys a sign-up, and so as its
-// budget does.
-func signupEmail(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
 }
 
 // fieldBound is a request field and the most bytes the service accepts in

@@ -481,6 +481,22 @@ func TestLoginIsCaseInsensitiveInTheLogin(t *testing.T) {
 	}
 }
 
+// A dot is refused only in a new login: an account made before keeps signing
+// in with it, in any letter case.
+func TestAnExistingDottedLoginStillSignsIn(t *testing.T) {
+	f := newFixture(t)
+	dotted := f.repo.Add(users.User{
+		Login: "Ion.Popescu", FullName: "Ion Popescu", PasswordHash: passwordtest.Hash(t, testPassword), Status: users.StatusActive,
+	})
+
+	for _, typed := range []string{"Ion.Popescu", "ion.popescu", "ION.POPESCU"} {
+		result, err := f.service.Login(t.Context(), LoginCommand{Login: typed, Password: testPassword, IP: "10.0.0.1"})
+		if err != nil || result.User.ID != dotted.ID {
+			t.Errorf("Login(%q) = %v, %v; want the dotted account signed in", typed, result.User.ID, err)
+		}
+	}
+}
+
 func TestLogoutEndsTheSession(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

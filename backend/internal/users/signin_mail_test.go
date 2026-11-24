@@ -232,7 +232,7 @@ func TestCreateQueuesTheSignInDetailsInTheTransactionThatIssuesThePassword(t *te
 	f := newMailFixture(t)
 
 	created, err := f.service.Create(context.Background(), users.CreateCommand{
-		ActorID: f.actor, Login: "a.rusu", FullName: "Ana Rusu", Email: "ana@usm.md",
+		ActorID: f.actor, Login: "a-rusu", FullName: "Ana Rusu", Email: "ana@usm.md",
 		Roles: []string{"student"}, Delivery: byEmail,
 	})
 	if err != nil {
@@ -253,7 +253,7 @@ func TestCreateQueuesTheSignInDetailsInTheTransactionThatIssuesThePassword(t *te
 		t.Errorf("message = kind %q to %q for %v, want the sign-in details to ana@usm.md for %v",
 			m.Kind, m.To, m.UserID, created.User.ID)
 	}
-	for _, detail := range []string{"Ana Rusu", "a.rusu", "Olimpiada USM", "olimpiada@usm.md", "https://olympdb.usm.md/login"} {
+	for _, detail := range []string{"Ana Rusu", "a-rusu", "Olimpiada USM", "olimpiada@usm.md", "https://olympdb.usm.md/login"} {
 		if !strings.Contains(m.Body, detail) {
 			t.Errorf("the body does not name %q", detail)
 		}
@@ -286,7 +286,7 @@ func TestTheSignInMessageIsWrittenInTheInstallationsLanguage(t *testing.T) {
 	f.settings.values[settings.KeyMailLanguage] = string(mailing.English)
 
 	if _, err := f.service.Create(context.Background(), users.CreateCommand{
-		ActorID: f.actor, Login: "a.rusu", FullName: "Ana Rusu", Email: "ana@usm.md", Delivery: byEmail,
+		ActorID: f.actor, Login: "a-rusu", FullName: "Ana Rusu", Email: "ana@usm.md", Delivery: byEmail,
 	}); err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
@@ -300,7 +300,7 @@ func TestAnAccountWithoutAnAddressIsReportedNotFailed(t *testing.T) {
 	f := newMailFixture(t)
 
 	created, err := f.service.Create(context.Background(), users.CreateCommand{
-		ActorID: f.actor, Login: "a.rusu", FullName: "Ana Rusu", Delivery: byEmail,
+		ActorID: f.actor, Login: "a-rusu", FullName: "Ana Rusu", Delivery: byEmail,
 	})
 	if err != nil {
 		t.Fatalf("Create() = %v, want the account created without an email", err)
@@ -324,7 +324,7 @@ func TestWithoutTheOptionNothingIsQueuedAndNothingIsRead(t *testing.T) {
 	f := newMailFixture(t)
 
 	created, err := f.service.Create(context.Background(), users.CreateCommand{
-		ActorID: f.actor, Login: "a.rusu", FullName: "Ana Rusu", Email: "ana@usm.md",
+		ActorID: f.actor, Login: "a-rusu", FullName: "Ana Rusu", Email: "ana@usm.md",
 	})
 	if err != nil {
 		t.Fatalf("Create() = %v", err)
@@ -382,7 +382,7 @@ func TestMailOffRefusesTheOptionBeforeAnythingChanges(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := build(t)
-			target := f.add("a.rusu", "ana@usm.md")
+			target := f.add("a-rusu", "ana@usm.md")
 			for op, run := range issuingOperations(f, target) {
 				t.Run(op, func(t *testing.T) {
 					if err := run(); !errors.Is(err, users.ErrMailOff) {
@@ -410,7 +410,7 @@ func TestTheMessageIsDroppedWithTheAccountWhenTheTransactionFails(t *testing.T) 
 	f.sink.err = context.DeadlineExceeded
 
 	_, err := f.service.Create(context.Background(), users.CreateCommand{
-		ActorID: f.actor, Login: "a.rusu", FullName: "Ana Rusu", Email: "ana@usm.md", Delivery: byEmail,
+		ActorID: f.actor, Login: "a-rusu", FullName: "Ana Rusu", Email: "ana@usm.md", Delivery: byEmail,
 	})
 
 	if err == nil {
@@ -430,7 +430,7 @@ func TestAnOutboxFailureFailsTheReset(t *testing.T) {
 	f := newMailFixture(t)
 	f.outbox.err = errors.New("the outbox table is unreachable")
 
-	_, err := f.service.ResetPassword(context.Background(), f.actor, f.add("a.rusu", "ana@usm.md").ID, byEmail)
+	_, err := f.service.ResetPassword(context.Background(), f.actor, f.add("a-rusu", "ana@usm.md").ID, byEmail)
 
 	if !errors.Is(err, f.outbox.err) {
 		t.Fatalf("err = %v, want the outbox's failure", err)
@@ -447,10 +447,10 @@ func TestImportEmailsEveryCreatedAccountThatHasAnAddress(t *testing.T) {
 	result, err := f.service.Import(context.Background(), users.ImportCommand{
 		ActorID: f.actor, Delivery: byEmail, Roles: []string{"student"},
 		Rows: []users.ImportRow{
-			{Login: "s.popescu", FullName: "Sergiu Popescu", Email: "sergiu@usm.md"},
-			{Login: "i.ivanov", FullName: "Ivan Ivanov"},
+			{Login: "s-popescu", FullName: "Sergiu Popescu", Email: "sergiu@usm.md"},
+			{Login: "i-ivanov", FullName: "Ivan Ivanov"},
 			{Login: "taken", FullName: "Taken Login", Email: "taken@usm.md"},
-			{Login: "a.rusu", FullName: "Ana Rusu", Email: "ana@usm.md"},
+			{Login: "a-rusu", FullName: "Ana Rusu", Email: "ana@usm.md"},
 		},
 	})
 	if err != nil {
@@ -464,9 +464,9 @@ func TestImportEmailsEveryCreatedAccountThatHasAnAddress(t *testing.T) {
 		password[c.User.Login] = c.OneTimePassword
 	}
 	want := map[string]users.EmailOutcome{
-		"s.popescu": {Emailed: true},
-		"i.ivanov":  {SkipReason: users.EmailSkipNoAddress},
-		"a.rusu":    {Emailed: true},
+		"s-popescu": {Emailed: true},
+		"i-ivanov":  {SkipReason: users.EmailSkipNoAddress},
+		"a-rusu":    {Emailed: true},
 	}
 	if fmt.Sprint(outcome) != fmt.Sprint(want) {
 		t.Errorf("outcomes = %v, want %v", outcome, want)
@@ -478,7 +478,7 @@ func TestImportEmailsEveryCreatedAccountThatHasAnAddress(t *testing.T) {
 		t.Fatalf("queued %d messages, want 2", len(f.outbox.queued()))
 	}
 	for _, m := range f.outbox.queued() {
-		login := map[string]string{"sergiu@usm.md": "s.popescu", "ana@usm.md": "a.rusu"}[m.To]
+		login := map[string]string{"sergiu@usm.md": "s-popescu", "ana@usm.md": "a-rusu"}[m.To]
 		if login == "" {
 			t.Errorf("a message went to %q, which no created row gave", m.To)
 			continue
@@ -495,7 +495,7 @@ func TestImportEmailsEveryCreatedAccountThatHasAnAddress(t *testing.T) {
 
 func TestResetPasswordEmailsTheNewPassword(t *testing.T) {
 	f := newMailFixture(t)
-	target := f.add("a.rusu", "ana@usm.md")
+	target := f.add("a-rusu", "ana@usm.md")
 
 	issued, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail)
 	if err != nil {
@@ -506,7 +506,7 @@ func TestResetPasswordEmailsTheNewPassword(t *testing.T) {
 	if !passwordtest.Matches(t, after.PasswordHash, issued.OneTimePassword) {
 		t.Error("the password handed back is not the one stored")
 	}
-	if !issued.Email.Emailed || issued.ID != target.ID || issued.Login != "a.rusu" {
+	if !issued.Email.Emailed || issued.ID != target.ID || issued.Login != "a-rusu" {
 		t.Errorf("issued = %+v, want the account's emailed reset", issued)
 	}
 	if len(f.outbox.queued()) != 1 || f.outbox.queued()[0].UserID != target.ID {
@@ -524,7 +524,7 @@ func TestResetPasswordEmailsTheNewPassword(t *testing.T) {
 
 func TestResetPasswordOfAnAccountWithoutAnAddressStillIssuesIt(t *testing.T) {
 	f := newMailFixture(t)
-	target := f.add("a.rusu", "")
+	target := f.add("a-rusu", "")
 
 	issued, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail)
 	if err != nil {
@@ -541,9 +541,9 @@ func TestResetPasswordOfAnAccountWithoutAnAddressStillIssuesIt(t *testing.T) {
 
 func TestBulkResetEmailsEachAccountItsOwnPasswordInOneTransaction(t *testing.T) {
 	f := newMailFixture(t)
-	first := f.add("s.popescu", "sergiu@usm.md")
-	second := f.add("a.rusu", "ana@usm.md")
-	noAddress := f.add("i.ivanov", "")
+	first := f.add("s-popescu", "sergiu@usm.md")
+	second := f.add("a-rusu", "ana@usm.md")
+	noAddress := f.add("i-ivanov", "")
 	gone := f.add("gone", "gone@usm.md")
 	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{gone.ID}, users.StatusDeleted,
 		users.StatusChange{Reason: "left", By: f.actor}); err != nil {
@@ -563,8 +563,8 @@ func TestBulkResetEmailsEachAccountItsOwnPasswordInOneTransaction(t *testing.T) 
 	if len(res.Issued) != 3 || len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipDeleted {
 		t.Fatalf("issued %d, skipped %+v; want 3 issued and the deleted account skipped", len(res.Issued), res.Skipped)
 	}
-	if byLogin["i.ivanov"].Email != (users.EmailOutcome{SkipReason: users.EmailSkipNoAddress}) {
-		t.Errorf("the account without an address reads %+v", byLogin["i.ivanov"].Email)
+	if byLogin["i-ivanov"].Email != (users.EmailOutcome{SkipReason: users.EmailSkipNoAddress}) {
+		t.Errorf("the account without an address reads %+v", byLogin["i-ivanov"].Email)
 	}
 	if len(f.outbox.queued()) != 2 {
 		t.Fatalf("queued %d messages, want 2", len(f.outbox.queued()))
@@ -573,9 +573,9 @@ func TestBulkResetEmailsEachAccountItsOwnPasswordInOneTransaction(t *testing.T) 
 		var issued users.IssuedPassword
 		switch m.UserID {
 		case first.ID:
-			issued = byLogin["s.popescu"]
+			issued = byLogin["s-popescu"]
 		case second.ID:
-			issued = byLogin["a.rusu"]
+			issued = byLogin["a-rusu"]
 		default:
 			t.Fatalf("a message went to account %v, which was not emailed", m.UserID)
 		}
@@ -604,7 +604,7 @@ func TestBulkResetEmailsEachAccountItsOwnPasswordInOneTransaction(t *testing.T) 
 func TestAMessageThatCannotBeWrittenChangesNothing(t *testing.T) {
 	f := newMailFixture(t)
 	f.settings.values[settings.KeyName] = " "
-	target := f.add("a.rusu", "ana@usm.md")
+	target := f.add("a-rusu", "ana@usm.md")
 
 	for op, run := range issuingOperations(f, target) {
 		t.Run(op, func(t *testing.T) {
@@ -632,8 +632,8 @@ func TestAnImportWhoseMessageCannotBeWrittenStopsAndNamesTheRows(t *testing.T) {
 	result, err := f.service.Import(context.Background(), users.ImportCommand{
 		ActorID: f.actor, Delivery: byEmail,
 		Rows: []users.ImportRow{
-			{Login: "s.popescu", FullName: "Sergiu Popescu", Email: "sergiu@usm.md"},
-			{Login: "a.rusu", FullName: "Ana Rusu"},
+			{Login: "s-popescu", FullName: "Sergiu Popescu", Email: "sergiu@usm.md"},
+			{Login: "a-rusu", FullName: "Ana Rusu"},
 		},
 	})
 
@@ -641,7 +641,7 @@ func TestAnImportWhoseMessageCannotBeWrittenStopsAndNamesTheRows(t *testing.T) {
 		t.Fatalf("err = %v, want the import stopped by ErrIncompleteMessage", err)
 	}
 	if len(result.Created) != 0 || len(result.Skipped) != 0 ||
-		!slices.Equal(result.NotImported, []string{"s.popescu", "a.rusu"}) {
+		!slices.Equal(result.NotImported, []string{"s-popescu", "a-rusu"}) {
 		t.Errorf("result = %+v, want every row not imported and none skipped", result)
 	}
 }
@@ -649,7 +649,7 @@ func TestAnImportWhoseMessageCannotBeWrittenStopsAndNamesTheRows(t *testing.T) {
 func TestASettingsReadFailureChangesNothing(t *testing.T) {
 	f := newMailFixture(t)
 	f.settings.err = errors.New("settings table unreachable")
-	target := f.add("a.rusu", "ana@usm.md")
+	target := f.add("a-rusu", "ana@usm.md")
 
 	for op, run := range issuingOperations(f, target) {
 		t.Run(op, func(t *testing.T) {
@@ -688,9 +688,9 @@ func TestWithMailRefusesAMissingPart(t *testing.T) {
 
 func TestBulkResetEmailsNoAccountThatIsNotActive(t *testing.T) {
 	f := newMailFixture(t)
-	first := f.add("s.popescu", "sergiu@usm.md")
+	first := f.add("s-popescu", "sergiu@usm.md")
 	blocked := f.add("blocked", "blocked@usm.md")
-	second := f.add("a.rusu", "ana@usm.md")
+	second := f.add("a-rusu", "ana@usm.md")
 	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{blocked.ID}, users.StatusBlocked,
 		users.StatusChange{Reason: "cheating", By: f.actor}); err != nil {
 		t.Fatalf("SetStatus() = %v", err)
@@ -762,7 +762,7 @@ func (f *mailFixture) block(t *testing.T, id uuid.UUID) {
 
 func TestResettingTwiceLeavesOnlyTheNewestMessagePending(t *testing.T) {
 	f := newMailFixture(t)
-	target := f.add("a.rusu", "ana@usm.md")
+	target := f.add("a-rusu", "ana@usm.md")
 	ctx := context.Background()
 
 	if _, err := f.service.ResetPassword(ctx, f.actor, target.ID, byEmail); err != nil {
@@ -803,7 +803,7 @@ func TestAnyNewPasswordGivesUpTheEarlierMessage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newMailFixture(t)
-			target := f.add("a.rusu", "ana@usm.md")
+			target := f.add("a-rusu", "ana@usm.md")
 			if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err != nil {
 				t.Fatalf("ResetPassword() = %v", err)
 			}
@@ -821,9 +821,9 @@ func TestAnyNewPasswordGivesUpTheEarlierMessage(t *testing.T) {
 
 func TestABulkResetGivesUpOnlyTheEarlierMessagesOfItsAccounts(t *testing.T) {
 	f := newMailFixture(t)
-	first := f.add("s.popescu", "sergiu@usm.md")
-	second := f.add("a.rusu", "ana@usm.md")
-	untouched := f.add("i.ivanov", "ivan@usm.md")
+	first := f.add("s-popescu", "sergiu@usm.md")
+	second := f.add("a-rusu", "ana@usm.md")
+	untouched := f.add("i-ivanov", "ivan@usm.md")
 	ctx := context.Background()
 	if _, err := f.service.BulkResetPassword(ctx, f.actor, []uuid.UUID{first.ID, second.ID, untouched.ID}, byEmail); err != nil {
 		t.Fatalf("first BulkResetPassword() = %v", err)
@@ -854,7 +854,7 @@ func TestABulkResetGivesUpOnlyTheEarlierMessagesOfItsAccounts(t *testing.T) {
 
 func TestAFailedResetKeepsTheEarlierMessage(t *testing.T) {
 	f := newMailFixture(t)
-	target := f.add("a.rusu", "ana@usm.md")
+	target := f.add("a-rusu", "ana@usm.md")
 	if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err != nil {
 		t.Fatalf("ResetPassword() = %v", err)
 	}
@@ -884,7 +884,7 @@ func TestBlockingOrDeletingGivesUpThePendingMessage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newMailFixture(t)
-			target := f.add("a.rusu", "ana@usm.md")
+			target := f.add("a-rusu", "ana@usm.md")
 			if _, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail); err != nil {
 				t.Fatalf("ResetPassword() = %v", err)
 			}
@@ -908,9 +908,9 @@ func TestBlockingOrDeletingGivesUpThePendingMessage(t *testing.T) {
 
 func TestUnblockingGivesUpNothing(t *testing.T) {
 	f := newMailFixture(t)
-	target := f.add("a.rusu", "ana@usm.md")
+	target := f.add("a-rusu", "ana@usm.md")
 	f.block(t, target.ID)
-	other := f.add("i.ivanov", "ivan@usm.md")
+	other := f.add("i-ivanov", "ivan@usm.md")
 	if _, err := f.service.ResetPassword(context.Background(), f.actor, other.ID, byEmail); err != nil {
 		t.Fatalf("ResetPassword() = %v", err)
 	}
@@ -946,8 +946,8 @@ func (r blockedDuringWrite) SetPasswordMany(ctx context.Context, creds []users.C
 func TestAnAccountBlockedDuringAResetIsNotEmailed(t *testing.T) {
 	t.Run("bulk", func(t *testing.T) {
 		f := newMailFixture(t)
-		active := f.add("s.popescu", "sergiu@usm.md")
-		target := f.add("a.rusu", "ana@usm.md")
+		active := f.add("s-popescu", "sergiu@usm.md")
+		target := f.add("a-rusu", "ana@usm.md")
 		f.serve(blockedDuringWrite{Repository: f.repo, t: t, f: f, target: target.ID})
 
 		res, err := f.service.BulkResetPassword(context.Background(), f.actor, []uuid.UUID{active.ID, target.ID}, byEmail)
@@ -975,7 +975,7 @@ func TestAnAccountBlockedDuringAResetIsNotEmailed(t *testing.T) {
 	})
 	t.Run("single", func(t *testing.T) {
 		f := newMailFixture(t)
-		target := f.add("a.rusu", "ana@usm.md")
+		target := f.add("a-rusu", "ana@usm.md")
 		f.serve(blockedDuringWrite{Repository: f.repo, t: t, f: f, target: target.ID})
 
 		issued, err := f.service.ResetPassword(context.Background(), f.actor, target.ID, byEmail)

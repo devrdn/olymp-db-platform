@@ -275,9 +275,3 @@ func sessionKey(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return sessionKeyPrefix + hex.EncodeToString(sum[:])
 }
-
-// normalizeLogin lower-cases a login for lookups and rate-limit keys, as the
-// unique index on lower(login) does, so case variants share a counter.
-func normalizeLogin(login string) string {
-	return strings.ToLower(strings.TrimSpace(login))
-}

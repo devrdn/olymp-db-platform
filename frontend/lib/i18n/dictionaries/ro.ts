@@ -1582,6 +1582,7 @@ const ro = {
         reason: {
           login_taken: "login-ul este deja ocupat",
           email_taken: "adresa de e-mail este deja folosită",
+          login_has_dot: "login-ul conține un punct — folosiți o cratimă sau o liniuță de subliniere",
           invalid_row: "rând nefolosibil — verificați login-ul și numele complet",
         },
       },
@@ -2380,6 +2381,7 @@ const ro = {
     password_mismatch: "Cele două parole noi nu coincid.",
     same_password: "Parola nouă coincide cu cea veche.",
     login_taken: "Acest utilizator există deja.",
+    login_has_dot: "Login-ul nu poate conține un punct. Folosiți o cratimă sau o liniuță de subliniere, de exemplu ion-popescu.",
     email_taken: "Această adresă de e-mail este deja folosită.",
     forbidden: "Nu aveți drepturi pentru această acțiune.",
     last_administrator: "Astfel nu ar mai rămâne nimeni care să poată administra conturile. Acordați mai întâi rolul de administrator altui cont.",

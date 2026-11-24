@@ -214,8 +214,11 @@ const (
 
 func (s *Service) create(ctx context.Context, c Claims, identity users.ExternalIdentity, email string) (users.User, error) {
 	base := loginBase(c.LoginHint, c.Name)
+	// A cleaned name users would still refuse, empty or with nothing visible
+	// left, gives way to the login base: the holder cannot fix it at the
+	// provider.
 	fullName := strings.TrimSpace(c.Name)
-	if fullName == "" {
+	if users.ValidateProfile(fullName, "") != nil {
 		fullName = base
 	}
 	now := s.cfg.Now()
@@ -265,8 +268,9 @@ func (s *Service) candidate(base string, try int) (string, error) {
 }
 
 // loginBase is the hint's local part, or else the name, lowercased and
-// reduced to [a-z0-9._-] without leading or trailing marks; "user" when
-// neither leaves anything.
+// reduced to [a-z0-9_-] without leading or trailing marks, a dot
+// (users.IsLabelSeparator) becoming a hyphen since a new login may not hold
+// one; "user" when neither leaves anything.
 func loginBase(hint, name string) string {
 	if at := strings.LastIndex(hint, "@"); at >= 0 {
 		hint = hint[:at]
@@ -285,9 +289,12 @@ func plainLogin(s string) string {
 		if b.Len() == maxLoginBase {
 			break
 		}
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+		if users.IsLabelSeparator(r) {
+			r = '-'
+		}
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
 			b.WriteRune(r)
 		}
 	}
-	return strings.Trim(b.String(), "._-")
+	return strings.Trim(b.String(), "_-")
 }

@@ -771,12 +771,12 @@ func (s *Service) resetAccountAddress(ctx context.Context, cmd LoginCommand, gen
 
 // accountFamily names an account's throttle generation, keyed by normalised
 // login because counters are spent before the account is looked up.
-func accountFamily(login string) string { return "login:" + normalizeLogin(login) }
+func accountFamily(login string) string { return "login:" + users.ParseTypedLogin(login).String() }
 
 // trustedSubject keys the account's trusted budget. The generation is hex,
 // so the separator is unambiguous.
 func trustedSubject(login, gen string) string {
-	return "trusted:" + gen + "|" + normalizeLogin(login)
+	return "trusted:" + gen + "|" + users.ParseTypedLogin(login).String()
 }
 
 // deviceSubject keys a trusted browser's limit; neither part can hold the
@@ -788,14 +788,14 @@ func deviceSubject(id DeviceID, gen string) string {
 // accountSubject keys the account-wide ceiling. The generation is hex, so the
 // separator is unambiguous.
 func accountSubject(login, gen string) string {
-	return "login:" + gen + "|" + normalizeLogin(login)
+	return "login:" + gen + "|" + users.ParseTypedLogin(login).String()
 }
 
 // accountAddressSubject keys the guessing limit, with the address grouped by
 // httpx.AddressSubject (CLAUDE.md rule 9). The address comes first and the
 // generation is hex, so no invented login can produce another address's key.
 func accountAddressSubject(login, ip, gen string) string {
-	return "login-from:" + httpx.AddressSubject(ip) + "|" + gen + "|" + normalizeLogin(login)
+	return "login-from:" + httpx.AddressSubject(ip) + "|" + gen + "|" + users.ParseTypedLogin(login).String()
 }
 
 func passwordChangeSubject(userID uuid.UUID) string { return "pwchange:" + userID.String() }

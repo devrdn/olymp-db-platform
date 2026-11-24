@@ -144,6 +144,46 @@ type CreateCommand struct {
 	// password waits only the sign-in wait for a hashing slot, so a burst of
 	// visitors cannot hold the shared slots for the administrative one.
 	SelfService bool
+	// LoginFromEmail makes the account's own email address, lower-cased, its
+	// login, as an event registration's account has; Login must then be
+	// empty and Email set (loginFromEmail).
+	LoginFromEmail bool
+}
+
+// errLoginFromEmailMisused means a caller set CreateCommand.LoginFromEmail
+// with a login or without an address: a programming error, never a person's.
+var errLoginFromEmailMisused = errors.New("users: LoginFromEmail takes the login from the address, so it needs an address and no login")
+
+// newAccount is a new account's login, name and address, trimmed and checked.
+type newAccount struct {
+	login           Login
+	fullName, email string
+}
+
+// checkNewAccount is what every path that makes an account checks first: the
+// login (ParseNewLogin, or loginFromEmail when fromEmail), the name and
+// address (ValidateProfile), and that no live account holds the login.
+func (s *Service) checkNewAccount(ctx context.Context, login, fullName, email string, fromEmail bool) (newAccount, error) {
+	a := newAccount{fullName: strings.TrimSpace(fullName), email: strings.TrimSpace(email)}
+	var err error
+	switch {
+	case fromEmail && (login != "" || a.email == ""):
+		return newAccount{}, errLoginFromEmailMisused
+	case fromEmail:
+		a.login, err = loginFromEmail(a.email)
+	default:
+		a.login, err = ParseNewLogin(login)
+	}
+	if err != nil {
+		return newAccount{}, err
+	}
+	if err := ValidateProfile(a.fullName, a.email); err != nil {
+		return newAccount{}, err
+	}
+	if err := RefuseTakenLogin(ctx, s.repo, a.login); err != nil {
+		return newAccount{}, err
+	}
+	return a, nil
 }
 
 type CreateResult struct {
@@ -174,14 +214,11 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 // create is Create for roles checkRoles has already passed, with the
 // letterhead read when email was asked for.
 func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letterhead) (CreateResult, error) {
-	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
-	if err := ValidateAccount(login, fullName, email); err != nil {
+	account, err := s.checkNewAccount(ctx, cmd.Login, cmd.FullName, cmd.Email, cmd.LoginFromEmail)
+	if err != nil {
 		return CreateResult{}, err
 	}
-
-	if err := s.refuseTakenLogin(ctx, login); err != nil {
-		return CreateResult{}, err
-	}
+	login, fullName, email := account.login.String(), account.fullName, account.email
 
 	oneTime, err := generatePassword()
 	if err != nil {
@@ -247,19 +284,6 @@ func (s *Service) create(ctx context.Context, cmd CreateCommand, letters *letter
 	return CreateResult{User: created, OneTimePassword: oneTime, Email: emailed}, nil
 }
 
-// refuseTakenLogin is checked before an account is made, for a clear error;
-// the unique index is the real guarantee. A deleted account's login is free.
-func (s *Service) refuseTakenLogin(ctx context.Context, login string) error {
-	existing, err := s.repo.ByLogin(ctx, login)
-	switch {
-	case err == nil && existing.Status != StatusDeleted:
-		return ErrLoginTaken
-	case err != nil && !errors.Is(err, ErrNotFound):
-		return err
-	}
-	return nil
-}
-
 // errIncompleteVerifiedAccount means a caller of CreateVerified passed no
 // digest or no verification time, or one of CreateExternal an email with no
 // verification time: a programming error, never a person's.
@@ -278,21 +302,19 @@ type CreateVerifiedCommand struct {
 // password at once, its email verified. The owner made it, so the audit
 // entry has no actor.
 func (s *Service) CreateVerified(ctx context.Context, cmd CreateVerifiedCommand) (User, error) {
-	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
-	if email == "" {
+	if strings.TrimSpace(cmd.Email) == "" {
 		return User{}, fmt.Errorf("%w: email must not be empty", ErrInvalidAccount)
-	}
-	if err := ValidateAccount(login, fullName, email); err != nil {
-		return User{}, err
 	}
 	if cmd.PasswordHash == "" || cmd.VerifiedAt.IsZero() {
 		return User{}, errIncompleteVerifiedAccount
 	}
-	roles, err := s.checkRoles(ctx, []string{RoleStudent})
+	account, err := s.checkNewAccount(ctx, cmd.Login, cmd.FullName, cmd.Email, false)
 	if err != nil {
 		return User{}, err
 	}
-	if err := s.refuseTakenLogin(ctx, login); err != nil {
+	login, fullName, email := account.login.String(), account.fullName, account.email
+	roles, err := s.checkRoles(ctx, []string{RoleStudent})
+	if err != nil {
 		return User{}, err
 	}
 
@@ -346,21 +368,19 @@ func (s *Service) CreateExternal(ctx context.Context, cmd CreateExternalCommand)
 	if s.identities == nil {
 		return User{}, errNoIdentityStore
 	}
-	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
-	if err := ValidateAccount(login, fullName, email); err != nil {
-		return User{}, err
-	}
 	if err := cmd.Identity.Validate(); err != nil {
 		return User{}, err
 	}
-	if email != "" && cmd.VerifiedAt.IsZero() {
+	if strings.TrimSpace(cmd.Email) != "" && cmd.VerifiedAt.IsZero() {
 		return User{}, errIncompleteVerifiedAccount
 	}
-	roles, err := s.checkRoles(ctx, []string{RoleStudent})
+	account, err := s.checkNewAccount(ctx, cmd.Login, cmd.FullName, cmd.Email, false)
 	if err != nil {
 		return User{}, err
 	}
-	if err := s.refuseTakenLogin(ctx, login); err != nil {
+	login, fullName, email := account.login.String(), account.fullName, account.email
+	roles, err := s.checkRoles(ctx, []string{RoleStudent})
+	if err != nil {
 		return User{}, err
 	}
 
@@ -786,9 +806,18 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 		return ErrAccountDeleted
 	}
 
+	// Only a field the edit changes is checked: existing values stay as they
+	// are, so one a rule added since would refuse does not block the other.
 	fullName, email = strings.TrimSpace(fullName), strings.TrimSpace(email)
-	if err := ValidateAccount(current.Login, fullName, email); err != nil {
-		return err
+	if fullName != current.FullName {
+		if err := validateName(fullName); err != nil {
+			return err
+		}
+	}
+	if email != current.Email {
+		if err := validateEmail(email); err != nil {
+			return err
+		}
 	}
 
 	changes := audit.Between(current.auditFields(), User{FullName: fullName, Email: email}.auditFields())
@@ -874,31 +903,43 @@ func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, 
 	return s.audit.Record(ctx, s.entry(actorID, action, subject, payload))
 }
 
-// ValidateAccount checks trimmed descriptive fields. A login or name with a
-// control character is refused: PostgreSQL cannot store a NUL, and the
-// sign-in message must not carry one. The email must parse back to exactly
-// the bare address, since net/mail also accepts a display name with brackets.
-func ValidateAccount(login, fullName, email string) error {
+// ValidateProfile checks an account's trimmed name and email. A name holding
+// what IsUnfitForName names, or nothing visible, is refused: PostgreSQL
+// cannot store a NUL, the sign-in message must not carry one, and a bidi
+// override, a line separator or a character that shows as nothing misleads
+// whoever reads the name. The email may hold none of them either, and must
+// parse back to exactly the bare address, since net/mail also accepts a
+// display name with brackets.
+func ValidateProfile(fullName, email string) error {
+	if err := validateName(fullName); err != nil {
+		return err
+	}
+	return validateEmail(email)
+}
+
+func validateName(fullName string) error {
 	switch {
-	case login == "":
-		return fmt.Errorf("%w: login must not be empty", ErrInvalidAccount)
-	case len(login) > MaxLoginLength:
-		return fmt.Errorf("%w: login must be at most %d characters", ErrInvalidAccount, MaxLoginLength)
 	case fullName == "":
 		return fmt.Errorf("%w: full name must not be empty", ErrInvalidAccount)
 	case len(fullName) > MaxFullNameLength:
 		return fmt.Errorf("%w: full name must be at most %d characters", ErrInvalidAccount, MaxFullNameLength)
-	case strings.ContainsFunc(login, unicode.IsControl):
-		return fmt.Errorf("%w: login must not contain control characters", ErrInvalidAccount)
-	case strings.ContainsFunc(fullName, unicode.IsControl):
-		return fmt.Errorf("%w: full name must not contain control characters", ErrInvalidAccount)
+	case holdsUnfitInName(fullName):
+		return fmt.Errorf("%w: full name must not contain control, format or blank characters", ErrInvalidAccount)
+	case !showsSomething(fullName):
+		return fmt.Errorf("%w: full name must hold a visible character", ErrInvalidAccount)
 	}
+	return nil
+}
 
+func validateEmail(email string) error {
 	if email == "" {
 		return nil
 	}
 	if len(email) > MaxEmailLength {
 		return fmt.Errorf("%w: email must be at most %d characters", ErrInvalidAccount, MaxEmailLength)
+	}
+	if strings.ContainsFunc(email, IsUnfitForName) {
+		return fmt.Errorf("%w: email must not contain control, format or blank characters", ErrInvalidAccount)
 	}
 	parsed, err := mail.ParseAddress(email)
 	if err != nil || parsed.Address != email {
@@ -1008,13 +1049,12 @@ type BootstrapResult struct {
 // BootstrapAdmin makes sure an administrator account exists. It is
 // idempotent and run from the command line (cmd/bootstrap), never over HTTP.
 func (s *Service) BootstrapAdmin(ctx context.Context, login, fullName string) (BootstrapResult, error) {
-	existing, err := s.repo.ByLogin(ctx, login)
-	switch {
-	// A deleted match's login is free, so a new account is created.
-	case err == nil && existing.Status != StatusDeleted:
-		return BootstrapResult{User: existing}, nil
-	case err != nil && !errors.Is(err, ErrNotFound):
+	existing, live, err := liveByLogin(ctx, s.repo, login)
+	if err != nil {
 		return BootstrapResult{}, err
+	}
+	if live {
+		return BootstrapResult{User: existing}, nil
 	}
 
 	// No actor: nobody was signed in.
@@ -1038,6 +1078,10 @@ const (
 	SkipLoginTaken = "login_taken"
 	SkipEmailTaken = "email_taken"
 	SkipInvalidRow = "invalid_row"
+	// SkipLoginHasDot is a row refused for a dot in its login alone, apart
+	// from SkipInvalidRow, since a roster of name.surname logins was valid
+	// until the rule was added.
+	SkipLoginHasDot = "login_has_dot"
 )
 
 // maxImportRows bounds a roster (CLAUDE.md rule 2): every row costs an
@@ -1117,6 +1161,8 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipLoginTaken})
 		case errors.Is(err, ErrEmailTaken):
 			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipEmailTaken})
+		case errors.Is(err, ErrLoginHasDot):
+			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipLoginHasDot})
 		case errors.Is(err, ErrInvalidAccount):
 			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipInvalidRow})
 		default:

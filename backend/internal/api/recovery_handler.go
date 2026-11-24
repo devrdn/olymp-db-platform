@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -100,8 +99,7 @@ func (h *RecoveryHandler) forgot(w http.ResponseWriter, r *http.Request) {
 	if !decodeBodyWithin(w, r, &req, recoveryBodyBytes) {
 		return
 	}
-	// Keyed as the service looks the account up.
-	typed := strings.ToLower(strings.TrimSpace(req.Login))
+	typed := users.TypedKey(req.Login)
 	if !withinBounds(w, r, fieldBound{"login", typed, users.MaxEmailLength}) {
 		return
 	}

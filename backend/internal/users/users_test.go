@@ -226,3 +226,91 @@ type failingContests struct{ err error }
 func (f failingContests) ManagesContest(context.Context, uuid.UUID) (bool, error) {
 	return false, f.err
 }
+
+func TestANameMayNotHoldWhatShowsAsNothingOrBreaksTheLine(t *testing.T) {
+	for _, r := range []rune{
+		'\x00', '\t', '\u0085', '\u202e', '\u2066', '\u200b', '\ufeff',
+		'\u2028', '\u2029', '\u115f', '\u1160', '\u3164', '\uffa0',
+		'\u034f', '\ufe00', '\ufe0f', '\U000E0100', '\U000E01EF',
+		'\u180b', '\u180c', '\u180d', '\u180f', '\u17b4', '\u17b5',
+	} {
+		if !users.IsUnfitForName(r) {
+			t.Errorf("IsUnfitForName(%U) = false, want true", r)
+		}
+	}
+	for _, r := range []rune{'a', 'ș', 'Я', '한', ' ', '-', '\'', '\u0301', '\ufe10'} {
+		if users.IsUnfitForName(r) {
+			t.Errorf("IsUnfitForName(%U) = true, want false", r)
+		}
+	}
+}
+
+// A name greets a reader, so it must show something: a combining mark alone
+// renders as nothing, and so does a period with no letter beside it.
+// A joiner is of a name only between two letters or marks of a script that
+// needs one; Latin, Cyrillic and Greek do not, and an edge or a pair of
+// joiners joins nothing. A Mongolian selector or vowel separator follows a
+// Mongolian letter, the separator also one selector after it, and an
+// ideographic selector follows a Han letter.
+func TestANameWrittenAsANameTakesTheJoinersItsScriptNeeds(t *testing.T) {
+	for _, s := range []string{
+		"\u0639\u0644\u06cc\u200c\u0631\u0636\u0627",
+		"\u0930\u093e\u091c\u094d\u200c\u0915\u0941\u092e\u093e\u0930",
+		"\u0936\u094d\u200d\u0930\u0940",
+		"\u0dc1\u0dca\u200d\u0dbb\u0dd3",
+		"\u0639\u0644\u06cc\u200c\u0631\u0636\u0627 Popescu",
+		"\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d", "\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d Popescu", "\u09b6\u09b0\u09a4\u09cd\u200d", "\u182e\u1823\u180b\u1829\u182d\u1823\u182f", "\u182d\u1820\u180e\u1820",
+		"\u182d\u1820\u180b\u180e\u1820", "\u845b\U000E0100\u57ce", "\u845b\U000E01EF",
+	} {
+		if !users.IsWrittenAsAName(s) {
+			t.Errorf("IsWrittenAsAName(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{
+		"Ion\u200cPopescu", "Ion\u200dPopescu", "\u0418\u0432\u0430\u043d\u200c\u043e\u0432", "\u03b1\u200c\u03b2",
+		"\u200c\u0639\u0644\u06cc", "\u0639\u0644\u06cc\u200c", "\u0639\u0644\u06cc\u200c\u200c\u0631",
+		"\u0639\u0644\u06cc\u200c \u0631", "Ana\u0301\u200cPopescu", "\u0639\u0644\u06cc\u200b\u0631",
+		"Ana\u200d", "Jose\u0301\u200d", "\u0d28\u0d4d\u200d\u200d", "Ana\u180bPopescu", "Ana\u180eb",
+		"\u180b\u1820", "\u1820\u180b\u180b", "\u1820\u180e\u180e", "Ana\u180b\u180eb", "\u1820\u180b\u180b\u180e",
+		"\U000E0100\u845b", "\u845b\U000E0100\U000E0100", "\u3042\U000E0100", "\u845b\u0301\U000E0100",
+	} {
+		if users.IsWrittenAsAName(s) {
+			t.Errorf("IsWrittenAsAName(%q) = true, want false", s)
+		}
+	}
+}
+
+// Federation keeps what a name may hold and strips the rest, a joiner its
+// script needs included and one it does not stripped.
+func TestStripUnfitFromNameKeepsTheJoinersANameMayHold(t *testing.T) {
+	for in, want := range map[string]string{
+		"\u0639\u0644\u06cc\u200c\u0631\u0636\u0627": "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627",
+		"Ion\u200cPopescu":                           "IonPopescu",
+		"\u200c\u0639\u0644\u06cc\u200c":             "\u0639\u0644\u06cc",
+		"Ana\u202e Pop\u3164escu\u2028":              "Ana Popescu",
+		"\u0639\u0644\u06cc\u200c\u3164":             "\u0639\u0644\u06cc",
+		"\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d":       "\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d",
+		"\u182e\u1823\u180b\u1829\u182d\u1823\u182f": "\u182e\u1823\u180b\u1829\u182d\u1823\u182f",
+		"Ana\u180bPopescu\u180e":                     "AnaPopescu",
+		"\u182d\u1820\u180b\u180e\u1820":             "\u182d\u1820\u180b\u180e\u1820",
+		"\u845b\U000E0100\u57ce":                     "\u845b\U000E0100\u57ce",
+		"Ana\U000E0100":                              "Ana",
+	} {
+		if got := users.StripUnfitFromName(in); got != want {
+			t.Errorf("StripUnfitFromName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestANameWrittenAsANameShowsALetter(t *testing.T) {
+	for _, s := range []string{"\u0301", " \u0301", ".", "- '", "Ana\u034f", "Ana\ufe0f"} {
+		if users.IsWrittenAsAName(s) {
+			t.Errorf("IsWrittenAsAName(%q) = true, want false", s)
+		}
+	}
+	for _, s := range []string{"Ana", "Zo\u00eb", "Jos\u0065\u0301", "J. R. R."} {
+		if !users.IsWrittenAsAName(s) {
+			t.Errorf("IsWrittenAsAName(%q) = false, want true", s)
+		}
+	}
+}

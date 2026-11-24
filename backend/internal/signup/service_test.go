@@ -430,6 +430,55 @@ func TestStartRefusesAFullNameThatIsNotWrittenAsAName(t *testing.T) {
 	begin(t, f, cmd)
 }
 
+// A bidi control or another format character would reorder the text around
+// the name wherever staff read it.
+func TestStartTakesANameItsScriptJoins(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+	cmd := start("ali@example.edu", "ali-reza")
+	cmd.FullName = "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627"
+	begin(t, f, cmd)
+	chillu := start("rajan@example.edu", "rajan")
+	chillu.FullName = "\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d"
+	begin(t, f, chillu)
+	mongolian := start("bat@example.edu", "bat")
+	mongolian.FullName = "\u182e\u1823\u180b\u1829\u182d\u1823\u182f"
+	begin(t, f, mongolian)
+
+	refused := start("ion@example.edu", "ion")
+	refused.FullName = "Ion\u200cPopescu"
+	if err := startErr(t, f, refused); !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("Start(a joiner in a Latin name) = %v, want ErrInvalidAccount", err)
+	}
+}
+
+func TestStartRefusesANameWithAFormatCharacter(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	for _, name := range []string{"Ana \u202eucsepoP", "Ana \u2067Popescu\u2069", "Ana\u200bPopescu", "\ufeffAna Popescu"} {
+		cmd := start("ana@example.edu", "ana")
+		cmd.FullName = name
+		if err := startErr(t, f, cmd); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("Start(name %q) = %v, want ErrInvalidAccount", name, err)
+		}
+	}
+	if len(f.Store.Rows()) != 0 || f.Hasher.Calls() != 0 {
+		t.Error("a refused name was stored or hashed")
+	}
+}
+
+func TestStartRefusesAnEmailWithAFormatCharacter(t *testing.T) {
+	f := signuptest.NewFixture(t, nil)
+
+	for _, email := range []string{"a\u200bna@example.edu", "ana@exa\u202emple.edu"} {
+		if err := startErr(t, f, start(email, "ana")); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("Start(email %q) = %v, want ErrInvalidAccount", email, err)
+		}
+	}
+	if len(f.Store.Rows()) != 0 || f.Hasher.Calls() != 0 {
+		t.Error("a refused address was stored or hashed")
+	}
+}
+
 // The login is mailed to whatever address was typed, so it is kept to what a
 // login needs and cannot carry a link or a pitch.
 func TestStartRefusesALoginOfMoreThanPlainCharacters(t *testing.T) {

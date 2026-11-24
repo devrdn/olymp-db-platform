@@ -480,7 +480,9 @@ func TestAGeneratedLoginIsUniqueAndBounded(t *testing.T) {
 		hint, name string
 		want       string
 	}{
-		"the hint's local part":        {"Ana.Popescu@example.edu", "Ana Popescu", "ana.popescu"},
+		"the hint's local part":        {"Ana_Popescu@example.edu", "Ana Popescu", "ana_popescu"},
+		"a dot becomes a hyphen":       {"ion.popescu@usm.md", "Ion Popescu", "ion-popescu"},
+		"so do the IDNA full stops":    {"ion\u3002pop\uff0ees\uff61cu", "Ion Popescu", "ion-pop-es-cu"},
 		"a hint without an at sign":    {"Ana_P", "", "ana_p"},
 		"only plain characters":        {"ștefan+ana@example.edu", "", "tefanana"},
 		"the name when the hint is ''": {"", "Ana-Maria Popescu", "ana-mariapopescu"},
@@ -518,6 +520,18 @@ func TestAGeneratedLoginIsUniqueAndBounded(t *testing.T) {
 		}
 	})
 
+	t.Run("a dotted hint taken in its hyphenated form", func(t *testing.T) {
+		f := newFixture(t)
+		f.repo.Add(users.User{Login: "ion-popescu", FullName: "Ion Popescu"})
+		c := claims("sub-ion")
+		c.LoginHint = "ion.popescu@usm.md"
+
+		got, err := f.service().Resolve(t.Context(), c)
+		if err != nil || got.Login != "ion-popescu-2" {
+			t.Errorf("Resolve() = %q, %v; want ion-popescu-2", got.Login, err)
+		}
+	})
+
 	t.Run("a random suffix after fifty tries", func(t *testing.T) {
 		f := newFixture(t)
 		f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
@@ -542,7 +556,7 @@ func TestAGeneratedLoginIsUniqueAndBounded(t *testing.T) {
 		if err != nil || got.Login != strings.Repeat("a", 90)+"-2" || len(got.Login) > users.MaxLoginLength {
 			t.Errorf("Resolve() = %q, %v; want ninety a's and -2", got.Login, err)
 		}
-		if !regexp.MustCompile(`^[a-z0-9._-]+$`).MatchString(got.Login) {
+		if !regexp.MustCompile(`^[a-z0-9_-]+$`).MatchString(got.Login) {
 			t.Errorf("login %q holds more than plain characters", got.Login)
 		}
 	})
@@ -592,12 +606,37 @@ func TestTheNameAndTheLoginHintAreCleanedNotRefused(t *testing.T) {
 			edit: func(c *federation.Claims) { c.Name = "Ana\tPopescu" }, fullName: "AnaPopescu", base: "ana"},
 		"a name with a NUL and invalid UTF-8": {
 			edit: func(c *federation.Claims) { c.Name = "Ana\x00 Pop\xffescu" }, fullName: "Ana Popescu", base: "ana"},
+		"a name with a bidi override": {
+			edit: func(c *federation.Claims) { c.Name = "Ana \u202ePopescu\u202c" }, fullName: "Ana Popescu", base: "ana"},
+		"a name with a bidi isolate and a zero-width space": {
+			edit: func(c *federation.Claims) { c.Name = "\u2067Ana\u2069 Pop\u200bescu" }, fullName: "Ana Popescu", base: "ana"},
+		"a name with a line separator and Hangul fillers": {
+			edit: func(c *federation.Claims) { c.Name = "Ana\u2028 Pop\u3164escu\uffa0\u115f\u1160\u2029" }, fullName: "Ana Popescu", base: "ana"},
+		"a name with a grapheme joiner and variation selectors": {
+			edit: func(c *federation.Claims) { c.Name = "Ana\u034f Pope\ufe0fscu\U000E0100" }, fullName: "Ana Popescu", base: "ana"},
+		"a Persian name with its non-joiner": {
+			edit:     func(c *federation.Claims) { c.Name = "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627" },
+			fullName: "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627", base: "ana"},
+		"a Malayalam chillu": {
+			edit: func(c *federation.Claims) { c.Name = "\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d" }, fullName: "\u0d30\u0d3e\u0d1c\u0d28\u0d4d\u200d", base: "ana"},
+		"a Bengali khanda ta": {
+			edit: func(c *federation.Claims) { c.Name = "\u09b6\u09b0\u09a4\u09cd\u200d" }, fullName: "\u09b6\u09b0\u09a4\u09cd\u200d", base: "ana"},
+		"a Mongolian name with a selector": {
+			edit: func(c *federation.Claims) { c.Name = "\u182e\u1823\u180b\u1829\u182d\u1823\u182f" }, fullName: "\u182e\u1823\u180b\u1829\u182d\u1823\u182f", base: "ana"},
+		"a Mongolian selector in a Latin name": {
+			edit: func(c *federation.Claims) { c.Name = "Ana\u180b Popescu\u180e" }, fullName: "Ana Popescu", base: "ana"},
+		"a joiner in a Latin name": {
+			edit: func(c *federation.Claims) { c.Name = "Ana\u200cPopescu" }, fullName: "AnaPopescu", base: "ana"},
+		"a name of a braille blank and a Mongolian selector": {
+			edit: func(c *federation.Claims) { c.Name = "\u2800\u180b" }, fullName: "ana", base: "ana"},
+		"a name with nothing visible left": {
+			edit: func(c *federation.Claims) { c.Name = "\u0301\u3164" }, fullName: "ana", base: "ana"},
 		"an overlong name": {
 			edit: func(c *federation.Claims) { c.Name = long(federation.MaxNameLength) }, fullName: strings.Repeat("ă", federation.MaxNameLength/2), base: "ana"},
 		"a GitHub login with a control character": {
 			edit: func(c *federation.Claims) { c.LoginHint = "ana\x7fp" }, fullName: "Ana Popescu", base: "anap"},
 		"a Microsoft username with invalid UTF-8": {
-			edit: func(c *federation.Claims) { c.LoginHint = "ana\xff.p@example.edu" }, fullName: "Ana Popescu", base: "ana.p"},
+			edit: func(c *federation.Claims) { c.LoginHint = "ana\xff.p@example.edu" }, fullName: "Ana Popescu", base: "ana-p"},
 		"an overlong hint": {
 			edit: func(c *federation.Claims) { c.LoginHint = long(federation.MaxLoginHintLength) }, fullName: "Ana Popescu", base: "anapopescu"},
 		"an untrusted email with a control character as the hint": {

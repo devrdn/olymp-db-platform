@@ -24,7 +24,7 @@ export const MAX_BULK_ACCOUNTS = 500;
  * Why a roster row produced no account. Smaller than SKIP_REASONS because an
  * import only creates accounts. A reason not listed here is shown raw.
  */
-export const IMPORT_SKIP_REASONS = ["login_taken", "email_taken", "invalid_row"] as const;
+export const IMPORT_SKIP_REASONS = ["login_taken", "email_taken", "login_has_dot", "invalid_row"] as const;
 export type ImportSkipReason = (typeof IMPORT_SKIP_REASONS)[number];
 
 /** Mirrors `users.maxImportRows`. */

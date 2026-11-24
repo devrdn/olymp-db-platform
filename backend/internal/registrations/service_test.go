@@ -43,7 +43,7 @@ func TestAFirstRegistrationCreatesTheAccountAndMailsTheCode(t *testing.T) {
 	if out.Registration.UserID == nil || *out.Registration.UserID != out.Account.ID {
 		t.Errorf("registration links %v, want the new account %v", out.Registration.UserID, out.Account.ID)
 	}
-	want := registrations.NewAccount{Login: "ana@example.com", Email: "Ana@Example.com", FullName: "Ana Popescu", ByEmail: true}
+	want := registrations.NewAccount{Email: "Ana@Example.com", FullName: "Ana Popescu", ByEmail: true}
 	if len(f.Accounts.Created) != 1 || f.Accounts.Created[0] != want {
 		t.Errorf("accounts created = %+v, want %+v", f.Accounts.Created, want)
 	}

@@ -131,22 +131,28 @@ func (c Claims) identity() (users.ExternalIdentity, error) {
 	return identity, nil
 }
 
-// cleaned returns c with Name and LoginHint stripped of invalid UTF-8 and
-// control characters and cut to their bounds.
+// cleaned returns c with Name and LoginHint stripped of invalid UTF-8, cut to
+// their bounds, and stripped of what a name may not hold
+// (users.StripUnfitFromName, which keeps a joiner the name's script needs)
+// and of what users.IsUnfitForName names in the hint. A name is stripped
+// rather than refused: its holder cannot fix it at the provider, and a
+// refusal would lock them out. Cutting first lets the strip drop a joiner the
+// cut left at the edge.
 func (c Claims) cleaned() Claims {
-	c.Name = cleanText(c.Name, MaxNameLength)
-	c.LoginHint = cleanText(c.LoginHint, MaxLoginHintLength)
-	return c
-}
-
-// cleanText cuts at a character boundary, so the result stays valid UTF-8.
-func cleanText(s string, limit int) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+	c.Name = users.StripUnfitFromName(cut(c.Name, MaxNameLength))
+	c.LoginHint = strings.Map(func(r rune) rune {
+		if users.IsUnfitForName(r) {
 			return -1
 		}
 		return r
-	}, strings.ToValidUTF8(s, ""))
+	}, cut(c.LoginHint, MaxLoginHintLength))
+	return c
+}
+
+// cut drops invalid UTF-8 and cuts at a character boundary, so the result
+// stays valid UTF-8.
+func cut(s string, limit int) string {
+	s = strings.ToValidUTF8(s, "")
 	if len(s) <= limit {
 		return s
 	}
@@ -171,7 +177,7 @@ func address(raw string) (string, bool) {
 	if strings.ContainsFunc(raw, func(r rune) bool { return r > unicode.MaxASCII }) {
 		return "", true
 	}
-	email := strings.ToLower(strings.TrimSpace(raw))
+	email := users.TypedKey(raw)
 	if email == "" {
 		return "", true
 	}

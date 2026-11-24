@@ -229,6 +229,22 @@ func TestByLoginOfAStringNoLoginCanBeIsNotFoundAndTheTransactionGoesOn(t *testin
 	})
 }
 
+// A new login may not hold a dot, but an account made before keeps its login
+// and is still found by it, in any letter case, as sign-in looks it up.
+func TestByLoginFindsAnExistingDottedLoginInAnyCase(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		made := makeUser(t, ctx, "Bylogin.Dotted.Popescu")
+
+		for _, typed := range []string{"Bylogin.Dotted.Popescu", "bylogin.dotted.popescu"} {
+			got, err := repo.ByLogin(ctx, typed)
+			if err != nil || got.ID != made.ID || got.Login != "Bylogin.Dotted.Popescu" {
+				t.Errorf("ByLogin(%q) = %q (%v), %v; want the account with its login as stored", typed, got.Login, got.ID, err)
+			}
+		}
+	})
+}
+
 func TestByLoginPrefersTheLiveAccountOverADeletedOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
