@@ -1011,16 +1011,20 @@ panes with resizable, remembered sizes). Plus `Band` and `AppBar`, which every
 shell is built from.
 
 **Built so far:** in `components/ui`, Button, Input, Label, Field, Textarea,
-Checkbox, Combobox, Tag, Avatar, Tooltip, Dialog, Tabs, Skeleton, ScrollBox
-and MarkdownEditor; in `components/product`, StateView, ExportMenu, CodeEditor,
-SqlBlock, QueryLog, QueryRow, TabStrip, StoryText, StandingsView,
-AnswerAttempts, ContestWindow, DrawnCover and NotFoundView; in
-`components/layout`, Band, AppBar, Mark, Breadcrumbs, SectionNav,
-AccountLink, SignOutButton, LanguageSwitcher, ThemeToggle and two shells in
-place of the four planned: ProductShell for every screen behind a session and
-FocusShell for the public screens, the not-found page and the forced password
-change. ContestRegister lives beside the contest list that uses it, in
-`app/(admin)/contests/`.
+Checkbox, Combobox, Tag, Avatar, Tooltip, Dialog, ConfirmDialog (asked through
+`useConfirm`, the one way to ask before a step that cannot be taken back),
+Tabs, Skeleton, ScrollBox and MarkdownEditor; in `components/product`,
+ActionForm (a form bound to its action, with its button, outcome and save
+row), StateView, RefusalNote, ReloadButton, ExportMenu, CodeEditor, SqlBlock,
+QueryLog, QueryRow, TabStrip, StoryText, StandingsView, AnswerAttempts,
+ContestWindow, DrawnCover and NotFoundView; in `components/layout`, Band,
+AppBar, Mark, Breadcrumbs, SectionNav, AccountLink, SignOutButton,
+LanguageSwitcher, ThemeToggle and one Frame in place of the four planned
+shells. Each route group's layout names its audience, and the frame wears one
+of two shapes: the product shell for every screen behind a session, and the
+focus shell for the public screens, the not-found page and the forced
+password change. ContestRegister lives beside the contest list that uses it,
+in `app/(admin)/contests/`.
 
 ### 11.1 ExportMenu
 
