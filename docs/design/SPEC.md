@@ -1018,7 +1018,7 @@ ActionForm (a form bound to its action, with its button, outcome and save
 row), StateView, RefusalNote, ReloadButton, ExportMenu, CodeEditor, SqlBlock,
 QueryLog, QueryRow, TabStrip, StoryText, StandingsView, AnswerAttempts,
 ContestWindow, DrawnCover and NotFoundView; in `components/layout`, Band,
-AppBar, Mark, Breadcrumbs, SectionNav, AccountLink, SignOutButton,
+AppBar, Logo, Breadcrumbs, SectionNav, AccountLink, SignOutButton,
 LanguageSwitcher, ThemeToggle and one Frame in place of the four planned
 shells. Each route group's layout names its audience, and the frame wears one
 of two shapes: the product shell for every screen behind a session, and the
