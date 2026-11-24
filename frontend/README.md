@@ -166,9 +166,9 @@ Nothing in `lib/` imports a component. Nothing in `components/ui/` knows the
 domain: a primitive that mentions a contest belongs in `components/product/`.
 Within `lib/`, `api` is the lowest layer. It takes from `auth` only what a
 request needs: the session for `api/server.ts`, sign-in recovery for a page's
-read in `api/page-read.ts`, and the provider and cookie constants a few
-schemas name. From `i18n` it takes only the `Locale` type, and it never
-imports `theme`.
+read in `api/page-read.ts`, the provider constants two schemas name, and the
+cookie helpers and command type the sign-up module uses. From `i18n` it takes
+only the `Locale` type, and it never imports `theme`.
 
 ## Where does a new thing go?
 
