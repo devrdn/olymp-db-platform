@@ -1862,6 +1862,43 @@ it, with the number of questions waiting beside it while the contest runs.
   - **No answer tells a known address from an unknown one.** Sign-up and
     recovery answer every address alike and in the same time; a login, which
     the leaderboards show anyway, may be refused as taken.
+  - **One rule for every new account.** Every path that makes an account
+    (an administrator's form, a roster import, the bootstrap administrator,
+    sign-up, an external sign-in and the event form) checks it in one place,
+    `users.Service.checkNewAccount`: the login, then the name and the
+    address, then whether the login is free.
+    - A new login (`users.ParseNewLogin`) is at most 64 bytes, holds no
+      control or format character, and holds no dot: neither `.` nor a code
+      point a domain name reads as one (U+3002, U+FF0E, U+FF61, U+2024,
+      U+FE52; `users.IsLabelSeparator`). The login is mailed in the sign-in
+      letter, and a mail client turns a dotted one into a link to a domain.
+      A dotted login is refused with `login_has_dot`, and a roster import
+      skips its row with that reason. An account keeps the login it has, and
+      sign-in compares what was typed, trimmed and lower-cased
+      (`users.ParseTypedLogin`), with no shape rule. The one new login that
+      keeps its dots is the event form's, which is the person's own address,
+      lower-cased: the letter goes to that address, so a link a dot makes
+      leads to the reader's own mailbox.
+    - A full name may hold no control or format character, no line or
+      paragraph separator, and no variation selector or other code point
+      that shows as nothing (the Hangul fillers, the combining grapheme
+      joiner, the Khmer inherent vowels), and it must show at least one
+      visible character, which a mark alone or the braille blank is not
+      (`users.ValidateProfile`). A script that needs one of these characters
+      keeps it in its own context only: a zero-width non-joiner or joiner
+      between two letters or marks, after one of a script other than Latin,
+      Cyrillic, Greek, Common or Inherited (Persian, Hindi, Bengali, Sinhala,
+      Kannada); a zero-width joiner after a nonspacing mark of such a script,
+      whatever follows, as a word-final legacy Malayalam chillu or Bengali
+      khanda ta is written; a Mongolian free variation selector right after a
+      Mongolian letter, and the vowel separator after one or after such a
+      selector; and an ideographic variation selector (U+E0100 to U+E01EF)
+      right after a Han letter, as a Japanese family name is written in its
+      registered glyph. A combining accent is no context for any of them.
+    - A typed address may hold none of those characters, a joiner included.
+    - An administrator's edit of an existing account checks only the field
+      it changes, so a stored name or address that a rule added since would
+      refuse does not block editing the other.
   - **Staff accounts are never reached through email.** An account holding
     any global permission (an organiser or an administrator), or managing or
     owning a contest that is not archived, which lets it read the reference
@@ -1891,9 +1928,11 @@ it, with the number of questions waiting beside it while the contest runs.
     message links the forgotten-password page only for an account recovery
     serves, and tells a staff or blocked owner to ask an administrator. The
     login is 3 to 64 lowercase letters, digits, hyphens or underscores,
-    starting with a letter or a digit; the full name is written as a name
-    (letters, marks, spaces, hyphens, apostrophes and periods, no period
-    directly before a letter), since it greets the reader of a message sent
+    starting with a letter or a digit (`users.ParseChosenLogin`), so it never
+    holds a dot; the full name is written as a name (letters, marks, spaces,
+    hyphens, apostrophes and periods, no period directly before a letter,
+    and a joiner or selector only in the contexts above;
+    `users.IsWrittenAsAName`), since it greets the reader of a message sent
     to whatever address was typed; the password has at least 12 characters.
     Each route spends its address budget (120 in ten minutes) before the
     body is read, and so before the hash; confirming then spends the
@@ -1948,7 +1987,11 @@ it, with the number of questions waiting beside it while the contest runs.
     identity is linked to; or, for a vouched address, links the live account
     holding it and marks the address verified; or creates a `student`
     account with no password, carrying the address only when vouched for and
-    a login derived from the hint or the name. It refuses a staff account
+    a login derived from the hint's local part or the name: lower-cased,
+    kept to letters, digits, hyphens and underscores, with a dot (or a code
+    point read as one) becoming a hyphen, then numbered or given a random
+    suffix while taken, so `ion.popescu@usm.md` becomes `ion-popescu`, or
+    `ion-popescu-2`. It refuses a staff account
     unless `HomeDirectory` is set for this sign-in, a blocked or deleted one
     whatever the provider says, a creation while `SELF_SIGNUP_ENABLED` is
     off, a link by email to an account already linked to another identity of
@@ -1976,8 +2019,11 @@ it, with the number of questions waiting beside it while the contest runs.
     `lower()` included, takes the Kelvin sign for `k`, so it could find
     another person's account, and an account's address must equal the
     identity's in ASCII for a link. The display name and the login hint,
-    which only seeds a new login, lose invalid UTF-8 and control characters
-    and are cut to their bounds, never refused. Linking any account that
+    which only seeds a new login, lose invalid UTF-8 and are cut to their
+    bounds, then lose what a name may not hold: the name keeps a joiner or
+    selector its script needs in the contexts above, the hint keeps none.
+    Neither is ever refused, since their holder cannot correct them at the
+    provider. Linking any account that
     still holds the one-time password staff issued (a student's, which
     `User.LinkableByEmail` admits although its address is unverified because
     nobody has chosen its password yet, or a staff account linked through
@@ -2314,7 +2360,13 @@ repeat inside the cooldown — answers 202 with the same body, `{"status":
 travel only in the message. Each case also spends exactly one password hash, a
 decoy where no account is made, so the time tells no more than the body.
 With mail off nothing can be sent, so the code and the one-time password are
-shown on screen as the answer to the request (201, or 200 for a repeat).
+shown on screen as the answer to the request (201, or 200 for a repeat). The
+account it makes takes the address as its login, lower-cased with its dots
+kept (section 7). The form refuses an address holding a control, format or
+blank character, and one whose lower case changes a letter's width, such as
+U+0130 or the Kelvin sign, which lower-case to the ASCII `i` and `k` and so
+would name another mailbox; a name must be written as a name. An account the
+users rules refuse is answered 400 `invalid_request`.
 
 **Authorisation has two levels** (`internal/rbac`) — exactly the model in
 section 7. A separate permission, `contest.admin_all`, removes the scope, and
@@ -2420,7 +2472,10 @@ subject (`httpx.AddressSubject` / `httpx.ClientSubject`), which leaves IPv4
 exact and folds IPv6 to its /64 — otherwise one subscriber would get a fresh
 budget of attempts for every address inside their own prefix. The audit trail
 and a contest's address restriction still ask for the exact address
-(`httpx.ClientIP`): they need the real address, not a throttling subject.
+(`httpx.ClientIP`): they need the real address, not a throttling subject. A
+sign-in or a password change whose address cannot be read is refused with
+500 `internal_error` before any window is counted, as every route with a
+request budget refuses one: a missing key must not mean a skipped limit.
 
 **Guessing is counted per account-and-address pair, not per account.** Logins
 are not secret — a public results table may show them — and a counter on the
@@ -2719,7 +2774,9 @@ overwriting the first. The contest response carries the version, and
 `PATCH /contests/{id}` takes it back as an optional `expected_version`: when
 present, `Update` refuses a row at any other version the same way, so the
 check covers the time the settings form was open, not only the request.
-Without it the save applies to whatever is stored. The repository decides
+Without it the save applies to whatever is stored. The interface's settings
+form always sends it, and under a `contest_changed` refusal offers a reload
+that starts the form over with the contest as it now is. The repository decides
 only that refusal and `ErrNotFound`; the rules (the running-contest locks, an
 archived contest's prize places, the self-registration visibility) are the
 domain's alone.
@@ -2736,9 +2793,9 @@ the version. Two edits of one contest therefore take turns rather than refuse
 each other, an edit that waited on a start sees the running contest and is
 refused as not editable, and a publish or start whose gate counted a question
 deleted since, or saw a game built that has since been replaced, is refused.
-`internal/provisioning` calls it on its own `ContestRows`, a required argument
-of `NewGames` with the unit of work, and answers its refusals in its own
-terms. A cover change needs no such step: an upload always carries its credit
+`internal/provisioning` calls it with `contests.ContentRows`, a required
+argument of `NewGames` with the unit of work, and answers its refusals in its
+own terms; `contests` therefore never imports `provisioning`. A cover change needs no such step: an upload always carries its credit
 line and a removal needs none, so neither can turn a passing gate into a
 failing one. The one gate check outside the version is a staff member
 registered as a participant, which turns on account permissions rather than on
@@ -2782,7 +2839,10 @@ one buffer per contest, per sending account and per contest owner, so the
 contests one organiser owns share a buffer whoever uploads to them. A chunk
 beyond any of these bounds is refused unread with 503 `game_table_data_busy`
 and a `Retry-After`: 503 and not 429, because the limit is the installation's
-memory, shared by every organiser, and not a rate one caller exceeded. A
+memory, shared by every organiser, and not a rate one caller exceeded. The
+interface sends a chunk refused as busy again by itself after its
+`Retry-After`, held between 1 and 60 seconds, for a dump as for a table, and
+leaves it to the organiser's Retry after five refusals in a row. A
 chunk at a wrong offset, to a finished or to a missing upload is refused
 before its body is read. A manager who holds a chunk back keeps CSV chunks
 refused for every contest the appointing owner created, the owner's own
@@ -4717,10 +4777,8 @@ genuinely bad message being retried up to its cap instead of dropped at once.
   that account.
 - A sent or abandoned row of `mail_outbox` has no body but keeps the
   recipient's address for thirty days, then the retention sweep deletes it.
-- The check that refuses a control character in a login or a full name also
-  runs when an administrator edits a profile, against the stored login. An
-  account created before the check whose login carries one cannot have its
-  name or address edited, and no route renames a login.
+- No route renames a login, so an account made before new logins refused a
+  dot keeps its dotted login.
 
 ## 11. Security in summary
 
