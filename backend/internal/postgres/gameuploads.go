@@ -114,18 +114,21 @@ func (r *GameUploads) UpdateReceived(ctx context.Context, id uuid.UUID, received
 // caller after commit), and replaces the contest's game through upsertGame.
 // It is GameInstances's, not GameUploads's, because it replaces the game.
 //
-// Neither UPDATE checks RowsAffected: the caller already validated the row,
-// and a race between that read and this write is rare enough to leave to the
-// next organiser action or the janitor.
+// An upload aborted since the caller read it is ErrUploadAlreadyComplete and
+// replaces nothing: its file is being removed, and a game must not name it.
 func (r *GameInstances) CompleteUpload(
 	ctx context.Context, contestID, id uuid.UUID, database string, summary provisioning.UploadSummary, previous *uuid.UUID,
 ) (provisioning.Template, error) {
-	if _, err := r.querier(ctx).Exec(ctx, `
+	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_uploads
 		SET status = 'complete', received_bytes = $2, sha256 = $3, line_count = $4, updated_at = now()
 		WHERE id = $1 AND status = 'receiving'`,
-		id, summary.Bytes, summary.SHA256, summary.Lines); err != nil {
+		id, summary.Bytes, summary.SHA256, summary.Lines)
+	if err != nil {
 		return provisioning.Template{}, fmt.Errorf("mark the upload complete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return provisioning.Template{}, provisioning.ErrUploadAlreadyComplete
 	}
 
 	if previous != nil {
@@ -138,11 +141,17 @@ func (r *GameInstances) CompleteUpload(
 	return r.upsertGame(ctx, contestID, database, "", string(provisioning.SourceFile), &id, nil)
 }
 
-// Abort marks one upload 'aborted'. It never touches game_templates.
+// Abort marks one 'receiving' upload 'aborted'. One completed since the
+// caller read it is ErrUploadAlreadyComplete and stays as it is. It never
+// touches game_templates.
 func (r *GameUploads) Abort(ctx context.Context, id uuid.UUID) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_uploads SET status = 'aborted', updated_at = now() WHERE id = $1`, id); err != nil {
+	tag, err := r.querier(ctx).Exec(ctx,
+		`UPDATE game_uploads SET status = 'aborted', updated_at = now() WHERE id = $1 AND status = 'receiving'`, id)
+	if err != nil {
 		return fmt.Errorf("mark the upload aborted: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return provisioning.ErrUploadAlreadyComplete
 	}
 	return nil
 }

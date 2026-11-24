@@ -107,7 +107,9 @@ type TableDataRows interface {
 	// the table has none yet.
 	Ready(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
 	// Complete marks id 'complete' with what validation measured, and retires
-	// previous (nil unless another upload for the table is displaced).
+	// previous (nil unless another upload for the table is displaced), inside
+	// the caller's transaction. An upload no longer 'receiving' is
+	// ErrUploadAlreadyComplete, and previous stays the table's.
 	Complete(ctx context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID) (TableData, error)
 	// CreateReady records a table's first row as a file that starts
 	// 'complete'. A table that already has one is ErrUploadInProgress.

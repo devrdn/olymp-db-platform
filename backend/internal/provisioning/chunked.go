@@ -139,7 +139,9 @@ type UploadRows[R any] interface {
 	// lowering it, so a resumed browser knows where to continue. An upload no
 	// longer 'receiving' is ErrUploadAlreadyComplete and keeps its length.
 	UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error
-	// Abort marks one upload 'aborted'.
+	// Abort marks one 'receiving' upload 'aborted'. One no longer receiving,
+	// completed since the caller read it, is ErrUploadAlreadyComplete and
+	// stays as it is.
 	Abort(ctx context.Context, id uuid.UUID) error
 	// Abandoned lists up to limit uploads still 'receiving' whose last
 	// activity is older than cutoff, oldest first.
@@ -384,16 +386,21 @@ func (u *Uploads[R]) Abort(ctx context.Context, actorID, contestID, id uuid.UUID
 	return u.abort(ctx, &actorID, row)
 }
 
-// abort removes one upload's file, then marks the row 'aborted'. actor is nil
-// for the janitor's sweep, a system event.
+// abort marks the row 'aborted', then removes its file. actor is nil for the
+// janitor's sweep, a system event.
+//
+// The row goes first because a completion may have taken it since it was
+// read: that abort is refused as ErrUploadAlreadyComplete, and the file the
+// completed upload now is stays. A removal that fails after the commit is
+// left to the orphan sweep, which an aborted row no longer holds back.
 func (u *Uploads[R]) abort(ctx context.Context, actor *uuid.UUID, row R) (R, error) {
 	var none R
 	at := row.progress()
-	if err := u.retire(at.ID); err != nil {
-		return none, fmt.Errorf("remove the upload's file: %w", err)
-	}
 	err := u.uow.Do(ctx, func(ctx context.Context) error {
 		if err := u.rows.Abort(ctx, at.ID); err != nil {
+			if errors.Is(err, ErrUploadAlreadyComplete) {
+				return ErrUploadAlreadyComplete
+			}
 			return fmt.Errorf("mark the upload aborted: %w", err)
 		}
 		return u.record(ctx, row.abortEntry(actor))
@@ -401,6 +408,7 @@ func (u *Uploads[R]) abort(ctx context.Context, actor *uuid.UUID, row R) (R, err
 	if err != nil {
 		return none, err
 	}
+	_ = u.retire(at.ID)
 	return row.aborted(), nil
 }
 
@@ -444,7 +452,11 @@ func (u *Uploads[R]) sweep(ctx context.Context, olderThan time.Duration) (abando
 		failures = append(failures, fmt.Errorf("list abandoned uploads: %w", err))
 	}
 	for _, row := range rows {
-		if _, err := u.abort(ctx, nil, row); err != nil {
+		_, err := u.abort(ctx, nil, row)
+		switch {
+		case errors.Is(err, ErrUploadAlreadyComplete):
+			continue // completed or cancelled since it was listed
+		case err != nil:
 			failures = append(failures, fmt.Errorf("abandon upload %s: %w", row.progress().ID, err))
 			continue
 		}

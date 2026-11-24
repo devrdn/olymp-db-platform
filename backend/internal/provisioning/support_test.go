@@ -529,6 +529,10 @@ type templateStore struct {
 	// progressWrites counts UpdateReceived calls of either kind, so a test
 	// can tell a retried chunk recorded nothing.
 	progressWrites int
+	// completedBeforeAbort, when set, completes the upload an Abort is about
+	// to mark, as a completion that commits between the abort's read and its
+	// write does.
+	completedBeforeAbort bool
 	// ownerOfAll, when set, is the account every contest belongs to.
 	ownerOfAll uuid.UUID
 	// deleteRowErr, when set, is what the table rows' DeleteRow answers. The
@@ -765,8 +769,8 @@ func (s *templateStore) CompleteUpload(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.uploads[id]
-	if !ok {
-		return provisioning.Template{}, provisioning.ErrUploadNotFound
+	if !ok || u.Status != provisioning.UploadReceiving {
+		return provisioning.Template{}, provisioning.ErrUploadAlreadyComplete
 	}
 	u.Status, u.SHA256, u.Lines, u.ReceivedBytes = provisioning.UploadComplete, summary.SHA256, summary.Lines, summary.Bytes
 	u.UpdatedAt = time.Now()
@@ -853,8 +857,12 @@ func (d dumpRows) Abort(_ context.Context, id uuid.UUID) error {
 	d.s.mu.Lock()
 	defer d.s.mu.Unlock()
 	u, ok := d.s.uploads[id]
-	if !ok {
-		return provisioning.ErrUploadNotFound
+	if ok && d.s.completedBeforeAbort {
+		u.Status = provisioning.UploadComplete
+		d.s.uploads[id] = u
+	}
+	if !ok || u.Status != provisioning.UploadReceiving {
+		return provisioning.ErrUploadAlreadyComplete
 	}
 	u.Status, u.UpdatedAt = provisioning.UploadAborted, time.Now()
 	d.s.uploads[id] = u
@@ -979,8 +987,8 @@ func (d tableRows) Complete(
 	d.s.mu.Lock()
 	defer d.s.mu.Unlock()
 	row, ok := d.s.tableData[id]
-	if !ok {
-		return provisioning.TableData{}, provisioning.ErrUploadNotFound
+	if !ok || row.Status != provisioning.UploadReceiving {
+		return provisioning.TableData{}, provisioning.ErrUploadAlreadyComplete
 	}
 	row.Status, row.ReceivedBytes, row.Lines, row.UpdatedAt = provisioning.UploadComplete, receivedBytes, lines, time.Now()
 	d.s.tableData[id] = row
@@ -1031,8 +1039,12 @@ func (d tableRows) Abort(_ context.Context, id uuid.UUID) error {
 	d.s.mu.Lock()
 	defer d.s.mu.Unlock()
 	row, ok := d.s.tableData[id]
-	if !ok {
-		return provisioning.ErrUploadNotFound
+	if ok && d.s.completedBeforeAbort {
+		row.Status = provisioning.UploadComplete
+		d.s.tableData[id] = row
+	}
+	if !ok || row.Status != provisioning.UploadReceiving {
+		return provisioning.ErrUploadAlreadyComplete
 	}
 	row.Status, row.UpdatedAt = provisioning.UploadAborted, time.Now()
 	d.s.tableData[id] = row

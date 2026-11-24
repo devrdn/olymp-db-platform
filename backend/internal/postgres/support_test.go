@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -194,4 +196,75 @@ func moveStatus(t *testing.T, ctx context.Context, id uuid.UUID, to string) {
 // with builds as the build state.
 func gameStores(builds *GameInstances) provisioning.GameStores {
 	return provisioning.GameStores{Builds: builds, Dumps: NewGameUploads(testPool), TableData: NewGameTableData(testPool)}
+}
+
+// raceOnTwoConnections runs hold in a transaction it keeps open, then wait in
+// a transaction on another connection. Once that connection is seen waiting
+// on a lock while running a statement containing waitsIn, hold's transaction
+// commits, and wait's answer is returned. The wait is read from
+// pg_stat_activity for wait's own backend, so a statement that never blocked
+// fails the test instead of passing on timing.
+func raceOnTwoConnections(t *testing.T, hold, wait func(context.Context) error, waitsIn string) error {
+	t.Helper()
+	uow := storage.NewUnitOfWork(testPool)
+
+	held, holdDone := make(chan error, 1), make(chan error, 1)
+	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce) // a failed wait must not leave hold's transaction open
+	go func() {
+		holdDone <- uow.Do(context.Background(), func(ctx context.Context) error {
+			err := hold(ctx)
+			held <- err
+			if err != nil {
+				return err
+			}
+			<-release
+			return nil
+		})
+	}()
+	if err := <-held; err != nil {
+		t.Fatalf("the operation holding the row = %v", err)
+	}
+
+	pid, waitDone := make(chan int32, 1), make(chan error, 1)
+	go func() {
+		waitDone <- uow.Do(context.Background(), func(ctx context.Context) error {
+			var backend int32
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&backend); err != nil {
+				pid <- 0
+				return err
+			}
+			pid <- backend
+			return wait(ctx)
+		})
+	}()
+	backend := <-pid
+	if backend == 0 {
+		t.Fatalf("the waiting operation could not start: %v", <-waitDone)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var waitType, query string
+		if err := testPool.QueryRow(context.Background(), `
+			SELECT coalesce(wait_event_type, ''), query FROM pg_stat_activity WHERE pid = $1`, backend).
+			Scan(&waitType, &query); err != nil {
+			t.Fatalf("read the waiting connection's activity: %v", err)
+		}
+		if waitType == "Lock" && strings.Contains(query, waitsIn) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the second operation never waited on a lock in a statement with %q; last seen %q running %q",
+				waitsIn, waitType, query)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	releaseOnce()
+	if err := <-holdDone; err != nil {
+		t.Fatalf("commit the operation holding the row: %v", err)
+	}
+	return <-waitDone
 }

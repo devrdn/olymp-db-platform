@@ -19,7 +19,12 @@ import (
 
 // GameTableData is the rows of the table builder's CSV files,
 // provisioning.TableDataRows.
-type GameTableData struct{ pool *pgxpool.Pool }
+type GameTableData struct {
+	pool *pgxpool.Pool
+	// wrap, when set, wraps every querier, so a test can act between two
+	// statements of one call.
+	wrap func(storage.Querier) storage.Querier
+}
 
 var _ provisioning.TableDataRows = (*GameTableData)(nil)
 
@@ -27,7 +32,11 @@ var _ provisioning.TableDataRows = (*GameTableData)(nil)
 func NewGameTableData(pool *pgxpool.Pool) *GameTableData { return &GameTableData{pool: pool} }
 
 func (r *GameTableData) querier(ctx context.Context) storage.Querier {
-	return storage.QuerierFrom(ctx, r.pool)
+	q := storage.QuerierFrom(ctx, r.pool)
+	if r.wrap != nil {
+		return r.wrap(q)
+	}
+	return q
 }
 
 const tableDataColumns = `id, contest_id, table_name, declared_bytes, received_bytes,
@@ -156,10 +165,25 @@ func (r *GameTableData) UpdateReceived(ctx context.Context, id uuid.UUID, receiv
 }
 
 // Complete marks id 'complete' with what the validation pass measured, and
-// retires previous (the file this one displaces, if any).
+// retires previous (the file this one displaces, if any). An upload aborted
+// since the caller read it is ErrUploadAlreadyComplete, and previous stays
+// the table's. Call it inside a transaction: outside one, an abort between
+// its statements is still refused, but previous has already been retired.
 func (r *GameTableData) Complete(
 	ctx context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID,
 ) (provisioning.TableData, error) {
+	// Held until the transaction ends, so an abort waits for this completion
+	// and then finds the upload no longer receiving.
+	var locked uuid.UUID
+	err := r.querier(ctx).QueryRow(ctx,
+		`SELECT id FROM game_table_data WHERE id = $1 AND status = 'receiving' FOR UPDATE`, id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return provisioning.TableData{}, provisioning.ErrUploadAlreadyComplete
+	}
+	if err != nil {
+		return provisioning.TableData{}, fmt.Errorf("lock the table upload: %w", err)
+	}
+
 	// Retire the displaced row first: in the other order both rows would be
 	// 'complete' at once and game_table_data_one_complete_idx raises 23505.
 	if previous != nil {
@@ -169,11 +193,17 @@ func (r *GameTableData) Complete(
 		}
 	}
 
-	if _, err := r.querier(ctx).Exec(ctx, `
+	// Checked again, not only locked above: outside a transaction the lock
+	// ends with its statement, and then only this condition decides.
+	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_table_data
 		SET status = 'complete', received_bytes = $2, line_count = $3, updated_at = now()
-		WHERE id = $1 AND status = 'receiving'`, id, receivedBytes, lines); err != nil {
+		WHERE id = $1 AND status = 'receiving'`, id, receivedBytes, lines)
+	if err != nil {
 		return provisioning.TableData{}, fmt.Errorf("mark the table upload complete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return provisioning.TableData{}, provisioning.ErrUploadAlreadyComplete
 	}
 
 	return r.ByID(ctx, id)
@@ -225,11 +255,16 @@ func (r *GameTableData) AppendRow(ctx context.Context, id uuid.UUID, at, rowByte
 	return data, nil
 }
 
-// Abort marks one table-data upload 'aborted'.
+// Abort marks one 'receiving' table-data upload 'aborted'. One completed
+// since the caller read it is ErrUploadAlreadyComplete and stays the table's.
 func (r *GameTableData) Abort(ctx context.Context, id uuid.UUID) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_table_data SET status = 'aborted', updated_at = now() WHERE id = $1`, id); err != nil {
+	tag, err := r.querier(ctx).Exec(ctx,
+		`UPDATE game_table_data SET status = 'aborted', updated_at = now() WHERE id = $1 AND status = 'receiving'`, id)
+	if err != nil {
 		return fmt.Errorf("mark the table upload aborted: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return provisioning.ErrUploadAlreadyComplete
 	}
 	return nil
 }

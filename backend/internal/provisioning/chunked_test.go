@@ -328,6 +328,25 @@ func lifecycleSuite[R provisioning.UploadRow[R]](t *testing.T, kind chunkedKind[
 		}
 	})
 
+	t.Run("an abort that lost its race to a completion changes nothing", func(t *testing.T) {
+		dir := t.TempDir()
+		games, store, contest := kind.open(t, dir)
+		uploads := kind.uploads(games)
+		begun := mustBegin(t, uploads, contest, kind.name)
+		id, _, _ := kind.state(begun)
+		store.completedBeforeAbort = true
+
+		if _, err := uploads.Abort(t.Context(), uuid.New(), contest, id); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+			t.Fatalf("Abort() = %v, want ErrUploadAlreadyComplete", err)
+		}
+		if _, err := gamefiletest.StoredBytes(chunkedStoreOn(t, dir, kind.limits), id.String()); err != nil {
+			t.Fatalf("the completed upload's file is gone: %v", err)
+		}
+		if _, _, status := kind.state(kind.stored(store, id)); status != provisioning.UploadComplete {
+			t.Fatalf("the stored row is %q, want still complete", status)
+		}
+	})
+
 	t.Run("the janitor aborts an abandoned upload and removes an old file no row names, and nothing younger", func(t *testing.T) {
 		dir := t.TempDir()
 		games, store, contest := kind.open(t, dir)
@@ -726,6 +745,22 @@ func uploadRowsContract[R any](t *testing.T, name string, each func(t *testing.T
 			if !listed[stale] || listed[fresh] || listed[resumed] || listed[aborted] {
 				t.Errorf("abandoned: stale %v, fresh %v, resumed %v, aborted %v; want only stale",
 					listed[stale], listed[fresh], listed[resumed], listed[aborted])
+			}
+		})
+	})
+
+	t.Run("only a receiving upload can be aborted", func(t *testing.T) {
+		each(t, func(ctx context.Context, target uploadRowsTarget[R]) {
+			contest, _ := target.newContest()
+			id := uuid.New()
+			if _, err := target.rows.Begin(ctx, id, contest, name, 100); err != nil {
+				t.Fatalf("Begin() = %v", err)
+			}
+			if err := target.rows.Abort(ctx, id); err != nil {
+				t.Fatalf("Abort() = %v", err)
+			}
+			if err := target.rows.Abort(ctx, id); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+				t.Fatalf("a second Abort() = %v, want ErrUploadAlreadyComplete", err)
 			}
 		})
 	})

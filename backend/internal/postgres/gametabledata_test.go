@@ -3,12 +3,14 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestBeginningTableDataCreatesARowInReceiving(t *testing.T) {
@@ -91,6 +93,108 @@ func TestCompletingTableDataMarksItCompleteAndDisplacesThePrevious(t *testing.T)
 		}
 		if ready.ID != second {
 			t.Fatalf("ready table data = %s, want the second upload %s", ready.ID, second)
+		}
+	})
+}
+
+// As for a dump (TestAnAbortAndACompletionOfOneDumpCannotBothWin): of an
+// abort and a completion that both read 'receiving', the second changes
+// nothing, and a refused completion keeps the file it would have displaced.
+func TestAnAbortAndACompletionOfOneTableUploadCannotBothWin(t *testing.T) {
+	t.Run("an abort after the completion", func(t *testing.T) {
+		withTx(t, func(ctx context.Context) {
+			contest := aContest(t, ctx)
+			repo := NewGameTableData(testPool)
+			id := uuid.New()
+			if _, err := repo.Begin(ctx, id, contest, "suspects", 20); err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			if _, err := repo.Complete(ctx, contest, "suspects", id, 20, 2, nil); err != nil {
+				t.Fatalf("complete: %v", err)
+			}
+
+			if err := repo.Abort(ctx, id); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+				t.Fatalf("abort = %v, want ErrUploadAlreadyComplete", err)
+			}
+			if data, err := repo.ByID(ctx, id); err != nil || data.Status != provisioning.UploadComplete {
+				t.Fatalf("read back %q, %v; want still complete", data.Status, err)
+			}
+		})
+	})
+
+	t.Run("a completion after the abort", func(t *testing.T) {
+		withTx(t, func(ctx context.Context) {
+			contest := aContest(t, ctx)
+			repo := NewGameTableData(testPool)
+			first, second := uuid.New(), uuid.New()
+			if _, err := repo.CreateReady(ctx, first, contest, "suspects", 10, 1); err != nil {
+				t.Fatalf("create the table's file: %v", err)
+			}
+			if _, err := repo.Begin(ctx, second, contest, "suspects", 20); err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			if err := repo.Abort(ctx, second); err != nil {
+				t.Fatalf("abort: %v", err)
+			}
+
+			if _, err := repo.Complete(ctx, contest, "suspects", second, 20, 2, &first); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+				t.Fatalf("complete = %v, want ErrUploadAlreadyComplete", err)
+			}
+			if ready, err := repo.Ready(ctx, contest, "suspects"); err != nil || ready.ID != first {
+				t.Fatalf("the table's file is %v (%v), want the one the refused completion would have displaced", ready.ID, err)
+			}
+		})
+	})
+}
+
+// The same two orders across two connections. A completion takes the row
+// with FOR UPDATE before it retires the file it displaces, so the abort it
+// waits on cannot have retired that file for nothing.
+func TestAnAbortAndACompletionOfOneTableUploadRacingCannotBothWin(t *testing.T) {
+	repo := NewGameTableData(testPool)
+
+	t.Run("an abort waiting on a completion", func(t *testing.T) {
+		ctx := context.Background()
+		contest, id := contestRow(t, ctx), uuid.New()
+		if _, err := repo.Begin(ctx, id, contest, "suspects", 20); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		err := raceOnTwoConnections(t,
+			func(ctx context.Context) error {
+				_, err := repo.Complete(ctx, contest, "suspects", id, 20, 2, nil)
+				return err
+			},
+			func(ctx context.Context) error { return repo.Abort(ctx, id) },
+			"SET status = 'aborted'")
+		if !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+			t.Fatalf("abort = %v, want ErrUploadAlreadyComplete", err)
+		}
+		if data, err := repo.ByID(ctx, id); err != nil || data.Status != provisioning.UploadComplete {
+			t.Fatalf("read back %q, %v; want still complete", data.Status, err)
+		}
+	})
+
+	t.Run("a completion waiting on an abort", func(t *testing.T) {
+		ctx := context.Background()
+		contest, first, second := contestRow(t, ctx), uuid.New(), uuid.New()
+		if _, err := repo.CreateReady(ctx, first, contest, "suspects", 10, 1); err != nil {
+			t.Fatalf("create the table's file: %v", err)
+		}
+		if _, err := repo.Begin(ctx, second, contest, "suspects", 20); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		err := raceOnTwoConnections(t,
+			func(ctx context.Context) error { return repo.Abort(ctx, second) },
+			func(ctx context.Context) error {
+				_, err := repo.Complete(ctx, contest, "suspects", second, 20, 2, &first)
+				return err
+			},
+			"FOR UPDATE")
+		if !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+			t.Fatalf("complete = %v, want ErrUploadAlreadyComplete", err)
+		}
+		if ready, err := repo.Ready(ctx, contest, "suspects"); err != nil || ready.ID != first {
+			t.Fatalf("the table's file is %v (%v), want the one the refused completion would have displaced", ready.ID, err)
 		}
 	})
 }
@@ -226,8 +330,8 @@ func TestAppendTableDataRowRefusesALengthThatIsNoLongerTheRecord(t *testing.T) {
 		}
 
 		// A row no longer current (the game was replaced) is refused.
-		if err := repo.Abort(ctx, id); err != nil {
-			t.Fatalf("abort: %v", err)
+		if _, err := repo.Discard(ctx, contest); err != nil {
+			t.Fatalf("discard: %v", err)
 		}
 		if _, err := repo.AppendRow(ctx, id, 25, 15); !errors.Is(err, provisioning.ErrTableDataChanged) {
 			t.Fatalf("error = %v, want ErrTableDataChanged", err)
@@ -414,11 +518,51 @@ func TestInUseTableDataIsAFileSomethingNeedsAndNotOneNothingDoes(t *testing.T) {
 			t.Fatalf("in use = %v, err = %v, want true for a ready file", inUse, err)
 		}
 
-		if err := repo.Abort(ctx, id); err != nil {
-			t.Fatalf("abort: %v", err)
+		// A complete file is retired when the game stops being the builder's.
+		if _, err := repo.Discard(ctx, contest); err != nil {
+			t.Fatalf("discard: %v", err)
 		}
 		if inUse, err := repo.InUse(ctx, id); err != nil || inUse {
-			t.Fatalf("in use = %v, err = %v, want false once aborted", inUse, err)
+			t.Fatalf("in use = %v, err = %v, want false once retired", inUse, err)
 		}
 	})
+}
+
+// abortingBeforeTheMark aborts upload, on its own connection, just before the
+// statement that marks a table upload complete: what an abort does between a
+// completion's lock and its mark when the completion runs outside a
+// transaction and so holds no lock.
+type abortingBeforeTheMark struct {
+	storage.Querier
+	t      *testing.T
+	upload uuid.UUID
+}
+
+func (q abortingBeforeTheMark) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "SET status = 'complete'") {
+		if _, err := testPool.Exec(ctx,
+			`UPDATE game_table_data SET status = 'aborted' WHERE id = $1`, q.upload); err != nil {
+			q.t.Fatalf("abort between the lock and the mark: %v", err)
+		}
+	}
+	return q.Querier.Exec(ctx, sql, args...)
+}
+
+// The mark refuses on its own, so Complete does not report an aborted upload
+// as completed whatever transaction it is called in.
+func TestACompletionWhoseUploadWasAbortedBeforeItsMarkIsRefused(t *testing.T) {
+	ctx := context.Background()
+	contest := contestRow(t, ctx)
+	repo := NewGameTableData(testPool)
+	id := uuid.New()
+	if _, err := repo.Begin(ctx, id, contest, "suspects", 20); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	repo.wrap = func(q storage.Querier) storage.Querier {
+		return abortingBeforeTheMark{Querier: q, t: t, upload: id}
+	}
+
+	if _, err := repo.Complete(ctx, contest, "suspects", id, 20, 2, nil); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+		t.Fatalf("complete = %v, want ErrUploadAlreadyComplete", err)
+	}
 }

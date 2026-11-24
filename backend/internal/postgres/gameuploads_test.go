@@ -253,6 +253,103 @@ func TestAbortingAnUploadMarksItAbortedAndNeverTouchesTheGame(t *testing.T) {
 	})
 }
 
+// An abort and a completion that both read 'receiving' race for the row; the
+// one that writes second must find it moved and change nothing.
+func TestAnAbortAndACompletionOfOneDumpCannotBothWin(t *testing.T) {
+	summary := provisioning.UploadSummary{Bytes: 10, SHA256: "ab", Lines: 1}
+
+	t.Run("an abort after the completion", func(t *testing.T) {
+		withTx(t, func(ctx context.Context) {
+			contest := aContest(t, ctx)
+			repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
+			id := uuid.New()
+			if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 10); err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			if _, err := repo.CompleteUpload(ctx, contest, id, "game_tpl_cabc", summary, nil); err != nil {
+				t.Fatalf("complete: %v", err)
+			}
+
+			if err := uploads.Abort(ctx, id); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+				t.Fatalf("abort = %v, want ErrUploadAlreadyComplete", err)
+			}
+			if upload, err := uploads.ByID(ctx, id); err != nil || upload.Status != provisioning.UploadComplete {
+				t.Fatalf("read back %q, %v; want still complete", upload.Status, err)
+			}
+		})
+	})
+
+	t.Run("a completion after the abort", func(t *testing.T) {
+		withTx(t, func(ctx context.Context) {
+			contest := aContest(t, ctx)
+			repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
+			id := uuid.New()
+			if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 10); err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			if err := uploads.Abort(ctx, id); err != nil {
+				t.Fatalf("abort: %v", err)
+			}
+
+			if _, err := repo.CompleteUpload(ctx, contest, id, "game_tpl_cabc", summary, nil); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+				t.Fatalf("complete = %v, want ErrUploadAlreadyComplete", err)
+			}
+			if _, err := repo.Template(ctx, contest); !errors.Is(err, provisioning.ErrNoGame) {
+				t.Fatalf("an aborted upload became the game: %v", err)
+			}
+		})
+	})
+}
+
+// The same two orders across two connections: the second operation waits on
+// the row the first holds, and finds it moved once the first commits.
+func TestAnAbortAndACompletionOfOneDumpRacingCannotBothWin(t *testing.T) {
+	summary := provisioning.UploadSummary{Bytes: 10, SHA256: "ab", Lines: 1}
+	begun := func(t *testing.T) (contest, id uuid.UUID) {
+		t.Helper()
+		contest, id = contestRow(t, context.Background()), uuid.New()
+		if _, err := NewGameUploads(testPool).Begin(context.Background(), id, contest, "dump.sql", 10); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		return contest, id
+	}
+	repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
+
+	t.Run("an abort waiting on a completion", func(t *testing.T) {
+		contest, id := begun(t)
+		err := raceOnTwoConnections(t,
+			func(ctx context.Context) error {
+				_, err := repo.CompleteUpload(ctx, contest, id, "race_"+id.String()[:8], summary, nil)
+				return err
+			},
+			func(ctx context.Context) error { return uploads.Abort(ctx, id) },
+			"SET status = 'aborted'")
+		if !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+			t.Fatalf("abort = %v, want ErrUploadAlreadyComplete", err)
+		}
+		if upload, err := uploads.ByID(context.Background(), id); err != nil || upload.Status != provisioning.UploadComplete {
+			t.Fatalf("read back %q, %v; want still complete", upload.Status, err)
+		}
+	})
+
+	t.Run("a completion waiting on an abort", func(t *testing.T) {
+		contest, id := begun(t)
+		err := raceOnTwoConnections(t,
+			func(ctx context.Context) error { return uploads.Abort(ctx, id) },
+			func(ctx context.Context) error {
+				_, err := repo.CompleteUpload(ctx, contest, id, "race_"+id.String()[:8], summary, nil)
+				return err
+			},
+			"SET status = 'complete'")
+		if !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+			t.Fatalf("complete = %v, want ErrUploadAlreadyComplete", err)
+		}
+		if _, err := repo.Template(context.Background(), contest); !errors.Is(err, provisioning.ErrNoGame) {
+			t.Fatalf("an aborted upload became the game: %v", err)
+		}
+	})
+}
+
 func TestAbandonedDumpsAreOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)

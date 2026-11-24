@@ -254,7 +254,9 @@ type BuildRepository interface {
 
 	// CompleteUpload marks the upload id 'complete' with what sealing it
 	// measured, retires previous (nil unless another upload is displaced), and
-	// replaces the contest's game the same way SaveScript does.
+	// replaces the contest's game the same way SaveScript does. An upload no
+	// longer 'receiving' (aborted since it was read) is
+	// ErrUploadAlreadyComplete and replaces nothing.
 	CompleteUpload(ctx context.Context, contestID, id uuid.UUID, database string, summary UploadSummary, previous *uuid.UUID) (Template, error)
 }
 

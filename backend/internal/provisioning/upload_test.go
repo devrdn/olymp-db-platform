@@ -461,9 +461,10 @@ func TestSweepUploadsLeavesARecentUploadAlone(t *testing.T) {
 	}
 }
 
-// The file goes before the row is marked. Only a failing removal shows the
-// order, so a read-only directory makes the unlink fail.
-func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
+// The row is marked before the file goes, so an abort a completion beat
+// removes nothing. A removal that then fails is the janitor's: the aborted row
+// no longer holds the file. A read-only directory makes the unlink fail.
+func TestAnAbortWhoseFileCannotBeRemovedLeavesItToTheJanitor(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
@@ -478,8 +479,8 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	if _, err := games.DumpUploads().Abort(t.Context(), uuid.New(), contest.ID, upload.ID); err == nil {
-		t.Fatal("abort succeeded although the file could not be removed")
+	if _, err := games.DumpUploads().Abort(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
+		t.Fatalf("abort = %v; the upload is cancelled whatever happens to its file", err)
 	}
 
 	if err := os.Chmod(dir, 0o755); err != nil {
@@ -490,19 +491,20 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the upload back: %v", err)
 	}
-	if stored.Status != provisioning.UploadReceiving {
-		t.Fatalf("status = %q, want still receiving — the file removal that failed must not have been marked done anyway", stored.Status)
+	if stored.Status != provisioning.UploadAborted {
+		t.Fatalf("status = %q, want aborted", stored.Status)
 	}
 	if !onDisk(t, dir, upload.ID) {
 		t.Fatal("the file is gone even though its removal was made to fail")
 	}
 
-	// A retry with the directory writable again finishes the abort.
-	if _, err := games.DumpUploads().Abort(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
-		t.Fatalf("retry after restoring permissions: %v", err)
+	age(t, dir, upload.ID, time.Hour)
+	result, err := games.SweepUploads(t.Context(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
 	}
-	if onDisk(t, dir, upload.ID) {
-		t.Fatal("the retried abort left the file behind")
+	if result.OrphanFiles != 1 || onDisk(t, dir, upload.ID) {
+		t.Fatalf("swept %+v and the file is still there: %v; the janitor must take it", result, onDisk(t, dir, upload.ID))
 	}
 }
 
