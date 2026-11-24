@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { CONFIRM_ARM_MS } from "@/components/ui/use-confirm";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -550,5 +551,96 @@ describe("the table builder's own data panel", () => {
 
     await waitFor(() => expect(completeTableUploadAction).toHaveBeenCalled());
     await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+});
+
+// The API refuses a chunk as busy while another table of the contest is
+// uploading, or while it holds as many chunks as it can; nothing was stored,
+// so the same chunk is sent again after the wait it names.
+describe("a chunk refused as busy", () => {
+  const busy = () =>
+    new ApiError("game_table_data_busy", 503, "busy", undefined, undefined, undefined, 2);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function startUpload() {
+    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ declaredBytes: 4 }) });
+    const view = show();
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["a,b\n"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    return view;
+  }
+
+  test("is sent again by itself, and the upload finishes with nothing asked of the organiser", async () => {
+    request.mockRejectedValueOnce(busy()).mockResolvedValueOnce({ received_bytes: 4 });
+    completeTableUploadAction.mockResolvedValueOnce({
+      value: tableData({ status: "complete", lines: 1, activeRows: 1 }),
+    });
+
+    await startUpload();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(en.errors.game_table_data_busy)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: td.retry })).not.toBeInTheDocument();
+    expect(screen.getByText(td.uploading)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      `/contests/${contestId}/game/tables/suspects/data/${dataId}/chunk?offset=0`,
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(completeTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(screen.queryByText(en.errors.game_table_data_busy)).not.toBeInTheDocument();
+  });
+
+  test("five times in a row says so and offers Retry", async () => {
+    request.mockRejectedValue(busy());
+
+    await startUpload();
+    await act(() => vi.advanceTimersByTimeAsync(4 * 2000));
+
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(screen.getByText(en.errors.game_table_data_busy)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: td.retry })).toBeInTheDocument();
+    expect(completeTableUploadAction).not.toHaveBeenCalled();
+  });
+
+  test("is not sent again once the organiser cancels during the wait, and leaves no timer running", async () => {
+    request.mockRejectedValueOnce(busy());
+    abortTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "aborted" }) });
+
+    await startUpload();
+    fireEvent.click(screen.getByRole("button", { name: td.cancel }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const dialog = screen.getByRole("dialog", { name: td.cancelConfirm });
+    await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
+    fireEvent.click(within(dialog).getByRole("button", { name: td.cancel }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+    expect(screen.queryByText(en.errors.game_table_data_busy)).not.toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("is not sent again once the screen is gone, and leaves no timer running", async () => {
+    request.mockRejectedValueOnce(busy());
+
+    const view = await startUpload();
+    view.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

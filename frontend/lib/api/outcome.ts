@@ -17,7 +17,7 @@ export type Failure = {
   subject?: string;
   /** A 1-based offset into the query text, for a syntax error. */
   position?: number;
-  /** A 429's `Retry-After`, in whole seconds. */
+  /** A 429 or 503 refusal's `Retry-After`, in whole seconds. */
   retryAfterSeconds?: number;
   /**
    * The API's English message for developers. Never shown instead of the

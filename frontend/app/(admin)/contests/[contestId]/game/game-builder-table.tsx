@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { browserRequest } from "@/lib/api/browser";
 import { ApiError, isAbortError } from "@/lib/api/client";
 import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 import { failureCodeOf } from "@/lib/api/outcome";
@@ -24,6 +23,7 @@ import {
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
+import { putTableChunk } from "./table-chunk";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
@@ -37,39 +37,15 @@ const CANCELLABLE: ReadonlySet<Phase> = new Set(["resumable", "uploading", "erro
 const MAX_AUTO_RESYNCS = 3;
 
 /**
- * Sends one chunk straight to the API: a Server Action's body limit is far
- * below the configured chunk size, and `rawBody: Blob` streams the slice from
- * disk instead of buffering it as `FormData`.
- */
-async function putTableChunk(
-  contestId: string,
-  table: string,
-  id: string,
-  offset: number,
-  chunk: Blob,
-  signal: AbortSignal,
-): Promise<number> {
-  const payload = await browserRequest(
-    `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/${id}/chunk?offset=${offset}`,
-    { method: "PUT", rawBody: chunk, signal },
-  );
-
-  const bytes = (payload as { received_bytes?: unknown } | null)?.received_bytes;
-  if (typeof bytes !== "number") {
-    throw new Error(`malformed chunk response for table upload ${id}`);
-  }
-  return bytes;
-}
-
-/**
  * One table's data: rows a page at a time, added by hand or loaded from a
  * chunked CSV.
  *
  * Stays mounted for every table (tabs only hide), so a running upload survives
  * a tab switch; `active` gates the first fetch so a page load does not fan out
- * to every table. A reload resumes from `initialTableData`, and an out-of-order
- * chunk resyncs against the server's count. `sentBytes` only advances from a
- * chunk response's `received_bytes`, so Retry resends idempotently.
+ * to every table. A reload resumes from `initialTableData`, an out-of-order
+ * chunk resyncs against the server's count, and a busy one is sent again by
+ * `putTableChunk`. `sentBytes` only advances from a chunk response's
+ * `received_bytes`, so Retry resends idempotently.
  */
 export function GameBuilderTable({
   contestId,
@@ -153,6 +129,9 @@ export function GameBuilderTable({
 
   const fileRef = useRef<File | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
+  // Leaving the screen stops the upload, a chunk's busy wait included; the
+  // server keeps what it received, and the page offers to resume it.
+  useEffect(() => () => controllerRef.current?.abort(), []);
   const rateOriginRef = useRef<{ time: number; bytes: number }>({ time: 0, bytes: 0 });
 
   const [windowFrom, setWindowFrom] = useState(1);

@@ -60,7 +60,7 @@ export class ApiError extends Error {
    * position.
    */
   readonly position?: number;
-  /** A 429's `Retry-After` in whole seconds, the only form this API sends. */
+  /** A 429 or 503 refusal's `Retry-After` in whole seconds, the only form this API sends. */
   readonly retryAfterSeconds?: number;
 
   constructor(
