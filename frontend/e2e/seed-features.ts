@@ -16,6 +16,10 @@ import { Api, generatedPassword, writeRecord, type Account, type SeedRecord } fr
  * - `monitor`: a draft with a roster of ROSTER_SIZE imported accounts, for
  *   the monitoring screen. A draft keeps no spare databases, so the roster
  *   costs the game cluster nothing.
+ * - `editing`: a draft the organiser made and owns, with one question and
+ *   table descriptions, for the checks that a settings save follows every
+ *   content save. Nobody else edits it, so its version moves only when a
+ *   check moves it.
  */
 
 export const ROSTER_SIZE = 300;
@@ -33,9 +37,9 @@ export type ContestRef = { id: string; title: string };
 export type QuestionRef = { id: string; title: string; answer: string };
 
 export type FeatureSeed = {
-  accounts: Record<"alice" | "bob" | "carol" | "dave" | "erin" | "frank", Account>;
-  contests: Partial<Record<"features" | "sequential" | "hidden" | "monitor", ContestRef>>;
-  questions: Partial<Record<"titled" | "bonus" | "open" | "first" | "final", QuestionRef>>;
+  accounts: Record<"alice" | "bob" | "carol" | "dave" | "erin" | "frank" | "organiser", Account>;
+  contests: Partial<Record<"features" | "sequential" | "hidden" | "monitor" | "editing", ContestRef>>;
+  questions: Partial<Record<"titled" | "bonus" | "open" | "first" | "final" | "editing", QuestionRef>>;
   /** The imported roster, deleted in bulk by the teardown. */
   roster: string[];
   notesHeading: string;
@@ -133,6 +137,8 @@ export async function seedFeatures(operator: Api, record: SeedRecord, run: strin
   for (const [key, name] of people) {
     await createAccount(operator, accounts, key, `e2e-${key}-${run}`, name, () => writeRecord(record));
   }
+  const save = () => writeRecord(record);
+  await createAccount(operator, accounts, "organiser", `e2e-organiser-${run}`, "Olga Organiser", save, ["organizer"]);
 
   const features = await draftContest(operator, record, "features", `E2E features ${run}`, { scoring: "points" });
   const sequential = await draftContest(operator, record, "sequential", `E2E sequential ${run}`, {
@@ -143,6 +149,7 @@ export async function seedFeatures(operator: Api, record: SeedRecord, run: strin
     result_download: false,
   });
   const monitor = await draftContest(operator, record, "monitor", `E2E monitor ${run}`, {});
+  await seedEditing(record, run);
 
   await fillFeatures(operator, seed, features);
   await fillSequential(operator, seed, sequential);
@@ -192,6 +199,35 @@ async function draftContest(
   record.features!.contests[key] = ref;
   writeRecord(record);
   return ref;
+}
+
+/**
+ * The organiser's own draft, made from the organiser's session so the
+ * organiser owns it, as one would by creating it in the interface.
+ */
+async function seedEditing(record: SeedRecord, run: string): Promise<void> {
+  const seed = record.features!;
+  const organiser = await Api.open();
+  try {
+    await organiser.signIn(seed.accounts.organiser.login, seed.accounts.organiser.password);
+    const contest = await draftContest(organiser, record, "editing", `E2E editing ${run}`, { scoring: "points" });
+    await organiser.call("PUT", `/contests/${contest.id}/schema-notes`, {
+      translations: { en: "**suspects** lists everyone questioned." },
+    });
+    const editing = { title: "The missing alibi", answer: "Mallory Kent" };
+    seed.questions.editing = {
+      ...editing,
+      id: await question(
+        organiser,
+        contest,
+        { kind: "text", points: 10, texts: { en: { title: editing.title, body_md: "Who has no alibi?" } } },
+        [{ match_kind: "exact_ci", value: editing.answer }],
+      ),
+    };
+    writeRecord(record);
+  } finally {
+    await organiser.close();
+  }
 }
 
 async function policy(operator: Api, contest: ContestRef, allowCatalog: boolean): Promise<void> {
@@ -379,9 +415,10 @@ async function playScores(seed: FeatureSeed, features: ContestRef, hidden: Conte
 }
 
 /**
- * Creates a student account under `key` and replaces its one-time password.
- * The account is in `accounts` and saved before anything else can fail, so a
- * failed sign-in still leaves it where the teardown looks.
+ * Creates an account under `key`, a student unless `roles` says otherwise,
+ * and replaces its one-time password. The account is in `accounts` and
+ * saved before anything else can fail, so a failed sign-in still leaves it
+ * where the teardown looks.
  */
 async function createAccount(
   operator: Api,
@@ -390,11 +427,12 @@ async function createAccount(
   login: string,
   fullName: string,
   save: () => void,
+  roles: string[] = ["student"],
 ): Promise<void> {
   const created = await operator.call<{ user: { id: string }; one_time_password: string }>("POST", "/users", {
     login,
     full_name: fullName,
-    roles: ["student"],
+    roles,
   });
   accounts[key] = { id: created.user.id, login, password: "", fullName };
   save();

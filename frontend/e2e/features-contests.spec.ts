@@ -1,13 +1,14 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { readSeed, type Account } from "./api";
+import { Api, readSeed, type Account } from "./api";
 import { SECRET } from "./seed-features";
 import { capture, cellUnder, chooseTheme, openPlay, openSideTab, runQuery, scrollWithin, signIn } from "./support";
 
 /**
  * The contest-wide post-beta behaviour: what a sequential contest withholds,
- * what a closed catalogue hides, the prize places, and the monitoring
- * screen with a roster of a few hundred.
+ * what a closed catalogue hides, the prize places, the monitoring screen
+ * with a roster of a few hundred, a settings save after every kind of
+ * content save, and a confirmation asked inside another dialog.
  */
 
 test.use({ viewport: { width: 1600, height: 900 } });
@@ -287,4 +288,193 @@ test("the monitoring screen opens on a roster of three hundred and stays respons
   expect(sortMs).toBeLessThan(1_500);
   await page.setViewportSize({ width: 768, height: 900 });
   await capture(page, "staff-monitor-roster-at-768");
+});
+
+const SAVED = "Saved.";
+const CONTEST_CHANGED = "This contest changed while you were deciding";
+
+/**
+ * One of the settings screen's panels, by its heading. A panel is an unnamed
+ * section, so it is found by the heading it holds; what is pressed and read
+ * inside it is found by role.
+ */
+function panel(page: Page, heading: string): Locator {
+  const title = page.getByRole("heading", { level: 3, name: heading, exact: true });
+  // Every section around the panel holds its heading too; the panel is the
+  // innermost, which comes last in document order.
+  return page.locator("section").filter({ has: title }).last();
+}
+
+/** The contest's own fields end in the access panel, where their save sits. */
+function contestFields(page: Page): Locator {
+  return panel(page, "Who may enter, and from where");
+}
+
+/**
+ * Presses a form's save and returns once its server action has settled. The
+ * button reads its label again only then, so an outcome left on screen by an
+ * earlier save is never taken for this one's.
+ */
+async function press(button: Locator): Promise<void> {
+  const page = button.page();
+  const label = ((await button.textContent()) ?? "").trim();
+  const answered = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.request().headers()["next-action"] !== undefined,
+  );
+  await button.click();
+  // The answer has arrived, so the action is pending; its body streams on,
+  // and only the action's settling gives the button its label back.
+  await answered;
+  await expect(button).toHaveText(label);
+  await expect(button).toBeEnabled();
+}
+
+/** Saves the contest's settings and expects "Saved.", never a refusal. */
+async function saveSettings(page: Page): Promise<void> {
+  const fields = contestFields(page);
+  await press(fields.getByRole("button", { name: "Save", exact: true }));
+  await expect(fields.getByRole("alert")).toHaveCount(0);
+  await expect(fields.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+}
+
+/** Opens the organiser's settings screen; every later screen is reached from it in the same session. */
+async function openSettings(page: Page): Promise<string> {
+  const { accounts, contests } = seed();
+  const id = contests.editing.id;
+  await signIn(page, accounts.organiser);
+  await page.goto(`/contests/${id}/settings`);
+  await expect(page.getByRole("heading", { level: 2, name: "Settings" })).toBeVisible();
+  return id;
+}
+
+/**
+ * A section of the contest through the workspace's own links, so the router's
+ * copy of the screen is what shows; `heading` is the screen's own. A link's
+ * name can go on with a marker after the section's name ("Story none").
+ */
+async function goToSection(page: Page, link: string, heading: string): Promise<void> {
+  const sections = page.getByRole("navigation", { name: "Contest sections" });
+  await sections.getByRole("link", { name: new RegExp(`^${link}(\\s|$)`) }).click();
+  await expect(page.getByRole("heading", { level: 2, name: heading, exact: true })).toBeVisible();
+}
+
+test.describe("a settings save follows every content save", () => {
+  test("the settings save twice in a row", async ({ page }) => {
+    await openSettings(page);
+    await saveSettings(page);
+    await saveSettings(page);
+  });
+
+  test("a language save, then the settings", async ({ page }) => {
+    await openSettings(page);
+    const languages = panel(page, "Languages");
+    await press(languages.getByRole("button", { name: "Save", exact: true }));
+    await expect(languages.getByRole("alert")).toHaveCount(0);
+    await expect(languages.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+    await saveSettings(page);
+  });
+
+  test("a question saved on its own screen, then the settings", async ({ page }) => {
+    const id = await openSettings(page);
+    const { questions } = seed();
+    await goToSection(page, "Questions", "Questions");
+    await page.getByRole("link", { name: questions.editing.title }).click();
+    await expect(page).toHaveURL(new RegExp(`/contests/${id}/questions/${questions.editing.id}$`));
+    const main = page.getByRole("main");
+    await press(main.getByRole("button", { name: "Save", exact: true }));
+    await expect(main.getByRole("alert")).toHaveCount(0);
+    await expect(main.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+
+    await goToSection(page, "Settings", "Settings");
+    await saveSettings(page);
+  });
+
+  test("the table descriptions, then the settings", async ({ page }) => {
+    await openSettings(page);
+    await goToSection(page, "Story", "The crime story");
+    const notes = page.getByRole("region", { name: "Table descriptions" });
+    await press(notes.getByRole("button", { name: "Save the table descriptions" }));
+    await expect(notes.getByRole("alert")).toHaveCount(0);
+    await expect(notes.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+
+    await goToSection(page, "Settings", "Settings");
+    await saveSettings(page);
+  });
+
+  test("a change from another session is refused with a reload, and the reloaded form saves", async ({ page }) => {
+    const id = await openSettings(page);
+    const { organiser } = seed().accounts;
+    const other = await Api.open();
+    try {
+      await other.signIn(organiser.login, organiser.password);
+      await other.call("PUT", `/contests/${id}/story`, { translations: { en: "Changed from another session." } });
+    } finally {
+      await other.close();
+    }
+
+    const fields = contestFields(page);
+    await press(fields.getByRole("button", { name: "Save", exact: true }));
+    await expect(fields.getByRole("alert")).toContainText(CONTEST_CHANGED);
+    await expect(fields.getByRole("status").filter({ hasText: SAVED })).toHaveCount(0);
+
+    const reload = fields.getByRole("button", { name: "Reload the page" });
+    await reload.click();
+    await expect(fields.getByRole("alert")).toHaveCount(0);
+    await expect(reload).toHaveCount(0);
+    await saveSettings(page);
+  });
+
+  test("a refused save keeps what the organiser typed", async ({ page }) => {
+    await openSettings(page);
+    const fields = contestFields(page);
+    const networks = fields.getByRole("textbox", { name: "Allowed networks" });
+    const rate = fields.getByRole("spinbutton", { name: "Queries per minute" });
+    await networks.fill("not-a-network");
+    await rate.fill("37");
+    await expect(networks).toHaveValue("not-a-network");
+    await expect(rate).toHaveValue("37");
+
+    await press(fields.getByRole("button", { name: "Save", exact: true }));
+    // An ordinary refusal of a value, not the contest having moved.
+    await expect(fields.getByRole("alert")).toContainText("Wrong IP range format.");
+    await expect(fields.getByRole("alert")).not.toContainText(CONTEST_CHANGED);
+
+    // Both are read, so a failure says which kind of field lost its value.
+    await expect.soft(networks).toHaveValue("not-a-network");
+    await expect.soft(rate).toHaveValue("37");
+  });
+});
+
+test("the roles dialog's own question is answered, and the roles dialog stays usable with focus back in it", async ({
+  page,
+}) => {
+  const { frank } = seed().accounts;
+  await signIn(page, readSeed().admin);
+  await page.goto(`/users?q=${encodeURIComponent(frank.login)}`);
+  await page.getByRole("checkbox", { name: `Select ${nameOf(frank)}` }).check();
+  await page.getByRole("button", { name: "Roles", exact: true }).click();
+
+  const roles = page.getByRole("dialog", { name: "Change roles for 1 accounts" });
+  await expect(roles).toBeVisible();
+  const replace = roles.getByRole("button", { name: "Replace roles" });
+  // Nothing ticked: the dialog asks before it strips every role.
+  await replace.click();
+  const question = page.getByRole("dialog", { name: "Remove every role?" });
+  await expect(question).toBeVisible();
+  // The corner control shares the answer's name; the answer comes first.
+  await question.getByRole("button", { name: "Go back" }).first().click();
+
+  await expect(question).toHaveCount(0);
+  await expect(roles).toBeVisible();
+  await expect(replace).toBeFocused();
+
+  // Still usable: a box ticks and the dialog submits, with no second question.
+  const student = roles.getByRole("checkbox", { name: /^Student/ });
+  await student.check();
+  await expect(student).toBeChecked();
+  await replace.click();
+  await expect(roles.getByRole("status")).toContainText("1 changed");
+  await expect(question).toHaveCount(0);
+  await roles.getByRole("button", { name: "Done" }).click();
+  await expect(roles).toHaveCount(0);
 });
