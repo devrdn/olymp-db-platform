@@ -23,9 +23,34 @@ test("a refused sign-in clears the password and keeps the login", async ({ page 
   await page.getByLabel("Password").fill(`${seed.admin.password}-wrong`);
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  await expect(page.getByRole("alert")).toContainText("Wrong login or password");
+  // Inside main: Next's route announcer is an alert of its own, empty here.
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("Wrong login or password");
   await expect(page.getByLabel("Login")).toHaveValue(seed.admin.login);
   await expect(page.getByLabel("Password")).toHaveValue("");
   // A sign-in that works clears the failure this attempt counted.
   await signIn(page, seed.admin);
+});
+
+test.describe("without JavaScript", () => {
+  test.use({ javaScriptEnabled: false });
+
+  test("an administrator signs in through the form's native POST", async ({ page }) => {
+    const seed = readSeed();
+    // Without a native POST the browser would send the form back to /login
+    // as a GET, the password in its address.
+    const posted = page.waitForRequest(
+      (request) =>
+        request.isNavigationRequest() && request.method() === "POST" && new URL(request.url()).pathname === "/login",
+    );
+
+    await signIn(page, seed.admin);
+    await posted;
+
+    await expect(page).toHaveURL(/\/contests$/);
+    // The list streams in behind a skeleton that only a script swaps out, so
+    // the session is proven by asking the API who this browser is.
+    const me = await page.request.get("/api/v1/auth/me");
+    expect(me.status()).toBe(200);
+    expect(((await me.json()) as { login: string }).login).toBe(seed.admin.login);
+  });
 });
