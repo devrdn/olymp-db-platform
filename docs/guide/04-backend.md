@@ -41,13 +41,14 @@ flowchart TB
     cmdapi["cmd/api"]
     cmdjobs["cmd/migrate, bootstrap, gamedb, gameorphans, gamecheck, testdb"]
     cmdqr["cmd/queryrunner"]
+    cmdtools["cmd/apicontract, auditcontract (generated contracts), consoleload (load test over HTTP)"]
   end
 
   app["internal/app (composition root)"]
   api["internal/api (HTTP adapters, error table, codes)"]
 
   subgraph domain["Domain packages"]
-    dom["contests, participation, users, auth, rbac, audit, settings, workspace, monitor, clarifications, leaderboard, profile, archive, showcase, covers, mailing, signup, recovery, registrations, federation, connector, retention, health"]
+    dom["contests, participation, users, auth, rbac, audit, settings, workspace, monitor, clarifications, leaderboard, profile, archive, showcase, covers, mailing, signup, recovery, registrations, federation, connector, microsoft, google, github, retention, health"]
     game["provisioning, queryproxy, gamefile"]
   end
 
@@ -835,7 +836,7 @@ breaks without noticing (by number; the reasons are there):
 | 1 | Every error you return to a handler is a declared sentinel with a declared answer and a message in every locale. |
 | 2 | Every new string field and every list a request carries has a bound in the domain. |
 | 3 | A `LIKE`/`ILIKE` pattern built from user text goes through `escapeLike`. |
-| 4, 5 | Anything that verifies a password uses `auth.Limiter`; the bounded key (the address) is checked before the unbounded one (the login). A request budget a handler charges is declared once and charged through `httpx.Budgets.Charge`, which keeps that order. Four budgets keyed by an account or registration the service has already resolved are still a domain service's own `auth.Limiter` call: workspace writes, questions to the organisers, signal batches and test mails. |
+| 4, 5 | Anything that verifies a password uses `auth.Limiter`; the bounded key (the address) is checked before the unbounded one (the login). A request budget a handler charges is declared once and charged through `httpx.Budgets.Charge`, which keeps that order. Six budgets a domain service owns are its own `auth.Limiter` call instead: workspace writes, questions to the organisers, signal batches and test mails, keyed by an account or registration the service has resolved; and sign-up's and recovery's mail budgets, keyed by the sender's address first, then the installation's `mailing.Budget`, then (sign-up only) the typed email. The sign-in and password-change windows in `auth` are rule 4's own. |
 | 6 | No write on a hot path (middleware, every request) unless something observable changes. |
 | 7 | A new filter on a list endpoint lands with the index that serves it, in the same change. |
 | 8 | A partial-success import classifies errors: only row-level sentinels become "skipped". |
