@@ -38,14 +38,14 @@ Everything under `frontend/app/` is a route. A folder in parentheses is a
 **route group**: it does not appear in the URL, but it gives every page inside
 it the same layout. The app has six groups, one per audience.
 
-| Group | Who it serves | Routes | Shell |
+| Group | Who it serves | Routes | Frame |
 |---|---|---|---|
-| `(public)` | anyone, signed in or not | `/`, `/login`, `/contests/[contestId]/leaderboard` | `FocusShell` |
-| `(account)` | a signed-in account that must change its one-time password | `/password` | `FocusShell` with `signedIn` |
-| `(session)` | any signed-in account, participant or staff | `/profile`, `/profile/contests/[contestId]` | `ProductShell`, no navigation |
-| `(archive)` | any signed-in account, participant or staff | `/archive`, `/archive/[contestId]` | `ProductShell`, the viewer's own menu and home; 404 while the archive is off |
-| `(participant)` | participants | `/my`, `/open`, `/contests/[contestId]/play` | `ProductShell`, home is `/my` |
-| `(admin)` | contest authors and administrators | `/contests`, `/contests/new`, `/contests/[contestId]/…`, `/users`, `/users/[userId]`, `/audit`, `/settings` | `ProductShell`, home is `/contests` |
+| `(public)` | anyone, signed in or not | `/`, `/login`, `/contests/[contestId]/leaderboard` | `public`: the focus shell |
+| `(account)` | a signed-in account that must change its one-time password | `/password` | `account`: the focus shell, with sign-out |
+| `(session)` | any signed-in account, participant or staff | `/profile`, `/profile/contests/[contestId]` | `session`: the product shell, no navigation |
+| `(archive)` | any signed-in account, participant or staff | `/archive`, `/archive/[contestId]` | `archive`: the product shell, the viewer's own menu and home; 404 while the archive is off |
+| `(participant)` | participants | `/my`, `/open`, `/contests/[contestId]/play` | `participant`: the product shell, home is `/my` |
+| `(admin)` | contest authors and administrators | `/contests`, `/contests/new`, `/contests/[contestId]/…`, `/users`, `/users/[userId]`, `/audit`, `/settings` | `admin`: the product shell, home is `/contests` |
 
 Two routes are Route Handlers rather than pages: `/healthz`, the container's
 liveness probe, outside every group
@@ -60,12 +60,12 @@ table under `(public)`. Pick the group by audience, not by URL.
 ```mermaid
 flowchart LR
     root["app/layout.tsx: html, fonts, lang, theme, AppDictionaryProvider"]
-    root --> pub["(public): FocusShell"]
-    root --> acc["(account): FocusShell, signed in"]
-    root --> ses["(session): ProductShell"]
-    root --> arc["(archive): ProductShell, the viewer's menu"]
-    root --> par["(participant): ProductShell, home /my"]
-    root --> adm["(admin): ProductShell, home /contests"]
+    root --> pub["(public): focus shell"]
+    root --> acc["(account): focus shell, signed in"]
+    root --> ses["(session): product shell"]
+    root --> arc["(archive): product shell, the viewer's menu"]
+    root --> par["(participant): product shell, home /my"]
+    root --> adm["(admin): product shell, home /contests"]
     pub --> pub1["/ and /login"]
     pub --> pub2["/contests/id/leaderboard"]
     acc --> acc1["/password"]
@@ -80,21 +80,31 @@ flowchart LR
 - The root layout is [`app/layout.tsx`](../../frontend/app/layout.tsx). It
   resolves the locale, the dictionary and the theme from cookies before the
   first byte, so there is no flash of the wrong theme or language.
-- Each group's layout is its `layout.tsx`:
+- Each group's layout is its `layout.tsx`, which renders `Frame` with the
+  group's audience:
   [`(public)`](../../frontend/app/(public)/layout.tsx),
   [`(account)`](../../frontend/app/(account)/layout.tsx),
   [`(session)`](../../frontend/app/(session)/layout.tsx),
   [`(archive)`](../../frontend/app/(archive)/layout.tsx),
   [`(participant)`](../../frontend/app/(participant)/layout.tsx),
   [`(admin)`](../../frontend/app/(admin)/layout.tsx).
-- The shells live in `components/layout/`: `focus-shell.tsx` (a bare frame for
-  signing in) and `product-shell.tsx` (app bar, navigation, account chip).
+- The frame is
+  [`components/layout/frame.tsx`](../../frontend/components/layout/frame.tsx).
+  One table, `AUDIENCES`, holds what each audience's frame differs in: the
+  shell (`focus`, the bar alone, for signing in; `product`, the app bar with
+  navigation and the account chip), where the mark leads, the menu, the
+  dictionary scope (section 4), and what the frame does when the API cannot
+  say who is reading. Everything else is the same for every audience. The
+  not-found page outside every group wears the public frame.
 - Each group has its own `not-found.tsx`, so a 404 inside a group keeps one
   header instead of stacking a second.
 
-The `(admin)` layout builds its navigation from the permissions `/auth/me`
-returns: `/users` appears only with `users.manage`, `/audit` with
-`audit.view`, `/settings` with `settings.manage`. A role that gains a
+The staff frame builds its navigation from the permissions `/auth/me` returns
+(`staffDestinations` in
+[`components/layout/destinations.ts`](../../frontend/components/layout/destinations.ts)):
+`/users` and `/registrations` appear only with `users.manage`, `/audit` with
+`audit.view`, `/settings` and `/integrations` with `settings.manage`, and
+`/archive` while the installation's archive is on. A role that gains a
 permission as data gets the link with no code change. An account with no staff
 permission that manages a contest (`manages_contests` in `/auth/me`) also lands
 on `/contests` and gets this menu; the register's "New contest" link needs
@@ -119,23 +129,29 @@ Three layers, from the edge inward:
    `PUBLIC_PATHS` (`/` and `/login`), `PUBLIC_EXACT` (`/healthz`) and
    `PUBLIC_PATTERNS` (a contest's leaderboard). Everything else redirects to
    `/login?next=<path and query>`.
-3. **The Core API** decides everything else. A page that reads the API and
-   gets `unauthenticated` (a stale cookie) or `password_change_required`
-   passes the error to `authRecoveryRedirect` (same file), which redirects to
-   sign-in or to `/password`. `forbidden` is not redirected: the account is
-   signed in, and signing in again would not help. Screens that load one
-   contest answer `forbidden` as not found (see `loadContest` in
-   `app/(admin)/contests/[contestId]/contest.ts`).
+3. **The Core API** decides everything else. A page reads the API through
+   `readPage` (section 2). When the answer is `unauthenticated` (a stale
+   cookie) or `password_change_required`, `readPage` redirects to sign-in or
+   to `/password` through `authRecoveryRedirect` (same file as
+   `guardRedirect`). `forbidden` is not redirected: the account is signed in,
+   and signing in again would not help. Screens that load one contest answer
+   `forbidden` as not found: their read policy sets `hideForbidden` (see
+   `loadContest` in `app/(admin)/contests/[contestId]/contest.ts`).
 
 The server-side identity check is `fetchIdentity()` in
 [`lib/auth/session.ts`](../../frontend/lib/auth/session.ts). It calls
 `GET /api/v1/auth/me` with the session cookie and is wrapped in React's
-`cache()`, so the layouts and the page of one request share a single round
+`cache()`, so the frame and the page of one request share a single round
 trip. It returns `null` when there is no cookie or the API answers 401, and
 throws `IdentityUnavailableError` on
-any other failure, so an API restart does not look like a sign-out. Layouts
-that only decorate (`(admin)`, `(participant)`) swallow that error; the
-`(session)` layout redirects to sign-in on `null`.
+any other failure, so an API restart does not look like a sign-out. A frame
+where the identity only decorates (`participant`, `admin`) reads it through
+`readIdentity` in [`lib/auth/identity.ts`](../../frontend/lib/auth/identity.ts)
+instead, which answers `null` on an outage and logs it once per render; the
+frame then renders without the account chip and the permission-gated links.
+The `session` and `archive` frames read `fetchIdentity` and let an outage
+reach the error boundary, since the identity decides where their mark leads;
+the `session` frame redirects to sign-in on `null`.
 
 The frontend never decides what an account may do. It hides links the account
 cannot use, and the API refuses what it may not do.
@@ -151,11 +167,14 @@ and pass plain values to Client Components. The transport lives in
 | File | Role |
 |---|---|
 | [`client.ts`](../../frontend/lib/api/client.ts) | `request(path, options)`: the framework-free transport. Prefixes `/api/v1`, serialises `body` as JSON, returns `undefined` for 204, and turns any failing response into an `ApiError` with `code`, `status`, `requestId`, and optional `subject`, `position` and `retryAfterSeconds`. A non-JSON failure (a gateway's HTML page) becomes code `unreachable`. |
-| [`server.ts`](../../frontend/lib/api/server.ts) | `serverRequest(path, options)`: `request` with the API's private origin (`apiOrigin()`), the forwarded headers and the session cookie added. Use it from Server Components, server actions and Route Handlers. |
+| [`outcome.ts`](../../frontend/lib/api/outcome.ts) | `outcome(call)`: runs one call and returns its value or why there is none (`code`, and `requestId`, `subject`, `position`, `retryAfterSeconds` when the API sent them), so no caller writes its own `catch`. Anything the API did not answer in its own terms is `unreachable`. Next's redirects, not-found and prerender bail-outs pass through, and so does the caller's own abort. A failure is logged without its message. `bestEffort(call, path)` is a read the caller works without: its value, or `null` with the failure logged. |
+| [`server.ts`](../../frontend/lib/api/server.ts) | `serverRequest(path, options)`: `request` with the API's private origin (`apiOrigin()`), the forwarded headers, the session cookie and a 30-second deadline added. `serverAction` and `serverOutcome` run it for a server action (section 3) and revalidate what changed only once it worked; `ActionState` is the state a form bound to an action holds. |
+| [`page-read.ts`](../../frontend/lib/api/page-read.ts) | `readPage(path, parse, policy)`: how a page reads. One request per path per render, shared by a layout, its page and their metadata; the policy says how the page answers a refusal. |
+| [`browser.ts`](../../frontend/lib/api/browser.ts) | `browserRequest(path, options)`: `request` from the page's own origin with the session cookie, throwing an `ApiError`. `browserCall(call)` runs such a call into the state a screen renders, `refused` with the code instead of a throw. |
 | [`caller.ts`](../../frontend/lib/api/caller.ts) | `callerHeaders()`: binds `forwardedHeaders` to the current Next request. |
 | [`forwarded.ts`](../../frontend/lib/api/forwarded.ts) | Decides which client headers may be passed on to the API. |
 | [`config.ts`](../../frontend/lib/api/config.ts) | `apiOrigin()` reads `API_ORIGIN` (falls back to `http://localhost:8080` only outside production) and `ingressSecret()` reads `INGRESS_SECRET`. |
-| `ids.ts` | `isId(value)`: whether a value is a UUID and safe to put into a request path. |
+| `ids.ts` | `isId(value)`: whether a value is a UUID and safe to put into a request path. `pathSegment(name)`: a name (a table, a row) encoded as one path segment, or `null` for an empty name, `.` or `..`, which would move the request path. |
 | `<area>.ts` | zod schemas for one area of the API (`contests.ts`, `play.ts`, `workspace.ts`, …) and, in some modules, the functions that call it. |
 | `<area>-terms.ts` | Constants and small helpers from the same area, with no zod. |
 
@@ -178,11 +197,18 @@ surfacing as `undefined` three components later. `contestSummarySchema` in
 
 **Why `*-terms.ts` files exist.** A schema module calls `z.object()` when it
 loads, so a bundler cannot drop it. A Client Component that imports one
-constant array from `contests.ts` would ship all of zod (about 280 KB) to the
-browser. The vocabulary (enum arrays, tone maps, page sizes) lives in
-`contests-terms.ts`, `content-terms.ts`, `querylog-terms.ts` and the like; the
-schema modules import from there, so each term is defined once. The reason is
-written down in [`content-terms.ts`](../../frontend/lib/api/content-terms.ts).
+constant array from `contests.ts` would ship all of zod (about 110 KB
+minified, 31 KB gzipped) to the browser. The vocabulary (enum arrays, tone
+maps, page sizes, status predicates) lives in `contests-terms.ts`,
+`content-terms.ts`, `querylog-terms.ts` and the like; the schema modules
+import from there, so each term is defined once. The reason is written down in
+[`content-terms.ts`](../../frontend/lib/api/content-terms.ts). `npm run lint`
+holds client files to it: the rule `bundle/no-schema-in-client`
+([`scripts/no-schema-in-client.mjs`](../../frontend/scripts/no-schema-in-client.mjs))
+follows a `"use client"` file's value imports and refuses one that brings in
+zod. The one exception is an import of a function that calls the browser
+adapter (`lib/api/browser.ts`), since that call parses the API's answer with
+zod anyway.
 
 ### A server-rendered page, traced
 
@@ -211,7 +237,7 @@ sequenceDiagram
         N-->>B: HTML and RSC stream
     else unauthenticated or password_change_required
         API-->>N: error envelope
-        N-->>B: redirect via authRecoveryRedirect
+        N-->>B: readPage redirects to sign-in or /password
     else any other failure
         N-->>B: contests/error.tsx with a retry
     end
@@ -219,17 +245,34 @@ sequenceDiagram
 
 - `proxy.ts` and `lib/auth/guard.ts` run first. Without a cookie the browser
   would be redirected to `/login?next=%2Fcontests` here.
-- `app/(admin)/layout.tsx` reads branding (`lib/api/branding.ts`) and the
-  identity in one `Promise.all`; the identity decides the navigation links.
-  The diagram draws the two reads one after the other for readability.
-- The page calls `serverRequest` from `lib/api/server.ts`, which adds
-  `callerHeaders()` and `sessionHeader()` to the request.
-- On failure the page's `.catch` calls `authRecoveryRedirect`; anything else
-  is rethrown and lands in
+- `app/(admin)/layout.tsx` renders the `admin` frame, which reads branding
+  (`lib/api/branding.ts`) and the identity in one `Promise.all`; the identity
+  decides the navigation links. The diagram draws the two reads one after the
+  other for readability.
+- The page calls `readPage(path, parse, { here })` from
+  `lib/api/page-read.ts`. It sends the request through `serverRequest`, which
+  adds `callerHeaders()` and `sessionHeader()`, and parses the answer with
+  `contestListSchema`.
+- The page writes no `catch`. `readPage` keeps three rules on every read: a
+  dead session goes to sign-in and a one-time password to `/password`; the
+  code `not_found`, never a status, renders the not-found page; Next's own
+  redirects and not-found pass through. Anything else is thrown and lands in
   [`app/(admin)/contests/error.tsx`](../../frontend/app/(admin)/contests/error.tsx).
   In production Next reduces a Server Component error to a digest, so the
-  error boundary cannot see the API code. Handle the codes that matter in the
-  page, before rethrowing.
+  error boundary cannot see the API code. A page names the codes that matter
+  to it in its policy, and `readPage` answers them before anything is thrown:
+  - `missing`: codes besides `not_found` that mean the page's own subject is
+    not there, answered with the not-found page;
+  - `hideForbidden`: `forbidden` answered as not found, where whether the
+    thing exists is not the caller's business;
+  - `absent`: an ordinary absence the page renders, answered as `null` and
+    never logged;
+  - `shown`: a refusal whose sentence the page shows in place of what it read,
+    such as the reader's own rate limit, answered as a `Refusal` (rendered with
+    `RefusalNote` from `components/product/refusal-note.tsx`);
+  - `bestEffort`: the page renders without this read, which answers `null`
+    and logs the failure, unless the failure would have been the not-found
+    page, since anyone can ask for an address that leads nowhere.
 - The page asks for contest text in the interface language (`lang=<locale>`),
   so a page never mixes two languages.
 
@@ -237,8 +280,8 @@ sequenceDiagram
 
 Most data flows through the Next server. A few calls go from the browser
 straight to the API, same-origin through `/api/v1` (Caddy in production, the
-`next.config.ts` rewrite otherwise), using `request(path, { credentials:
-"same-origin" })` from `client.ts`:
+`next.config.ts` rewrite otherwise), using `browserRequest` or `browserCall`
+from `lib/api/browser.ts`:
 
 - everything the play screen sends or reads while the contest runs: queries,
   answers, the question list, the query log, the standings, the schema, the
@@ -253,19 +296,33 @@ straight to the API, same-origin through `/api/v1` (Caddy in production, the
   which polls its queue every five seconds and answers and announces from the
   same place (`lib/api/clarifications.ts`,
   `app/(admin)/contests/[contestId]/clarifications/`);
-- the game database's chunked upload
-  (`app/(admin)/contests/[contestId]/game/game-upload.tsx`), streamed from the
-  file as a `rawBody` `Blob` without passing through the Next server;
+- the game's chunked uploads: a dump that replaces the game database
+  (`game/game-upload.tsx`) and a builder table's CSV data
+  (`game/game-builder-table.tsx`), both under
+  `app/(admin)/contests/[contestId]/`. Both send their chunks through one loop,
+  [`game/chunk-upload.ts`](../../frontend/app/(admin)/contests/[contestId]/game/chunk-upload.ts),
+  streamed from the file as `rawBody` `Blob` slices without passing through
+  the Next server. Every chunk is sent from the server's count, never the
+  tab's own tally. A chunk refused as busy (`game_upload_busy`,
+  `game_table_data_busy`) was not stored and is sent again by itself after its
+  `Retry-After`, held between 1 and 60 seconds; five such refusals in a row
+  leave it to the organiser's Retry. An out-of-order refusal resyncs against
+  the server's count, at most three times in a row. Leaving the screen aborts
+  the chunk in flight and leaves the upload to be resumed;
 - the play screen's Server-Sent Events channel (section 6);
-- the story PDF an administrator downloads from the story screen
-  (`app/(admin)/contests/[contestId]/story/pdf/`). It is made in the browser
-  from the saved text: the button loads `pdfmake` with a dynamic `import()` on
-  its first click, so no route's first load carries the library, and the faces
-  are fetched from `public/fonts/pdf/`. The library is plain JavaScript, so it
-  runs under the production content policy unchanged. The Markdown goes
-  through the same `react-markdown` pipeline as `StoryText`, and every
-  typographic value is `StoryText`'s, converted at 10 pt to the rem
-  (`pdf/theme.ts`, held to `globals.css` and `tokens.css` by its test).
+- the PDF files an administrator downloads: the story from the story screen,
+  and the results table or protocol from the standings export. All are made
+  in the browser by one engine in [`lib/pdf/`](../../frontend/lib/pdf/):
+  `renderPdf` in `render.ts` loads `pdfmake` with a dynamic `import()` on the
+  first click, so no route's first load carries the library, fetches the faces
+  from `public/fonts/pdf/`, draws the logo and fits the running header's
+  title; each document only builds its definition
+  (`app/(admin)/contests/[contestId]/story/pdf/` for the story,
+  `standings/export/pdf/` for the results). The library is plain JavaScript,
+  so it runs under the production content policy unchanged. The story's
+  Markdown goes through the same `react-markdown` pipeline as `StoryText`, and
+  every typographic value is `StoryText`'s, converted at 10 pt to the rem
+  (`lib/pdf/theme.ts`, held to `globals.css` and `tokens.css` by its test).
 
 There are no `NEXT_PUBLIC_` variables. The browser never needs the API's
 address, because the API shares the page's origin.
@@ -274,25 +331,67 @@ address, because the API shares the page's origin.
 
 A mutation is a **server action**: an `async` function in a file marked
 `"use server"`, conventionally the route's own `actions.ts`. A Client
-Component binds it to a `<form>` with React's `useActionState`. The action
-runs on the Next server, calls the API with `serverRequest`, and returns a
-small state object, usually `{ code?: string }`. It never returns the API's
-English message.
+Component binds it to a `<form>` with `ActionForm` from
+[`components/product/action-form.tsx`](../../frontend/components/product/action-form.tsx).
+The action runs on the Next server, calls the API through `serverAction` (or
+`serverOutcome`, when it needs the answer itself) from `lib/api/server.ts`,
+and returns a small state object: an `ActionState`, which holds nothing yet,
+`{ ok: true }` or a refusal's `{ code }`, never both, plus whatever extras the
+form needs. It never returns the API's English message.
 
 Patterns an action must follow:
 
 - **Validate ids before they reach a path.** Form fields are forgeable, and
   `fetch` resolves `..`, so `/contests/${id}/enroll` could address a different
-  endpoint. Use `isId` from `lib/api/ids.ts`. Every action file that builds a
-  path from an id does this.
-- **Return a code, not text.** `failureCode(error)` from `client.ts` gives the
-  API's code, or `unreachable` when the API never answered.
-- **Revalidate what changed** with `revalidatePath`, then return, or
-  `redirect()` to the next screen. `redirect()` throws, so keep it outside any
-  `try`/`catch`.
-- **The form shows the sentence.** The Client Component maps the code with
-  `messageForCode(state.code, dict.errors)` and renders it in a
-  `role="alert"` element.
+  endpoint. Use `isId` from `lib/api/ids.ts`, and `pathSegment` for a name
+  that becomes a segment. Every action file that builds a path from a field
+  does this.
+- **Return a code, not text.** `serverAction` turns a failure into
+  `{ code }`: the API's code, or `unreachable` when the API never answered.
+  Nothing else of a refusal reaches the browser unless the action's
+  `failure` names it (the `subject` a sentence quotes).
+- **Revalidate what changed** by naming it in `revalidate`; the paths are
+  revalidated only once the call worked. Every action that writes a contest
+  revalidates through `contestChanged(contestId)` from
+  `app/(admin)/contests/[contestId]/revalidation.ts`: the workspace header,
+  the publish gate and the settings form's version all read the contest, and
+  a stale version refuses the organiser's next settings save. To move to the
+  next screen, run the call with `serverOutcome` and call `redirect()` once it
+  has returned, outside the call.
+- **The form shows the sentence.** Inside `ActionForm`, `ActionButton` is the
+  submit button, disabled while the action runs; `ActionOutcome` shows the
+  refusal's sentence, or the screen's "saved" once the save worked;
+  `ActionFooter` is the usual save row of both. The sentence always comes from
+  the dictionary (`messageForCode`), in `FailureAlert`, the one alert style
+  every form uses, so a code never reaches the screen. A screen whose request
+  is not an action renders `FailureAlert` itself.
+
+What `ActionForm` keeps for every form, so a screen does not handle it:
+
+- **A refusal keeps what was typed.** Only password fields are cleared, so a
+  password is not left on screen for the next person at the machine. Once a
+  save worked, the fields start over from the server's copy: `revision` names
+  the version they show.
+- **It works without JavaScript.** The form is a plain HTML form bound to its
+  action: submitted before the page hydrates, or with no JavaScript at all, it
+  still reaches the action. A form that asks first is the exception: its
+  button waits for hydration, because the question needs it.
+- **A destructive form asks first** through its `confirm` prop: a question,
+  or a function of the data about to be sent. The question is the product's
+  own dialog (`useConfirm` in
+  [`components/ui/use-confirm.tsx`](../../frontend/components/ui/use-confirm.tsx)),
+  in the interface's language, never the browser's `confirm()`. A yes covers
+  only the data it was asked about, and the answer stays disabled for
+  `CONFIRM_ARM_MS` after the question opens, so the second click of a
+  double-click cannot land on it. A name the user chose goes into the question
+  through `isolate` (section 4). If the dialog cannot be loaded, nothing is
+  sent and the form says so.
+- **A contest that moved meanwhile** is refused with `contest_changed`. Under
+  that refusal `ReloadWhenChanged`
+  (`app/(admin)/contests/[contestId]/reload-when-changed.tsx`) offers a
+  reload, which re-reads the page and starts the form over with the fresh
+  copy. The settings, prize places, archive settings, status actions and the
+  reveal carry it.
 
 ### A form submitted through a server action, traced
 
@@ -314,23 +413,24 @@ sequenceDiagram
         N->>API: POST /api/v1/contests/id/enroll
         alt 2xx
             API-->>N: ok
-            N->>N: revalidatePath /my
-            N-->>U: state enrolled true
+            N->>N: revalidate /my
+            N-->>U: state ok
             U->>U: replace the button with the joined status
         else already_enrolled
             API-->>N: error envelope
-            N-->>U: state enrolled true
+            N-->>U: state ok
         else refused
             API-->>N: error envelope with code
             N-->>U: state with the code
-            U->>U: messageForCode in a role alert
+            U->>U: ActionOutcome shows the sentence in an alert
         end
     end
 ```
 
-- `useActionState(enrollAction, {})` gives the button its `state`, the bound
-  `formAction` and `pending`, which disables the button while the request is
-  in flight.
+- `ActionForm` binds the action and its hidden `contestId` field; its
+  children are a function of the state, so the row shows the joined status
+  once the state is `ok`. `ActionButton` is disabled while the request is in
+  flight.
 - `enrollAction` treats `already_enrolled` as success, without revalidating:
   a double click or a stale list both mean the account got what it asked for.
 - The API decides the contest's own rules (closed enrolment, deadline,
@@ -384,21 +484,35 @@ sets the cookie and revalidates the layout.
 - **On the client**, prefer the prop. A client boundary that cannot receive
   props, chiefly `error.tsx`, reads a **dictionary scope** from context:
   `AppDictionary.use()`, `ParticipantDictionary.use()`,
-  `SessionDictionary.use()` or `AdminDictionary.use()` from
-  [`lib/i18n/client.tsx`](../../frontend/lib/i18n/client.tsx). Each group's
-  layout provides its scope.
+  `SessionDictionary.use()`, `ArchiveDictionary.use()` or
+  `AdminDictionary.use()` from
+  [`lib/i18n/client.tsx`](../../frontend/lib/i18n/client.tsx). Each
+  audience's frame provides its scope.
 
 A scope carries only some sections of the dictionary, listed in
 [`lib/i18n/scopes.ts`](../../frontend/lib/i18n/scopes.ts): `APP_SECTIONS` is
 `screens`, `PARTICIPANT_SECTIONS` is `participant`, `SESSION_SECTIONS` is
-`profile` and `participant`, `ADMIN_SECTIONS` is `contests`, `accounts`,
-`audit` and `settings`. Everything handed to a Client Component is serialised
-into the page payload, and the whole dictionary was about half of the play
+`profile` and `participant`, `ARCHIVE_SECTIONS` is `archive`,
+`ADMIN_SECTIONS` is `contests`, `accounts`, `audit` and `settings`.
+Everything handed to a Client Component is serialised into the page payload, and the whole dictionary was about half of the play
 route's payload. Reading a section the scope does not carry does not compile.
 The play screen narrows further with its own `PlayDictionary` (section 6).
 
-Placeholders are plain tokens replaced at the call site, for example
-`t.startsAt.replace("{time}", startsAt)`.
+Placeholders are `{name}` tokens filled by `fill(template, values)` from
+[`lib/i18n/fill.ts`](../../frontend/lib/i18n/fill.ts), for example
+`fill(t.startsAt, { time: startsAt })`. It replaces every occurrence in one
+pass and literally, so a value that reads like a replacement pattern (`$&`) or
+like another placeholder stays text. A placeholder with no value stays visible
+in production and throws under test, so a mistyped key fails a test. A name a
+user chose (a login, a contest title, a table) goes through `isolate(name)`
+first: it is stripped of its own direction controls and set apart from the
+sentence, so it cannot reorder the words around it.
+
+A sentence keyed by something the server chose (an error code, a status, a
+skip reason) is looked up with `labelFor(section, key)` from
+[`lib/i18n/label.ts`](../../frontend/lib/i18n/label.ts). It finds only the
+section's own keys, so a key such as `constructor` does not find what every
+object inherits; the caller decides what an unknown key shows.
 
 ### From an API error code to a sentence
 
@@ -407,10 +521,13 @@ message for developers. The interface shows only its own sentence for the
 code:
 
 1. `request()` turns the response into an `ApiError` carrying `code`.
-2. The page or action passes the code on (an action returns `{ code }`).
-3. The component calls `messageForCode(code, dict.errors)` from
-   [`lib/i18n/errors.ts`](../../frontend/lib/i18n/errors.ts). It looks the code
-   up in the dictionary's `errors` section and falls back to
+2. `outcome` (section 2) hands the code on: a page's read policy answers it,
+   an action returns `{ code }`, a browser call returns `refused` with it.
+3. The screen shows it through `ActionOutcome` or `FailureAlert` (section 3),
+   or `RefusalNote` for a refusal a page shows in place of what it read. Each
+   calls `messageForCode(code, dict.errors)` from
+   [`lib/i18n/errors.ts`](../../frontend/lib/i18n/errors.ts), which looks the
+   code up among the `errors` section's own keys and falls back to
    `errors.fallback` for a code this build does not know.
 
 The API publishes its codes as data in
@@ -447,9 +564,9 @@ variables.
 
 | Folder | What goes there | Examples |
 |---|---|---|
-| `components/ui/` | Primitives with no domain knowledge. Classes are merged with `cn()` from `lib/utils.ts`; variants are declared with `class-variance-authority` where a primitive has them (`button.tsx`, `tag.tsx`). Sizes come from `--control-h`, colours from tokens. | `button.tsx`, `input.tsx`, `field.tsx`, `tag.tsx`, `tabs.tsx`, `dialog.tsx`, `combobox.tsx` |
-| `components/product/` | Domain components used by more than one route. | `state-view.tsx`, `standings.tsx`, `code-editor.tsx`, `query-row.tsx`, `export-menu.tsx` |
-| `components/layout/` | The frame the whole app wears. | `band.tsx`, `app-bar.tsx`, `product-shell.tsx`, `focus-shell.tsx`, `language-switcher.tsx`, `theme-toggle.tsx` |
+| `components/ui/` | Primitives with no domain knowledge. Classes are merged with `cn()` from `lib/utils.ts`; variants are declared with `class-variance-authority` where a primitive has them (`button.tsx`, `tag.tsx`). Sizes come from `--control-h`, colours from tokens. | `button.tsx`, `input.tsx`, `field.tsx`, `tag.tsx`, `tabs.tsx`, `dialog.tsx`, `combobox.tsx`, `use-confirm.tsx` with `confirm-dialog.tsx` (the one way to ask before a step that cannot be taken back) |
+| `components/product/` | Domain components used by more than one route. | `action-form.tsx` (a form bound to a server action, section 3), `refusal-note.tsx`, `reload-button.tsx`, `state-view.tsx`, `standings.tsx`, `code-editor.tsx`, `query-row.tsx`, `export-menu.tsx` |
+| `components/layout/` | The frame the whole app wears. | `frame.tsx` (one frame per audience, section 1), `destinations.ts`, `band.tsx`, `app-bar.tsx`, `language-switcher.tsx`, `theme-toggle.tsx` |
 
 `StateView` (`components/product/state-view.tsx`) is the shared renderer for
 the spec's states: `empty`, `empty-filtered`, `error-recoverable`,
@@ -485,7 +602,8 @@ budgets and surviving a closed tab.
 
 | File | What it is |
 |---|---|
-| `page.tsx` | Server Component. Finds the contest in the participant's enrolled listing, shows a waiting room for `published`, "not available" for other non-running statuses, and for `running` reads story, questions, query log, schema and workspace in parallel (`Promise.allSettled`). |
+| `page.tsx` | Server Component. Finds the contest in the participant's enrolled listing, shows a waiting room for `published`, "not available" for other non-running statuses, and for `running` builds the workspace from `readPlay`, or shows the refusal that takes the screen instead. |
+| `play-reads.ts` | `readPlay`: the story, questions, query log, schema and workspace, read in parallel through `readPage` and settled apart, so a refusal about the story alone does not lose the rest. A refusal that means the participant may not use the screen now (the contest closed or not open for them, a disallowed address, not on the roster, the read rate limit) takes the whole screen; the log, the schema and the workspace are best-effort. |
 | `dictionary.ts` | `PlayDictionary`: the `participant`, `errors` and `leaderboard` sections only. |
 | `play-header.tsx` | Title, clock and panel toggles. The only place that opens the events channel. Rendered outside `<Suspense>` so it streams before the slow reads. |
 | `workspace.tsx` | The full-screen grid: schema panel, console, bottom panel (Result and Query log tabs), side panel. Here "workspace" names the screen's layout; the server-side *workspace* in the glossary is the participant's notes and SQL tabs. |
@@ -500,7 +618,7 @@ budgets and surviving a closed tab.
 | `clarification-signal.tsx` | Carries the channel's `clarification` hints, admitted connections and finish from the header to the side panel, across the Suspense boundary. |
 | `schema-panel.tsx`, `table-query.ts` | Tables, columns, types and foreign keys; a click on a table's name writes `SELECT * FROM <table> LIMIT 5;`, quoted as PostgreSQL needs, into the open SQL tab, and the chevron opens the table. Absent when the organiser hides the schema. It shows the game's build, not the participant's own tables; re-read after a database reset, which changes it only if the game was rebuilt meanwhile. |
 | `schema-diagram-dialog.tsx`, `schema-diagram.tsx`, `schema-diagram-layout.ts`, `schema-diagram-positions.ts` | The schema panel's "Diagram" button (offered unless the contest switches it off) and the large view it opens: tables as boxes with their primary and foreign keys marked, an arrow from each foreign-key column to the column it references, panned and zoomed by pointer, wheel and keyboard, with the relations as a list for a screen reader. A table is moved by dragging it, or by Tab and the arrow keys; where it was moved is kept in `localStorage` per contest and per set of table names, and "Arrange" returns to the automatic layout. The layout puts a hub's leaf tables on both sides of it, reorders each rank by the rows its arrows leave from, folds a long chain into bands and sets keyless tables below or beside the graph, whichever fits the dialog larger. The drawing and its layout engine (`@dagrejs/dagre`) are a lazy chunk fetched when the button is hovered, focused or pressed. Past a measured budget of edge segments the layout ranks the tables itself instead of calling dagre, so a 200-table schema opens in under half a second. |
-| `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabase`, that stays open until it can say how the reset went. |
+| `reset-database.tsx` | The "Reset database" control in the console toolbar, offered only by a `read_write` contest (the listing's `sql_mode`). A confirmation dialog, bound to `resetDatabase`, that stays open until it can say how the reset went. It keeps its own dialog for that reason rather than `useConfirm`, and arms its answer the same way, so a double click does not reset twice. |
 | `panel-toggles.tsx`, `pane-splitter.tsx` | Collapsible panels with keyboard shortcuts; draggable, remembered pane sizes. The provider also holds which pane a phone shows. |
 | `pane-switch.tsx` | Below 760 px the workspace shows one pane at a time; this is the switch that chooses it (Editor, Result, Schema, Questions). The panes stay mounted. |
 | `use-autosave.ts` | The autosave engine for notes and SQL tabs. |
@@ -510,7 +628,7 @@ budgets and surviving a closed tab.
 | `content-loaded.tsx` | Tells the header, across the Suspense boundary, whether the workspace or a refusal rendered. |
 | `requests.ts` | Browser-side requests to the API: run a query, submit an answer, refresh questions, page the query log and read one row of it whole, read the standings, reset the database, re-read the schema, read the questions to the organisers and ask one. Not server actions; see below. |
 | `story.md/route.ts` | Route Handler: the story as a Markdown download. |
-| `print-view.tsx`, `story-cover.tsx`, `skeleton.tsx`, `reload-link.tsx`, `loading.tsx` | Print copy, cover picture, loading skeleton, rate-limit reload button. |
+| `print-view.tsx`, `story-cover.tsx`, `skeleton.tsx`, `loading.tsx` | Print copy, cover picture, loading skeleton. Under the read rate limit the page offers `ReloadButton` from `components/product/reload-button.tsx`, which re-reads the page in place. |
 
 ```mermaid
 flowchart TD
@@ -545,8 +663,8 @@ minute of a contest an answer sent on time would reach the API as
 held it there several times over (as text, parsed, validated and encoded
 for the client). So every call in `requests.ts` goes from the browser to
 the same-origin API with the session cookie, as the autosave does, using
-`request(path, { credentials: "same-origin" })` from `lib/api/client.ts`;
-Caddy routes `/api/*` to the API, and the API checks `Origin` on writes.
+`browserCall` and `browserRequest` from `lib/api/browser.ts`; Caddy routes
+`/api/*` to the API, and the API checks `Origin` on writes.
 
 The functions keep the server-action shape so a form binds them with
 `useActionState` all the same: `runQuery` and `submitAnswer` take `(previous,
@@ -627,30 +745,37 @@ Modelled on `/contests` (`app/(admin)/contests/page.tsx`).
 
 1. Choose the group by audience (section 1) and create
    `frontend/app/(<group>)/<segment>/page.tsx`. The group's layout gives it
-   the shell.
+   the frame.
 2. Make it an `async` Server Component typed with the generated
    `PageProps<"/<segment>">` (no import needed). Export `generateMetadata` that
    reads the title from `activeDictionary()`.
-3. Read data with `serverRequest` and parse it with the area's schema. In the
-   `.catch`, call `authRecoveryRedirect(error, here)` and `redirect` when it
-   returns a target; rethrow anything else. A rethrown `forbidden` reaches the
-   error boundary, whose retry cannot succeed; when the page is about one
-   resource, answer it with `notFound()` as `loadContest` does.
+3. Read data with `readPage(path, (payload) => xSchema.parse(payload), {
+   here })` from `lib/api/page-read.ts`, where `here` is the page's address
+   that sign-in leads back to. Write no `catch`: `readPage` already handles a
+   dead session, `not_found` and Next's own control flow (section 2). Name in
+   the policy every other code the page answers itself (`missing`, `absent`,
+   `shown`, `hideForbidden`, `bestEffort`); anything unnamed reaches the error
+   boundary. A `forbidden` that reaches it gets a retry that cannot succeed, so
+   when the page is about one resource, set `hideForbidden`. A workspace
+   screen reads its contest through `loadContest` or `loadContestResource` in
+   `app/(admin)/contests/[contestId]/contest.ts`, which do.
 4. Pass `dict` and plain values to Client Components. Add strings as in
    "Add a UI string".
 5. Add `loading.tsx` if the wait is visible, and `error.tsx` (a Client
    Component reading the group's dictionary scope and rendering `StateView`
    with `error-recoverable`) if the section's failure differs from the root's.
-   Only `(admin)`, `(participant)` and `(session)` provide a scope of their
-   own; in `(public)` and `(account)` use `AppDictionary` (section `screens`).
+   Only `(admin)`, `(participant)`, `(session)` and `(archive)` provide a
+   scope of their own; in `(public)` and `(account)` use `AppDictionary`
+   (section `screens`).
    If the boundary's strings are in a section the scope does not list, add the
    section to that scope in `lib/i18n/scopes.ts`.
 6. If the page needs no session, add its path to `PUBLIC_PATHS`,
    `PUBLIC_EXACT` or `PUBLIC_PATTERNS` in `lib/auth/guard.ts`, with a case in
    `lib/auth/guard.test.ts`. Placing it in `(public)` alone is not enough: the
    guard decides by path, not by group.
-7. For a staff page with a navigation entry, add it to `destinations` in
-   `app/(admin)/layout.tsx`, gated on the permission the API checks.
+7. For a staff page with a navigation entry, add it to `staffDestinations` in
+   `components/layout/destinations.ts`, gated on the permission the API
+   checks.
 
 Check: `npm run typecheck` (it generates `PageProps` for the new route
 first), `npm test`, then `make front` and open the page signed out and signed
@@ -667,12 +792,16 @@ Modelled on `lib/api/play.ts` and `lib/api/play.test.ts`.
    constant (see `NOTES_MAX_CHARS` in `workspace.ts`).
 3. Put enum arrays and constants a Client Component needs into
    `<area>-terms.ts`, and import them into the schema module.
-4. Call it from a page or action as `xSchema.parse(await serverRequest(path))`.
-   For a browser-side call, wrap `request(path, { ...options, credentials:
-   "same-origin" })` as `workspace.ts` does. A browser wrapper in a schema
-   module puts zod in that route's bundle. That is acceptable where the route
-   already ships it (the play screen does, as `workspace.ts` notes); otherwise
-   keep the wrapper in a module without zod.
+4. Read it from a page as `readPage(path, (payload) => xSchema.parse(payload),
+   policy)`, and call it from an action as `serverAction(() =>
+   serverRequest(path, init), { revalidate })`. For a browser-side call, wrap
+   `browserRequest(path, options)` from `lib/api/browser.ts` as `workspace.ts`
+   does, and run it through `browserCall` where the screen wants a state
+   rather than a throw. A browser wrapper in a schema module puts zod in the
+   bundle of every route that imports it. The lint rule accepts that import,
+   since the call parses the answer with zod anyway, but refuses a constant
+   taken from a schema module, so keep what a client file needs besides the
+   call in `<area>-terms.ts`.
 5. Write `lib/api/<area>.test.ts`: parse a realistic payload and assert the
    camelCase result; assert how optional and nullable fields read (see
    "reads an omitted attempt count as no limit, not as zero" in
@@ -688,7 +817,8 @@ Check: `npm test -- lib/api/<area>` and `npm run typecheck`, then
    the field) or `help` (behind a "?"), as the comment at the top of `en.ts`
    explains.
 2. Add the same key to `ro.ts` and `ru.ts` with real translations.
-3. Read it as `dict.<section>.<key>` from the prop. If a client boundary reads
+3. Read it as `dict.<section>.<key>` from the prop, and fill its placeholders
+   with `fill`, never `String.replace`. If a client boundary reads
    it from a scope, make sure the section is in that scope's list in
    `lib/i18n/scopes.ts`. On the play screen, add the section to both the
    `PlayDictionary` type and the `playDictionary()` function in
@@ -721,27 +851,38 @@ Modelled on `app/(participant)/my/actions.ts` and `enroll-button.tsx`, with
 tests like `app/(admin)/contests/[contestId]/people/actions.test.ts`.
 
 1. In the route folder, create or extend `actions.ts` starting with
-   `"use server"`. Export a state type (`{ code?: string; … }`) and an
+   `"use server"`. Export a state type (`ActionState`, or `ActionState & { … }`
+   when the form needs more) and an
    `async function xAction(previous: XState, form: FormData): Promise<XState>`.
-2. Read fields from `form`. Validate every id with `isId` and every enum with
+2. Read fields from `form`. Validate every id with `isId`, every name that
+   becomes a path segment with `pathSegment`, and every enum with
    `enumFromForm` (from `lib/api/contests.ts`) before building a path or body.
    A local refusal returns a code the API already declares
    (`invalid_contest_id`, `invalid_user_id`, … in `docs/api/error-codes.json`).
    A code only the frontend uses must also be added to `CLIENT_ONLY` in
    `scripts/error-codes.mjs`: untranslated it shows the fallback sentence, and
    translated it is reported as `unused`.
-3. Call `serverRequest`. On failure return `{ code: failureCode(error) }`. On
-   success call `revalidatePath` for what changed, then return or
-   `redirect()` outside any `try`/`catch`.
-4. In a `"use client"` component, call
-   `useActionState<XState, FormData>(xAction, {})`, render
-   `<form action={formAction}>`, disable the submit button while `pending`, and
-   show `messageForCode(state.code, dict.errors)` in a `role="alert"` element.
-5. Test the action in `actions.test.ts` with `vi.mock("@/lib/api/server")`
-   and `vi.mock("next/cache")`, plus `next/navigation` if it redirects and
-   `@/lib/i18n/server` if it reads the locale (both import Next's request
-   APIs). Assert the request it sends, the code it returns, and that an
-   invalid id never reaches the server.
+3. Return `serverAction(() => serverRequest(path, init), { revalidate })`,
+   naming what changed in `revalidate` (`contestChanged(contestId)` for a
+   contest write). It returns `{ ok: true }` or `{ code }`; give it `success`
+   or `failure` only when the form needs more. To move to another screen, use
+   `serverOutcome` and call `redirect()` once it has returned, as
+   `app/(admin)/contests/new/actions.ts` does.
+4. In a `"use client"` component, render `<ActionForm action={xAction}
+   errors={dict.errors}>` with the form's fields, an `ActionButton` and an
+   `ActionOutcome`, or an `ActionFooter` for a save row. Pass ids as `fields`,
+   a question as `confirm` for a destructive step, and `revision` where the
+   fields show a server copy that a save changes; do not key the form. A
+   contest form that can be refused with `contest_changed` adds
+   `ReloadWhenChanged`.
+5. Test the action in `actions.test.ts` with `vi.mock("next/cache")` and a
+   partial mock of `@/lib/api/server` that replaces `serverRequest` and keeps
+   the real `serverAction` (see `people/actions.test.ts`). A mock of
+   `next/navigation`, needed if the action redirects, must be partial as well,
+   since `outcome` calls its `unstable_rethrow`. Mock `@/lib/i18n/server` if
+   the action reads the locale (both import Next's request APIs). Assert the
+   request it sends, the state it returns, and that an invalid id never
+   reaches the server.
 6. Test the component in its own `<component>.test.tsx` with
    `vi.mock("./actions")`, since the real action imports `next/headers` (see
    `sign-in-form.test.tsx`).
@@ -794,7 +935,10 @@ and `expect` from `vitest`.
 Common patterns: component tests load a real dictionary with
 `getDictionary("en")` and assert the dictionary's sentence, not a literal;
 server actions and `next/*` modules are replaced with `vi.mock` and
-`vi.hoisted`. The full picture, including the backend, is in
+`vi.hoisted`. A test that answers a question imports `answerYes` from
+`components/ui/confirm-dialog-test-support.ts`, which also loads the dialog's
+chunk before the file's first test, and presses the answer once it is armed.
+The full picture, including the backend, is in
 [06-testing.md](06-testing.md).
 
 ## 9. Gotchas
@@ -820,8 +964,16 @@ These add to "Things worth knowing before changing them" in
   play screen).
 - **Importing a schema module into a Client Component ships zod.** Import
   constants from the `*-terms.ts` file instead.
-- **The production error boundary sees only a digest.** Branch on the API code
-  in the page or action, before the error reaches `error.tsx`.
+- **The production error boundary sees only a digest.** Name the codes a page
+  answers in its `readPage` policy, and let an action return them as its
+  state, before anything reaches `error.tsx`. A page or action never writes
+  its own `catch`: one would also catch Next's `redirect` and `notFound`.
+- **Ask first only through `useConfirm`.** `ActionForm`'s `confirm` uses it;
+  a browser-side control calls it directly. Never `window.confirm`: its
+  buttons are in the browser's language, not the interface's.
+- **Look up a server's key with `labelFor`.** A plain `section[code]` finds
+  `constructor` on every object, so a code the server chose could show a
+  function where a sentence belongs.
 - **`scripts/error-codes.mjs` imports the dictionaries.** It reads the keys of
   `errors` in every locale file under Node's type stripping, so the files must
   stay erasable-syntax TypeScript (`import type`, `satisfies`; no enums, no
