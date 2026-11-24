@@ -205,7 +205,8 @@ an administrator signs in and finds the contest list; a participant opens a
 running `read_write` contest, runs a query and sees its rows, deletes a row,
 resets their database through the dialog, sees the result panel cleared and
 the row back, then answers the question wrongly and rightly and sees each
-judged. It is the only test that crosses Caddy, the interface, the API, the
+judged. An administrator also signs in with JavaScript off, through the
+form's native POST (`admin.spec.ts`). It is the only test that crosses Caddy, the interface, the API, the
 Query Runner and both clusters in one go (CLAUDE.md, security rule 10).
 
 The `features-*` specs walk what the post-beta changes added: the play
