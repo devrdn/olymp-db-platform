@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { CONFIRM_ARM_MS } from "@/components/ui/use-confirm";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -483,5 +484,355 @@ describe("the upload's progress bar", () => {
 
     const fill = (await screen.findByRole("progressbar")).firstElementChild as HTMLElement;
     expect(fill.style.transitionDuration).toMatch(/^min\(var\(--t-input\), \d+ms\)$/);
+  });
+});
+
+// Nothing of a chunk refused as busy was stored, so the same chunk is sent
+// again after the wait the API names, as a table's data is.
+describe("a dump chunk refused as busy", () => {
+  const busy = () => new ApiError("game_upload_busy", 503, "busy", undefined, undefined, undefined, 2);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function startUpload() {
+    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ declaredBytes: 4 }) });
+    const view = show();
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    return view;
+  }
+
+  /** Presses the panel's Cancel; the question opens and arms on its own clock. */
+  async function pressCancel() {
+    fireEvent.click(screen.getByRole("button", { name: tu.cancel }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  /** Answers the open question with a yes once it is armed. */
+  async function confirmCancel() {
+    const dialog = screen.getByRole("dialog", { name: tu.cancelConfirm });
+    await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
+    fireEvent.click(within(dialog).getByRole("button", { name: tu.cancel }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  /** Holds `action`'s next answer until the returned function gives it. */
+  function hold(action: ReturnType<typeof vi.fn>) {
+    let answer: (value: unknown) => void = () => {};
+    action.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    return (value: unknown) => answer(value);
+  }
+
+  test("is sent again by itself, and the upload finishes with nothing asked of the organiser", async () => {
+    request.mockRejectedValueOnce(busy()).mockResolvedValueOnce({ received_bytes: 4 });
+    completeGameUploadAction.mockResolvedValueOnce({ value: game({ status: "pending", building: true }) });
+    gameUploadWindowAction.mockResolvedValue({ value: { fromLine: 1, lines: [], totalLines: 0, truncated: false } });
+    gameStatusAction.mockResolvedValue({ value: game({ status: "pending", building: true }) });
+
+    await startUpload();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(en.errors.game_upload_busy)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: tu.retry })).not.toBeInTheDocument();
+    expect(screen.getByText(tu.uploading)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      `/contests/${contestId}/game/uploads/${uploadId}/chunk?offset=0`,
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(completeGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+    expect(screen.queryByText(en.errors.game_upload_busy)).not.toBeInTheDocument();
+  });
+
+  test("five times in a row says so and offers Retry", async () => {
+    request.mockRejectedValue(busy());
+
+    await startUpload();
+    await act(() => vi.advanceTimersByTimeAsync(4 * 2000));
+
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(screen.getByText(en.errors.game_upload_busy)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: tu.retry })).toBeInTheDocument();
+    expect(completeGameUploadAction).not.toHaveBeenCalled();
+  });
+
+  // The screen can go while its begin is still being answered; the upload
+  // must not start behind it.
+  test("never starts sending when the screen went while the upload was being begun", async () => {
+    let answerBegin: (value: unknown) => void = () => {};
+    beginGameUploadAction.mockImplementationOnce(() => new Promise((resolve) => (answerBegin = resolve)));
+    const view = show();
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    view.unmount();
+    answerBegin({ value: upload({ declaredBytes: 4 }) });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    // Leaving is not a Cancel: the upload the begin created stays resumable.
+    expect(abortGameUploadAction).not.toHaveBeenCalled();
+  });
+
+  // A begin answered after the yes created an upload nobody will send to; it
+  // is ended on the server, as Cancel ends any other.
+  test("never starts sending when the organiser cancelled while the upload was being begun, and ends what it created", async () => {
+    const answerBegin = hold(beginGameUploadAction);
+    show();
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    await confirmCancel();
+    answerBegin({ value: upload({ declaredBytes: 4 }) });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(abortGameUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The usual order: the yes arms only after a moment, and the begin has
+  // answered by then.
+  test("cancels an upload whose begin answered while the question was open", async () => {
+    const answerBegin = hold(beginGameUploadAction);
+    let chunkSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      chunkSignal = init.signal;
+      return new Promise(() => {});
+    });
+    show();
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    answerBegin({ value: upload({ declaredBytes: 4 }) });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(chunkSignal?.aborted).toBe(false);
+    await confirmCancel();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(chunkSignal?.aborted).toBe(true);
+    expect(abortGameUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+    expect(completeGameUploadAction).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+  });
+
+  test("cancelled while the server's count is read for a resume, sends nothing and ends the upload", async () => {
+    const RESUMABLE = upload({ receivedBytes: 0, declaredBytes: 4 });
+    const answerCount = hold(currentGameUploadAction);
+    show({ initialUpload: RESUMABLE });
+    fireEvent.change(screen.getByLabelText(tu.resumePick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    await confirmCancel();
+    answerCount(upload({ receivedBytes: 2, declaredBytes: 4 }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(abortGameUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+  });
+
+  test("cancelled while Retry reads the server's count, sends nothing more and ends the upload", async () => {
+    request.mockRejectedValueOnce(new ApiError("game_upload_too_large", 400, "too big"));
+    await startUpload();
+    expect(screen.getByRole("button", { name: tu.retry })).toBeInTheDocument();
+
+    const answerCount = hold(currentGameUploadAction);
+    fireEvent.click(screen.getByRole("button", { name: tu.retry }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await pressCancel();
+    await confirmCancel();
+    answerCount(upload({ receivedBytes: 2, declaredBytes: 4 }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(abortGameUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+  });
+
+  test("says nothing of a begin refused after the organiser cancelled it", async () => {
+    const answerBegin = hold(beginGameUploadAction);
+    show();
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    await confirmCancel();
+    answerBegin({ code: "game_upload_too_large" });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(screen.queryByText(en.errors.game_upload_too_large)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: tu.retry })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+    expect(abortGameUploadAction).not.toHaveBeenCalled();
+  });
+
+  // A resume cancelled while its count was read must not write that count
+  // over the upload picked after it.
+  test("a cancelled resume's late count leaves the next upload's progress alone", async () => {
+    const RESUMABLE = upload({ receivedBytes: 0, declaredBytes: 4 });
+    const answerCount = hold(currentGameUploadAction);
+    show({ initialUpload: RESUMABLE });
+    fireEvent.change(screen.getByLabelText(tu.resumePick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await pressCancel();
+    await confirmCancel();
+
+    hold(beginGameUploadAction);
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["abcd"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    answerCount(upload({ receivedBytes: 2, declaredBytes: 4 }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+  });
+
+  // The yes lands only after the question has finished loading; the panel can
+  // finish and take another file meanwhile, and that one was never asked about.
+  test("a yes answers only the upload the question was asked about", async () => {
+    const otherId = "44444444-4444-4444-4444-444444444444";
+    let release: () => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ received_bytes: 4 }))),
+    );
+    completeGameUploadAction.mockResolvedValueOnce({ value: game({ status: "pending", building: true }) });
+    gameUploadWindowAction.mockResolvedValue({ value: { fromLine: 1, lines: [], totalLines: 0, truncated: false } });
+    await startUpload();
+    await pressCancel();
+
+    release();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(completeGameUploadAction).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: tu.replace, hidden: true }));
+    let secondSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      secondSignal = init.signal;
+      return new Promise(() => {});
+    });
+    // A new begin is a new upload, with an id of its own.
+    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ id: otherId, declaredBytes: 4 }) });
+    fireEvent.change(screen.getByLabelText(tu.pick), {
+      target: { files: [new File(["efgh"], "dump.sql")] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(secondSignal).toBeDefined();
+
+    await confirmCancel();
+
+    expect(secondSignal?.aborted).toBe(false);
+    expect(abortGameUploadAction).not.toHaveBeenCalled();
+    expect(screen.getByText(tu.uploading)).toBeInTheDocument();
+  });
+
+  // Retry opens a new attempt on the same upload; the yes was about that
+  // upload, so it ends whichever attempt is sending it by then.
+  test("a yes cancels the upload it was asked about even after a Retry of it", async () => {
+    let refuse: () => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (refuse = () => reject(new ApiError("game_upload_too_large", 400, "too big")))),
+    );
+    await startUpload();
+    await pressCancel();
+
+    refuse();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    let retrySignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      retrySignal = init.signal;
+      return new Promise(() => {});
+    });
+    currentGameUploadAction.mockResolvedValueOnce(upload({ receivedBytes: 0, declaredBytes: 4 }));
+    fireEvent.click(screen.getByRole("button", { name: tu.retry, hidden: true }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(retrySignal).toBeDefined();
+
+    await confirmCancel();
+
+    expect(retrySignal?.aborted).toBe(true);
+    expect(abortGameUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+  });
+
+  // A yes that lands while the upload is being completed is too late: the
+  // complete goes on and the panel shows what it built.
+  test("leaves an upload being completed alone when the yes lands then", async () => {
+    let finish: (value: unknown) => void = () => {};
+    let release: () => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ received_bytes: 4 }))),
+    );
+    completeGameUploadAction.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    gameUploadWindowAction.mockResolvedValue({ value: { fromLine: 1, lines: [], totalLines: 0, truncated: false } });
+    await startUpload();
+    await pressCancel();
+
+    release();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(completeGameUploadAction).toHaveBeenCalled();
+    await confirmCancel();
+    finish({ value: game({ status: "pending", building: true }) });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(abortGameUploadAction).not.toHaveBeenCalled();
+    expect(screen.getByText(tu.done)).toBeInTheDocument();
+  });
+
+  test("is not sent again once the screen is gone, and leaves no timer running", async () => {
+    request.mockRejectedValueOnce(busy());
+
+    const view = await startUpload();
+    view.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("a chunk still in flight is cut off when the screen is gone", async () => {
+    let chunkSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      chunkSignal = init.signal;
+      return new Promise(() => {});
+    });
+
+    const view = await startUpload();
+    expect(chunkSignal?.aborted).toBe(false);
+    view.unmount();
+
+    expect(chunkSignal?.aborted).toBe(true);
   });
 });

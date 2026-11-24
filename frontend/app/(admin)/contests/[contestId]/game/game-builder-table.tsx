@@ -6,8 +6,9 @@ import { useRouter } from "next/navigation";
 import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { ApiError, isAbortError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/client";
 import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
+import { pathSegment } from "@/lib/api/ids";
 import { failureCodeOf } from "@/lib/api/outcome";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -23,7 +24,7 @@ import {
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
-import { putTableChunk } from "./table-chunk";
+import { receivingOffset, useChunkLoop, type ChunkTarget, type UploadAttempt } from "./chunk-upload";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
@@ -31,21 +32,14 @@ type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 const CANCELLABLE: ReadonlySet<Phase> = new Set(["resumable", "uploading", "error"]);
 
 /**
- * Consecutive out-of-order refusals resynced automatically before asking for
- * Retry (as in `game-upload.tsx`).
- */
-const MAX_AUTO_RESYNCS = 3;
-
-/**
  * One table's data: rows a page at a time, added by hand or loaded from a
  * chunked CSV.
  *
  * Stays mounted for every table (tabs only hide), so a running upload survives
  * a tab switch; `active` gates the first fetch so a page load does not fan out
- * to every table. A reload resumes from `initialTableData`, an out-of-order
- * chunk resyncs against the server's count, and a busy one is sent again by
- * `putTableChunk`. `sentBytes` only advances from a chunk response's
- * `received_bytes`, so Retry resends idempotently.
+ * to every table. A reload resumes from `initialTableData`; the chunks go
+ * through `useChunkLoop`, as the dump's do. `sentBytes` only advances from a
+ * chunk response's `received_bytes`, so Retry resends idempotently.
  */
 export function GameBuilderTable({
   contestId,
@@ -128,10 +122,7 @@ export function GameBuilderTable({
   const [hasFile, setHasFile] = useState(false);
 
   const fileRef = useRef<File | null>(null);
-  const controllerRef = useRef<AbortController | null>(null);
-  // Leaving the screen stops the upload, a chunk's busy wait included; the
-  // server keeps what it received, and the page offers to resume it.
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  const chunks = useChunkLoop((id) => abortTableUploadAction(contestId, table.name, id));
   const rateOriginRef = useRef<{ time: number; bytes: number }>({ time: 0, bytes: 0 });
 
   const [windowFrom, setWindowFrom] = useState(1);
@@ -187,49 +178,31 @@ export function GameBuilderTable({
     setSentBytes(newSent);
   }
 
-  /** Sends the remaining chunks from `startOffset`, resyncing on out-of-order refusals. */
-  async function runLoop(file: File, id: string, startOffset: number, chunkBytes: number) {
-    const controller = new AbortController();
-    controllerRef.current = controller;
+  /** Sends the remaining chunks from `startOffset`, then completes the upload. */
+  async function runLoop(attempt: UploadAttempt, file: File, id: string, startOffset: number, chunkBytes: number) {
+    const segment = pathSegment(table.name);
+    if (segment === null) {
+      setPhase("error");
+      setErrorCode("invalid_request");
+      return;
+    }
     rateOriginRef.current = { time: Date.now(), bytes: startOffset };
+    const target: ChunkTarget = {
+      chunkPath: (offset) => `/contests/${contestId}/game/tables/${segment}/data/${id}/chunk?offset=${offset}`,
+      busy: "game_table_data_busy",
+      outOfOrder: "game_table_data_chunk_out_of_order",
+      serverOffset: async () => receivingOffset(await currentTableUploadAction(contestId, table.name), id),
+    };
 
-    let offset = startOffset;
-    let resyncs = 0;
-
-    while (offset < file.size) {
-      const end = Math.min(offset + chunkBytes, file.size);
-      const chunk = file.slice(offset, end);
-
-      try {
-        // One at a time: parallel PUTs would race the same offset.
-        offset = await putTableChunk(contestId, table.name, id, offset, chunk, controller.signal);
-        resyncs = 0;
-        markProgress(offset);
-      } catch (error) {
-        if (isAbortError(error)) return;
-
-        // The server knows the true offset better than this tab.
-        if (
-          error instanceof ApiError &&
-          error.code === "game_table_data_chunk_out_of_order" &&
-          resyncs < MAX_AUTO_RESYNCS
-        ) {
-          resyncs += 1;
-          const fresh = await currentTableUploadAction(contestId, table.name);
-          if (fresh && fresh.id === id && fresh.status === "receiving") {
-            offset = fresh.receivedBytes;
-            markProgress(offset);
-            continue;
-          }
-        }
-
-        setPhase("error");
-        setErrorCode(failureCodeOf(error));
-        // The PUT goes straight to the API, so the full `ApiError` (e.g. a
-        // header mismatch) is available here.
-        setErrorDetail(error instanceof ApiError ? error.message : null);
-        return;
-      }
+    const end = await attempt.send(target, { file, from: startOffset, chunkBytes, onProgress: markProgress });
+    if (end.kind === "stopped") return;
+    if (end.kind === "refused") {
+      setPhase("error");
+      setErrorCode(failureCodeOf(end.error));
+      // The PUT goes straight to the API, so the full `ApiError` (e.g. a
+      // header mismatch) is available here.
+      setErrorDetail(end.error instanceof ApiError ? end.error.message : null);
+      return;
     }
 
     setPhase("completing");
@@ -261,8 +234,10 @@ export function GameBuilderTable({
     setErrorDetail(null);
     setPhase("uploading");
 
+    const attempt = chunks.start();
     const result = await beginTableUploadAction(contestId, table.name, file.size);
     const begun = result.value;
+    if (!attempt.proceed(begun?.id)) return;
     if (result.code || !begun) {
       setPhase("error");
       setErrorCode(result.code ?? "unreachable");
@@ -272,7 +247,7 @@ export function GameBuilderTable({
     fileRef.current = file;
     setHasFile(true);
     setUploadId(begun.id);
-    await runLoop(file, begun.id, 0, begun.builderLimits.chunkBytes);
+    await runLoop(attempt, file, begun.id, 0, begun.builderLimits.chunkBytes);
   }
 
   /** Resumes after a reload; only the reselected file's size must match. */
@@ -283,21 +258,21 @@ export function GameBuilderTable({
     setErrorDetail(null);
     setPhase("uploading");
 
-    // Resend from the server's current count; the one loaded with the page may
-    // be stale.
-    const fresh = await currentTableUploadAction(contestId, table.name);
-    const offset =
-      fresh && fresh.id === resumable.id && fresh.status === "receiving"
-        ? fresh.receivedBytes
-        : resumable.receivedBytes;
-
     fileRef.current = file;
     setHasFile(true);
     setUploadId(resumable.id);
     setFilename(file.name);
     setTotalBytes(resumable.declaredBytes);
+
+    // Resend from the server's current count; the one loaded with the page may
+    // be stale. An attempt that ended meanwhile writes nothing over the panel,
+    // which may hold a newer upload by now.
+    const attempt = chunks.start();
+    const fresh = await currentTableUploadAction(contestId, table.name);
+    if (!attempt.proceed()) return;
+    const offset = receivingOffset(fresh, resumable.id) ?? resumable.receivedBytes;
     setSentBytes(offset);
-    await runLoop(file, resumable.id, offset, (fresh ?? resumable).builderLimits.chunkBytes);
+    await runLoop(attempt, file, resumable.id, offset, (fresh ?? resumable).builderLimits.chunkBytes);
   }
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -319,25 +294,22 @@ export function GameBuilderTable({
   }
 
   async function cancel() {
-    const question = { title: td.cancelConfirm, answer: td.cancel, cancel: td.keepUploading, danger: true };
-    if (!(await ask(question).catch(() => false))) return;
-    // The page went on while the question was open: an upload that finished
-    // meanwhile is not cancelled, nor is one that has become another.
-    const now = live.current;
-    if (!CANCELLABLE.has(now.phase) || now.uploadId !== uploadId) return;
-    controllerRef.current?.abort();
-    const id = uploadId;
-    fileRef.current = null;
-    setHasFile(false);
-    setPhase("idle");
-    setUploadId(null);
-    setFilename("");
-    setTotalBytes(0);
-    setSentBytes(0);
-    setMismatch(false);
-    setErrorCode(null);
-    setErrorDetail(null);
-    if (id) await abortTableUploadAction(contestId, table.name, id);
+    await chunks.cancel({
+      confirm: () => ask({ title: td.cancelConfirm, answer: td.cancel, cancel: td.keepUploading, danger: true }),
+      now: () => ({ cancellable: CANCELLABLE.has(live.current.phase), uploadId: live.current.uploadId }),
+      reset: () => {
+        fileRef.current = null;
+        setHasFile(false);
+        setPhase("idle");
+        setUploadId(null);
+        setFilename("");
+        setTotalBytes(0);
+        setSentBytes(0);
+        setMismatch(false);
+        setErrorCode(null);
+        setErrorDetail(null);
+      },
+    });
   }
 
   async function retry() {
@@ -347,7 +319,7 @@ export function GameBuilderTable({
     setErrorCode(null);
     setErrorDetail(null);
     setPhase("uploading");
-    await runLoop(file, id, sentBytes, limits.chunkBytes);
+    await runLoop(chunks.start(), file, id, sentBytes, limits.chunkBytes);
   }
 
   function updateRowValue(index: number, value: string) {

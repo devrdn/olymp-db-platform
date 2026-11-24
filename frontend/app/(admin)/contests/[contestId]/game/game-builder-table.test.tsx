@@ -96,6 +96,7 @@ function show({
   activeRowCount = 0,
   onActiveRowCountChange = vi.fn(),
   initialTableData = null,
+  tableName = table.name,
 }: {
   active?: boolean;
   editable?: boolean;
@@ -106,11 +107,12 @@ function show({
   onActiveRowCountChange?: (n: number) => void;
   /** The upload still receiving at page load, or null. */
   initialTableData?: ReturnType<typeof tableData> | null;
+  tableName?: string;
 } = {}) {
   return render(
     <GameBuilderTable
       contestId={contestId}
-      table={table}
+      table={{ ...table, name: tableName }}
       active={active}
       limits={{ ...limits, enabled }}
       editable={editable}
@@ -247,6 +249,16 @@ describe("the table builder's own data panel", () => {
     ]);
     expect(sizes).toEqual([5, 5, 2]);
     await waitFor(() => expect(completeTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId));
+  });
+
+  test("sends no chunk for a table whose name is no path segment, and says why", async () => {
+    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
+
+    show({ tableName: ".." });
+    await userEvent.upload(screen.getByLabelText(td.pick), new File([new Uint8Array(12)], "suspects.csv"));
+
+    expect(await screen.findByText(en.errors.invalid_request)).toBeInTheDocument();
+    expect(request).not.toHaveBeenCalled();
   });
 
   // The next chunk continues from the server's received_bytes, not this tab's
@@ -579,6 +591,27 @@ describe("a chunk refused as busy", () => {
     return view;
   }
 
+  /** Presses the panel's Cancel; the question opens and arms on its own clock. */
+  async function pressCancel() {
+    fireEvent.click(screen.getByRole("button", { name: td.cancel }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  /** Answers the open question with a yes once it is armed. */
+  async function confirmCancel() {
+    const dialog = screen.getByRole("dialog", { name: td.cancelConfirm });
+    await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
+    fireEvent.click(within(dialog).getByRole("button", { name: td.cancel }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  /** Holds `action`'s next answer until the returned function gives it. */
+  function hold(action: ReturnType<typeof vi.fn>) {
+    let answer: (value: unknown) => void = () => {};
+    action.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    return (value: unknown) => answer(value);
+  }
+
   test("is sent again by itself, and the upload finishes with nothing asked of the organiser", async () => {
     request.mockRejectedValueOnce(busy()).mockResolvedValueOnce({ received_bytes: 4 });
     completeTableUploadAction.mockResolvedValueOnce({
@@ -631,6 +664,254 @@ describe("a chunk refused as busy", () => {
     expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
     expect(screen.queryByText(en.errors.game_table_data_busy)).not.toBeInTheDocument();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The screen can go while its begin is still being answered; the upload
+  // must not start behind it.
+  test("never starts sending when the screen went while the upload was being begun", async () => {
+    let answerBegin: (value: unknown) => void = () => {};
+    beginTableUploadAction.mockImplementationOnce(() => new Promise((resolve) => (answerBegin = resolve)));
+    const view = show();
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    view.unmount();
+    answerBegin({ value: tableData({ declaredBytes: 4 }) });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    // Leaving is not a Cancel: the upload the begin created stays resumable.
+    expect(abortTableUploadAction).not.toHaveBeenCalled();
+  });
+
+  // A begin answered after the yes created an upload nobody will send to; it
+  // is ended on the server, as Cancel ends any other.
+  test("never starts sending when the organiser cancelled while the upload was being begun, and ends what it created", async () => {
+    const answerBegin = hold(beginTableUploadAction);
+    show();
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    await confirmCancel();
+    answerBegin({ value: tableData({ declaredBytes: 4 }) });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The usual order: the yes arms only after a moment, and the begin has
+  // answered by then.
+  test("cancels an upload whose begin answered while the question was open", async () => {
+    const answerBegin = hold(beginTableUploadAction);
+    let chunkSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      chunkSignal = init.signal;
+      return new Promise(() => {});
+    });
+    show();
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    answerBegin({ value: tableData({ declaredBytes: 4 }) });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(chunkSignal?.aborted).toBe(false);
+    await confirmCancel();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(chunkSignal?.aborted).toBe(true);
+    expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(completeTableUploadAction).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+  });
+
+  test("cancelled while the server's count is read for a resume, sends nothing and ends the upload", async () => {
+    const RESUMABLE = tableData({ receivedBytes: 0, declaredBytes: 4 });
+    const answerCount = hold(currentTableUploadAction);
+    show({ initialTableData: RESUMABLE });
+    fireEvent.change(screen.getByLabelText(td.resumePick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    await confirmCancel();
+    answerCount(tableData({ receivedBytes: 2, declaredBytes: 4 }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+  });
+
+  test("says nothing of a begin refused after the organiser cancelled it", async () => {
+    const answerBegin = hold(beginTableUploadAction);
+    show();
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await pressCancel();
+    await confirmCancel();
+    answerBegin({ code: "game_upload_too_large" });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(screen.queryByText(en.errors.game_upload_too_large)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: td.retry })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+    expect(abortTableUploadAction).not.toHaveBeenCalled();
+  });
+
+  // A resume cancelled while its count was read must not write that count
+  // over the upload picked after it.
+  test("a cancelled resume's late count leaves the next upload's progress alone", async () => {
+    const RESUMABLE = tableData({ receivedBytes: 0, declaredBytes: 4 });
+    const answerCount = hold(currentTableUploadAction);
+    show({ initialTableData: RESUMABLE });
+    fireEvent.change(screen.getByLabelText(td.resumePick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await pressCancel();
+    await confirmCancel();
+
+    hold(beginTableUploadAction);
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    answerCount(tableData({ receivedBytes: 2, declaredBytes: 4 }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+  });
+
+  // The yes lands only after the question has finished loading; the panel can
+  // finish and take another file meanwhile, and that one was never asked about.
+  test("a yes answers only the upload the question was asked about", async () => {
+    const otherId = "44444444-4444-4444-4444-444444444444";
+    let release: () => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ received_bytes: 4 }))),
+    );
+    completeTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "complete", lines: 1, activeRows: 1 }) });
+    await startUpload();
+    await pressCancel();
+
+    release();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(completeTableUploadAction).toHaveBeenCalled();
+    let secondSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      secondSignal = init.signal;
+      return new Promise(() => {});
+    });
+    // A new begin is a new upload, with an id of its own.
+    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ id: otherId, declaredBytes: 4 }) });
+    fireEvent.change(screen.getByLabelText(td.pick), {
+      target: { files: [new File(["efgh"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(secondSignal).toBeDefined();
+
+    await confirmCancel();
+
+    expect(secondSignal?.aborted).toBe(false);
+    expect(abortTableUploadAction).not.toHaveBeenCalled();
+    expect(screen.getByText(td.uploading)).toBeInTheDocument();
+  });
+
+  // Retry opens a new attempt on the same upload; the yes was about that
+  // upload, so it ends whichever attempt is sending it by then.
+  test("a yes cancels the upload it was asked about even after a Retry of it", async () => {
+    let refuse: () => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (refuse = () => reject(new ApiError("game_upload_too_large", 400, "too big")))),
+    );
+    await startUpload();
+    await pressCancel();
+
+    refuse();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    let retrySignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      retrySignal = init.signal;
+      return new Promise(() => {});
+    });
+    fireEvent.click(screen.getByRole("button", { name: td.retry, hidden: true }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(retrySignal).toBeDefined();
+
+    await confirmCancel();
+
+    expect(retrySignal?.aborted).toBe(true);
+    expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+  });
+
+  test("a yes cancels the upload it was asked about even after it was resumed", async () => {
+    show({ initialTableData: tableData({ receivedBytes: 0, declaredBytes: 4 }) });
+    fireEvent.click(screen.getByRole("button", { name: td.resumeCancel }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    currentTableUploadAction.mockResolvedValueOnce(tableData({ receivedBytes: 0, declaredBytes: 4 }));
+    let resumeSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      resumeSignal = init.signal;
+      return new Promise(() => {});
+    });
+    fireEvent.change(screen.getByLabelText(td.resumePick), {
+      target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(resumeSignal).toBeDefined();
+
+    await confirmCancel();
+
+    expect(resumeSignal?.aborted).toBe(true);
+    expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
+    expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+  });
+
+  // A yes that lands while the upload is being completed is too late: the
+  // complete goes on and the panel shows what it built.
+  test("leaves an upload being completed alone when the yes lands then", async () => {
+    let finish: (value: unknown) => void = () => {};
+    let release: () => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ received_bytes: 4 }))),
+    );
+    completeTableUploadAction.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    await startUpload();
+    await pressCancel();
+
+    release();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(completeTableUploadAction).toHaveBeenCalled();
+    await confirmCancel();
+    finish({ value: tableData({ status: "complete", lines: 1, activeRows: 1 }) });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(abortTableUploadAction).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+    expect(refresh).toHaveBeenCalled();
   });
 
   test("is not sent again once the screen is gone, and leaves no timer running", async () => {

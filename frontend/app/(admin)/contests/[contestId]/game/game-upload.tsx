@@ -7,8 +7,6 @@ import { FailureAlert } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { browserRequest } from "@/lib/api/browser";
-import { ApiError, isAbortError } from "@/lib/api/client";
 import type { Game, Upload } from "@/lib/api/game";
 import { failureCodeOf } from "@/lib/api/outcome";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
@@ -23,46 +21,13 @@ import {
   currentGameUploadAction,
   gameUploadWindowAction,
 } from "./actions";
+import { receivingOffset, useChunkLoop, type ChunkTarget, type UploadAttempt } from "./chunk-upload";
 import { useGamePoll } from "./game-poll";
-
-/**
- * Consecutive out-of-order refusals resynced automatically (this tab's offset
- * fell behind the server's) before asking for Retry, so a broken upload does
- * not spin forever.
- */
-const MAX_AUTO_RESYNCS = 3;
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "done" | "error";
 
 /** Where the panel offers its cancel. */
 const CANCELLABLE: ReadonlySet<Phase> = new Set(["resumable", "uploading", "error"]);
-
-/**
- * Sends one chunk straight to the API, not through a Server Action: an action's
- * body is capped at 1 MiB while `chunk_bytes` is configured per installation at
- * runtime, and an action buffers its `FormData` where `rawBody: Blob` streams
- * the slice from disk. It is a same-origin `/api` call, forwarded by the
- * reverse proxy or, without one, the `next.config.ts` rewrite.
- */
-async function putChunk(
-  contestId: string,
-  uploadId: string,
-  offset: number,
-  chunk: Blob,
-  signal: AbortSignal,
-): Promise<number> {
-  const payload = await browserRequest(`/contests/${contestId}/game/uploads/${uploadId}/chunk?offset=${offset}`, {
-    method: "PUT",
-    rawBody: chunk,
-    signal,
-  });
-
-  const bytes = (payload as { received_bytes?: unknown } | null)?.received_bytes;
-  if (typeof bytes !== "number") {
-    throw new Error(`malformed chunk response for upload ${uploadId}`);
-  }
-  return bytes;
-}
 
 /**
  * Builds the game from an uploaded dump, on the same screen as `GameEditor` so
@@ -137,7 +102,7 @@ export function GameUpload({
   const [hasFile, setHasFile] = useState(false);
 
   const fileRef = useRef<File | null>(null);
-  const controllerRef = useRef<AbortController | null>(null);
+  const chunks = useChunkLoop((id) => abortGameUploadAction(contestId, id));
   const rateOriginRef = useRef<{ time: number; bytes: number }>({ time: 0, bytes: 0 });
   /** When `markProgress` last ran (see `stepMs`). */
   const progressStepRef = useRef(0);
@@ -206,46 +171,22 @@ export function GameUpload({
     await fetchWindow(uploadId, from);
   }
 
-  async function runLoop(file: File, id: string, startOffset: number, chunkBytes: number) {
-    const controller = new AbortController();
-    controllerRef.current = controller;
+  /** Sends the remaining chunks from `startOffset`, then completes the upload. */
+  async function runLoop(attempt: UploadAttempt, file: File, id: string, startOffset: number, chunkBytes: number) {
     rateOriginRef.current = { time: Date.now(), bytes: startOffset };
+    const target: ChunkTarget = {
+      chunkPath: (offset) => `/contests/${contestId}/game/uploads/${id}/chunk?offset=${offset}`,
+      busy: "game_upload_busy",
+      outOfOrder: "game_upload_chunk_out_of_order",
+      serverOffset: async () => receivingOffset(await currentGameUploadAction(contestId), id),
+    };
 
-    let offset = startOffset;
-    let resyncs = 0;
-
-    while (offset < file.size) {
-      const end = Math.min(offset + chunkBytes, file.size);
-      const chunk = file.slice(offset, end);
-
-      try {
-        // One at a time: parallel PUTs would race the same offset.
-        offset = await putChunk(contestId, id, offset, chunk, controller.signal);
-        resyncs = 0;
-        markProgress(offset);
-      } catch (error) {
-        if (isAbortError(error)) return;
-
-        // The server knows the true offset better than this tab, mid-stream as
-        // much as on resume.
-        if (
-          error instanceof ApiError &&
-          error.code === "game_upload_chunk_out_of_order" &&
-          resyncs < MAX_AUTO_RESYNCS
-        ) {
-          resyncs += 1;
-          const fresh = await currentGameUploadAction(contestId);
-          if (fresh && fresh.id === id && fresh.status === "receiving") {
-            offset = fresh.receivedBytes;
-            markProgress(offset);
-            continue;
-          }
-        }
-
-        setPhase("error");
-        setErrorCode(failureCodeOf(error));
-        return;
-      }
+    const end = await attempt.send(target, { file, from: startOffset, chunkBytes, onProgress: markProgress });
+    if (end.kind === "stopped") return;
+    if (end.kind === "refused") {
+      setPhase("error");
+      setErrorCode(failureCodeOf(end.error));
+      return;
     }
 
     setPhase("completing");
@@ -273,8 +214,10 @@ export function GameUpload({
     setErrorCode(null);
     setPhase("uploading");
 
+    const attempt = chunks.start();
     const result = await beginGameUploadAction(contestId, file.name, file.size);
     const begun = result.value;
+    if (!attempt.proceed(begun?.id)) return;
     if (result.code || !begun) {
       setPhase("error");
       setErrorCode(result.code ?? "unreachable");
@@ -284,7 +227,7 @@ export function GameUpload({
     fileRef.current = file;
     setHasFile(true);
     setUploadId(begun.id);
-    await runLoop(file, begun.id, 0, begun.uploadLimits.chunkBytes);
+    await runLoop(attempt, file, begun.id, 0, begun.uploadLimits.chunkBytes);
   }
 
   async function beginResume(file: File) {
@@ -293,21 +236,21 @@ export function GameUpload({
     setErrorCode(null);
     setPhase("uploading");
 
-    // Resend from the server's current count; the one loaded with the page may
-    // be stale.
-    const fresh = await currentGameUploadAction(contestId);
-    const offset =
-      fresh && fresh.id === resumable.id && fresh.status === "receiving"
-        ? fresh.receivedBytes
-        : resumable.receivedBytes;
-
     fileRef.current = file;
     setHasFile(true);
     setUploadId(resumable.id);
     setFilename(resumable.filename);
     setTotalBytes(resumable.declaredBytes);
+
+    // Resend from the server's current count; the one loaded with the page may
+    // be stale. An attempt that ended meanwhile writes nothing over the panel,
+    // which may hold a newer upload by now.
+    const attempt = chunks.start();
+    const fresh = await currentGameUploadAction(contestId);
+    if (!attempt.proceed()) return;
+    const offset = receivingOffset(fresh, resumable.id) ?? resumable.receivedBytes;
     setSentBytes(offset);
-    await runLoop(file, resumable.id, offset, (fresh ?? resumable).uploadLimits.chunkBytes);
+    await runLoop(attempt, file, resumable.id, offset, (fresh ?? resumable).uploadLimits.chunkBytes);
   }
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -329,24 +272,21 @@ export function GameUpload({
   }
 
   async function cancel() {
-    const question = { title: tu.cancelConfirm, answer: tu.cancel, cancel: tu.keepUploading, danger: true };
-    if (!(await ask(question).catch(() => false))) return;
-    // The page went on while the question was open: an upload that finished
-    // meanwhile is not cancelled, nor is one that has become another.
-    const now = live.current;
-    if (!CANCELLABLE.has(now.phase) || now.uploadId !== uploadId) return;
-    controllerRef.current?.abort();
-    const id = uploadId;
-    fileRef.current = null;
-    setHasFile(false);
-    setPhase("idle");
-    setUploadId(null);
-    setFilename("");
-    setTotalBytes(0);
-    setSentBytes(0);
-    setMismatch(false);
-    setErrorCode(null);
-    if (id) await abortGameUploadAction(contestId, id);
+    await chunks.cancel({
+      confirm: () => ask({ title: tu.cancelConfirm, answer: tu.cancel, cancel: tu.keepUploading, danger: true }),
+      now: () => ({ cancellable: CANCELLABLE.has(live.current.phase), uploadId: live.current.uploadId }),
+      reset: () => {
+        fileRef.current = null;
+        setHasFile(false);
+        setPhase("idle");
+        setUploadId(null);
+        setFilename("");
+        setTotalBytes(0);
+        setSentBytes(0);
+        setMismatch(false);
+        setErrorCode(null);
+      },
+    });
   }
 
   /**
@@ -378,9 +318,10 @@ export function GameUpload({
     setErrorCode(null);
     setPhase("uploading");
 
+    const attempt = chunks.start();
     const fresh = await currentGameUploadAction(contestId);
-    const offset = fresh && fresh.id === id && fresh.status === "receiving" ? fresh.receivedBytes : sentBytes;
-    await runLoop(file, id, offset, (fresh?.uploadLimits ?? uploadLimits).chunkBytes);
+    const offset = receivingOffset(fresh, id) ?? sentBytes;
+    await runLoop(attempt, file, id, offset, (fresh?.uploadLimits ?? uploadLimits).chunkBytes);
   }
 
   if (!editable) {
