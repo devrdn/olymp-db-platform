@@ -170,9 +170,9 @@ type ContestResponse struct {
 	Translations map[string]TranslationResponse `json:"translations"`
 	CreatedAt    string                         `json:"created_at"`
 	UpdatedAt    string                         `json:"updated_at"`
-	// Version moves on every write of the contest. A settings form sends it
-	// back as expected_version, so a save made after somebody else's, or
-	// after the contest started or ended, is refused as contest_changed.
+	// Version moves on every write of the contest. A form sends it back as
+	// expected_version (versionGuard), so a save made after somebody else's,
+	// or after the contest started or ended, is refused as contest_changed.
 	Version int64 `json:"version"`
 	// MayMonitor says whether the caller holds contest.monitor here, so the
 	// workspace can offer its monitoring tab without restating the rule. Sent
@@ -579,11 +579,16 @@ func (h *ContestsHandler) mayOffer(r *http.Request, permission string, contestID
 	return may
 }
 
-// contestUpdateRequest is contestRequest plus the version the client decided
-// the change against; absent, the change applies to whatever is stored.
+// versionGuard is the version a client decided a contest save against, which
+// the settings, prize places and archive settings saves take; absent or null,
+// the save applies to whatever is stored.
+type versionGuard struct {
+	ExpectedVersion *int64 `json:"expected_version"`
+}
+
 type contestUpdateRequest struct {
 	contestRequest
-	ExpectedVersion *int64 `json:"expected_version"`
+	versionGuard
 }
 
 func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
@@ -649,13 +654,16 @@ func (h *ContestsHandler) setPrizePlaces(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var req PrizePlacesPayload
+	var req struct {
+		PrizePlacesPayload
+		versionGuard
+	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	updated, err := h.service.SetPrizePlaces(r.Context(), identity.UserID, id, contests.PrizePlaces{
+	updated, err := h.service.SetPrizePlaces(r.Context(), identity.UserID, id, req.ExpectedVersion, contests.PrizePlaces{
 		First: req.First, Second: req.Second, Third: req.Third,
 	})
 	if err != nil {
@@ -670,6 +678,7 @@ func (h *ContestsHandler) setPrizePlaces(w http.ResponseWriter, r *http.Request)
 type archiveSettingsRequest struct {
 	Visibility   string `json:"visibility"`
 	ArchiveTasks *bool  `json:"archive_tasks"`
+	versionGuard
 }
 
 func (h *ContestsHandler) setArchiveSettings(w http.ResponseWriter, r *http.Request) {
@@ -688,7 +697,7 @@ func (h *ContestsHandler) setArchiveSettings(w http.ResponseWriter, r *http.Requ
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	updated, err := h.service.SetArchiveSettings(r.Context(), identity.UserID, id, contests.ArchiveSettings{
+	updated, err := h.service.SetArchiveSettings(r.Context(), identity.UserID, id, req.ExpectedVersion, contests.ArchiveSettings{
 		Visibility: req.Visibility, ArchiveTasks: *req.ArchiveTasks,
 	})
 	if err != nil {

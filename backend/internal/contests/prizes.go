@@ -58,8 +58,8 @@ func (c Contest) PrizePlacesEditable() bool {
 
 // SetPrizePlaces changes how many prizes the standings show. It is a second
 // door beside Update, not a widening of it, and is refused once the contest
-// is archived.
-func (s *Service) SetPrizePlaces(ctx context.Context, actorID, contestID uuid.UUID, places PrizePlaces) (Contest, error) {
+// is archived. expectedVersion is UpdateCommand.ExpectedVersion's guard.
+func (s *Service) SetPrizePlaces(ctx context.Context, actorID, contestID uuid.UUID, expectedVersion *int64, places PrizePlaces) (Contest, error) {
 	if err := places.Validate(); err != nil {
 		return Contest{}, err
 	}
@@ -68,6 +68,9 @@ func (s *Service) SetPrizePlaces(ctx context.Context, actorID, contestID uuid.UU
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		current, err := s.contests.ByID(ctx, contestID)
 		if err != nil {
+			return err
+		}
+		if err := current.checkVersion(expectedVersion); err != nil {
 			return err
 		}
 		if !current.PrizePlacesEditable() {

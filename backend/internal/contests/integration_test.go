@@ -295,11 +295,11 @@ func TestARefusedConditionalWriteRecordsNothing(t *testing.T) {
 			return err
 		}},
 		"SetPrizePlaces": {contests.StatusRunning, func(f *conteststest.Fixture, id uuid.UUID) error {
-			_, err := f.Service.SetPrizePlaces(ctx, actor, id, contests.PrizePlaces{First: 1})
+			_, err := f.Service.SetPrizePlaces(ctx, actor, id, nil, contests.PrizePlaces{First: 1})
 			return err
 		}},
 		"SetArchiveSettings": {contests.StatusFinished, func(f *conteststest.Fixture, id uuid.UUID) error {
-			_, err := f.Service.SetArchiveSettings(ctx, actor, id, contests.ArchiveSettings{
+			_, err := f.Service.SetArchiveSettings(ctx, actor, id, nil, contests.ArchiveSettings{
 				Visibility: contests.VisibilityOpen, ArchiveTasks: true,
 			})
 			return err

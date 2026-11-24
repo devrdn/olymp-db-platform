@@ -2781,12 +2781,14 @@ A decision taken against a row that has since moved is refused with
 published contest cannot land on the running one the scheduler made of it, and
 of two organisers saving at once the second reloads instead of silently
 overwriting the first. The contest response carries the version, and
-`PATCH /contests/{id}` takes it back as an optional `expected_version`: when
-present, `Update` refuses a row at any other version the same way, so the
-check covers the time the settings form was open, not only the request.
-Without it the save applies to whatever is stored. The interface's settings
-form always sends it, and under a `contest_changed` refusal offers a reload
-that starts the form over with the contest as it now is. The repository decides
+`PATCH /contests/{id}`, `PUT .../prize-places` and `PUT .../archive-settings`
+take it back as an optional `expected_version`: when present, `Update`,
+`SetPrizePlaces` and `SetArchiveSettings` refuse a row at any other version the
+same way (one check, `Contest.checkVersion`), so the check covers the time the
+screen was open, not only the request. Without it the save applies to
+whatever is stored. The interface's settings form always sends it, and under a
+`contest_changed` refusal offers a reload that starts the form over with the
+contest as it now is. The repository decides
 only that refusal and `ErrNotFound`; the rules (the running-contest locks, an
 archived contest's prize places, the self-registration visibility) are the
 domain's alone.

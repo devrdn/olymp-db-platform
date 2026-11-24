@@ -109,7 +109,7 @@ func TestPrizePlacesChangeAtEveryStatusButArchived(t *testing.T) {
 			c := f.SeedContest(status)
 			want := contests.PrizePlaces{First: 1, Second: 2, Third: 3}
 
-			updated, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, want)
+			updated, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, nil, want)
 			if err != nil {
 				t.Fatalf("SetPrizePlaces() = %v", err)
 			}
@@ -128,13 +128,68 @@ func TestPrizePlacesAreRefusedOnceArchived(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusArchived)
 
-	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, contests.PrizePlaces{First: 1})
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, nil, contests.PrizePlaces{First: 1})
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("SetPrizePlaces() = %v, want ErrNotEditable", err)
 	}
 	stored, _ := f.Contests.ByID(context.Background(), c.ID)
 	if stored.PrizePlaces != (contests.PrizePlaces{}) {
 		t.Errorf("stored PrizePlaces = %+v, want them untouched", stored.PrizePlaces)
+	}
+}
+
+// A prize screen read the contest at one version and a colleague saved since:
+// its counts would undo theirs.
+func TestSetPrizePlacesRefusesAnExpectedVersionTheContestHasMovedPast(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	if _, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, nil, contests.PrizePlaces{First: 2}); err != nil {
+		t.Fatalf("the colleague's SetPrizePlaces() = %v", err)
+	}
+	trail := len(f.Audit.Entries)
+
+	stale := c.Version
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, &stale, contests.PrizePlaces{Third: 4})
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Fatalf("SetPrizePlaces() = %v, want ErrContestChanged", err)
+	}
+	if stored, _ := f.Contests.ByID(context.Background(), c.ID); stored.PrizePlaces != (contests.PrizePlaces{First: 2}) {
+		t.Errorf("PrizePlaces = %+v, want the colleague's 2/0/0: the stale save landed", stored.PrizePlaces)
+	}
+	if len(f.Audit.Entries) != trail {
+		t.Errorf("the refused save recorded %v", f.Audit.Entries[trail:])
+	}
+}
+
+// The version is checked before the status: a screen loaded before the
+// contest was archived is told the contest changed, and its reload shows why.
+func TestAStalePrizeSaveOnAContestArchivedSinceIsAContestChange(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	stale := c.Version
+	archived := c
+	archived.Status, archived.Version = contests.StatusArchived, c.Version+1
+	f.Contests.Put(archived)
+
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, &stale, contests.PrizePlaces{First: 1})
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("SetPrizePlaces() = %v, want ErrContestChanged", err)
+	}
+}
+
+func TestSetPrizePlacesSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+
+	updated, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, &c.Version, contests.PrizePlaces{Third: 4})
+
+	if err != nil {
+		t.Fatalf("SetPrizePlaces() = %v", err)
+	}
+	if updated.PrizePlaces != (contests.PrizePlaces{Third: 4}) || updated.Version == c.Version {
+		t.Errorf("PrizePlaces, version = %+v, %d, want 0/0/4 and a version past %d", updated.PrizePlaces, updated.Version, c.Version)
 	}
 }
 
@@ -145,7 +200,7 @@ func TestSettingPrizePlacesOnAFinishedContestChangesNothingElse(t *testing.T) {
 	c := f.SeedContest(contests.StatusFinished)
 	before, _ := f.Contests.ByID(context.Background(), c.ID)
 
-	if _, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, contests.PrizePlaces{Third: 4}); err != nil {
+	if _, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, nil, contests.PrizePlaces{Third: 4}); err != nil {
 		t.Fatalf("SetPrizePlaces() = %v", err)
 	}
 
@@ -176,7 +231,7 @@ func TestPrizePlacesOutOfBoundsAreRefused(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 
-	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, contests.PrizePlaces{Second: 1001})
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, nil, contests.PrizePlaces{Second: 1001})
 	if !errors.Is(err, contests.ErrInvalidContest) {
 		t.Errorf("SetPrizePlaces() = %v, want ErrInvalidContest", err)
 	}
@@ -185,7 +240,7 @@ func TestPrizePlacesOutOfBoundsAreRefused(t *testing.T) {
 func TestSettingPrizePlacesOfAContestThatIsNotThereIsNotFound(t *testing.T) {
 	f := conteststest.NewFixture()
 
-	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), uuid.New(), contests.PrizePlaces{First: 1})
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), uuid.New(), nil, contests.PrizePlaces{First: 1})
 	if !errors.Is(err, contests.ErrNotFound) {
 		t.Errorf("SetPrizePlaces() = %v, want ErrNotFound", err)
 	}
@@ -195,7 +250,7 @@ func TestAPrizePlacesChangeIsAuditedAsAContestUpdate(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	if _, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID,
+	if _, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, nil,
 		contests.PrizePlaces{First: 1, Second: 0, Third: 2}); err != nil {
 		t.Fatalf("SetPrizePlaces() = %v", err)
 	}

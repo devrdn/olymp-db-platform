@@ -875,6 +875,40 @@
           "response": []
         },
         {
+          "name": "Set prize places",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/prize-places",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "prize-places"
+              ]
+            },
+            "description": "How many places down the standings earn a first, second and third prize. The request replaces all three: a count left out is 0. Each is 0..1000.\n\n`expected_version` (optional) is the `version` the screen was loaded at, as on Update contest: when it is present and the contest has been written since, the save is refused with 409 `contest_changed` and nothing is written; left out or null, the save applies to whatever is stored. A malformed value is 400 `invalid_request`, never read as absent.\n\nOpen while the contest runs and after it finishes, unlike Update contest, since the counts change only what the standings show; refused once archived.\n\nResponses: 200 the contest · 400 `invalid_request` · 403 `forbidden` · 404 `not_found` · 409 `not_editable` (archived) / `contest_changed`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first\": 1,\n  \"second\": 2,\n  \"third\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Set archive visibility and tasks",
           "request": {
             "method": "PUT",
@@ -895,7 +929,7 @@
                 "archive-settings"
               ]
             },
-            "description": "Whether the contest appears in the archive once it has ended (`visibility`: `open` or `closed`) and whether the archive shows its story, table descriptions and visible questions (`archive_tasks`). Both fields are required.\n\nOpen in every status, unlike Update contest: the settings matter once the contest has ended. A contest with `enrollment: open` is always `open`.\n\nResponses: 200 the contest · 400 `invalid_request` · 403 `forbidden` · 404 `not_found` · 409 `visibility_needs_invite_only`",
+            "description": "Whether the contest appears in the archive once it has ended (`visibility`: `open` or `closed`) and whether the archive shows its story, table descriptions and visible questions (`archive_tasks`). Both fields are required.\n\n`expected_version` (optional) is the `version` the screen was loaded at, as on Update contest: when it is present and the contest has been written since, the save is refused with 409 `contest_changed` and nothing is written; left out or null, the save applies to whatever is stored. A malformed value is 400 `invalid_request`, never read as absent.\n\nOpen in every status, unlike Update contest: the settings matter once the contest has ended. A contest with `enrollment: open` is always `open`.\n\nResponses: 200 the contest · 400 `invalid_request` · 403 `forbidden` · 404 `not_found` · 409 `visibility_needs_invite_only` / `contest_changed`",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"visibility\": \"open\",\n  \"archive_tasks\": true\n}",

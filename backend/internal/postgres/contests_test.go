@@ -1016,56 +1016,132 @@ func publishableRow(t *testing.T, ctx context.Context) (id, question uuid.UUID, 
 }
 
 // The version a client is handed is the one the stored row carries and the
-// one a write moves, so an expected version read before somebody else's save
-// is refused and the current one is accepted.
-func TestAnUpdateExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T) {
-	ctx := context.Background()
-	id := contestRow(t, ctx)
-	service := raceService(NewContests(testPool), NewQuestions(testPool), conteststest.NewGames())
+// one a write moves, so on each save that takes one an expected version read
+// before somebody else's save is refused, no expected version saves over
+// whatever is stored, and the current one is accepted. A colleague's save
+// committed between the read and the write refuses even the current version:
+// the domain's check passed, and the store's conditional write is what holds.
+func TestASaveExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T) {
+	for _, save := range []struct {
+		name   string
+		theirs func(context.Context, *contests.Service, uuid.UUID) error
+		ours   func(context.Context, *contests.Service, uuid.UUID, *int64) (contests.Contest, error)
+		landed func(contests.Contest) bool
+	}{
+		{
+			name: "settings",
+			theirs: func(ctx context.Context, s *contests.Service, id uuid.UUID) error {
+				_, err := s.Update(ctx, contests.UpdateCommand{ContestID: id, Patch: contests.Patch{Scoring: contests.ScoringWinner}})
+				return err
+			},
+			ours: func(ctx context.Context, s *contests.Service, id uuid.UUID, expected *int64) (contests.Contest, error) {
+				return s.Update(ctx, contests.UpdateCommand{
+					ContestID: id, ExpectedVersion: expected,
+					Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
+				})
+			},
+			landed: func(c contests.Contest) bool {
+				return c.QuestionMode == contests.QuestionModeSingle && c.Scoring == contests.ScoringWinner
+			},
+		},
+		{
+			name: "prize places",
+			theirs: func(ctx context.Context, s *contests.Service, id uuid.UUID) error {
+				_, err := s.SetPrizePlaces(ctx, uuid.Nil, id, nil, contests.PrizePlaces{First: 2})
+				return err
+			},
+			ours: func(ctx context.Context, s *contests.Service, id uuid.UUID, expected *int64) (contests.Contest, error) {
+				return s.SetPrizePlaces(ctx, uuid.Nil, id, expected, contests.PrizePlaces{First: 1, Second: 2, Third: 3})
+			},
+			landed: func(c contests.Contest) bool {
+				return c.PrizePlaces == contests.PrizePlaces{First: 1, Second: 2, Third: 3}
+			},
+		},
+		{
+			name: "archive settings",
+			theirs: func(ctx context.Context, s *contests.Service, id uuid.UUID) error {
+				_, err := s.SetArchiveSettings(ctx, uuid.Nil, id, nil,
+					contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true})
+				return err
+			},
+			ours: func(ctx context.Context, s *contests.Service, id uuid.UUID, expected *int64) (contests.Contest, error) {
+				return s.SetArchiveSettings(ctx, uuid.Nil, id, expected,
+					contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
+			},
+			landed: func(c contests.Contest) bool {
+				return c.Visibility == contests.VisibilityClosed && !c.ArchiveTasks
+			},
+		},
+	} {
+		t.Run(save.name, func(t *testing.T) {
+			ctx := context.Background()
+			id := contestRow(t, ctx)
+			service := raceService(NewContests(testPool), NewQuestions(testPool), conteststest.NewGames())
 
-	loaded, err := service.ByID(ctx, id)
-	if err != nil {
-		t.Fatalf("ByID() = %v", err)
-	}
-	if _, err := service.Update(ctx, contests.UpdateCommand{
-		ContestID: id, Patch: contests.Patch{Scoring: contests.ScoringWinner},
-	}); err != nil {
-		t.Fatalf("the other organiser's Update() = %v", err)
-	}
+			loaded, err := service.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+			if err := save.theirs(ctx, service, id); err != nil {
+				t.Fatalf("the other organiser's save = %v", err)
+			}
 
-	_, err = service.Update(ctx, contests.UpdateCommand{
-		ContestID: id, ExpectedVersion: &loaded.Version,
-		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
-	})
-	if !errors.Is(err, contests.ErrContestChanged) {
-		t.Fatalf("Update(stale version) = %v, want ErrContestChanged", err)
-	}
+			if _, err := save.ours(ctx, service, id, &loaded.Version); !errors.Is(err, contests.ErrContestChanged) {
+				t.Fatalf("save(stale version) = %v, want ErrContestChanged", err)
+			}
+			current, err := service.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+			if save.landed(current) || current.Version == loaded.Version {
+				t.Fatalf("stored %+v after the refusal, want the other save's values at a version past %d", current, loaded.Version)
+			}
 
-	current, err := service.ByID(ctx, id)
-	if err != nil {
-		t.Fatalf("ByID() = %v", err)
-	}
-	if current.QuestionMode != contests.QuestionModeMulti || current.Version == loaded.Version {
-		t.Fatalf("question mode, version = %s, %d, want multi and a version past %d",
-			current.QuestionMode, current.Version, loaded.Version)
-	}
-	saved, err := service.Update(ctx, contests.UpdateCommand{
-		ContestID: id, ExpectedVersion: &current.Version,
-		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
-	})
-	if err != nil {
-		t.Fatalf("Update(current version) = %v", err)
-	}
-	if saved.QuestionMode != contests.QuestionModeSingle || saved.Scoring != contests.ScoringWinner {
-		t.Errorf("question mode, scoring = %s, %s, want single, winner", saved.QuestionMode, saved.Scoring)
-	}
-	// What Update returns is what the next save sends back.
-	stored, err := service.ByID(ctx, id)
-	if err != nil {
-		t.Fatalf("ByID() = %v", err)
-	}
-	if saved.Version == current.Version || saved.Version != stored.Version {
-		t.Errorf("returned version = %d, want the stored %d, past %d", saved.Version, stored.Version, current.Version)
+			if _, err := save.ours(ctx, service, id, nil); err != nil {
+				t.Fatalf("save(no version) = %v", err)
+			}
+			if absent, _ := service.ByID(ctx, id); !save.landed(absent) {
+				t.Fatalf("stored %+v, want the save without a version landed", absent)
+			}
+
+			current, _ = service.ByID(ctx, id)
+			saved, err := save.ours(ctx, service, id, &current.Version)
+			if err != nil {
+				t.Fatalf("save(current version) = %v", err)
+			}
+			// What the save returns is what the next save sends back.
+			stored, err := service.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+			if saved.Version == current.Version || saved.Version != stored.Version {
+				t.Errorf("returned version = %d, want the stored %d, past %d", saved.Version, stored.Version, current.Version)
+			}
+		})
+
+		t.Run(save.name+", raced after the read", func(t *testing.T) {
+			ctx := context.Background()
+			id := contestRow(t, ctx)
+			colleague := raceService(NewContests(testPool), NewQuestions(testPool), conteststest.NewGames())
+			theirs := func(id uuid.UUID) error { return save.theirs(context.Background(), colleague, id) }
+			service := raceService(&afterFirstRead{Contests: NewContests(testPool), other: theirs, t: t},
+				NewQuestions(testPool), conteststest.NewGames())
+			loaded, err := colleague.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+
+			if _, err := save.ours(ctx, service, id, &loaded.Version); !errors.Is(err, contests.ErrContestChanged) {
+				t.Fatalf("save(current version, raced) = %v, want ErrContestChanged", err)
+			}
+			stored, err := colleague.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+			if save.landed(stored) || stored.Version == loaded.Version {
+				t.Errorf("stored %+v, want the colleague's save alone at a version past %d", stored, loaded.Version)
+			}
+		})
 	}
 }
 

@@ -293,9 +293,8 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		if err != nil {
 			return err
 		}
-		if cmd.ExpectedVersion != nil && *cmd.ExpectedVersion != current.Version {
-			return fmt.Errorf("%w: it was read at version %d and is now at %d",
-				ErrContestChanged, *cmd.ExpectedVersion, current.Version)
+		if err := current.checkVersion(cmd.ExpectedVersion); err != nil {
+			return err
 		}
 		updated, err := s.decideUpdate(ctx, current, cmd.Patch.ApplyTo(current))
 		if err != nil {

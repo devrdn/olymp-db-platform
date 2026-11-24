@@ -78,8 +78,8 @@ func (c Contest) InArchive() bool {
 
 // SetArchiveSettings is a contest's second settings door, open in every
 // status: visibility and archive tasks matter most once the contest has ended,
-// when Update is closed.
-func (s *Service) SetArchiveSettings(ctx context.Context, actorID, contestID uuid.UUID, settings ArchiveSettings) (Contest, error) {
+// when Update is closed. expectedVersion is UpdateCommand.ExpectedVersion's guard.
+func (s *Service) SetArchiveSettings(ctx context.Context, actorID, contestID uuid.UUID, expectedVersion *int64, settings ArchiveSettings) (Contest, error) {
 	if err := settings.Validate(); err != nil {
 		return Contest{}, err
 	}
@@ -88,6 +88,9 @@ func (s *Service) SetArchiveSettings(ctx context.Context, actorID, contestID uui
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		current, err := s.contests.ByID(ctx, contestID)
 		if err != nil {
+			return err
+		}
+		if err := current.checkVersion(expectedVersion); err != nil {
 			return err
 		}
 		updated := current

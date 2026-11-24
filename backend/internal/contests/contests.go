@@ -315,6 +315,18 @@ func (c Contest) FreezeFitsWindow() bool {
 	return ok && c.StartsAt != nil && c.StartsAt.Before(freezeAt)
 }
 
+// checkVersion is the guard of UpdateCommand.ExpectedVersion, which
+// SetPrizePlaces and SetArchiveSettings take too: a write decided against
+// expected is refused once the contest has moved past it, and nil expects
+// nothing.
+func (c Contest) checkVersion(expected *int64) error {
+	if expected != nil && *expected != c.Version {
+		return fmt.Errorf("%w: it was read at version %d and is now at %d",
+			ErrContestChanged, *expected, c.Version)
+	}
+	return nil
+}
+
 // SettingsEditable reports whether the contest's own fields may still change.
 // Wider than ContentEditable: a running contest may need its window extended
 // or a network range corrected.

@@ -91,7 +91,7 @@ func TestSetArchiveSettingsWorksInEveryStatus(t *testing.T) {
 		f := conteststest.NewFixture()
 		c := f.SeedContest(status)
 
-		updated, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, want)
+		updated, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, nil, want)
 		if err != nil {
 			t.Errorf("SetArchiveSettings() on a %s contest = %v", status, err)
 			continue
@@ -112,7 +112,7 @@ func TestSetArchiveSettingsRefusesClosingASelfRegistrationContest(t *testing.T) 
 	f.Contests.Put(c)
 	entries := len(f.Audit.Entries)
 
-	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID,
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, nil,
 		contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
 
 	if !errors.Is(err, contests.ErrVisibilityNeedsInviteOnly) {
@@ -127,11 +127,71 @@ func TestSetArchiveSettingsRefusesClosingASelfRegistrationContest(t *testing.T) 
 	}
 }
 
+// An archive screen read the contest at one version and a colleague saved
+// since: its settings would undo theirs.
+func TestSetArchiveSettingsRefusesAnExpectedVersionTheContestHasMovedPast(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	if _, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, nil,
+		contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true}); err != nil {
+		t.Fatalf("the colleague's SetArchiveSettings() = %v", err)
+	}
+	trail := len(f.Audit.Entries)
+
+	stale := c.Version
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, &stale,
+		contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Fatalf("SetArchiveSettings() = %v, want ErrContestChanged", err)
+	}
+	if stored, _ := f.Contests.ByID(context.Background(), c.ID); stored.Visibility != contests.VisibilityOpen || !stored.ArchiveTasks {
+		t.Errorf("visibility, archive tasks = %q, %v, want the colleague's open, true: the stale save landed",
+			stored.Visibility, stored.ArchiveTasks)
+	}
+	if len(f.Audit.Entries) != trail {
+		t.Errorf("the refused save recorded %v", f.Audit.Entries[trail:])
+	}
+}
+
+// The version is checked before the visibility rule: a screen loaded before
+// the contest opened self-registration is told the contest changed.
+func TestAStaleArchiveSaveClosingASelfRegistrationContestIsAContestChange(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	stale := c.Version
+	opened := c
+	opened.Enrollment, opened.Visibility, opened.Version = contests.EnrollmentOpen, contests.VisibilityOpen, c.Version+1
+	f.Contests.Put(opened)
+
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, &stale,
+		contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
+
+	if !errors.Is(err, contests.ErrContestChanged) {
+		t.Errorf("SetArchiveSettings() = %v, want ErrContestChanged", err)
+	}
+}
+
+func TestSetArchiveSettingsSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+
+	updated, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, &c.Version,
+		contests.ArchiveSettings{Visibility: contests.VisibilityOpen})
+
+	if err != nil {
+		t.Fatalf("SetArchiveSettings() = %v", err)
+	}
+	if updated.Visibility != contests.VisibilityOpen || updated.Version == c.Version {
+		t.Errorf("visibility, version = %q, %d, want open and a version past %d", updated.Visibility, updated.Version, c.Version)
+	}
+}
+
 func TestSetArchiveSettingsRefusesAnUnknownVisibility(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID,
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, nil,
 		contests.ArchiveSettings{Visibility: "hidden"})
 
 	if !errors.Is(err, contests.ErrInvalidContest) {
@@ -142,7 +202,7 @@ func TestSetArchiveSettingsRefusesAnUnknownVisibility(t *testing.T) {
 func TestSetArchiveSettingsOfAContestThatIsNotThereIsNotFound(t *testing.T) {
 	f := conteststest.NewFixture()
 
-	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), uuid.New(),
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), uuid.New(), nil,
 		contests.ArchiveSettings{Visibility: contests.VisibilityOpen})
 
 	if !errors.Is(err, contests.ErrNotFound) {
@@ -154,7 +214,7 @@ func TestSetArchiveSettingsIsAudited(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	if _, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID,
+	if _, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, nil,
 		contests.ArchiveSettings{Visibility: contests.VisibilityOpen, ArchiveTasks: true}); err != nil {
 		t.Fatalf("SetArchiveSettings() = %v", err)
 	}
