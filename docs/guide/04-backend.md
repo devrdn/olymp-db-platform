@@ -157,6 +157,7 @@ From CLAUDE.md, "Go layout conventions" (read the reasons there):
 | 5 | `foo.go` is tested by `foo_test.go`; cross-cutting tests go in `integration_test.go`, shared helpers in `support_test.go` or a `<pkg>test` package. |
 | 6 | Every package has a doc comment saying what it answers and what it does not. |
 | 7 | `internal/platform/*` imports no domain package; `internal/app` is the only place that knows them all. |
+| 8 | An adapter refuses only what the database enforces race-free (a row changed since it was read, a unique index, a foreign key, a check constraint), as the domain's sentinel; every other rule is the domain's. |
 
 Rule 3 in practice: `auth.UserStore` (`internal/auth/session.go`) is four
 methods of `users.Repository`, and `contests.UserDirectory`

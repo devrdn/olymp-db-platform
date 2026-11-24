@@ -828,7 +828,8 @@ Modelled on `lib/api/play.ts` and `lib/api/play.test.ts`.
    camelCase, and export `type X = z.infer<typeof xSchema>`.
 2. Repeat a server-side bound as a named constant in `<area>-terms.ts`, with
    the Go identifier in its comment (see `NOTES_MAX_CHARS` in
-   `workspace-terms.ts`). Add the identifier to `limits()` in
+   `workspace-terms.ts`); a test holds it to the Go value (CLAUDE.md, Code
+   rule 1). Add the identifier to `limits()` in
    `backend/cmd/apicontract/limits.go`, run `make api-contract`, and add the
    pair to `lib/api/limits-contract.test.ts`, which fails until you do (section
    4). A sentence that states the bound gets a placeholder in `BOUNDS`.

@@ -26,8 +26,9 @@ whatever — is writing the change.
 3. **Keep the branch current with `git rebase origin/main`**, never
    `git merge`, and push a rebased branch with `git push --force-with-lease`.
 4. **Open a pull request** against `main` once the checks below pass locally.
-5. **Address review with new commits or a rebase**, whichever keeps the
-   history readable, and re-run the checks.
+5. **Address review with new commits or a fold into the commit a fix
+   corrects**, as [CLAUDE.md](CLAUDE.md) general rule 4 says when each is
+   right, and re-run the checks.
 6. **The pull request is merged by rebase or squash.** `main` has no merge
    commits anywhere in its history, and keeps it that way.
 

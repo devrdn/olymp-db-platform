@@ -23,7 +23,7 @@ A path through the project for your first days on it.
 | Document | What it is |
 |---|---|
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | The workflow: branches, commits, pull requests, checks |
-| [CLAUDE.md](../CLAUDE.md) | The project's rulebook: Go layout conventions and the security and performance rules, each with its reason |
+| [CLAUDE.md](../CLAUDE.md) | The project's rulebook: the code-shape rules, the Go layout conventions and the security and performance rules, each with its reason |
 | [SECURITY.md](../SECURITY.md) | How to report a vulnerability |
 
 ## Reference
