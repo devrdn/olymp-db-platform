@@ -79,6 +79,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # The deployment's cache is Redis, and a refused caller's Retry-After is
+      # read from its TTL. The cache contract (internal/platform/cache) checks
+      # Redis only when CACHE_TEST_REDIS_ADDR names a server; without one it
+      # proves the in-process store alone, which the deployment does not run
+      # on (CLAUDE.md rule 10). The product's image, with nothing to keep.
+      redis:
+        image: redis:7.4.12-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     # A literal, not a secret, and deliberately so. It has to match the
     # password in the services above, in this same file; hiding one half of a pair
@@ -104,6 +118,7 @@ jobs:
       GAME_READER_PASSWORD: dbcontest
       GAME_WRITER_PASSWORD: dbcontest
       GAME_AUTHOR_PASSWORD: dbcontest
+      CACHE_TEST_REDIS_ADDR: localhost:6379
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
