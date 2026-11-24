@@ -213,9 +213,21 @@ type ContestPanelProps = {
  * contest as it is now and the refusal goes with what was typed.
  */
 export function ContestPanel(props: ContestPanelProps) {
+  const { contest, dict } = props;
   const [reloads, setReloads] = useState(0);
 
-  return <ContestForm key={reloads} {...props} onReload={() => setReloads((count) => count + 1)} />;
+  return (
+    <ActionForm
+      key={reloads}
+      action={saveSettingsAction}
+      fields={{ contestId: contest.id, expectedVersion: contest.version }}
+      errors={dict.errors}
+      revision={contest.updatedAt}
+      className="contents"
+    >
+      <ContestFields {...props} onReload={() => setReloads((count) => count + 1)} />
+    </ActionForm>
+  );
 }
 
 /** Offered under one refusal only: a save over a contest that moved since the form was rendered. */
@@ -225,7 +237,11 @@ function ReloadWhenChanged({ label, onReload }: { label: string; onReload: () =>
   return code === "contest_changed" ? <ReloadButton label={label} onReload={onReload} /> : null;
 }
 
-function ContestForm({
+/**
+ * Remounted with the form's revision, so the picks that decide which fields
+ * show start over with the radios when the server's copy changes.
+ */
+function ContestFields({
   contest,
   editable,
   shapeOpen,
@@ -248,13 +264,7 @@ function ContestForm({
   const [names, setNames] = useState<string>(contest.leaderboard.names);
 
   return (
-    <ActionForm
-      action={saveSettingsAction}
-      fields={{ contestId: contest.id, expectedVersion: contest.version }}
-      errors={dict.errors}
-      revision={contest.updatedAt}
-      className="contents"
-    >
+    <>
       <Panel title={t.schedule.heading} help={t.schedule.help} dict={dict}>
         <div className="grid gap-6 narrow:grid-cols-2">
           <Field id="startsAt" label={t.schedule.startsAt}>
@@ -574,7 +584,7 @@ function ContestForm({
           <ReloadWhenChanged label={t.reload} onReload={onReload} />
         </ActionFooter>
       </Panel>
-    </ActionForm>
+    </>
   );
 }
 

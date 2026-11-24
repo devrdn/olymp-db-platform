@@ -86,6 +86,49 @@ describe("ContestPanel, after the server's copy changes", () => {
     );
   });
 
+  // The picked timing decides which fields show, so it must start over with
+  // the radios rather than keep a pick the server's copy no longer holds.
+  test("shows only the fields of the timing the server now holds", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+    await user.click(screen.getByRole("radio", { name: dict.workspace.timing.individual }));
+    expect(screen.getByLabelText(dict.workspace.settings.shape.duration)).toBeInTheDocument();
+
+    rerender(<ContestPanel contest={contest({ updatedAt: "2026-08-31T18:00:00Z" })} editable shapeOpen dict={dict} />);
+
+    expect(screen.getByRole("radio", { name: dict.workspace.timing.fixed })).toBeChecked();
+    expect(screen.queryByLabelText(dict.workspace.settings.shape.duration)).not.toBeInTheDocument();
+  });
+
+  // The save remounts the fields with the server's new copy, which holds
+  // exactly what was picked; nothing from before the save may come back.
+  test("shows the timing and scoring just saved once the server's copy comes back", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockResolvedValueOnce({});
+    const user = userEvent.setup();
+    const { rerender } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    await user.click(screen.getByRole("radio", { name: dict.workspace.timing.individual }));
+    await user.click(screen.getByRole("radio", { name: dict.workspace.scoring.icpc }));
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    expect(await screen.findByText(dict.workspace.settings.saved)).toBeInTheDocument();
+
+    rerender(
+      <ContestPanel
+        contest={contest({ timing: "individual", durationMin: 90, scoring: "icpc", updatedAt: "2026-08-31T18:00:00Z" })}
+        editable
+        shapeOpen
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: dict.workspace.timing.individual })).toBeChecked();
+    expect(screen.getByRole("radio", { name: dict.workspace.scoring.icpc })).toBeChecked();
+    expect(screen.getByLabelText(dict.workspace.settings.shape.duration)).toBeInTheDocument();
+    expect(screen.getByLabelText(dict.workspace.settings.shape.icpcPenalty)).toBeInTheDocument();
+    expect(screen.getByText(dict.workspace.settings.saved)).toBeInTheDocument();
+  });
+
   test("leaves the fields alone when the server's copy did not change", () => {
     // A re-render that is not a save must keep what is being typed.
     const { rerender } = render(
