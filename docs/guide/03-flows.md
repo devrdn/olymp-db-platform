@@ -481,10 +481,16 @@ Which process does what:
 | Core API, `internal/gamedb` | `Provisioner` connects with `GAME_PROVISIONER_DSN` on a maintenance pool with a 10-minute statement timeout, and runs the organiser's SQL only as `game_author` with `GAME_AUTHOR_PASSWORD`. |
 | Query Runner | Nothing here; it only runs participants' queries. |
 
-- Uploads: `BeginUpload`, `AppendChunk` and `CompleteUpload` in
-  [backend/internal/provisioning/upload.go](../../backend/internal/provisioning/upload.go)
-  write to `GAME_UPLOAD_DIR` (package `internal/gamefile`); the build streams
-  the file statement by statement.
+- Uploads: one lifecycle, `Uploads.Begin`, `Append` and `Abort` in
+  [backend/internal/provisioning/chunked.go](../../backend/internal/provisioning/chunked.go),
+  serves both kinds of chunked file: an uploaded dump (`Games.DumpUploads`,
+  sealed by `CompleteUpload` in
+  [upload.go](../../backend/internal/provisioning/upload.go)) and a builder
+  table's CSV data (`Games.TableUploads`, completed by `CompleteTableUpload`
+  in [tabledata.go](../../backend/internal/provisioning/tabledata.go)). The
+  files go to `GAME_UPLOAD_DIR`, table data under its `tables/` directory
+  (package `internal/gamefile`); the build streams a dump statement by
+  statement.
 - The template name is `game_tpl_c` plus 12 hex characters of the contest ID
   (`templateName`). The *version* in `game_templates` rises with every
   replacement or rebuild; copies made from an older version are stale
