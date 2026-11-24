@@ -595,7 +595,7 @@
     },
     {
       "code": "play_read_too_often",
-      "meaning": "This participant is loading the play screen (story, questions, schema, query log, workspace, events channel) faster than the installation allows. A budget of its own, apart from `query_too_often`: the console still runs queries, and `Retry-After` says how long to wait at most."
+      "meaning": "This participant is loading the play screen (story, questions, schema, query log, workspace, clarifications feed, events channel) faster than the installation allows. A budget of its own, apart from `query_too_often`: the console still runs queries, and `Retry-After` says how long to wait at most."
     },
     {
       "code": "profile_contest_not_found",
