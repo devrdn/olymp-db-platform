@@ -153,7 +153,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `PASSWORD_HASH_CONCURRENCY` | no | one per CPU, at least 2 | argon2id computations run at once (1-64); 64 MiB each, so size the memory limit from it |
 | `PASSWORD_HASH_MAX_WAIT` | no | `2s` | how long a sign-in or password change waits for a hashing slot before a 503 `sign_in_busy` (at most `30s`) |
 | `QUERY_PER_MINUTE` | no | `60` | queries one participant may run a minute unless the contest sets a lower rate, which then applies (0 is no limit); must match the Query Runner's own value; past it a 429 `query_too_often`. The same answer meets a participant whose queries held an execution slot for more than two `QUERY_DEADLINE`s in the last minute, however few they were: a statement that runs to its deadline costs everybody else the slot, so the time is charged to whoever spent it |
-| `PLAY_READ_PER_MINUTE` | no | `120` | play-screen reads (story, questions, schema, query log, workspace, each events channel opened) one account may make a minute (30-600; one page load costs about six); a budget apart from the queries; past it a 429 `play_read_too_often` |
+| `PLAY_READ_PER_MINUTE` | no | `120` | play-screen reads (story, questions, schema, query log, workspace, the questions to the organisers, each events channel opened) one account may make a minute (30-600; one page load costs about six); a budget apart from the queries; past it a 429 `play_read_too_often` |
 | `ANSWER_RATE_PER_MINUTE` | no | `12` | answers one registration may submit a minute, refused ones included (1-60); past it a 429 `answer_too_often` |
 | `EXPORT_CONCURRENCY` | no | `5` | CSV downloads that may hold a core-database connection at once, across every export route (1-10, one fifth of `CORE_DB_POOL_MAX` by default); past it a 503 `too_many_exports` with `Retry-After` |
 | `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |
@@ -169,6 +169,14 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | no | empty | the OAuth client for sign-in with Google (`GET /api/v1/auth/google/start` and `/callback`); without both the routes do not exist, one without the other refuses start-up, and with them `PUBLIC_URL` is required, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/google/callback` ([Connecting Google sign-in](#connecting-google-sign-in)) |
 | `GOOGLE_HOME_DOMAIN` | no | empty | the installation's own Google Workspace domain, bare (such as `example.edu`), compared ignoring case: an account of it with a verified email may enter or link a staff account. Empty means no domain is its own; anything but a domain name refuses start-up |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | no | empty | the OAuth app for sign-in with GitHub (`GET /api/v1/auth/github/start` and `/callback`), on the same terms as Google's pair, the redirect URI being `PUBLIC_URL` + `/api/v1/auth/github/callback` ([Connecting GitHub sign-in](#connecting-github-sign-in)). GitHub never admits staff |
+| `GAME_UPLOAD_DIR` | no | empty | the directory organisers' uploaded dumps are written to, with a builder table's CSV data under its `tables/`; empty turns uploads off (`game_uploads_disabled`) |
+| `GAME_UPLOAD_MAX_FILE_BYTES` | no | `4294967296` (4 GiB) | the largest single file, a dump or a table's CSV |
+| `GAME_UPLOAD_MAX_DIR_BYTES` | no | `17179869184` (16 GiB) | everything the dump store holds together; an upload declaring more than is left is refused before a byte is sent |
+| `GAME_UPLOAD_TABLE_MAX_DIR_BYTES` | no | `4294967296` (4 GiB) | the same for the table data store, its own budget on the same volume; size it and the dump's together against the volume |
+| `GAME_UPLOAD_CHUNK_BYTES` | no | `8388608` (8 MiB) | the largest chunk one request carries, which the browser slices the file by; at most 64 MiB, since the API holds up to four of a table's chunks in memory, and a larger value refuses to start |
+| `GAME_UPLOAD_ABANDONED_AFTER` | no | `24h` | how long an upload may sit untouched before the janitor cancels it and frees the disk; not negative |
+
+All four sizes must be positive when `GAME_UPLOAD_DIR` is set.
 
 ### The mail relay
 
