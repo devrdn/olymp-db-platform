@@ -1241,6 +1241,7 @@ const en = {
     save: "Save",
       saving: "Saving",
       saved: "Saved.",
+      reload: "Reload the page",
       schedule: {
         heading: "When it runs",
         help: "The window stays editable while the contest is running: extending it after a power cut is exactly what a running contest needs.",

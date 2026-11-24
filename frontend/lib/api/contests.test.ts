@@ -191,6 +191,7 @@ const detail = {
   },
   created_at: "2026-10-01T08:00:00Z",
   updated_at: "2026-10-02T08:00:00Z",
+  version: 4,
 };
 
 describe("contestSchema, the trusted-domain limit", () => {
@@ -230,6 +231,24 @@ describe("contestSchema", () => {
     expect(
       contestSchema.parse({ ...detail, leaderboard: { freeze_min: null, names: "login" } }).leaderboard,
     ).toEqual({ freezeMin: null, names: "login", revealedAt: undefined });
+  });
+
+  // A settings form sends it back, so a save made after the row moved is refused.
+  test("reads the version the row was at", () => {
+    expect(contestSchema.parse(detail).version).toBe(4);
+  });
+
+  test.each([
+    ["without a version", undefined],
+    ["with a negative one", -1],
+    ["with a fractional one", 1.5],
+    ["with one past what a number holds exactly", Number.MAX_SAFE_INTEGER + 1],
+  ])("refuses an answer %s, which no settings form could send back", (_, version) => {
+    expect(contestSchema.safeParse({ ...detail, version }).success).toBe(false);
+  });
+
+  test("reads a contest nobody has written since its creation, at version 0", () => {
+    expect(contestSchema.parse({ ...detail, version: 0 }).version).toBe(0);
   });
 
   test("reads whether the viewer may monitor the contest", () => {

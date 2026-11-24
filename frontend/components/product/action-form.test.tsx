@@ -8,7 +8,7 @@ import type { ActionState } from "@/lib/api/server";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 
-import { ActionButton, ActionFooter, ActionForm, ActionOutcome } from "./action-form";
+import { ActionButton, ActionFooter, ActionForm, ActionOutcome, useActionStatus } from "./action-form";
 
 // The dialog chunk's first load waits for the test, which fails it; later
 // loads go through.
@@ -367,6 +367,31 @@ describe("ActionForm that does not ask", () => {
     );
 
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+});
+
+describe("useActionStatus", () => {
+  function Status() {
+    const { ok, code } = useActionStatus();
+    return <output>{ok ? "worked" : (code ?? "nothing yet")}</output>;
+  }
+
+  // A part that makes an offer under one refusal only reads the refusal's code.
+  test.each([
+    ["the code it was refused with", { code: "contest_changed" }, "contest_changed"],
+    ["that it worked", { ok: true }, "worked"],
+  ] as const)("tells a part of the form %s", async (_, answer, shown) => {
+    render(
+      <ActionForm action={recording(answer).action} errors={dict.errors}>
+        <ActionButton>Save</ActionButton>
+        <Status />
+      </ActionForm>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("nothing yet");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(shown));
   });
 });
 

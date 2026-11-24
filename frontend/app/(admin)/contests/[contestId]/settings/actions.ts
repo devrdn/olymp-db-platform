@@ -12,6 +12,7 @@ import {
   icpcPenaltyFromForm,
   prizePlacesFromForm,
   shapeFromForm,
+  versionFromForm,
 } from "@/lib/api/contests";
 import { ENROLLMENTS } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
@@ -55,7 +56,8 @@ function moment(value: FormDataEntryValue | null): string | null {
  * editable while the contest runs (extending the window after a power cut), but
  * the shape (format, order, scoring, timing, session length) freezes; its
  * disabled fieldset submits nothing, which is read as "send no key" rather than
- * a default the server would refuse.
+ * a default the server would refuse. The form's version goes back with it, so
+ * a save over a contest that moved since it was rendered is refused.
  */
 export async function saveSettingsAction(
   _previous: SettingsState,
@@ -63,6 +65,9 @@ export async function saveSettingsAction(
 ): Promise<SettingsState> {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const expectedVersion = versionFromForm(form.get("expectedVersion"));
+  if (expectedVersion === undefined) return { code: "invalid_request" };
 
   const shape = shapeFromForm(form);
   if (!shape.ok) return { code: "invalid_request" };
@@ -94,6 +99,7 @@ export async function saveSettingsAction(
     .filter(Boolean);
 
   const body: Record<string, unknown> = {
+    expected_version: expectedVersion,
     enrollment: enumFromForm<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
     ...shape.value,
     starts_at: moment(form.get("startsAt")),

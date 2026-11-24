@@ -47,13 +47,14 @@ function useBound(component: string): Bound {
 }
 
 /**
- * Whether the enclosing ActionForm's action is running, and whether its last
- * submission worked, for a part that reacts to either (a dialog that closes
- * on success, or may not be dismissed while pending).
+ * Whether the enclosing ActionForm's action is running, and how its last
+ * submission went (it worked, or the code it was refused with), for a part
+ * that reacts to either: a dialog that closes on success or may not be
+ * dismissed while pending, an offer only one refusal makes.
  */
-export function useActionStatus(): { pending: boolean; ok: boolean } {
+export function useActionStatus(): { pending: boolean; ok: boolean; code?: string } {
   const { state, pending } = useBound("useActionStatus");
-  return { pending, ok: state.ok === true };
+  return { pending, ok: state.ok === true, code: state.code };
 }
 
 /**

@@ -152,6 +152,12 @@ export const settingsSchema = z
 
 export type ContestSettings = z.infer<typeof settingsSchema>;
 
+/**
+ * A contest row's write count: 0 until the row is first written, and kept to
+ * what a JavaScript number holds exactly, so it goes back to the API unchanged.
+ */
+const contestVersionSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
 /** A contest as its staff see it: every translation, since they author them all. */
 export const contestSchema = z
   .object({
@@ -189,6 +195,9 @@ export const contestSchema = z
     translations: z.record(z.string(), translationSchema),
     created_at: z.string(),
     updated_at: z.string(),
+    // Moves on every write of the row, content included; a settings save
+    // sends it back and is refused as `contest_changed` once it has moved.
+    version: contestVersionSchema,
     // Whether the caller holds contest.monitor here. Only the single-contest
     // read sends it; a write's answer omits it, which reads as "no".
     may_monitor: z.boolean().default(false),
@@ -223,6 +232,7 @@ export const contestSchema = z
     translations: raw.translations,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+    version: raw.version,
     mayMonitor: raw.may_monitor,
     mayClarify: raw.may_clarify,
   }));
@@ -349,6 +359,13 @@ export function icpcPenaltyFromForm(
   const whole = Number(raw);
   if (whole > 240) return { ok: false };
   return { ok: true, value: whole };
+}
+
+/** The version a settings form was rendered at, or undefined unless it is plain digits the contest schema accepts. */
+export function versionFromForm(value: FormDataEntryValue | null): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return undefined;
+  const version = contestVersionSchema.safeParse(Number(value));
+  return version.success ? version.data : undefined;
 }
 
 export function enumFromForm<T extends string>(

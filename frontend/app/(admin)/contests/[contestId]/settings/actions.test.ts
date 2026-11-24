@@ -17,7 +17,14 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
 }));
 
 import { ApiError } from "@/lib/api/client";
-import { deleteDraftAction, extendGraceAction, saveArchiveSettingsAction, savePrizePlacesAction, saveSettingsAction } from "./actions";
+import {
+  deleteDraftAction,
+  extendGraceAction,
+  saveArchiveSettingsAction,
+  saveLanguagesAction,
+  savePrizePlacesAction,
+  saveSettingsAction,
+} from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 
@@ -26,6 +33,11 @@ function form(fields: Record<string, string>): FormData {
   data.set("contestId", contestId);
   for (const [key, value] of Object.entries(fields)) data.set(key, value);
   return data;
+}
+
+/** The contest's own fields, as a form rendered at version 7 submits them. */
+function settingsForm(fields: Record<string, string>): FormData {
+  return form({ expectedVersion: "7", ...fields });
 }
 
 beforeEach(() => {
@@ -45,7 +57,7 @@ describe("saveSettingsAction, a running contest's locked shape", () => {
     // A locked shape submits nothing; the open panels submit as usual.
     await saveSettingsAction(
       {},
-      form({
+      settingsForm({
         startsAt: "2026-11-08T19:00",
         endsAt: "2026-11-08T23:00",
         enrollment: "open",
@@ -69,7 +81,7 @@ describe("saveSettingsAction, a running contest's locked shape", () => {
   test("still refuses an invalid rate or grace on the same locked-shape save", async () => {
     // An absent shape must not skip validation of the rest of the form.
     serverRequest.mockResolvedValueOnce({});
-    await saveSettingsAction({}, form({ queryRateLimitPerMin: "-5" }));
+    await saveSettingsAction({}, settingsForm({ queryRateLimitPerMin: "-5" }));
     expect(serverRequest).toHaveBeenCalledTimes(1);
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
     // A negative rate degrades to no limit rather than being sent.
@@ -83,7 +95,7 @@ describe("saveSettingsAction, an open shape", () => {
 
     await saveSettingsAction(
       {},
-      form({
+      settingsForm({
         questionMode: "single",
         progression: "sequential",
         scoring: "icpc",
@@ -105,7 +117,7 @@ describe("saveSettingsAction, an open shape", () => {
   });
 
   test("still refuses individual timing with no valid duration", async () => {
-    const state = await saveSettingsAction({}, form({ timing: "individual" }));
+    const state = await saveSettingsAction({}, settingsForm({ timing: "individual" }));
 
     expect(state).toEqual({ code: "invalid_request" });
     expect(serverRequest).not.toHaveBeenCalled();
@@ -116,7 +128,7 @@ describe("saveSettingsAction, an open shape", () => {
 
     await saveSettingsAction(
       {},
-      form({ questionMode: "multi", progression: "free", scoring: "points", timing: "fixed" }),
+      settingsForm({ questionMode: "multi", progression: "free", scoring: "points", timing: "fixed" }),
     );
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
@@ -128,7 +140,7 @@ describe("saveSettingsAction, the leaderboard's names", () => {
   test("keeps the choice the form carried", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({ leaderboardNames: "login" }));
+    await saveSettingsAction({}, settingsForm({ leaderboardNames: "login" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { leaderboard: { names: string } } }];
     expect(init.body.leaderboard.names).toBe("login");
@@ -138,10 +150,81 @@ describe("saveSettingsAction, the leaderboard's names", () => {
   test("shows full names when the form carries no readable choice", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({ leaderboardNames: "nickname" }));
+    await saveSettingsAction({}, settingsForm({ leaderboardNames: "nickname" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { leaderboard: { names: string } } }];
     expect(init.body.leaderboard.names).toBe("full_name");
+  });
+});
+
+describe("saveSettingsAction, the version the form was loaded at", () => {
+  test("sends it back, so a save made after the contest moved is refused", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, settingsForm({ expectedVersion: "12" }));
+
+    const [path, init] = serverRequest.mock.calls[0] as [string, { method: string; body: Record<string, unknown> }];
+    expect(path).toBe(`/contests/${contestId}`);
+    expect(init.method).toBe("PATCH");
+    expect(init.body.expected_version).toBe(12);
+  });
+
+  // The column's default: a contest nothing has written since its creation.
+  test("sends a never-written contest's version, zero", async () => {
+    serverRequest.mockResolvedValueOnce({});
+
+    await saveSettingsAction({}, settingsForm({ expectedVersion: "0" }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.expected_version).toBe(0);
+  });
+
+  test.each([
+    ["absent", undefined],
+    ["blank", ""],
+    ["not a number", "seven"],
+    ["fractional", "7.5"],
+    ["negative", "-7"],
+    ["signed", "+7"],
+    ["past what a number holds exactly", "9007199254740993"],
+  ])("refuses a form whose version is %s without asking the server", async (_, version) => {
+    const data = settingsForm({});
+    if (version === undefined) data.delete("expectedVersion");
+    else data.set("expectedVersion", version);
+
+    expect(await saveSettingsAction({}, data)).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal of a contest that moved since", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+
+    expect(await saveSettingsAction({}, settingsForm({}))).toEqual({ code: "contest_changed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveLanguagesAction", () => {
+  // The language set moves the contest's version, and the settings form on
+  // the same page sends the version back: it must read the new one.
+  test("re-reads the contest's pages, the settings form's version among them", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+    const data = form({ defaultLanguage: "ro" });
+    data.append("languages", "en");
+    data.append("languages", "ro");
+
+    expect(await saveLanguagesAction({}, data)).toEqual({ ok: true });
+
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/languages`, {
+      method: "PUT",
+      body: {
+        languages: [
+          { code: "en", is_default: false },
+          { code: "ro", is_default: true },
+        ],
+      },
+    });
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 });
 
@@ -149,7 +232,7 @@ describe("saveSettingsAction, the result download", () => {
   test("offers the CSV file when the box is ticked", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({ resultDownload: "on" }));
+    await saveSettingsAction({}, settingsForm({ resultDownload: "on" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.result_download).toBe(true);
@@ -158,7 +241,7 @@ describe("saveSettingsAction, the result download", () => {
   test("withdraws it when the box is cleared", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({}));
+    await saveSettingsAction({}, settingsForm({}));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.result_download).toBe(false);
@@ -169,7 +252,7 @@ describe("saveSettingsAction, the schema diagram", () => {
   test("offers the diagram when the box is ticked", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({ schemaDiagram: "on" }));
+    await saveSettingsAction({}, settingsForm({ schemaDiagram: "on" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.schema_diagram).toBe(true);
@@ -178,7 +261,7 @@ describe("saveSettingsAction, the schema diagram", () => {
   test("withdraws it when the box is cleared", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({}));
+    await saveSettingsAction({}, settingsForm({}));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(init.body.schema_diagram).toBe(false);
@@ -230,7 +313,7 @@ describe("saveSettingsAction, the trusted-domain limit", () => {
   test("sends it on when the form carries it", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({ queryRateLimitPerMin: "10", trustedDomainOnly: "on" }));
+    await saveSettingsAction({}, settingsForm({ queryRateLimitPerMin: "10", trustedDomainOnly: "on" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
     expect(init.body.settings.trusted_domain_only).toBe(true);
@@ -239,7 +322,7 @@ describe("saveSettingsAction, the trusted-domain limit", () => {
   test("sends it off, explicitly, when the form does not", async () => {
     serverRequest.mockResolvedValueOnce({});
 
-    await saveSettingsAction({}, form({ queryRateLimitPerMin: "10" }));
+    await saveSettingsAction({}, settingsForm({ queryRateLimitPerMin: "10" }));
 
     const [, init] = serverRequest.mock.calls[0] as [string, { body: { settings: Record<string, unknown> } }];
     expect(init.body.settings).toHaveProperty("trusted_domain_only", false);

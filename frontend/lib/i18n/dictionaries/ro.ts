@@ -1131,6 +1131,7 @@ const ro = {
     save: "Salvați",
       saving: "Se salvează",
       saved: "Salvat.",
+      reload: "Reîncărcați pagina",
       schedule: {
         heading: "Când se desfășoară",
         help: "Fereastra rămâne editabilă în timpul desfășurării: prelungirea ei după o pană de curent este exact ce îi trebuie unei olimpiade în curs.",

@@ -24,4 +24,15 @@ describe("ReloadButton", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(submit).not.toHaveBeenCalled();
   });
+
+  test("lets the screen start over what the fresh copy replaces", async () => {
+    const onReload = vi.fn();
+    const user = userEvent.setup();
+    render(<ReloadButton label="Reload the page" onReload={onReload} />);
+
+    await user.click(screen.getByRole("button", { name: "Reload the page" }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
 });

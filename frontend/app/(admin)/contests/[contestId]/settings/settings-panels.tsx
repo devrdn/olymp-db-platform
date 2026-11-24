@@ -2,7 +2,8 @@
 
 import { useId, useState } from "react";
 
-import { ActionFooter, ActionForm } from "@/components/product/action-form";
+import { ActionFooter, ActionForm, useActionStatus } from "@/components/product/action-form";
+import { ReloadButton } from "@/components/product/reload-button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
@@ -196,24 +197,42 @@ function TrustedDomainSwitch({
   );
 }
 
-/**
- * The contest's fields. While the contest runs settings stay editable but the
- * shape freezes; frozen controls stay in the form, disabled.
- */
-export function ContestPanel({
-  contest,
-  editable,
-  shapeOpen,
-  trustedDomain = null,
-  dict,
-}: {
+type ContestPanelProps = {
   contest: Contest;
   editable: boolean;
   shapeOpen: boolean;
   /** The site's email domain from `/auth/methods`; "" for none, null when unknown. */
   trustedDomain?: string | null;
   dict: Dictionary;
-}) {
+};
+
+/**
+ * The contest's fields. While the contest runs settings stay editable but the
+ * shape freezes; frozen controls stay in the form, disabled. A reload after a
+ * save refused for a contest that moved starts the form over, so it shows the
+ * contest as it is now and the refusal goes with what was typed.
+ */
+export function ContestPanel(props: ContestPanelProps) {
+  const [reloads, setReloads] = useState(0);
+
+  return <ContestForm key={reloads} {...props} onReload={() => setReloads((count) => count + 1)} />;
+}
+
+/** Offered under one refusal only: a save over a contest that moved since the form was rendered. */
+function ReloadWhenChanged({ label, onReload }: { label: string; onReload: () => void }) {
+  const { code } = useActionStatus();
+
+  return code === "contest_changed" ? <ReloadButton label={label} onReload={onReload} /> : null;
+}
+
+function ContestForm({
+  contest,
+  editable,
+  shapeOpen,
+  trustedDomain = null,
+  dict,
+  onReload,
+}: ContestPanelProps & { onReload: () => void }) {
   const t = dict.workspace.settings;
   const [timing, setTiming] = useState<string>(contest.timing);
   const [progression, setProgression] = useState<string>(contest.progression);
@@ -231,7 +250,7 @@ export function ContestPanel({
   return (
     <ActionForm
       action={saveSettingsAction}
-      fields={{ contestId: contest.id }}
+      fields={{ contestId: contest.id, expectedVersion: contest.version }}
       errors={dict.errors}
       revision={contest.updatedAt}
       className="contents"
@@ -551,7 +570,9 @@ export function ContestPanel({
           </p>
         </div>
 
-        <ActionFooter labels={dict.workspace.settings} disabled={!editable} />
+        <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
+          <ReloadWhenChanged label={t.reload} onReload={onReload} />
+        </ActionFooter>
       </Panel>
     </ActionForm>
   );

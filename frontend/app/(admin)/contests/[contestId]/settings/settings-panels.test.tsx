@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
+import { ApiError } from "@/lib/api/client";
 import type { Contest } from "@/lib/api/contests";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
@@ -14,6 +15,11 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
   serverRequest,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
 import { saveSettingsAction } from "./actions";
 import { ArchivePanel, ContestPanel, PrizePanel } from "./settings-panels";
@@ -47,6 +53,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     translations: { en: { title: "Night in the archive" } },
     createdAt: "2026-08-01T10:00:00Z",
     updatedAt: "2026-08-31T17:00:00Z",
+    version: 3,
     ...overrides,
   } as Contest;
 }
@@ -93,6 +100,77 @@ describe("ContestPanel, after the server's copy changes", () => {
     expect(screen.getByLabelText(dict.workspace.settings.schedule.endsAt)).toHaveValue(
       "2026-11-09T05:00",
     );
+  });
+});
+
+describe("ContestPanel, the version it was loaded at", () => {
+  const t = () => dict.workspace.settings;
+
+  function sentVersion(): FormDataEntryValue | null {
+    return new FormData(screen.getByLabelText(t().schedule.endsAt).closest("form")!).get("expectedVersion");
+  }
+
+  test("sends back the version the contest was at when the form was rendered", () => {
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    expect(sentVersion()).toBe("3");
+  });
+
+  // A title, language or question save moves the version without touching
+  // these fields, and re-reads the page; the next save must not be refused.
+  test("sends the moved version once a content save re-reads the page, keeping what is typed", () => {
+    const { rerender } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+    const field = screen.getByLabelText<HTMLInputElement>(t().schedule.endsAt);
+    field.value = "2026-11-09T05:00";
+
+    rerender(<ContestPanel contest={contest({ version: 4 })} editable shapeOpen dict={dict} />);
+
+    expect(sentVersion()).toBe("4");
+    expect(screen.getByLabelText(t().schedule.endsAt)).toHaveValue("2026-11-09T05:00");
+  });
+
+  test("shows the sentence for a stale form's save, and offers to reload", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    await user.click(screen.getByRole("button", { name: t().save }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.expected_version).toBe(3);
+    expect(screen.getByRole("button", { name: t().reload })).toBeInTheDocument();
+  });
+
+  test("reloads into the contest as it is now: re-read, nothing typed kept, the refusal gone", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    refresh.mockReset();
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    const rate = screen.getByLabelText(t().access.rate);
+    await user.clear(rate);
+    await user.type(rate, "12");
+    await user.click(screen.getByRole("button", { name: t().save }));
+    await user.click(await screen.findByRole("button", { name: t().reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(t().access.rate)).toHaveValue(0);
+  });
+
+  test("offers no reload for a refusal a reload would not change", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("invalid_cidr", 400, "bad"));
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    await user.click(screen.getByRole("button", { name: t().save }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t().reload })).not.toBeInTheDocument();
   });
 });
 
