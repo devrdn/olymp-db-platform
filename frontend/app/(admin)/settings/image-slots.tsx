@@ -72,6 +72,11 @@ function Slot({
                   name="file"
                   accept="image/png,image/jpeg,image/gif,image/webp"
                   className="sr-only"
+                  // Emptied as the picker opens: a refused file stays chosen,
+                  // and the same file picked again would fire no change.
+                  onClick={(event) => {
+                    event.currentTarget.value = "";
+                  }}
                   onChange={(event) => event.currentTarget.form?.requestSubmit()}
                 />
               </label>

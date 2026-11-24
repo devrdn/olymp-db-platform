@@ -328,6 +328,31 @@ describe("ActionForm's yes", () => {
   });
 });
 
+/**
+ * A function shaped like a server reference: React's server renderer gives a
+ * form a real action only when its action carries `$$FORM_ACTION`, and a
+ * server reference's `bind` keeps it one.
+ */
+function serverReference(): (previous: ActionState, form: FormData) => Promise<ActionState> {
+  const metadata = () => ({ name: "$ACTION_ID_sign_in", action: "", method: "POST", encType: "multipart/form-data", data: null });
+  const reference = () => Object.assign(async (): Promise<ActionState> => ({ ok: true }), { $$FORM_ACTION: metadata });
+  return Object.assign(reference(), { bind: reference });
+}
+
+describe("ActionForm without JavaScript", () => {
+  test("is server-rendered as a POST to its action, so it submits before or without hydration", () => {
+    const html = renderToString(
+      <ActionForm action={serverReference()} errors={dict.errors}>
+        <ActionButton>Sign in</ActionButton>
+      </ActionForm>,
+    );
+
+    expect(html).toMatch(/<form[^>]* method="POST"/);
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain('name="$ACTION_ID_sign_in"');
+  });
+});
+
 describe("ActionForm that does not ask", () => {
   test("is not disabled in the server's markup, so a submission made before hydration is queued", () => {
     const html = renderToString(
@@ -508,6 +533,98 @@ describe("ActionForm's children", () => {
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     expect(await screen.findByText("added 3")).toBeInTheDocument();
+  });
+});
+
+describe("ActionForm refused", () => {
+  test("keeps what was typed in its fields, so the organiser corrects rather than retypes", async () => {
+    render(
+      <ActionForm action={recording({ code: "invalid_cidr" }).action} errors={dict.errors}>
+        <input aria-label="Networks" name="networks" defaultValue="" />
+        <input aria-label="Rate" name="rate" type="number" defaultValue="0" />
+        <ActionButton>Save</ActionButton>
+        <ActionOutcome />
+      </ActionForm>,
+    );
+
+    await userEvent.type(screen.getByLabelText("Networks"), "not-a-network");
+    await userEvent.clear(screen.getByLabelText("Rate"));
+    await userEvent.type(screen.getByLabelText("Rate"), "37");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.invalid_cidr);
+    expect(screen.getByLabelText("Networks")).toHaveValue("not-a-network");
+    expect(screen.getByLabelText("Rate")).toHaveValue(37);
+  });
+
+  test("keeps what was typed when the question was answered yes and the save then refused", async () => {
+    const { action, sent } = recording({ code: "game_in_use" });
+    render(
+      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+        <input aria-label="Reason" name="reason" defaultValue="" />
+        <ActionButton>Delete</ActionButton>
+        <ActionOutcome />
+      </ActionForm>,
+    );
+
+    await userEvent.type(screen.getByLabelText("Reason"), "spam");
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await answerYes(ro.workspace.settings.deleteDraft.action);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(ro.errors.game_in_use);
+    expect(sent).toEqual([{ reason: ["spam"] }]);
+    expect(screen.getByLabelText("Reason")).toHaveValue("spam");
+  });
+
+  test("clears its password fields, and only those", async () => {
+    render(
+      <ActionForm action={recording({ code: "invalid_credentials" }).action} errors={dict.errors}>
+        <input aria-label="Login" name="login" defaultValue="" />
+        <input aria-label="Password" name="password" type="password" defaultValue="" />
+        <ActionButton>Sign in</ActionButton>
+        <ActionOutcome />
+      </ActionForm>,
+    );
+
+    await userEvent.type(screen.getByLabelText("Login"), "ada");
+    await userEvent.type(screen.getByLabelText("Password"), "a-wrong-guess");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("alert");
+
+    expect(screen.getByLabelText("Login")).toHaveValue("ada");
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  test("starts over from the saved values once a save worked", async () => {
+    render(
+      <ActionForm action={recording({ ok: true }).action} errors={dict.errors}>
+        <input aria-label="Networks" name="networks" defaultValue="" />
+        <ActionButton>Save</ActionButton>
+        <ActionOutcome saved="Saved." />
+      </ActionForm>,
+    );
+
+    await userEvent.type(screen.getByLabelText("Networks"), "10.0.0.0/8");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Networks")).toHaveValue("");
+  });
+
+  test("starts over again after a second save that answers the same", async () => {
+    render(
+      <ActionForm action={recording({ ok: true }).action} errors={dict.errors}>
+        <input aria-label="Networks" name="networks" defaultValue="" />
+        <ActionButton>Save</ActionButton>
+        <ActionOutcome saved="Saved." />
+      </ActionForm>,
+    );
+
+    for (const typed of ["10.0.0.0/8", "192.168.0.0/16"]) {
+      await userEvent.type(screen.getByLabelText("Networks"), typed);
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await vi.waitFor(() => expect(screen.getByLabelText("Networks")).toHaveValue(""));
+    }
   });
 });
 

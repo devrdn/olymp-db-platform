@@ -193,3 +193,18 @@ describe("signInErrors", () => {
     expect(Object.keys(picked).length).toBeLessThan(Object.keys(en.errors).length / 10);
   });
 });
+
+describe("SignInForm, the password after a refusal", () => {
+  test("clears the password and keeps the login", async () => {
+    signInAction.mockResolvedValue({ code: "invalid_credentials" });
+    render(<SignInForm dict={slice()} />);
+
+    await userEvent.type(screen.getByLabelText(en.auth.signIn.login), "ada");
+    await userEvent.type(screen.getByLabelText(en.auth.signIn.password), "a-wrong-guess");
+    await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
+    await screen.findByRole("alert");
+
+    expect(screen.getByLabelText(en.auth.signIn.login)).toHaveValue("ada");
+    expect(screen.getByLabelText(en.auth.signIn.password)).toHaveValue("");
+  });
+});

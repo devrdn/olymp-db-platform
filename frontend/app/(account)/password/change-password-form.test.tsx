@@ -105,3 +105,17 @@ describe("ChangePasswordForm, before anything has been submitted", () => {
     }
   });
 });
+
+describe("ChangePasswordForm, the passwords after a refusal", () => {
+  test("clears every password field", async () => {
+    changePasswordAction.mockResolvedValue({ code: "wrong_password" });
+    render(<ChangePasswordForm dict={en} />);
+
+    const labels = [en.auth.changePassword.current, en.auth.changePassword.next, en.auth.changePassword.confirm];
+    for (const label of labels) await userEvent.type(screen.getByLabelText(label), "correct-horse-battery");
+    await userEvent.click(screen.getByRole("button", { name: en.auth.changePassword.submit }));
+    await screen.findByRole("alert");
+
+    for (const label of labels) expect(screen.getByLabelText(label)).toHaveValue("");
+  });
+});

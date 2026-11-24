@@ -3,6 +3,7 @@
 import {
   createContext,
   Fragment,
+  startTransition,
   useActionState,
   useContext,
   useEffect,
@@ -144,7 +145,10 @@ function BoundActionForm<S extends ActionState>({
   children,
   restart,
 }: ActionFormProps<S> & { restart: () => void }) {
+  // Handed over as it is: a server action carries what the server renderer
+  // needs to make the form a POST that works without JavaScript.
   const [state, formAction, pending] = useActionState<S, FormData>(action, initial ?? (EMPTY as Awaited<S>));
+  const formRef = useRef<HTMLFormElement>(null);
   const hydrated = useHydrated();
   // React replays a submission queued before hydration without `onSubmit`,
   // where the question is asked, so a form that asks cannot be sent until then.
@@ -154,9 +158,31 @@ function BoundActionForm<S extends ActionState>({
   const approved = useRef<string | null>(null);
   const [unasked, setUnasked] = useState<string | undefined>(undefined);
 
+  // React resets a form's uncontrolled fields once its `action` settles, a
+  // refusal included, which erases what was typed. A hydrated form therefore
+  // sends through a transition of its own, and once a send settles only a
+  // save that worked starts its fields over. A refusal clears the password
+  // fields alone: a password left on screen is for the next person at the
+  // machine. Before hydration the form posts through `action` as React does.
+  const sending = useRef(false);
+  useEffect(() => {
+    if (pending) {
+      sending.current = true;
+      return;
+    }
+    const form = formRef.current;
+    if (!sending.current || !form) return;
+    sending.current = false;
+    if (state.ok) form.reset();
+    else if (state.code !== undefined) {
+      for (const input of form.querySelectorAll<HTMLInputElement>('input[type="password"]')) input.value = "";
+    }
+  }, [state, pending]);
+
   return (
     <BoundForm.Provider value={{ state, pending, locked, unasked, errors, restart }}>
       <form
+        ref={formRef}
         action={formAction}
         className={className}
         noValidate={noValidate}
@@ -167,17 +193,24 @@ function BoundActionForm<S extends ActionState>({
           approved.current = null;
           setUnasked(undefined);
           onSubmit?.(event);
-          if (event.defaultPrevented || confirm === undefined) return;
+          if (event.defaultPrevented) return;
 
+          event.preventDefault();
           const form = event.currentTarget;
           const submitter = (event.nativeEvent as SubmitEvent).submitter;
           const data = new FormData(form, submitter);
           // A yes covers the data it was asked about; anything else asks again.
-          if (yesFor !== null && yesFor === sent(data)) return;
-          const question = typeof confirm === "function" ? confirm(data) : confirm;
-          if (question === null) return;
+          const question =
+            confirm === undefined || (yesFor !== null && yesFor === sent(data))
+              ? null
+              : typeof confirm === "function"
+                ? confirm(data)
+                : confirm;
+          if (question === null) {
+            startTransition(() => formAction(data));
+            return;
+          }
 
-          event.preventDefault();
           const asked = sent(data);
           ask(question).then(
             (yes) => {

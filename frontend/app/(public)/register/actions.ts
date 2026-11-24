@@ -6,8 +6,9 @@ import { serverAction, serverRequest, type ActionState } from "@/lib/api/server"
 export type RegisterValues = { firstName: string; lastName: string; email: string };
 
 /**
- * Either the outcome, or a code with what was typed, since React resets an
- * action's form and the visitor should not type it all again.
+ * Either the outcome, or a code with what was typed: a form posted before
+ * hydration or without JavaScript comes back with empty fields, and the
+ * visitor should not type it all again.
  */
 export type RegisterState = ActionState & {
   outcome?: RegistrationOutcome;

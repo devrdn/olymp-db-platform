@@ -5,8 +5,9 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 // The real Server Actions would pull in Next's server runtime.
+const { uploadImageAction } = vi.hoisted(() => ({ uploadImageAction: vi.fn(async (): Promise<object> => ({})) }));
 vi.mock("./actions", () => ({
-  uploadImageAction: vi.fn(async () => ({})),
+  uploadImageAction,
   removeImageAction: vi.fn(async () => ({})),
 }));
 
@@ -87,5 +88,23 @@ describe("ImageSlots, the dark-theme variants", () => {
       container.querySelector(`img[src$="v=${hash}"]`)!.parentElement as HTMLElement;
     expect(tile("bbb").style.background).toBe("var(--dark-bg)");
     expect(tile("aaa").style.background).toBe("");
+  });
+});
+
+describe("ImageSlots, an upload the server refused", () => {
+  test("takes the same file again, since the picker opens on an empty input", async () => {
+    uploadImageAction.mockResolvedValue({ code: "unreachable" });
+    const user = userEvent.setup();
+    render(<ImageSlots images={{}} dict={dict} />);
+    const input = screen.getAllByLabelText(dict.settings.images.upload)[0] as HTMLInputElement;
+    const file = new File(["png"], "logo.png", { type: "image/png" });
+
+    await user.upload(input, file);
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.unreachable);
+    await user.click(input);
+
+    expect(input.files).toHaveLength(0);
+    await user.upload(input, file);
+    await vi.waitFor(() => expect(uploadImageAction).toHaveBeenCalledTimes(2));
   });
 });

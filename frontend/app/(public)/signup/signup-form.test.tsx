@@ -168,3 +168,24 @@ describe("SignUpForm, a refused sign-up", () => {
     expect(screen.getByLabelText(en.auth.signUp.password)).toHaveValue("");
   });
 });
+
+describe("SignUpForm, the passwords after a refusal", () => {
+  test("clears both passwords and keeps everything else typed", async () => {
+    signUpAction.mockResolvedValue({ code: "login_taken" });
+    renderForm();
+
+    await userEvent.type(screen.getByLabelText(en.auth.signUp.fullName), "Ada Lovelace");
+    await userEvent.type(screen.getByLabelText(en.auth.signUp.login), "ada");
+    await userEvent.type(screen.getByLabelText(en.auth.signUp.email), "ada@example.edu");
+    await userEvent.type(screen.getByLabelText(en.auth.signUp.password), "correct-horse-battery");
+    await userEvent.type(screen.getByLabelText(en.auth.signUp.confirm), "correct-horse-battery");
+    await submit();
+    await screen.findByRole("alert");
+
+    expect(screen.getByLabelText(en.auth.signUp.fullName)).toHaveValue("Ada Lovelace");
+    expect(screen.getByLabelText(en.auth.signUp.login)).toHaveValue("ada");
+    expect(screen.getByLabelText(en.auth.signUp.email)).toHaveValue("ada@example.edu");
+    expect(screen.getByLabelText(en.auth.signUp.password)).toHaveValue("");
+    expect(screen.getByLabelText(en.auth.signUp.confirm)).toHaveValue("");
+  });
+});

@@ -14,7 +14,8 @@ export type SignUpValues = { fullName: string; login: string; email: string };
 
 /**
  * A code, and the rule that was broken when this side knows it, with what was
- * typed: React resets an action's form. The passwords are never returned.
+ * typed, for a form posted before hydration or without JavaScript, whose page
+ * comes back with empty fields. The passwords are never returned.
  */
 export type SignUpState = ActionState & { broken?: BrokenRule; values?: SignUpValues };
 

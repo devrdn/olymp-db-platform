@@ -180,6 +180,7 @@ describe("the login rule, stated where a login is typed", () => {
     const login = screen.getByLabelText(ro.accounts.create.one.login);
     expect(login).toHaveAttribute("aria-invalid", "true");
     expect(login).toHaveAccessibleDescription(expect.stringContaining(ro.errors.login_has_dot));
+    expect(login).toHaveValue("s.popescu");
   });
 
   test("the roster's example logins hold no dot in any locale", () => {

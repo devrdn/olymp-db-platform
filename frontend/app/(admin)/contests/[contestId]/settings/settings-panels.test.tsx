@@ -204,6 +204,23 @@ describe("ContestPanel, the version it was loaded at", () => {
     expect(screen.getByLabelText(t().access.rate)).toHaveValue(0);
   });
 
+  test("keeps what was typed when the save is refused", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("invalid_cidr", 400, "bad"));
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    await user.type(screen.getByLabelText(t().access.network), "not-a-network");
+    const rate = screen.getByLabelText(t().access.rate);
+    await user.clear(rate);
+    await user.type(rate, "37");
+    await user.click(screen.getByRole("button", { name: t().save }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.invalid_cidr);
+    expect(screen.getByLabelText(t().access.network)).toHaveValue("not-a-network");
+    expect(screen.getByLabelText(t().access.rate)).toHaveValue(37);
+  });
+
   test("offers no reload for a refusal a reload would not change", async () => {
     serverRequest.mockReset();
     serverRequest.mockRejectedValueOnce(new ApiError("invalid_cidr", 400, "bad"));

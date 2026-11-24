@@ -95,3 +95,20 @@ describe("ResetForm", () => {
     expectInvalid(en.auth.reset.confirm, confirm);
   });
 });
+
+describe("ResetForm, the passwords after a refusal", () => {
+  test("clears both new passwords", async () => {
+    resetPasswordAction.mockResolvedValue({ code: "reset_link_invalid" });
+    renderForm();
+
+    for (const label of [en.auth.reset.next, en.auth.reset.confirm]) {
+      await userEvent.type(screen.getByLabelText(label), "correct-horse-battery");
+    }
+    await submit();
+    await screen.findByRole("alert");
+
+    for (const label of [en.auth.reset.next, en.auth.reset.confirm]) {
+      expect(screen.getByLabelText(label)).toHaveValue("");
+    }
+  });
+});
