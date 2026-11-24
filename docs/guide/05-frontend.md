@@ -369,13 +369,15 @@ Patterns an action must follow:
 What `ActionForm` keeps for every form, so a screen does not handle it:
 
 - **A refusal keeps what was typed.** Only password fields are cleared, so a
-  password is not left on screen for the next person at the machine. Once a
-  save worked, the fields start over from the server's copy: `revision` names
-  the version they show.
-- **It works without JavaScript.** The form is a plain HTML form bound to its
-  action: submitted before the page hydrates, or with no JavaScript at all, it
-  still reaches the action. A form that asks first is the exception: its
-  button waits for hydration, because the question needs it.
+  password is not left on screen for the next person at the machine. The
+  fields start over only after a save that worked, from the server's copy
+  (`revision` names the version they show), or on a reload under a refusal
+  (`ActionReload`, below).
+- **It works without JavaScript.** The form renders as a native POST to its
+  server action, so one submitted before the page hydrates, or with no
+  JavaScript at all, still reaches the action. An end-to-end test signs in
+  with JavaScript off (`e2e/admin.spec.ts`). A form that asks first is the
+  exception: its button waits for hydration, because the question needs it.
 - **A destructive form asks first** through its `confirm` prop: a question,
   or a function of the data about to be sent. The question is the product's
   own dialog (`useConfirm` in
@@ -437,8 +439,9 @@ sequenceDiagram
 - The API decides the contest's own rules (closed enrolment, deadline,
   network). The action cannot check the network itself: only the trusted
   proxy knows the address that counts.
-- A submission made before hydration is queued and sent once the page
-  hydrates (Next docs, `07-mutating-data.md`, on forms in Client Components).
+- A submission made before hydration is the form's own POST to the server
+  action, as it is with no JavaScript at all; it does not wait for the page
+  to hydrate.
 
 The Next client dispatches server actions one at a time (see
 `node_modules/next/dist/docs/01-app/02-guides/server-actions.md`, "Sequential
