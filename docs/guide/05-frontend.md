@@ -542,6 +542,32 @@ by the frontend and exempt: `fallback`, `unreachable` and `password_mismatch`.
 How a code is declared on the Go side is in [04-backend.md](04-backend.md)
 and CLAUDE.md, security rule 1.
 
+### Bounds the interface repeats
+
+A field stops at the API's bound, and a sentence states it, so the interface
+repeats some Go bounds: a constant in the area's `*-terms.ts` (or
+`lib/auth/signup-rules.ts`), named in its comment by the Go identifier it
+repeats (`NOTES_MAX_CHARS` is `workspace.MaxNotesRunes`). The API publishes
+those bounds too: `make api-contract` also writes
+[`docs/api/limits.json`](../../docs/api/limits.json) from `cmd/apicontract`,
+each entry under its Go identifier, with the durations, the contest's status
+transitions and the chosen-login pattern beside them.
+[`lib/api/limits-contract.test.ts`](../../frontend/lib/api/limits-contract.test.ts)
+compares every constant with that file. A bound must equal the API's, a page
+size the interface sends must be at most the API's maximum, and the few rules
+kept in a function are checked by what the function does. An entry the test
+does not check fails it, so a bound changed on one side only is a red test,
+not a refusal the field should have prevented.
+
+A sentence never spells a bound out. It names a placeholder such as
+`{notesMaxChars}`, listed in `BOUNDS` in
+[`lib/i18n/bounds.ts`](../../frontend/lib/i18n/bounds.ts) with the constant it
+is filled from, in the unit the sentence speaks of. `getDictionary` fills these
+placeholders once per locale when the dictionary loads, writing each number as
+the locale writes it, and leaves every other placeholder for `fill` at render.
+`lib/i18n/bounds.test.ts` fails on a bound left unfilled, on one no sentence
+states, and on a locale whose sentence names other bounds than English.
+
 ## 5. The design system in practice
 
 The visual specification is [`docs/design/SPEC.md`](../../docs/design/SPEC.md).
@@ -789,8 +815,12 @@ Modelled on `lib/api/play.ts` and `lib/api/play.test.ts`.
 1. Create `frontend/lib/api/<area>.ts`. Declare each response as a
    `z.object` of the wire's snake_case fields with a `.transform` to
    camelCase, and export `type X = z.infer<typeof xSchema>`.
-2. Mirror server-side limits as named constants with a comment naming the Go
-   constant (see `NOTES_MAX_CHARS` in `workspace.ts`).
+2. Repeat a server-side bound as a named constant in `<area>-terms.ts`, with
+   the Go identifier in its comment (see `NOTES_MAX_CHARS` in
+   `workspace-terms.ts`). Add the identifier to `limits()` in
+   `backend/cmd/apicontract/limits.go`, run `make api-contract`, and add the
+   pair to `lib/api/limits-contract.test.ts`, which fails until you do (section
+   4). A sentence that states the bound gets a placeholder in `BOUNDS`.
 3. Put enum arrays and constants a Client Component needs into
    `<area>-terms.ts`, and import them into the schema module.
 4. Read it from a page as `readPage(path, (payload) => xSchema.parse(payload),
@@ -819,7 +849,9 @@ Check: `npm test -- lib/api/<area>` and `npm run typecheck`, then
    explains.
 2. Add the same key to `ro.ts` and `ru.ts` with real translations.
 3. Read it as `dict.<section>.<key>` from the prop, and fill its placeholders
-   with `fill`, never `String.replace`. If a client boundary reads
+   with `fill`, never `String.replace`. A bound the API enforces is never
+   written as a number: use its `BOUNDS` placeholder (section 4), which the
+   dictionary arrives with already filled. If a client boundary reads
    it from a scope, make sure the section is in that scope's list in
    `lib/i18n/scopes.ts`. On the play screen, add the section to both the
    `PlayDictionary` type and the `playDictionary()` function in
