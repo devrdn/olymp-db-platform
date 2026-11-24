@@ -110,6 +110,7 @@ app/                 routes; a folder is a URL
     login/               page, sign-in-form, actions.ts
   (account)/           /password, the one screen an account on a one-time password may use
   (session)/           /profile, shared by participants and staff
+  (archive)/           /archive, for participants and staff while the installation has it on
   (participant)/       /my, /open and the play screen (contests/[contestId]/play)
   (admin)/             the constructor: contests, users, audit, settings
     contests/            page, loading, error, contest-register
@@ -117,7 +118,7 @@ app/                 routes; a folder is a URL
 components/
   ui/                  primitives with no domain knowledge: Button, Input, Field, Tag, Skeleton
   product/             domain components more than one route uses: StateView
-  layout/              the frame: Band, AppBar, shells, the language and theme switchers
+  layout/              the frame each audience wears (frame.tsx), Band, AppBar, the menus, the language and theme switchers
 
 lib/
   api/                 transport, wire schemas, the API's address
@@ -135,8 +136,10 @@ proxy.ts               route protection (Next 16 calls this middleware "proxy")
 
 **A parenthesised folder is a group, not a segment.** `(public)` and `(admin)`
 do not appear in any URL: `/login` and `/contests` are the addresses. What they
-carry is the layout — the shell each set of screens wears — so a new
-administrative screen is a folder inside `(admin)` and arrives already framed.
+carry is the layout: each group's `layout.tsx` renders `Frame` with its
+audience, which decides the bar, the menu and the dictionary scope its screens
+wear, so a new administrative screen is a folder inside `(admin)` and arrives
+already framed.
 A group is not an access rule: `proxy.ts` decides by path, from the lists in
 `lib/auth/guard.ts`.
 
@@ -161,17 +164,20 @@ app/  →  components/  →  lib/
 
 Nothing in `lib/` imports a component. Nothing in `components/ui/` knows the
 domain: a primitive that mentions a contest belongs in `components/product/`.
-Within `lib/`, `api` is the lowest layer and does not import `auth`, `i18n` or
-`theme`; `api/server.ts` is the one crossing, and deliberately, because an
-authenticated request needs both.
+Within `lib/`, `api` is the lowest layer. It takes from `auth` only what a
+request needs: the session for `api/server.ts`, sign-in recovery for a page's
+read in `api/page-read.ts`, and the provider and cookie constants a few
+schemas name. From `i18n` it takes only the `Locale` type, and it never
+imports `theme`.
 
 ## Where does a new thing go?
 
 **A page.** A folder inside the group of the audience it serves: `(admin)` for
 staff, `(participant)` for participants, `(session)` for both, `(public)` for
-anyone. The group gives it the shell. A page behind a session needs nothing
-more: `proxy.ts` already redirects a visitor without one, and `serverRequest`
-already carries the cookie. A page that must open without a session also needs
+anyone. The group gives it the frame. A page behind a session needs nothing
+more: `proxy.ts` already redirects a visitor without one, and `readPage`
+(`lib/api/page-read.ts`) already carries the cookie and sends a session that
+died meanwhile to sign-in. A page that must open without a session also needs
 its path in `PUBLIC_PATHS`, `PUBLIC_EXACT` or `PUBLIC_PATTERNS` in
 `lib/auth/guard.ts`; in `(public)` alone it still redirects to sign-in. Give it
 `loading.tsx` if the wait is visible, and an `error.tsx` only if the section's
@@ -199,10 +205,13 @@ and named in the `font-size` list of `cn()` in `lib/utils.ts`. Writing any of
 these inline is an ESLint error, and that is the point: a design system nothing
 enforces is a document, not a system.
 
-**An API call.** A schema in `lib/api/`, parsed at the boundary with Zod, and a
-`serverRequest` from a Server Component. Parsing where the data arrives means a
-contract change surfaces with a field name instead of as `undefined` three
-components later.
+**An API call.** A schema in `lib/api/`, parsed at the boundary with Zod. A
+page reads with `readPage(path, parse, policy)`, naming in the policy the
+refusals it answers itself, and writes no `catch`; a server action calls
+`serverAction(() => serverRequest(path, init), { revalidate })`; a call the
+browser makes goes through `browserRequest` or `browserCall` in
+`lib/api/browser.ts`. Parsing where the data arrives means a contract change
+surfaces with a field name instead of as `undefined` three components later.
 
 **An error code.** The Go side adds it; `npm run error-codes` then fails until
 all three dictionaries have a message. That check exists because the two sides
