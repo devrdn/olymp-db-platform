@@ -21,6 +21,10 @@ type Participation struct {
 // answers a refusal with fail. Every participant route is admitted here, or by
 // the same module inside queryproxy for the console and the reset, so none can
 // skip the budget, the gate or the monitor visit.
+// TestEveryParticipantRouteIsAdmittedFirst holds every route of the
+// participant, console, clarifications and events handlers to it, each With…
+// route mounted; a handler or a With… mount added in internal/app alone is
+// not in its walk until the test mounts it too.
 func (p Participation) admit(w http.ResponseWriter, r *http.Request, mw *auth.Middleware, budget participation.Budget,
 	fail func(http.ResponseWriter, *http.Request, error), opts ...participation.Option) (*participation.Admission, bool) {
 	identity, _ := auth.IdentityFrom(r.Context())
