@@ -86,9 +86,11 @@ The database checks need `deploy/.env` and the development databases
 (`make dev-up`); see [docs/guide/06-testing.md](docs/guide/06-testing.md#2-running-them).
 A pull request that changes the API or the audit trail also regenerates the
 contracts with `make api-contract` and `make audit-contract`. `make test-all`
-runs what CI's backend job runs except the database tests and the cgo-free
-build: gofmt and go.mod checks, vet, the unit tests under the race detector,
-a build, govulncheck and gosec.
+runs most of the backend workflow's Go checks: gofmt and go.mod checks, vet,
+the unit tests under the race detector and a build from the `build` job, and
+govulncheck and gosec from the `security` job. It leaves out the database
+tests, the cgo-free build, the migration step and the `observability` job
+(`make observability-check`).
 
 ## The pull request
 
