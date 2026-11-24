@@ -2796,11 +2796,11 @@ refused as not editable, and a publish or start whose gate counted a question
 deleted since, or saw a game built that has since been replaced, is refused.
 `internal/provisioning` calls it with `contests.ContentRows`, a required
 argument of `NewGames` with the unit of work, and answers its refusals in its
-own terms; `contests` therefore never imports `provisioning`. A cover change needs no such step: an upload always carries its credit
-line and a removal needs none, so neither can turn a passing gate into a
-failing one. The one gate check outside the version is a staff member
-registered as a participant, which turns on account permissions rather than on
-anything the contest holds.
+own terms; `contests` therefore never imports `provisioning`. A cover change
+needs no such step: an upload always carries its credit line and a removal
+needs none, so neither can turn a passing gate into a failing one. The one
+gate check outside the version is a staff member registered as a participant,
+which turns on account permissions rather than on anything the contest holds.
 
 A table builder's rows live in a file on the API host, outside any
 transaction, so the same edit decides what the file means. The table's
