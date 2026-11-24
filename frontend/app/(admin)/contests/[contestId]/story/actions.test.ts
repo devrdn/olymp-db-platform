@@ -43,7 +43,8 @@ describe("saveSchemaNotesAction", () => {
       method: "PUT",
       body: { translations: { en: "The suspects table." } },
     });
-    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}/story`);
+    // The save moves the contest's version, which the settings form sends back.
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
   test("cleans the editor's literal line breaks before storing", async () => {

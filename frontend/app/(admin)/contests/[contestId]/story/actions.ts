@@ -2,7 +2,9 @@
 
 import { storedMarkdown } from "@/lib/format/markdown";
 import { isId } from "@/lib/api/ids";
-import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
+
+import { contestChanged } from "../revalidation";
 
 /** What a save of one per-language document reports back to its form. */
 export type TranslationsState = ActionState;
@@ -25,13 +27,8 @@ function translationsFrom(form: FormData, prefix: string): Record<string, string
   return translations;
 }
 
-/** PUTs the set to `/contests/{id}{path}`, then revalidates what `changed` names. */
-async function saveTranslations(
-  form: FormData,
-  prefix: string,
-  path: string,
-  changed: (contestId: string) => Revalidation[],
-): Promise<TranslationsState> {
+/** PUTs the set to `/contests/{id}{path}`, then revalidates the workspace. */
+async function saveTranslations(form: FormData, prefix: string, path: string): Promise<TranslationsState> {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
@@ -41,7 +38,7 @@ async function saveTranslations(
         method: "PUT",
         body: { translations: translationsFrom(form, prefix) },
       }),
-    { revalidate: changed(contestId) },
+    { revalidate: contestChanged(contestId) },
   );
 }
 
@@ -51,8 +48,7 @@ async function saveTranslations(
  * empty body would pass the gate's presence check.
  */
 export async function saveStoryAction(_previous: StoryState, form: FormData): Promise<StoryState> {
-  // The publish gate counts the story.
-  return saveTranslations(form, "body", "/story", (contestId) => [{ layout: `/contests/${contestId}` }]);
+  return saveTranslations(form, "body", "/story");
 }
 
 /**
@@ -61,5 +57,5 @@ export async function saveStoryAction(_previous: StoryState, form: FormData): Pr
  * language's.
  */
 export async function saveSchemaNotesAction(_previous: SchemaNotesState, form: FormData): Promise<SchemaNotesState> {
-  return saveTranslations(form, "schemaNotes", "/schema-notes", (contestId) => [`/contests/${contestId}/story`]);
+  return saveTranslations(form, "schemaNotes", "/schema-notes");
 }

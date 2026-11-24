@@ -3,6 +3,8 @@
 import { isId } from "@/lib/api/ids";
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
+import { contestChanged } from "../revalidation";
+
 export type QuestionListState = ActionState;
 
 /** Both ids reach a request path, so both are validated first. */
@@ -18,7 +20,7 @@ function ids(form: FormData): { contestId: string; questionId?: string } | null 
 
 /** The list, the publish gate and the question screen all change. */
 function change(contestId: string, path: string, init: { method: string; body?: unknown }): Promise<QuestionListState> {
-  return serverAction(() => serverRequest(path, init), { revalidate: [{ layout: `/contests/${contestId}` }] });
+  return serverAction(() => serverRequest(path, init), { revalidate: contestChanged(contestId) });
 }
 
 /**

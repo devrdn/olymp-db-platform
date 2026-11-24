@@ -2,7 +2,9 @@
 
 import { isId } from "@/lib/api/ids";
 import { importResultSchema, parseLogins, type ImportResult } from "@/lib/api/people";
-import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
+
+import { contestChanged } from "../revalidation";
 
 export type PeopleState = ActionState & { skipReason?: string };
 export type ImportState = ActionState & { result?: ImportResult };
@@ -14,12 +16,8 @@ function pair(form: FormData): { contestId: string; userId: string } | null {
   return isId(contestId) && isId(userId) ? { contestId, userId } : null;
 }
 
-function changed(contestId: string): Revalidation[] {
-  return [{ layout: `/contests/${contestId}` }];
-}
-
 function change(contestId: string, path: string, init: { method: string; body?: unknown }): Promise<PeopleState> {
-  return serverAction(() => serverRequest(path, init), { revalidate: changed(contestId) });
+  return serverAction(() => serverRequest(path, init), { revalidate: contestChanged(contestId) });
 }
 
 /** Appoints a manager. The role is fixed: ownership is never granted through this list. */
@@ -92,7 +90,7 @@ export async function addParticipantAction(
         }),
       ),
     {
-      revalidate: (result) => (result.added === 0 ? [] : changed(at.contestId)),
+      revalidate: (result) => (result.added === 0 ? [] : contestChanged(at.contestId)),
       success: (result) => (result.added === 0 ? { skipReason: result.skipped[0]?.reason } : { ok: true }),
     },
   );
@@ -118,6 +116,6 @@ export async function importParticipantsAction(
       importResultSchema.parse(
         await serverRequest(`/contests/${contestId}/participants`, { method: "POST", body: { logins } }),
       ),
-    { revalidate: changed(contestId), success: (result) => ({ ok: true, result }) },
+    { revalidate: contestChanged(contestId), success: (result) => ({ ok: true, result }) },
   );
 }

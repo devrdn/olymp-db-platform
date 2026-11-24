@@ -3,6 +3,8 @@
 import { isId, pathSegment } from "@/lib/api/ids";
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
+import { contestChanged } from "../revalidation";
+
 export type GameState = ActionState;
 
 /**
@@ -27,6 +29,6 @@ export async function dropGameInstanceAction(
   // The list is server-rendered, so revalidate.
   return serverAction(
     () => serverRequest(`/contests/${contestId}/game/instances/${segment}`, { method: "DELETE" }),
-    { revalidate: [{ layout: `/contests/${contestId}` }] },
+    { revalidate: contestChanged(contestId) },
   );
 }

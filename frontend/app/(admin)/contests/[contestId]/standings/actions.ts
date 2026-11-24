@@ -3,6 +3,8 @@
 import { isId } from "@/lib/api/ids";
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
+import { contestChanged } from "../revalidation";
+
 export type RevealState = ActionState & { revealedAt?: string };
 
 /**
@@ -19,7 +21,7 @@ export async function revealStandingsAction(_previous: RevealState, form: FormDa
         revealed_at?: string;
       },
     {
-      revalidate: [{ layout: `/contests/${contestId}` }],
+      revalidate: contestChanged(contestId),
       success: (answer) => ({ ok: true, revealedAt: answer?.revealed_at }),
     },
   );

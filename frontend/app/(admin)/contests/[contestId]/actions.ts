@@ -2,16 +2,13 @@
 
 import { CONTEST_STATUSES, type ContestStatus } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
-import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
+
+import { contestChanged } from "./revalidation";
 
 export type StatusState = ActionState & { moved?: ContestStatus };
 
 export type TitleState = ActionState;
-
-/** The title and the status also appear in the header, breadcrumb and register. */
-function changed(contestId: string): Revalidation[] {
-  return ["/contests", { layout: `/contests/${contestId}` }];
-}
 
 /**
  * Replaces titles and descriptions as a set, so the publish gate never sees a
@@ -39,7 +36,7 @@ export async function saveTranslationsAction(
 
   return serverAction(
     () => serverRequest(`/contests/${contestId}/translations`, { method: "PUT", body: { translations } }),
-    { revalidate: changed(contestId) },
+    { revalidate: contestChanged(contestId, { register: true }) },
   );
 }
 
@@ -60,7 +57,7 @@ export async function setStatusAction(
   if (!CONTEST_STATUSES.includes(status as ContestStatus)) return { code: "invalid_request" };
 
   return serverAction(() => serverRequest(`/contests/${contestId}/status`, { method: "POST", body: { status } }), {
-    revalidate: changed(contestId),
+    revalidate: contestChanged(contestId, { register: true }),
     success: () => ({ ok: true, moved: status as ContestStatus }),
   });
 }

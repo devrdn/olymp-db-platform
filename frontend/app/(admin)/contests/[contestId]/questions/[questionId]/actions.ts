@@ -3,6 +3,7 @@
 import { isId } from "@/lib/api/ids";
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
+import { contestChanged } from "../../revalidation";
 import { questionFrom } from "./question-form";
 
 export type QuestionState = ActionState;
@@ -32,6 +33,6 @@ export async function saveQuestionAction(
 
   return serverAction(
     () => serverRequest(`/contests/${at.contestId}/questions/${at.questionId}`, { method: "PUT", body: parsed.body }),
-    { revalidate: [{ layout: `/contests/${at.contestId}` }] },
+    { revalidate: contestChanged(at.contestId) },
   );
 }

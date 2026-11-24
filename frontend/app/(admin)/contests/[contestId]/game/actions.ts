@@ -16,6 +16,8 @@ import { isId, pathSegment } from "@/lib/api/ids";
 import type { Failure } from "@/lib/api/outcome";
 import { serverAction, serverOutcome, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
+import { contestChanged } from "../revalidation";
+
 /**
  * `detail` is the API's message, shown beside (never instead of) the
  * dictionary sentence for refusals whose sentence is generic because the table,
@@ -25,11 +27,6 @@ export type GameState = ActionState & { detail?: string };
 
 /** A refusal code, or what the write produced (an upload id, a game's status). */
 export type UploadActionResult<T> = ActionState & { value?: T; detail?: string };
-
-/** The publish gate and this section both depend on the game. */
-function changed(contestId: string): Revalidation[] {
-  return [{ layout: `/contests/${contestId}` }];
-}
 
 /** A refusal that keeps the API's message as `detail`. */
 function withDetail(failure: Failure): { code: string; detail?: string } {
@@ -80,7 +77,7 @@ export async function saveGameScriptAction(_previous: GameState, form: FormData)
 
   return serverAction(
     () => serverRequest(`/contests/${contestId}/game/script`, { method: "PUT", body: { script } }),
-    { revalidate: changed(contestId) },
+    { revalidate: contestChanged(contestId) },
   );
 }
 
@@ -102,7 +99,7 @@ export async function requestGameBuildAction(contestId: string): Promise<UploadA
 
   return controlNamingFault(
     async () => gameSchema.parse(await serverRequest(`/contests/${contestId}/game/build`, { method: "POST" })),
-    changed(contestId),
+    contestChanged(contestId),
   );
 }
 
@@ -130,7 +127,7 @@ export async function beginGameUploadAction(
           body: { filename, declared_bytes: declaredBytes },
         }),
       ),
-    changed(contestId),
+    contestChanged(contestId),
   );
 }
 
@@ -176,7 +173,7 @@ export async function completeGameUploadAction(
       gameSchema.parse(
         await serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/complete`, { method: "POST" }),
       ),
-    changed(contestId),
+    contestChanged(contestId),
   );
 }
 
@@ -193,7 +190,7 @@ export async function abortGameUploadAction(
   // Frees the "one receiving upload" slot for a reload's read.
   return serverAction(
     () => serverRequest(`/contests/${contestId}/game/uploads/${uploadId}/abort`, { method: "POST" }),
-    { revalidate: changed(contestId) },
+    { revalidate: contestChanged(contestId) },
   );
 }
 
@@ -220,7 +217,7 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
   // Several validation refusals name the table or column at fault.
   const saved = await serverOutcome(
     () => serverRequest(`/contests/${contestId}/game/definition`, { method: "PUT", body: definition }),
-    { revalidate: changed(contestId) },
+    { revalidate: contestChanged(contestId) },
   );
   return saved.ok ? { ok: true } : withDetail(saved);
 }
@@ -287,7 +284,7 @@ export async function completeTableUploadAction(
           method: "POST",
         }),
       ),
-    changed(contestId),
+    contestChanged(contestId),
   );
 }
 
@@ -351,7 +348,7 @@ export async function appendTableRowAction(
           body: { values },
         }),
       ),
-    changed(contestId),
+    contestChanged(contestId),
   );
 }
 
@@ -369,6 +366,6 @@ export async function deleteTableRowAction(
   // Marks the game out of date, like an added row.
   return serverAction(
     () => serverRequest(`${at}/rows/${row}`, { method: "DELETE" }),
-    { revalidate: changed(contestId) },
+    { revalidate: contestChanged(contestId) },
   );
 }

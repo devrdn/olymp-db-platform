@@ -19,9 +19,11 @@ import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard-terms";
 import { parseTables, type SqlMode } from "@/lib/api/policy";
 import { SQL_MODES } from "@/lib/api/policy-terms";
-import { serverAction, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
+import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 import { instantFromWallClock } from "@/lib/format/datetime";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
+
+import { contestChanged } from "../revalidation";
 
 export type SettingsState = ActionState & {
   rejected?: string[];
@@ -32,13 +34,11 @@ export type SettingsState = ActionState & {
   cover?: ContestCover | null;
 };
 
-/** The contest's workspace and the register. */
-function changed(contestId: string): Revalidation[] {
-  return ["/contests", { layout: `/contests/${contestId}` }];
-}
-
+/** A settings save also changes what the register lists: the status, the dates. */
 function save(contestId: string, path: string, init: { method: string; body: unknown }): Promise<SettingsState> {
-  return serverAction(() => serverRequest(path, init), { revalidate: changed(contestId) });
+  return serverAction(() => serverRequest(path, init), {
+    revalidate: contestChanged(contestId, { register: true }),
+  });
 }
 
 /**
@@ -283,7 +283,7 @@ export async function uploadCoverAction(
   // Read after the save is revalidated: a cover the API stored but answered
   // in a shape this side cannot read is a contract break, not a refusal.
   return serverAction(() => serverRequest(`/contests/${contestId}/cover`, { method: "PUT", rawBody: payload }), {
-    revalidate: changed(contestId),
+    revalidate: contestChanged(contestId, { register: true }),
     success: (answer) => ({ ok: true, cover: contestCoverSchema.parse(answer) }),
   });
 }
@@ -297,7 +297,7 @@ export async function removeCoverAction(
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
   return serverAction(() => serverRequest(`/contests/${contestId}/cover`, { method: "DELETE" }), {
-    revalidate: changed(contestId),
+    revalidate: contestChanged(contestId, { register: true }),
     success: () => ({ ok: true, cover: null }),
   });
 }
