@@ -81,6 +81,10 @@ CORE_TEST_DB_DSN  ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(
 GAME_TEST_DB_PORT ?= 5434
 GAME_TEST_DB_DSN  ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(GAME_TEST_DB_PORT)/$(GAME_DB_NAME)_test?sslmode=disable
 
+# The Redis the cache contract runs against in `make test-db`: redis-test in
+# the development overlay, never the stack's own.
+REDIS_TEST_PORT ?= 56379
+
 # Redis is optional: with no address the service uses its in-process cache.
 #
 # deploy/.env also sets REDIS_ADDR — for the containerized api service, which
@@ -198,10 +202,18 @@ test-race: ## Run the tests with the race detector
 # app.New's refusal of a pool too small for the retention sweep, and
 # cmd/migrate for its round trip of a migration, which runs on a scratch
 # database of its own because rolling back drops tables the other packages
-# are using.
-test-db: require-env test-db-reset ## Run the repository tests against a fresh test database
-	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" go test -count=1 ./cmd/migrate/... ./internal/app/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/... \
-		./internal/participation/...
+# are using. internal/platform/cache is there for its contract on Redis, the
+# deployment's cache, run on a throwaway server (test-redis).
+test-db: require-env test-db-reset test-redis ## Run the repository tests against a fresh test database
+	cd $(BACKEND) && CORE_DB_DSN="$$CORE_TEST_DB_DSN" CACHE_TEST_REDIS_ADDR="localhost:$(REDIS_TEST_PORT)" \
+		go test -count=1 ./cmd/migrate/... ./internal/app/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/... \
+		./internal/participation/... ./internal/platform/cache/...
+
+# Recreated for every run, as test-game-cluster is, so no run reads a key the
+# last one left.
+.PHONY: test-redis
+test-redis: require-env
+	REDIS_TEST_PORT=$(REDIS_TEST_PORT) $(COMPOSE_DEV) --profile test up -d --wait --force-recreate redis-test
 
 # Once per run and before any test binary starts: `go test` runs packages in
 # parallel, and they share this database. The migrations are applied by the

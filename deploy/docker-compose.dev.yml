@@ -122,6 +122,24 @@ services:
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
 
+  # A Redis for the cache contract's tests and nothing else, so they never
+  # touch the sessions and counters of the stack's own. The product's image,
+  # with nothing written to disk; `make test-db` recreates it for every run.
+  redis-test:
+    image: redis:7.4.12-alpine
+    profiles: [test]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    ports:
+      - "127.0.0.1:${REDIS_TEST_PORT:-56379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    networks: [tests]
+
   # The API, the Query Runner, and the one-shot jobs are run from the host
   # during development (`make run`, `make runner`, `make game-roles`) — none
   # of the four carries a profile of its own in the base file, so without one
