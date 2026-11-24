@@ -1,11 +1,11 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings-terms";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 import { getDictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { loadContest } from "../../contest";
@@ -53,9 +53,7 @@ export default async function ResultsExportPage(props: PageProps<"/contests/[con
           logoHref={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined}
         />
       ) : (
-        <p role="alert" className="max-w-body bg-bad-wash px-3 py-2 text-small text-bad">
-          {messageForCode(preview.code, dict.errors)}
-        </p>
+        <FailureAlert code={preview.code} errors={dict.errors} />
       )}
     </div>
   );

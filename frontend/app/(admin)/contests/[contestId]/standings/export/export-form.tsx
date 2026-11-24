@@ -3,6 +3,7 @@
 import { FileDown, RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
@@ -15,7 +16,6 @@ import { saveBlob } from "@/lib/download";
 import { formatTime } from "@/lib/format/datetime";
 import { LOCALE_NAMES, LOCALES, type Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { messageForCode } from "@/lib/i18n/errors";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
@@ -33,7 +33,8 @@ function pdfLanguage(contestLanguage: string, locale: Locale): Locale {
   return (LOCALES as readonly string[]).includes(contestLanguage) ? (contestLanguage as Locale) : locale;
 }
 
-type Failure = { where: "refresh" | "download"; message: string };
+/** Where the export failed, and the API's code; none when this tab could not make the file. */
+type Failure = { where: "refresh" | "download"; code?: string };
 
 /**
  * The results export: whom on one side, what and how on the other, and the
@@ -91,10 +92,10 @@ export function ExportForm({
         setReport(result.report);
         setSelected((previous) => keptOnRefresh(previous, result.report.rows));
       } else {
-        setFailure({ where: "refresh", message: messageForCode(result.code, dict.errors) });
+        setFailure({ where: "refresh", code: result.code });
       }
     } catch {
-      setFailure({ where: "refresh", message: messageForCode("unreachable", dict.errors) });
+      setFailure({ where: "refresh", code: "unreachable" });
     } finally {
       setBusy(null);
     }
@@ -110,7 +111,7 @@ export function ExportForm({
       if (kind === "csv") {
         const outcome = await downloadResultsCsv(contestId, body);
         if (outcome.kind === "refused") {
-          setFailure({ where: "download", message: messageForCode(outcome.code, dict.errors) });
+          setFailure({ where: "download", code: outcome.code });
           return;
         }
         saveBlob(outcome.blob, outcome.fileName);
@@ -119,7 +120,7 @@ export function ExportForm({
 
       const outcome = await fetchResultsReport(contestId, body);
       if (outcome.kind === "refused") {
-        setFailure({ where: "download", message: messageForCode(outcome.code, dict.errors) });
+        setFailure({ where: "download", code: outcome.code });
         return;
       }
       const { makeResultsPdf } = await import("./pdf/make-results-pdf");
@@ -134,7 +135,7 @@ export function ExportForm({
       });
       saveBlob(blob, resultsFileName(kind, contestId, outcome.report.generatedAt));
     } catch {
-      setFailure({ where: "download", message: t.failed });
+      setFailure({ where: "download" });
     } finally {
       setBusy(null);
     }
@@ -165,11 +166,7 @@ export function ExportForm({
           <RefreshCw strokeWidth={1.75} aria-hidden />
           {busy === "refresh" ? t.refreshing : t.refresh}
         </Button>
-        {failure?.where === "refresh" ? (
-          <p role="alert" className="text-small text-bad">
-            {failure.message}
-          </p>
-        ) : null}
+        {failure?.where === "refresh" ? <FailureAlert code={failure.code} errors={dict.errors} /> : null}
       </div>
 
       {/* The options come first in reading order, which a one-column form
@@ -322,9 +319,11 @@ export function ExportForm({
               )}
             >
               {failure?.where === "download" ? (
-                <p role="alert" className="text-small text-bad">
-                  {failure.message}
-                </p>
+                <FailureAlert
+                  code={failure.code}
+                  errors={dict.errors}
+                  fallback={failure.code === undefined ? t.failed : undefined}
+                />
               ) : null}
               {count === 0 ? (
                 <p id={downloadHint} className="text-small text-ink-3">

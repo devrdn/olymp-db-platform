@@ -277,6 +277,7 @@ export function ActionOutcome({
 /**
  * A refusal's sentence as an alert, the one style every form shows one in;
  * for a screen whose request is not an action, `ActionOutcome` otherwise.
+ * Without a `code` the failure never reached the API, and `fallback` says it.
  */
 export function FailureAlert({
   code,
@@ -286,15 +287,20 @@ export function FailureAlert({
   id,
   children,
 }: {
-  code: string;
+  code?: string;
   errors: ErrorSentences;
-  /** Said for a code without a sentence, in place of the generic one. */
+  /** Said for a code without a sentence, or for no code, in place of the generic one. */
   fallback?: string;
   narrow?: boolean;
   id?: string;
   children?: ReactNode;
 }) {
-  const sentence = fallback === undefined ? messageForCode(code, errors) : (labelFor(errors, code) ?? fallback);
+  const sentence =
+    code === undefined
+      ? (fallback ?? errors.fallback)
+      : fallback === undefined
+        ? messageForCode(code, errors)
+        : (labelFor(errors, code) ?? fallback);
   const width = narrow ? "max-w-40 text-balance" : "max-w-body";
   if (children === undefined || children === null || children === false) {
     return (

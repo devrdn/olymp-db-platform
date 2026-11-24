@@ -8,7 +8,15 @@ import type { ActionState } from "@/lib/api/server";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 
-import { ActionButton, ActionFooter, ActionForm, ActionOutcome, ActionReload, useActionStatus } from "./action-form";
+import {
+  ActionButton,
+  ActionFooter,
+  ActionForm,
+  ActionOutcome,
+  ActionReload,
+  FailureAlert,
+  useActionStatus,
+} from "./action-form";
 
 const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
@@ -558,5 +566,25 @@ describe("ActionReload", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Rate")).toHaveValue("0");
+  });
+});
+
+describe("FailureAlert", () => {
+  test("says a code's sentence, and its fallback for a code without one", () => {
+    const { unmount } = render(<FailureAlert code="contest_changed" errors={dict.errors} fallback="Not made." />);
+    expect(screen.getByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    unmount();
+
+    render(<FailureAlert code="from_a_newer_server" errors={dict.errors} fallback="Not made." />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Not made.");
+  });
+
+  test("says its fallback for a failure that never reached the API, or the generic sentence", () => {
+    const { unmount } = render(<FailureAlert errors={dict.errors} fallback="Not made." />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Not made.");
+    unmount();
+
+    render(<FailureAlert errors={dict.errors} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(dict.errors.fallback);
   });
 });

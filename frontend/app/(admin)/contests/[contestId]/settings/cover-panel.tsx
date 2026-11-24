@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 
+import { FailureAlert } from "@/components/product/action-form";
 import { DrawnCover } from "@/components/product/drawn-cover";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -10,9 +11,9 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { ContestCover } from "@/lib/api/contests";
 import { coverStaffHref, MAX_COVER_ATTRIBUTION } from "@/lib/api/contests-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { messageForCode } from "@/lib/i18n/errors";
 
 import { removeCoverAction, uploadCoverAction, type SettingsState } from "./actions";
-import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * Refusals about the credit line, shown under it; every other code concerns the
@@ -118,10 +119,7 @@ export function CoverPanel({
     run("upload", uploadCoverAction, form);
   }
 
-  const failure =
-    outcome?.state.code != null
-      ? (messageForCode(outcome.state.code, dict.errors))
-      : null;
+  const failure = outcome?.state.code != null ? messageForCode(outcome.state.code, dict.errors) : null;
   const uploadFailure = outcome?.of === "upload" ? failure : null;
 
   const fileError =
@@ -131,7 +129,7 @@ export function CoverPanel({
     : uploadFailure && ATTRIBUTION_CODES.has(outcome!.state.code!)
       ? uploadFailure
       : null;
-  const removeFailure = outcome?.of === "remove" ? failure : null;
+  const removeRefusal = outcome?.of === "remove" ? outcome.state.code : undefined;
 
   const uploading = pending && attempt === "upload";
   const removing = pending && attempt === "remove";
@@ -243,11 +241,7 @@ export function CoverPanel({
               </Button>
 
               {/* A removal has no field, so its refusal sits beside the button. */}
-              {removeFailure ? (
-                <p role="alert" className="max-w-body text-small text-bad">
-                  {removeFailure}
-                </p>
-              ) : null}
+              {removeRefusal ? <FailureAlert code={removeRefusal} errors={dict.errors} /> : null}
             </form>
           ) : outcome?.of === "remove" && outcome.state.ok ? (
             <p role="status" className="text-small text-good">
