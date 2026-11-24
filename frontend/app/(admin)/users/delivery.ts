@@ -1,5 +1,5 @@
 import { mailStatusSchema } from "@/lib/api/accounts";
-import { bestEffort } from "@/lib/api/page-read";
+import { bestEffort } from "@/lib/api/outcome";
 import { serverRequest } from "@/lib/api/server";
 
 import type { MailOffer } from "./email-delivery";

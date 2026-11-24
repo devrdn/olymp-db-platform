@@ -1,6 +1,6 @@
 import { cache } from "react";
 
-import { bestEffort } from "@/lib/api/page-read";
+import { bestEffort } from "@/lib/api/outcome";
 
 import { fetchIdentity } from "./session";
 

@@ -4,7 +4,7 @@ import { cache } from "react";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 
 import { ApiError } from "./client";
-import { outcome } from "./outcome";
+import { bestEffort } from "./outcome";
 import { serverRequest } from "./server";
 
 /**
@@ -81,9 +81,7 @@ export async function readPage<T, const P extends ReadPolicy>(
     return parse(payload);
   };
 
-  if (!policy.bestEffort) return (await read()) as PageRead<T, P>;
-  const result = await outcome(read, { report: path });
-  return (result.ok ? result.value : null) as PageRead<T, P>;
+  return (await (policy.bestEffort ? bestEffort(read, path) : read())) as PageRead<T, P>;
 }
 
 /**
@@ -106,14 +104,4 @@ function answer(error: unknown, policy: ReadPolicy): null | Refusal {
     }
   }
   throw error;
-}
-
-/**
- * A read the caller works without, for a call that is not one API path: its
- * value, or null with the failure logged under `report`. Next's own control
- * flow still passes.
- */
-export async function bestEffort<T>(call: () => Promise<T>, report: string): Promise<T | null> {
-  const result = await outcome(call, { report });
-  return result.ok ? result.value : null;
 }

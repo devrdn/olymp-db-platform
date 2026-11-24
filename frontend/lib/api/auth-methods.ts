@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { PROVIDER_IDS, type ProviderId } from "@/lib/auth/external";
 
-import { bestEffort } from "./page-read";
+import { bestEffort } from "./outcome";
 import { serverRequest } from "./server";
 
 /** The ways in this installation offers, as `GET /auth/methods` says. */

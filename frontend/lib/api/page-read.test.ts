@@ -23,7 +23,8 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("./server", () => ({ serverRequest }));
 
-import { bestEffort, readPage, Refusal, type ReadPolicy } from "./page-read";
+import { bestEffort } from "./outcome";
+import { readPage, Refusal, type ReadPolicy } from "./page-read";
 
 const PATH = "/contests/c1/questions/q1";
 const HERE = "/contests/c1/questions";
@@ -160,14 +161,9 @@ describe("a best-effort read", () => {
     expect(await readPage(PATH, asIs, { here: HERE, bestEffort: true, ...policy })).toBeNull();
     expect(logged).not.toHaveBeenCalled();
   });
-
-  test("gives the value of a call that worked", async () => {
-    expect(await bestEffort(async () => "who", "/auth/me")).toBe("who");
-  });
 });
 
 describe("one render's reads", () => {
-
   test("ask the API once for a path, whatever each caller parses and however each answers a refusal", async () => {
     serverRequest.mockResolvedValue({ problems: [] });
 

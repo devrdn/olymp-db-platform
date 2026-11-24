@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 
 import { ApiError, request } from "./client";
-import { failureCodeOf, outcome } from "./outcome";
+import { bestEffort, failureCodeOf, outcome } from "./outcome";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -204,6 +204,19 @@ describe("outcome on the server", () => {
     );
 
     expect(logOf(logged)).not.toMatch(/[\u2028\u2029]/);
+  });
+});
+
+describe("bestEffort", () => {
+  test("gives the value of a call that worked", async () => {
+    expect(await bestEffort(async () => "who", "/auth/me")).toBe("who");
+  });
+
+  test("is null, with the failure logged under the path read, for a call that failed", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await bestEffort(async () => Promise.reject(new ApiError("internal_error", 500, "")), "/settings")).toBeNull();
+    expect(String(logged.mock.calls[0]?.[0])).toContain("/settings");
   });
 });
 

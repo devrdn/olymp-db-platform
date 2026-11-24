@@ -1,6 +1,6 @@
 import { cache } from "react";
 
-import { bestEffort } from "./page-read";
+import { bestEffort } from "./outcome";
 import { serverRequest } from "./server";
 import { settingsSchema, type Settings } from "./settings";
 

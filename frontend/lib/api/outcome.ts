@@ -98,6 +98,15 @@ function driftedFields(error: unknown): string | undefined {
 }
 
 /**
+ * A read the caller works without: its value, or null with the failure logged
+ * under `report`, the path read. Next's own control flow still passes.
+ */
+export async function bestEffort<T>(call: () => Promise<T>, report: string): Promise<T | null> {
+  const result = await outcome(call, { report });
+  return result.ok ? result.value : null;
+}
+
+/**
  * The code alone, for a caller that catches a thrown `ApiError` itself (an
  * upload's abort, the autosave's refusal kinds): the API's code when it
  * answered, `unreachable` for anything else.
