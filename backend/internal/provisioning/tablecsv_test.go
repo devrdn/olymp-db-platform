@@ -188,11 +188,11 @@ func TestSplitCSVLineStopsOneFieldPastTheWidestTable(t *testing.T) {
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 	content := widest + ",x,x\n1,Ann,\n"
-	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	data, err := service.TableUploads().Begin(t.Context(), contest, "suspects", int64(len(content)))
 	if err != nil {
 		t.Fatalf("begin table upload: %v", err)
 	}
-	_, err = service.AppendTableChunk(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content))
+	_, err = service.TableUploads().Append(t.Context(), uuid.New(), contest, data.ID, 0, strings.NewReader(content))
 	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
 		t.Fatalf("a header wider than any table = %v, want ErrTableHeaderMismatch", err)
 	}
@@ -268,8 +268,8 @@ func TestAppendTableRowAcceptsATimestampWithNoSecondsField(t *testing.T) {
 	}
 }
 
-// The content is written straight to the store, bypassing AppendTableChunk's
-// early header check, to test the end-of-upload fallback.
+// The content is written straight to the store, bypassing the first chunk's
+// header check, to test the end-of-upload fallback.
 func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *testing.T) {
 	t.Parallel()
 	service, store, _, files := tableDataGames(t, true)
@@ -277,7 +277,7 @@ func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *te
 	withSuspects(t, service, contest)
 
 	content := "id,name,extra\nnot-a-number,A,x\n" // wrong header AND a row that would also fail
-	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	data, err := service.TableUploads().Begin(t.Context(), contest, "suspects", int64(len(content)))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}

@@ -1175,7 +1175,7 @@ func TestAPublishDecidedBeforeTheGameIsReplacedIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ByID() = %v", err)
 	}
-	games := provisioning.NewGames(templates, nil, templates, repo, storage.NewUnitOfWork(testPool)).
+	games := provisioning.NewGames(gameStores(templates), nil, templates, repo, storage.NewUnitOfWork(testPool)).
 		WithAudit(audit.New(NewAuditSink(testPool)))
 	replaces := func() error {
 		_, err := games.SetScript(context.Background(), author.CreatedBy, id, "CREATE TABLE witnesses (name text);")
@@ -1346,7 +1346,7 @@ func TestAGameReplacementDecidedBeforeTheStartIsRefused(t *testing.T) {
 		_, err = repo.SetStatus(context.Background(), due, contests.StatusRunning)
 		return err
 	}
-	games := provisioning.NewGames(templates, nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
+	games := provisioning.NewGames(gameStores(templates), nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
 		repo, storage.NewUnitOfWork(testPool)).WithAudit(audit.New(NewAuditSink(testPool)))
 
 	_, err = games.SetScript(ctx, author.CreatedBy, id, "CREATE TABLE suspects (name text);")
@@ -1387,7 +1387,7 @@ func TestABuildRequestDecidedBeforeTheStartIsRefused(t *testing.T) {
 		_, err = repo.SetStatus(context.Background(), due, contests.StatusRunning)
 		return err
 	}
-	games := provisioning.NewGames(templates, nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
+	games := provisioning.NewGames(gameStores(templates), nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
 		repo, storage.NewUnitOfWork(testPool)).WithAudit(audit.New(NewAuditSink(testPool)))
 
 	_, err = games.RequestBuild(ctx, author.CreatedBy, id)

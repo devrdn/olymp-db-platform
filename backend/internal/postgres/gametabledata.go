@@ -6,14 +6,29 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Bookkeeping for the table builder's per-table CSV files (game_table_data):
 // gameuploads.go's shape at the grain of one table.
+
+// GameTableData is the rows of the table builder's CSV files,
+// provisioning.TableDataRows.
+type GameTableData struct{ pool *pgxpool.Pool }
+
+var _ provisioning.TableDataRows = (*GameTableData)(nil)
+
+// NewGameTableData returns the table builder's rows over pool.
+func NewGameTableData(pool *pgxpool.Pool) *GameTableData { return &GameTableData{pool: pool} }
+
+func (r *GameTableData) querier(ctx context.Context) storage.Querier {
+	return storage.QuerierFrom(ctx, r.pool)
+}
 
 const tableDataColumns = `id, contest_id, table_name, declared_bytes, received_bytes,
 	coalesce(line_count, 0), coalesce(deleted_rows, '{}'), status, created_at, updated_at`
@@ -31,15 +46,15 @@ func scanTableData(row pgx.Row, more ...any) (provisioning.TableData, error) {
 	dest := append([]any{&d.ID, &d.ContestID, &d.Table, &d.DeclaredBytes, &d.ReceivedBytes,
 		&d.Lines, &d.DeletedRows, &status, &d.CreatedAt, &d.UpdatedAt}, more...)
 	err := row.Scan(dest...)
-	d.Status = provisioning.TableDataStatus(status)
+	d.Status = provisioning.UploadStatus(status)
 	return d, err
 }
 
-// BeginTableData records a new table-data upload in 'receiving'. The caller
+// Begin records a new upload of table's data in 'receiving'. The caller
 // generates id so it can name a reservation on disk before this row exists.
 // One unfinished upload per table is enforced by the partial index
 // game_table_data_one_receiving_idx, not by a read before the INSERT.
-func (r *GameInstances) BeginTableData(
+func (r *GameTableData) Begin(
 	ctx context.Context, id, contestID uuid.UUID, table string, declaredBytes int64,
 ) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx, `
@@ -49,19 +64,19 @@ func (r *GameInstances) BeginTableData(
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
-			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+			return provisioning.TableData{}, provisioning.ErrUploadInProgress
 		}
 		return provisioning.TableData{}, fmt.Errorf("record the table upload: %w", err)
 	}
 	return data, nil
 }
 
-// TableDataByID reads one table-data row by id, or ErrTableDataNotFound.
-func (r *GameInstances) TableDataByID(ctx context.Context, id uuid.UUID) (provisioning.TableData, error) {
+// ByID reads one table-data row by id, or ErrUploadNotFound.
+func (r *GameTableData) ByID(ctx context.Context, id uuid.UUID) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+tableDataColumns+` FROM game_table_data WHERE id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrUploadNotFound
 	}
 	if err != nil {
 		return provisioning.TableData{}, fmt.Errorf("read the table upload: %w", err)
@@ -69,10 +84,9 @@ func (r *GameInstances) TableDataByID(ctx context.Context, id uuid.UUID) (provis
 	return data, nil
 }
 
-// TableDataWithOwner is TableDataByID with the account that created the
-// row's contest, in one statement: a chunk needs both and arrives hundreds of
-// times per upload.
-func (r *GameInstances) TableDataWithOwner(ctx context.Context, id uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
+// WithOwner is ByID with the account that created the row's contest, in one
+// statement: a chunk needs both and arrives hundreds of times per upload.
+func (r *GameTableData) WithOwner(ctx context.Context, id uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
 	var owner uuid.UUID
 	// The contest is joined under names of its own, so tableDataColumns stays
 	// unambiguous, and joined rather than looked up, so a row without its
@@ -84,7 +98,7 @@ func (r *GameInstances) TableDataWithOwner(ctx context.Context, id uuid.UUID) (p
 		  ON c.owned_contest = game_table_data.contest_id
 		WHERE game_table_data.id = $1`, id), &owner)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return provisioning.TableData{}, uuid.Nil, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, uuid.Nil, provisioning.ErrUploadNotFound
 	}
 	if err != nil {
 		return provisioning.TableData{}, uuid.Nil, fmt.Errorf("read the table upload and its contest's owner: %w", err)
@@ -92,15 +106,14 @@ func (r *GameInstances) TableDataWithOwner(ctx context.Context, id uuid.UUID) (p
 	return data, owner, nil
 }
 
-// CurrentTableData reads a table's one 'receiving' upload, or
-// ErrTableDataNotFound. game_table_data_one_receiving_idx guarantees at most
-// one.
-func (r *GameInstances) CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+// Current reads a table's one 'receiving' upload, or ErrUploadNotFound.
+// game_table_data_one_receiving_idx guarantees at most one.
+func (r *GameTableData) Current(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+tableDataColumns+` FROM game_table_data
 		 WHERE contest_id = $1 AND lower(table_name) = lower($2) AND status = 'receiving'`, contestID, table))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrUploadNotFound
 	}
 	if err != nil {
 		return provisioning.TableData{}, fmt.Errorf("read the table's current upload: %w", err)
@@ -108,15 +121,14 @@ func (r *GameInstances) CurrentTableData(ctx context.Context, contestID uuid.UUI
 	return data, nil
 }
 
-// ReadyTableData reads a table's one 'complete' file, or
-// ErrTableDataNotFound. game_table_data_one_complete_idx guarantees at most
-// one.
-func (r *GameInstances) ReadyTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+// Ready reads a table's one 'complete' file, or ErrUploadNotFound.
+// game_table_data_one_complete_idx guarantees at most one.
+func (r *GameTableData) Ready(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+tableDataColumns+` FROM game_table_data
 		 WHERE contest_id = $1 AND lower(table_name) = lower($2) AND status = 'complete'`, contestID, table))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrUploadNotFound
 	}
 	if err != nil {
 		return provisioning.TableData{}, fmt.Errorf("read the table's current data: %w", err)
@@ -124,12 +136,12 @@ func (r *GameInstances) ReadyTableData(ctx context.Context, contestID uuid.UUID,
 	return data, nil
 }
 
-// UpdateTableDataReceived records how far a 'receiving' upload has got. It
-// never lowers the length, and it does not touch a file that is no longer
-// 'receiving' (ErrTableDataAlreadyComplete): a chunk admitted before its
-// upload completed can finish after, and a 'complete' file's length is what
-// every reader and the next appended row go by.
-func (r *GameInstances) UpdateTableDataReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error {
+// UpdateReceived records how far a 'receiving' upload has got. It never
+// lowers the length, and it does not touch a file that is no longer
+// 'receiving' (ErrUploadAlreadyComplete): a chunk admitted before its upload
+// completed can finish after, and a 'complete' file's length is what every
+// reader and the next appended row go by.
+func (r *GameTableData) UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error {
 	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_table_data
 		SET received_bytes = GREATEST(received_bytes, $2), updated_at = now()
@@ -138,14 +150,14 @@ func (r *GameInstances) UpdateTableDataReceived(ctx context.Context, id uuid.UUI
 		return fmt.Errorf("record the table upload's progress: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return provisioning.ErrTableDataAlreadyComplete
+		return provisioning.ErrUploadAlreadyComplete
 	}
 	return nil
 }
 
-// CompleteTableData marks id 'complete' with what the validation pass
-// measured, and retires previous (the file this one displaces, if any).
-func (r *GameInstances) CompleteTableData(
+// Complete marks id 'complete' with what the validation pass measured, and
+// retires previous (the file this one displaces, if any).
+func (r *GameTableData) Complete(
 	ctx context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID,
 ) (provisioning.TableData, error) {
 	// Retire the displaced row first: in the other order both rows would be
@@ -164,12 +176,12 @@ func (r *GameInstances) CompleteTableData(
 		return provisioning.TableData{}, fmt.Errorf("mark the table upload complete: %w", err)
 	}
 
-	return r.TableDataByID(ctx, id)
+	return r.ByID(ctx, id)
 }
 
-// CreateReadyTableData records a table's first row as a file that starts
-// already 'complete' (see provisioning.Games.AppendTableRow).
-func (r *GameInstances) CreateReadyTableData(
+// CreateReady records a table's first row as a file that starts already
+// 'complete' (see provisioning.Games.AppendTableRow).
+func (r *GameTableData) CreateReady(
 	ctx context.Context, id, contestID uuid.UUID, table string, bytes, lines int64,
 ) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx, `
@@ -179,30 +191,14 @@ func (r *GameInstances) CreateReadyTableData(
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
-			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+			return provisioning.TableData{}, provisioning.ErrUploadInProgress
 		}
 		return provisioning.TableData{}, fmt.Errorf("record the table's first row: %w", err)
 	}
 	return data, nil
 }
 
-// MarkTableDataChanged records that this contest's built game no longer holds
-// the data its tables do. A contest with no game row is not an error: the
-// build that writes it later loads all the data.
-//
-// clock_timestamp(), not now(): now() is transaction start, so a mark whose
-// transaction opened before a build claimed the template could carry a time
-// no later than the claim, and FinishBuild's `data_changed_at <= claimedAt`
-// would clear it. clock_timestamp() is always after ClaimBuild's commit.
-func (r *GameInstances) MarkTableDataChanged(ctx context.Context, contestID uuid.UUID) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_templates SET data_changed_at = clock_timestamp() WHERE contest_id = $1`, contestID); err != nil {
-		return fmt.Errorf("mark the contest's table data changed: %w", err)
-	}
-	return nil
-}
-
-// AppendTableDataRow records one more row of rowBytes at the end of a
+// AppendRow records one more row of rowBytes at the end of a
 // 'complete' file, only while the file is still recorded as at bytes long,
 // and so holds the row until the transaction ends.
 //
@@ -212,7 +208,7 @@ func (r *GameInstances) MarkTableDataChanged(ctx context.Context, contestID uuid
 //
 // No row matched also covers a row that is gone or no longer 'complete' (a
 // game replacement discards table data); both are ErrTableDataChanged.
-func (r *GameInstances) AppendTableDataRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
+func (r *GameTableData) AppendRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx, `
 		UPDATE game_table_data
 		SET received_bytes = received_bytes + $3,
@@ -229,8 +225,8 @@ func (r *GameInstances) AppendTableDataRow(ctx context.Context, id uuid.UUID, at
 	return data, nil
 }
 
-// AbortTableData marks one table-data upload 'aborted'.
-func (r *GameInstances) AbortTableData(ctx context.Context, id uuid.UUID) error {
+// Abort marks one table-data upload 'aborted'.
+func (r *GameTableData) Abort(ctx context.Context, id uuid.UUID) error {
 	if _, err := r.querier(ctx).Exec(ctx,
 		`UPDATE game_table_data SET status = 'aborted', updated_at = now() WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("mark the table upload aborted: %w", err)
@@ -238,11 +234,11 @@ func (r *GameInstances) AbortTableData(ctx context.Context, id uuid.UUID) error 
 	return nil
 }
 
-// DeleteTableDataRow tombstones one row of a 'complete' file in one atomic
+// DeleteRow tombstones one row of a 'complete' file in one atomic
 // array_append whose WHERE refuses a row already tombstoned, so two
 // concurrent deletes cannot both succeed. The CHECK on deleted_rows enforces
 // the bound and is answered as ErrTooManyDeletedRows.
-func (r *GameInstances) DeleteTableDataRow(ctx context.Context, id uuid.UUID, row int64) error {
+func (r *GameTableData) DeleteRow(ctx context.Context, id uuid.UUID, row int64) error {
 	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_table_data
 		SET deleted_rows = array_append(deleted_rows, $2::bigint), updated_at = now()
@@ -262,12 +258,12 @@ func (r *GameInstances) DeleteTableDataRow(ctx context.Context, id uuid.UUID, ro
 	return nil
 }
 
-// DiscardTableData retires every table-data row of one contest that anything
+// Discard retires every table-data row of one contest that anything
 // still needs ('receiving' and 'complete') and returns their ids, so the
 // caller can remove their bytes once its transaction has committed. Rows are
-// marked 'aborted', not deleted: they stay as history, and TableDataInUse
+// marked 'aborted', not deleted: they stay as history, and InUse
 // reads 'aborted' as unneeded.
-func (r *GameInstances) DiscardTableData(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+func (r *GameTableData) Discard(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		UPDATE game_table_data
 		SET status = 'aborted', updated_at = now()
@@ -292,9 +288,9 @@ func (r *GameInstances) DiscardTableData(ctx context.Context, contestID uuid.UUI
 	return ids, nil
 }
 
-// AbandonedTableData lists up to limit table-data uploads still 'receiving'
+// Abandoned lists up to limit table-data uploads still 'receiving'
 // whose updated_at is older than cutoff, oldest first.
-func (r *GameInstances) AbandonedTableData(ctx context.Context, cutoff time.Time, limit int) ([]provisioning.TableData, error) {
+func (r *GameTableData) Abandoned(ctx context.Context, cutoff time.Time, limit int) ([]provisioning.TableData, error) {
 	rows, err := r.querier(ctx).Query(ctx,
 		`SELECT `+tableDataColumns+` FROM game_table_data
 		 WHERE status = 'receiving' AND updated_at < $1
@@ -319,9 +315,9 @@ func (r *GameInstances) AbandonedTableData(ctx context.Context, cutoff time.Time
 	return out, nil
 }
 
-// TableDataInUse reports whether anything still needs id's bytes on the
-// volume: an upload still receiving, or a table's current 'complete' file.
-func (r *GameInstances) TableDataInUse(ctx context.Context, id uuid.UUID) (bool, error) {
+// InUse reports whether anything still needs id's bytes on the volume: an
+// upload still receiving, or a table's current 'complete' file.
+func (r *GameTableData) InUse(ctx context.Context, id uuid.UUID) (bool, error) {
 	var inUse bool
 	if err := r.querier(ctx).QueryRow(ctx, `
 		SELECT EXISTS(

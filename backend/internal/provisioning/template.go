@@ -168,7 +168,7 @@ type Template struct {
 	Script string
 	// ScriptBytes is len(Script), filled in even when Script was not read, so
 	// a console polling a build can show the length without fetching the
-	// script (TemplateRepository.TemplateStatus).
+	// script (BuildRepository.TemplateStatus).
 	ScriptBytes int
 	BuildError  string
 	// DataChangedAt is when the table builder's data last changed, nil when
@@ -202,9 +202,10 @@ func (t Template) TooLarge() bool {
 	return t.Status == TemplateFailed && t.BuildError == BuildTemplateTooLarge
 }
 
-// TemplateRepository is the storage the game's own lifecycle needs, apart from
-// the pool's (Repository).
-type TemplateRepository interface {
+// BuildRepository is the storage of a contest's game itself: what it is built
+// from, and how its build went. The pool's storage is Repository, and the
+// rows of the two kinds of upload are DumpRows and TableDataRows.
+type BuildRepository interface {
 	// SaveScript stores script as contest's game and puts it back to
 	// pending, bumping the version when one was already there. The version it
 	// returns is the one a build will be recorded against.
@@ -251,85 +252,19 @@ type TemplateRepository interface {
 	// the defaults (CLAUDE.md rule 11).
 	Policy(ctx context.Context, contestID uuid.UUID) (sqlpolicy.Policy, error)
 
-	// Uploads. Declared here rather than as a second interface because Games
-	// is the only consumer and CompleteUpload replaces the game through the
-	// same statements SaveScript uses.
-
-	// BeginUpload records a new upload in 'receiving'. The caller generates id
-	// so the file on disk can carry it before this row exists. A second
-	// upload in progress for the contest is refused by a unique index and
-	// returned as ErrUploadInProgress.
-	BeginUpload(ctx context.Context, id, contestID uuid.UUID, filename string, declaredBytes int64) (Upload, error)
-	// Upload reads one upload by id, or ErrUploadNotFound.
-	Upload(ctx context.Context, id uuid.UUID) (Upload, error)
-	// CurrentUpload reads a contest's one 'receiving' upload, or
-	// ErrUploadNotFound.
-	CurrentUpload(ctx context.Context, contestID uuid.UUID) (Upload, error)
-	// UpdateReceived records how far a 'receiving' upload has got, never
-	// lowering it, so a resumed browser knows where to continue.
-	// ErrUploadAlreadyComplete when the upload is no longer 'receiving'.
-	UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error
-	// CompleteUpload marks id 'complete', retires previous (nil unless another
-	// upload is displaced), and replaces the contest's game the same way
-	// SaveScript does.
+	// CompleteUpload marks the upload id 'complete' with what sealing it
+	// measured, retires previous (nil unless another upload is displaced), and
+	// replaces the contest's game the same way SaveScript does.
 	CompleteUpload(ctx context.Context, contestID, id uuid.UUID, database string, summary UploadSummary, previous *uuid.UUID) (Template, error)
-	// AbortUpload marks one upload 'aborted' and leaves game_templates alone.
-	AbortUpload(ctx context.Context, id uuid.UUID) error
-	// AbandonedUploads lists up to limit uploads still 'receiving' whose
-	// updated_at is older than cutoff.
-	AbandonedUploads(ctx context.Context, cutoff time.Time, limit int) ([]Upload, error)
-	// UploadInUse reports whether anything still needs id's bytes: an upload
-	// still receiving, or one a contest's game is built from. A row existing
-	// is not enough, since a displaced upload's row stays as history.
-	UploadInUse(ctx context.Context, id uuid.UUID) (bool, error)
+}
 
-	// Table-builder CSV data, one file per table; each mirrors an upload
-	// method above (see tabledata.go).
-
-	// BeginTableData records a new table-data upload in 'receiving'.
-	BeginTableData(ctx context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (TableData, error)
-	// TableDataByID reads one table-data row by id, or ErrTableDataNotFound.
-	TableDataByID(ctx context.Context, id uuid.UUID) (TableData, error)
-	// TableDataWithOwner is TableDataByID with the account that created the
-	// row's contest.
-	TableDataWithOwner(ctx context.Context, id uuid.UUID) (TableData, uuid.UUID, error)
-	// CurrentTableData reads a table's one 'receiving' upload, or
-	// ErrTableDataNotFound.
-	CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
-	// ReadyTableData reads a table's one 'complete' file, or
-	// ErrTableDataNotFound when the table has none yet.
-	ReadyTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
-	// UpdateTableDataReceived records how far a 'receiving' upload has got,
-	// never lowering it. ErrTableDataAlreadyComplete when the upload is no
-	// longer 'receiving'; its length is then left alone.
-	UpdateTableDataReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error
-	// CompleteTableData marks id 'complete' with what validation measured, and
-	// retires previous (nil unless another upload for the table is displaced).
-	CompleteTableData(ctx context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID) (TableData, error)
-	// CreateReadyTableData records a table's first row as a file that starts
-	// 'complete'.
-	CreateReadyTableData(ctx context.Context, id, contestID uuid.UUID, table string, bytes, lines int64) (TableData, error)
-	// AppendTableDataRow records one more row of rowBytes at the end of a
-	// 'complete' file, only while the file is still recorded as at bytes
-	// long. Otherwise ErrTableDataChanged: another row was recorded first, or
-	// the file is no longer the table's.
-	AppendTableDataRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (TableData, error)
-	// AbortTableData marks one table-data upload 'aborted'.
-	AbortTableData(ctx context.Context, id uuid.UUID) error
-	// DiscardTableData retires every table-data row of a contest and returns
-	// the ids whose files the caller removes after its transaction commits.
-	//
-	// Used when a game stops being builder-sourced. The rows are keyed by
-	// table name, so left behind they would be loaded by a later definition
-	// that reuses a name, against columns they were never validated for.
-	DiscardTableData(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error)
-	// DeleteTableDataRow tombstones one row of a 'complete' file in one atomic
-	// update, refusing with ErrTooManyDeletedRows past the stored bound.
-	DeleteTableDataRow(ctx context.Context, id uuid.UUID, row int64) error
-	// AbandonedTableData is AbandonedUploads for table data.
-	AbandonedTableData(ctx context.Context, cutoff time.Time, limit int) ([]TableData, error)
-	// TableDataInUse is UploadInUse for a table's file.
-	TableDataInUse(ctx context.Context, id uuid.UUID) (bool, error)
+// GameStores is the storage Games keeps a contest's game in. Each is required,
+// whatever volumes are configured: a game's rows outlive a volume taken out of
+// the configuration, and replacing the game still has to retire them.
+type GameStores struct {
+	Builds    BuildRepository
+	Dumps     DumpRows
+	TableData TableDataRows
 }
 
 // Authoring answers whether a contest's game may still be replaced. The rule
@@ -383,27 +318,24 @@ func (g *Games) editable(ctx context.Context, contestID uuid.UUID) (bool, error)
 // template database built from it. Service owns the copies made from that
 // template.
 type Games struct {
-	repo     TemplateRepository
+	repo     BuildRepository
 	cluster  TemplateCluster
 	author   Authoring
 	audit    *audit.Recorder
 	uow      unitOfWork
 	now      func() time.Time
 	contests contests.ContentRows
-	// files and limits are set by WithUploads. files is nil when no upload
-	// volume is configured, and every upload method then returns
-	// ErrUploadsDisabled.
-	files  *gamefile.Store
-	limits gamefile.Limits
-	// tableFiles and tableLimits are the table builder's CSV storage, set by
-	// WithTableData; a separate store from files. nil when not configured.
-	tableFiles  *gamefile.Store
-	tableLimits gamefile.Limits
+	// dumps and tables are the two kinds of chunked upload, each disabled
+	// until WithUploads or WithTableData gives it a volume.
+	dumps  *Uploads[Upload]
+	tables *Uploads[TableData]
+	// dumpRows and tableRows are the rows dumps and tables keep, for what
+	// only that kind does.
+	dumpRows  DumpRows
+	tableRows TableDataRows
 	// rowMarks caches where every five-hundredth row of a table's file
 	// begins, so paging does not rescan the file (tableRowIndex).
 	rowMarks tableRowIndex
-	// tableChunks holds who has a table chunk arriving (AppendTableChunk).
-	tableChunks chunksInFlight
 }
 
 // TemplateCluster is the one thing building a game asks of the cluster.
@@ -432,12 +364,32 @@ type unitOfWork interface {
 }
 
 // NewGames assembles the game half. Every edit of the game begins with the
-// contest's row (beginGameEdit) inside uow, so neither may be nil.
-func NewGames(repo TemplateRepository, cluster TemplateCluster, author Authoring, rows contests.ContentRows, uow unitOfWork) *Games {
+// contest's row (beginGameEdit) inside uow, so neither may be nil, and every
+// one of stores is required.
+func NewGames(stores GameStores, cluster TemplateCluster, author Authoring, rows contests.ContentRows, uow unitOfWork) *Games {
 	if rows == nil || uow == nil {
 		panic("provisioning: NewGames needs the contest rows a game edit begins with, and the unit of work it runs in")
 	}
-	return &Games{repo: repo, cluster: cluster, author: author, contests: rows, uow: uow, now: time.Now}
+	if stores.Builds == nil || stores.Dumps == nil || stores.TableData == nil {
+		panic("provisioning: NewGames needs the game's build state, its dumps' rows and its tables' rows")
+	}
+	g := &Games{
+		repo: stores.Builds, dumpRows: stores.Dumps, tableRows: stores.TableData,
+		cluster: cluster, author: author, contests: rows, uow: uow, now: time.Now,
+	}
+	// g.record and the clock are read through g, so a later WithAudit, or a
+	// test's clock, reaches both kinds.
+	now := func() time.Time { return g.now() }
+	g.dumps = &Uploads[Upload]{
+		rows: stores.Dumps, editable: g.requireEditable, uow: uow, record: g.record, now: now,
+		checkName: checkUploadFilename,
+	}
+	g.tables = &Uploads[TableData]{
+		rows: stores.TableData, editable: g.requireEditable, uow: uow, record: g.record, now: now,
+		checkName: g.checkTableName, firstChunk: g.checkTableHeaderOnFirstChunk,
+		bound: &chunkBound[TableData]{owners: stores.TableData},
+	}
+	return g
 }
 
 // WithAudit records who replaced a game and when. Without it nothing is
@@ -461,21 +413,11 @@ func (g *Games) record(ctx context.Context, entry audit.Entry) error {
 	return g.audit.Record(ctx, entry)
 }
 
-// WithUploads turns on file uploads. limits must be the Limits files was
-// built with: Games refuses an oversized upload before Store.Begin reserves
-// anything (CLAUDE.md rule 12). Without it, upload methods return
-// ErrUploadsDisabled.
+// WithUploads turns on dump uploads on files (Uploads.use). Without it,
+// DumpUploads answers ErrUploadsDisabled.
 func (g *Games) WithUploads(files *gamefile.Store, limits gamefile.Limits) *Games {
-	g.files, g.limits = files, limits
+	g.dumps.use(files, limits)
 	return g
-}
-
-// UploadLimits reports the limits this package enforces on a chunked upload,
-// so the API publishes the same values it checks (CLAUDE.md rule 11). The
-// bool is false, with zero Limits, when uploads are disabled; callers check
-// it first, since disabled is not the same as a limit of zero.
-func (g *Games) UploadLimits() (gamefile.Limits, bool) {
-	return g.limits, g.files != nil
 }
 
 // Of reads one contest's game, or ErrNoGame when it has none yet.
@@ -484,7 +426,7 @@ func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 }
 
 // StatusOf is Of without the script and definition; it is what a console
-// polling a build should call (TemplateRepository.TemplateStatus).
+// polling a build should call (BuildRepository.TemplateStatus).
 func (g *Games) StatusOf(ctx context.Context, contestID uuid.UUID) (Template, error) {
 	return g.repo.TemplateStatus(ctx, contestID)
 }
@@ -701,7 +643,7 @@ func (g *Games) replaceGame(
 		// the saved row covers every source, and closes a way round a table's
 		// structure lock via the editor (checkTableDataCompatibility).
 		if saved.Source != SourceBuilder {
-			discardedTableFiles, err = g.repo.DiscardTableData(ctx, contestID)
+			discardedTableFiles, err = g.tableRows.Discard(ctx, contestID)
 			if err != nil {
 				return fmt.Errorf("discard the table builder's own data: %w", err)
 			}
@@ -719,14 +661,14 @@ func (g *Games) replaceGame(
 	// kept game naming a file that is gone.
 	//
 	// A failure here is not the caller's: the game has been replaced. The
-	// orphan sweeps (sweepOrphanFiles, sweepOrphanTableFiles) collect what is
-	// left, including after a crash at this point.
+	// orphan sweeps (SweepUploads) collect what is left, including after a
+	// crash at this point.
 	if displaced != nil {
-		_ = g.retireUploadFile(*displaced)
+		_ = g.dumps.retire(*displaced)
 	}
-	if g.tableFiles != nil {
+	if g.tables.enabled() {
 		for _, id := range discardedTableFiles {
-			_ = g.retireTableDataFile(id)
+			_ = g.tables.retire(id)
 		}
 	}
 	return saved, nil
@@ -785,7 +727,7 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 	)
 
 	switch {
-	case g.files == nil:
+	case !g.dumps.enabled():
 		// The upload volume was removed from the configuration while a
 		// file-sourced game was waiting to build.
 		cause = errors.New("a file-sourced game waited to build, but this installation has no upload volume configured")
@@ -806,7 +748,7 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 	}
 
 	if buildErr == "" {
-		file, err := g.files.Open(claimed.UploadID.String())
+		file, err := g.dumps.volume().Open(claimed.UploadID.String())
 		if err != nil {
 			cause = fmt.Errorf("open the uploaded file: %w", err)
 			buildErr = BuildFailedInternally

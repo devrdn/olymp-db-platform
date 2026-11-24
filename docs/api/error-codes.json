@@ -358,6 +358,10 @@
       "meaning": "This upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled."
     },
     {
+      "code": "game_upload_busy",
+      "meaning": "As many chunks are being received at once as the upload store holds in memory, and this one was not read: nothing of it was stored. A statement about the service's load rather than about the chunk; `Retry-After` says how long to wait before sending the same chunk again. A dump's store streams its chunks today, so this is not expected on a dump route."
+    },
+    {
       "code": "game_upload_chunk_incomplete",
       "meaning": "The chunk's body stopped arriving before the server had all of it — a dropped connection, or a transfer slower than the route waits for. Nothing of it was kept, so the same chunk can simply be sent again from the offset the server reports."
     },

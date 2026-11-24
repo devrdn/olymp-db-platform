@@ -6,14 +6,28 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Bookkeeping for a chunked game upload (game_uploads), and how it becomes a
+// Bookkeeping for an uploaded dump (game_uploads), and how it becomes a
 // contest's game once complete.
+
+// GameUploads is the rows of uploaded dumps, provisioning.DumpRows.
+type GameUploads struct{ pool *pgxpool.Pool }
+
+var _ provisioning.DumpRows = (*GameUploads)(nil)
+
+// NewGameUploads returns the dumps' rows over pool.
+func NewGameUploads(pool *pgxpool.Pool) *GameUploads { return &GameUploads{pool: pool} }
+
+func (r *GameUploads) querier(ctx context.Context) storage.Querier {
+	return storage.QuerierFrom(ctx, r.pool)
+}
 
 const uploadColumns = `id, contest_id, filename, declared_bytes, received_bytes,
 	coalesce(sha256, ''), coalesce(line_count, 0), status, created_at, updated_at`
@@ -27,13 +41,13 @@ func scanUpload(row pgx.Row) (provisioning.Upload, error) {
 	return u, err
 }
 
-// BeginUpload records a new upload in 'receiving'. The caller generates id so
-// it can name a reservation on disk before this row exists.
+// Begin records a new upload of the file filename in 'receiving'. The caller
+// generates id so it can name a reservation on disk before this row exists.
 //
 // One upload in progress per contest is enforced by
 // game_uploads_one_receiving_idx, not by a SELECT before the INSERT, which
 // would race; its violation comes back as ErrUploadInProgress.
-func (r *GameInstances) BeginUpload(
+func (r *GameUploads) Begin(
 	ctx context.Context, id, contestID uuid.UUID, filename string, declaredBytes int64,
 ) (provisioning.Upload, error) {
 	upload, err := scanUpload(r.querier(ctx).QueryRow(ctx, `
@@ -50,8 +64,8 @@ func (r *GameInstances) BeginUpload(
 	return upload, nil
 }
 
-// Upload reads one upload by id, or ErrUploadNotFound.
-func (r *GameInstances) Upload(ctx context.Context, id uuid.UUID) (provisioning.Upload, error) {
+// ByID reads one upload by id, or ErrUploadNotFound.
+func (r *GameUploads) ByID(ctx context.Context, id uuid.UUID) (provisioning.Upload, error) {
 	upload, err := scanUpload(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+uploadColumns+` FROM game_uploads WHERE id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -63,9 +77,9 @@ func (r *GameInstances) Upload(ctx context.Context, id uuid.UUID) (provisioning.
 	return upload, nil
 }
 
-// CurrentUpload reads a contest's one 'receiving' upload, or
-// ErrUploadNotFound. game_uploads_one_receiving_idx guarantees at most one.
-func (r *GameInstances) CurrentUpload(ctx context.Context, contestID uuid.UUID) (provisioning.Upload, error) {
+// Current reads a contest's one 'receiving' upload, or ErrUploadNotFound.
+// game_uploads_one_receiving_idx guarantees at most one.
+func (r *GameUploads) Current(ctx context.Context, contestID uuid.UUID) (provisioning.Upload, error) {
 	upload, err := scanUpload(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+uploadColumns+` FROM game_uploads WHERE contest_id = $1 AND status = 'receiving'`, contestID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -81,7 +95,7 @@ func (r *GameInstances) CurrentUpload(ctx context.Context, contestID uuid.UUID) 
 // browser can be told where to continue from. It never lowers the length, and
 // an upload no longer 'receiving' is ErrUploadAlreadyComplete and left alone:
 // a chunk's write can arrive after a later chunk's or after completion.
-func (r *GameInstances) UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error {
+func (r *GameUploads) UpdateReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error {
 	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_uploads
 		SET received_bytes = GREATEST(received_bytes, $2), updated_at = now()
@@ -95,9 +109,10 @@ func (r *GameInstances) UpdateReceived(ctx context.Context, id uuid.UUID, receiv
 	return nil
 }
 
-// CompleteUpload marks id 'complete' with what Store.Complete measured,
-// retires previous (marked 'aborted', its file removed by the caller after
-// commit), and replaces the contest's game through upsertGame.
+// CompleteUpload marks the dump id 'complete' with what Store.Complete
+// measured, retires previous (marked 'aborted', its file removed by the
+// caller after commit), and replaces the contest's game through upsertGame.
+// It is GameInstances's, not GameUploads's, because it replaces the game.
 //
 // Neither UPDATE checks RowsAffected: the caller already validated the row,
 // and a race between that read and this write is rare enough to leave to the
@@ -123,8 +138,8 @@ func (r *GameInstances) CompleteUpload(
 	return r.upsertGame(ctx, contestID, database, "", string(provisioning.SourceFile), &id, nil)
 }
 
-// AbortUpload marks one upload 'aborted'. It never touches game_templates.
-func (r *GameInstances) AbortUpload(ctx context.Context, id uuid.UUID) error {
+// Abort marks one upload 'aborted'. It never touches game_templates.
+func (r *GameUploads) Abort(ctx context.Context, id uuid.UUID) error {
 	if _, err := r.querier(ctx).Exec(ctx,
 		`UPDATE game_uploads SET status = 'aborted', updated_at = now() WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("mark the upload aborted: %w", err)
@@ -132,10 +147,10 @@ func (r *GameInstances) AbortUpload(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// AbandonedUploads lists up to limit uploads still 'receiving' whose
-// updated_at is older than cutoff, oldest first, for the janitor. Served by
+// Abandoned lists up to limit uploads still 'receiving' whose updated_at is
+// older than cutoff, oldest first, for the janitor. Served by
 // game_uploads_receiving_updated_idx (CLAUDE.md rule 7).
-func (r *GameInstances) AbandonedUploads(ctx context.Context, cutoff time.Time, limit int) ([]provisioning.Upload, error) {
+func (r *GameUploads) Abandoned(ctx context.Context, cutoff time.Time, limit int) ([]provisioning.Upload, error) {
 	rows, err := r.querier(ctx).Query(ctx,
 		`SELECT `+uploadColumns+` FROM game_uploads
 		 WHERE status = 'receiving' AND updated_at < $1
@@ -160,14 +175,14 @@ func (r *GameInstances) AbandonedUploads(ctx context.Context, cutoff time.Time, 
 	return out, nil
 }
 
-// UploadInUse reports whether anything still needs id's bytes on the volume:
+// InUse reports whether anything still needs id's bytes on the volume:
 // an upload still taking chunks, or one a contest's game is built from. A
 // displaced upload is not in use, so the janitor's orphan sweep removes it.
 //
 // game_templates is searched by upload_id without an index: the sweep starts
 // from a file and has no contest to scope by, and the table holds one row per
 // contest, so the scan stays small.
-func (r *GameInstances) UploadInUse(ctx context.Context, id uuid.UUID) (bool, error) {
+func (r *GameUploads) InUse(ctx context.Context, id uuid.UUID) (bool, error) {
 	var inUse bool
 	if err := r.querier(ctx).QueryRow(ctx, `
 		SELECT EXISTS(

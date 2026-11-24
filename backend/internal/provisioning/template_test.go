@@ -238,7 +238,7 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 	// Only the row recording three lines is needed, not a file on disk.
 	dataID := uuid.New()
 	store.tableData = map[uuid.UUID]provisioning.TableData{
-		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.UploadComplete, Lines: 3},
 	}
 
 	for _, tc := range []struct {
@@ -317,7 +317,7 @@ func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
 	}
 	dataID := uuid.New()
 	store.tableData = map[uuid.UUID]provisioning.TableData{
-		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.UploadComplete, Lines: 3},
 	}
 
 	next := aDefinition()
@@ -347,7 +347,7 @@ func TestATableWithACompletedButEmptyFileIsNotLocked(t *testing.T) {
 	}
 	dataID := uuid.New()
 	store.tableData = map[uuid.UUID]provisioning.TableData{
-		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 0},
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.UploadComplete, Lines: 0},
 	}
 
 	renamed := provisioning.Definition{Tables: []provisioning.TableDefinition{{
@@ -1023,7 +1023,7 @@ func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(
 	if err := files.Begin(upload.String(), 1<<16); err != nil {
 		t.Fatalf("begin the upload on disk: %v", err)
 	}
-	if _, err := store.BeginUpload(t.Context(), upload, contest, "dump.sql", 10); err != nil {
+	if _, err := store.dumpRows().Begin(t.Context(), upload, contest, "dump.sql", 10); err != nil {
 		t.Fatalf("begin the upload: %v", err)
 	}
 	if _, err := files.Append(upload.String(), 0, strings.NewReader("CREATE X;\n")); err != nil {
@@ -1076,7 +1076,7 @@ func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScri
 func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
 	// Read as "no game", the export would ship an incomplete package.
 	store := &templateStore{templateErr: errors.New("the database is away")}
-	service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true}, noContest{}, directly{})
+	service := provisioning.NewGames(store.stores(), &buildCluster{}, authoring{editable: true}, noContest{}, directly{})
 
 	if _, _, _, err := service.Script(t.Context(), uuid.New()); err == nil {
 		t.Fatal("Script() swallowed a storage failure")
@@ -1448,7 +1448,7 @@ func (r *contestRows) MarkContentChanged(_ context.Context, read contests.Contes
 func TestReplacingAGameMovesTheContestVersion(t *testing.T) {
 	t.Parallel()
 	rows := &contestRows{status: contests.StatusPublished}
-	service := provisioning.NewGames(&templateStore{policy: sqlpolicy.ReadOnly()}, &buildCluster{},
+	service := provisioning.NewGames((&templateStore{policy: sqlpolicy.ReadOnly()}).stores(), &buildCluster{},
 		authoring{editable: true}, rows, directly{})
 	contest := uuid.New()
 
@@ -1475,7 +1475,7 @@ func TestAGameReplacementOnAContestThatMovedSavesNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, trail := &templateStore{policy: sqlpolicy.ReadOnly()}, &sink{}
-			service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true}, tc.rows, directly{}).
+			service := provisioning.NewGames(store.stores(), &buildCluster{}, authoring{editable: true}, tc.rows, directly{}).
 				WithAudit(audit.New(trail))
 
 			_, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), "CREATE TABLE suspects (name text);")
@@ -1505,7 +1505,7 @@ func TestRequestingABuildMovesTheContestVersionUnlessItIsARecovery(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, cluster, rows := &templateStore{policy: sqlpolicy.ReadOnly()}, &buildCluster{}, &contestRows{status: tc.status}
-			service := provisioning.NewGames(store, cluster, tc.author, rows, directly{})
+			service := provisioning.NewGames(store.stores(), cluster, tc.author, rows, directly{})
 			contest := storeAGame(store, provisioning.TemplateReady)
 			if tc.missing {
 				cluster.missing = map[string]bool{"game_x": true}

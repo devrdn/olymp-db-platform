@@ -2765,6 +2765,12 @@ still `receiving` and only forwards, for a dump as for a table, so a chunk
 that finishes arriving after the upload completed answers
 `game_table_data_already_complete` and leaves the record alone.
 
+A dump and a table's CSV are two instances of one lifecycle,
+`provisioning.Uploads`: begin, append at the offset reached, abort, and the
+janitor's sweep are written once, each instance over its own store, rows and
+limits, and only completing one is the kind's own. Their refusals are one
+family of sentinels, which the API answers under each route's own codes.
+
 The two stores take a chunk differently. A dump's chunk streams to disk under
 its file's lock, which nothing but that dump's own requests waits on. A
 table's file is also written by a typed row, from inside a transaction that

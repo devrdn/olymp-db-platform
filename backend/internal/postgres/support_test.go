@@ -10,6 +10,7 @@ import (
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
+	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -187,4 +188,10 @@ func moveStatus(t *testing.T, ctx context.Context, id uuid.UUID, to string) {
 	if _, err := repo.SetStatus(ctx, read, to); err != nil {
 		t.Fatalf("SetStatus(%s → %s) = %v", read.Status, to, err)
 	}
+}
+
+// gameStores is every store a contest's game keeps, on the test database,
+// with builds as the build state.
+func gameStores(builds *GameInstances) provisioning.GameStores {
+	return provisioning.GameStores{Builds: builds, Dumps: NewGameUploads(testPool), TableData: NewGameTableData(testPool)}
 }

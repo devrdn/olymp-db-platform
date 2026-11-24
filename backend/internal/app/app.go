@@ -368,7 +368,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		}, tender))
 		gameDatabases = databases
 
-		gameAuthoring = provisioning.NewGames(games, cluster, games, postgres.NewContests(pool), storage.NewUnitOfWork(pool)).
+		gameStores := provisioning.GameStores{
+			Builds: games, Dumps: postgres.NewGameUploads(pool), TableData: postgres.NewGameTableData(pool),
+		}
+		gameAuthoring = provisioning.NewGames(gameStores, cluster, games, postgres.NewContests(pool), storage.NewUnitOfWork(pool)).
 			WithAudit(auditRecorder)
 		// The build timeout also decides when an unfinished build is dead.
 		a.tasks = append(a.tasks, buildGames(log, gameAuthoring.Build, cfg.GameBuildTimeout))
@@ -622,7 +625,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
 	}
 	if gameAuthoring != nil {
-		gameHandler := api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log, limiter)
+		gameHandler := api.NewGameHandler(gameAuthoring, gameAuthoring.DumpUploads(), gameAuthoring.TableUploads(),
+			gameDatabases, authMiddleware, log, limiter)
 		if cfg.GameUploadChunkBytes > 0 {
 			// The socket's ceiling equals the domain's chunk limit.
 			gameHandler = gameHandler.WithMaxChunkBody(cfg.GameUploadChunkBytes)

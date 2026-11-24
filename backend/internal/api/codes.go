@@ -108,6 +108,8 @@ var (
 		"One chunk is past the maximum chunk size this installation accepts. Split it into smaller pieces.")
 	codeGameUploadChunkIncomplete = httpx.NewCode("game_upload_chunk_incomplete",
 		"The chunk's body stopped arriving before the server had all of it — a dropped connection, or a transfer slower than the route waits for. Nothing of it was kept, so the same chunk can simply be sent again from the offset the server reports.")
+	codeGameUploadBusy = httpx.NewCode("game_upload_busy",
+		"As many chunks are being received at once as the upload store holds in memory, and this one was not read: nothing of it was stored. A statement about the service's load rather than about the chunk; `Retry-After` says how long to wait before sending the same chunk again. A dump's store streams its chunks today, so this is not expected on a dump route.")
 	codeGameUploadLengthMismatch = httpx.NewCode("game_upload_length_mismatch",
 		"What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again.")
 	codeGameUploadNotFound = httpx.NewCode("game_upload_not_found",

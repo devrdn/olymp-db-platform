@@ -505,8 +505,10 @@ func markTemplateReady(t *testing.T, ctx context.Context, contest uuid.UUID, dat
 	}
 }
 
-// templateStore is the game's row in memory, so a test controls its starting
-// state and reads what the service left behind.
+// templateStore is a contest's game in memory, its build state and the rows
+// of both kinds of upload (stores), so a test controls its starting state and
+// reads what the service left behind. Its upload rows are held to the real
+// ones by TestUploadRowsInMemoryKeepThePostgresContract.
 type templateStore struct {
 	mu       sync.Mutex
 	template provisioning.Template
@@ -524,13 +526,16 @@ type templateStore struct {
 	describeErr error
 	uploads     map[uuid.UUID]provisioning.Upload
 	tableData   map[uuid.UUID]provisioning.TableData
+	// progressWrites counts UpdateReceived calls of either kind, so a test
+	// can tell a retried chunk recorded nothing.
+	progressWrites int
 	// ownerOfAll, when set, is the account every contest belongs to.
 	ownerOfAll uuid.UUID
-	// deleteRowErr, when set, is what DeleteTableDataRow answers. The fake
-	// does not reimplement the database's CHECK on deleted_rows; the postgres
-	// tests prove that one.
+	// deleteRowErr, when set, is what the table rows' DeleteRow answers. The
+	// fake does not reimplement the database's CHECK on deleted_rows; the
+	// postgres tests prove that one.
 	deleteRowErr error
-	// tableDataReads, when armed, holds ReadyTableData callers until the
+	// tableDataReads, when armed, holds the table rows' Ready callers until the
 	// expected number arrive, making two simultaneous "add row" requests
 	// deterministic.
 	tableDataReads *arrivalGate
@@ -713,56 +718,45 @@ func (s *templateStore) Policy(context.Context, uuid.UUID) (sqlpolicy.Policy, er
 	return s.policy, nil
 }
 
-func (s *templateStore) BeginUpload(_ context.Context, id, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, u := range s.uploads {
-		if u.ContestID == contestID && u.Status == provisioning.UploadReceiving {
-			return provisioning.Upload{}, provisioning.ErrUploadInProgress
-		}
-	}
-	if s.uploads == nil {
-		s.uploads = map[uuid.UUID]provisioning.Upload{}
-	}
-	u := provisioning.Upload{
-		ID: id, ContestID: contestID, Filename: filename, DeclaredBytes: declaredBytes,
-		Status: provisioning.UploadReceiving,
-	}
-	s.uploads[id] = u
-	return u, nil
+// stores is the three stores this fake plays: the game's build state, its
+// dumps' rows and its tables' rows, all held under one lock so the build
+// state's CompleteUpload and the dump rows' InUse see each other.
+func (s *templateStore) stores() provisioning.GameStores {
+	return provisioning.GameStores{Builds: s, Dumps: s.dumpRows(), TableData: s.tableRows()}
 }
 
-func (s *templateStore) Upload(_ context.Context, id uuid.UUID) (provisioning.Upload, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	u, ok := s.uploads[id]
-	if !ok {
-		return provisioning.Upload{}, provisioning.ErrUploadNotFound
+func (s *templateStore) dumpRows() dumpRows   { return dumpRows{s} }
+func (s *templateStore) tableRows() tableRows { return tableRows{s} }
+
+// ownerOf answers ownerOfAll when set; otherwise each contest is its own
+// owner, so no two of them share one.
+func (s *templateStore) ownerOf(contestID uuid.UUID) uuid.UUID {
+	if s.ownerOfAll != uuid.Nil {
+		return s.ownerOfAll
 	}
-	return u, nil
+	return contestID
 }
 
-func (s *templateStore) CurrentUpload(_ context.Context, contestID uuid.UUID) (provisioning.Upload, error) {
+// ageUpload moves one upload's last activity, a dump's or a table's, back by
+// by, past a janitor cutoff.
+func (s *templateStore) ageUpload(id uuid.UUID, by time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, u := range s.uploads {
-		if u.ContestID == contestID && u.Status == provisioning.UploadReceiving {
-			return u, nil
-		}
+	if u, ok := s.uploads[id]; ok {
+		u.UpdatedAt = u.UpdatedAt.Add(-by)
+		s.uploads[id] = u
 	}
-	return provisioning.Upload{}, provisioning.ErrUploadNotFound
+	if d, ok := s.tableData[id]; ok {
+		d.UpdatedAt = d.UpdatedAt.Add(-by)
+		s.tableData[id] = d
+	}
 }
 
-func (s *templateStore) UpdateReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
+// progressRecorded is how many times either kind's UpdateReceived was called.
+func (s *templateStore) progressRecorded() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	u, ok := s.uploads[id]
-	if !ok || u.Status != provisioning.UploadReceiving {
-		return provisioning.ErrUploadAlreadyComplete
-	}
-	u.ReceivedBytes = max(u.ReceivedBytes, receivedBytes)
-	s.uploads[id] = u
-	return nil
+	return s.progressWrites
 }
 
 func (s *templateStore) CompleteUpload(
@@ -775,10 +769,11 @@ func (s *templateStore) CompleteUpload(
 		return provisioning.Template{}, provisioning.ErrUploadNotFound
 	}
 	u.Status, u.SHA256, u.Lines, u.ReceivedBytes = provisioning.UploadComplete, summary.SHA256, summary.Lines, summary.Bytes
+	u.UpdatedAt = time.Now()
 	s.uploads[id] = u
 	if previous != nil {
 		if p, ok := s.uploads[*previous]; ok {
-			p.Status = provisioning.UploadAborted
+			p.Status, p.UpdatedAt = provisioning.UploadAborted, time.Now()
 			s.uploads[*previous] = p
 		}
 	}
@@ -795,121 +790,167 @@ func (s *templateStore) CompleteUpload(
 	return s.template, nil
 }
 
-func (s *templateStore) AbortUpload(_ context.Context, id uuid.UUID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	u, ok := s.uploads[id]
-	if !ok {
-		return provisioning.ErrUploadNotFound
+// dumpRows is provisioning.DumpRows over templateStore's uploads.
+type dumpRows struct{ s *templateStore }
+
+// Begin stamps the row like the column's DEFAULT now(): a zero time would make
+// every row look abandoned to the janitor.
+func (d dumpRows) Begin(_ context.Context, id, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	for _, u := range d.s.uploads {
+		if u.ContestID == contestID && u.Status == provisioning.UploadReceiving {
+			return provisioning.Upload{}, provisioning.ErrUploadInProgress
+		}
 	}
-	u.Status = provisioning.UploadAborted
-	s.uploads[id] = u
+	if d.s.uploads == nil {
+		d.s.uploads = map[uuid.UUID]provisioning.Upload{}
+	}
+	now := time.Now()
+	u := provisioning.Upload{
+		ID: id, ContestID: contestID, Filename: filename, DeclaredBytes: declaredBytes,
+		Status: provisioning.UploadReceiving, CreatedAt: now, UpdatedAt: now,
+	}
+	d.s.uploads[id] = u
+	return u, nil
+}
+
+func (d dumpRows) ByID(_ context.Context, id uuid.UUID) (provisioning.Upload, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	u, ok := d.s.uploads[id]
+	if !ok {
+		return provisioning.Upload{}, provisioning.ErrUploadNotFound
+	}
+	return u, nil
+}
+
+func (d dumpRows) Current(_ context.Context, contestID uuid.UUID) (provisioning.Upload, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	for _, u := range d.s.uploads {
+		if u.ContestID == contestID && u.Status == provisioning.UploadReceiving {
+			return u, nil
+		}
+	}
+	return provisioning.Upload{}, provisioning.ErrUploadNotFound
+}
+
+func (d dumpRows) UpdateReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	d.s.progressWrites++
+	u, ok := d.s.uploads[id]
+	if !ok || u.Status != provisioning.UploadReceiving {
+		return provisioning.ErrUploadAlreadyComplete
+	}
+	u.ReceivedBytes, u.UpdatedAt = max(u.ReceivedBytes, receivedBytes), time.Now()
+	d.s.uploads[id] = u
 	return nil
 }
 
-func (s *templateStore) AbandonedUploads(_ context.Context, cutoff time.Time, limit int) ([]provisioning.Upload, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []provisioning.Upload
-	for _, u := range s.uploads {
-		if u.Status == provisioning.UploadReceiving && u.UpdatedAt.Before(cutoff) {
-			out = append(out, u)
-			if len(out) >= limit {
-				break
-			}
-		}
+func (d dumpRows) Abort(_ context.Context, id uuid.UUID) error {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	u, ok := d.s.uploads[id]
+	if !ok {
+		return provisioning.ErrUploadNotFound
 	}
-	return out, nil
+	u.Status, u.UpdatedAt = provisioning.UploadAborted, time.Now()
+	d.s.uploads[id] = u
+	return nil
 }
 
-func (s *templateStore) UploadInUse(_ context.Context, id uuid.UUID) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	u, ok := s.uploads[id]
+func (d dumpRows) Abandoned(_ context.Context, cutoff time.Time, limit int) ([]provisioning.Upload, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	var out []provisioning.Upload
+	for _, u := range d.s.uploads {
+		if u.Status == provisioning.UploadReceiving && u.UpdatedAt.Before(cutoff) {
+			out = append(out, u)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	return out[:min(len(out), limit)], nil
+}
+
+func (d dumpRows) InUse(_ context.Context, id uuid.UUID) (bool, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	u, ok := d.s.uploads[id]
 	if !ok {
 		return false, nil
 	}
 	if u.Status == provisioning.UploadReceiving {
 		return true, nil
 	}
-	return s.present && s.template.UploadID != nil && *s.template.UploadID == id, nil
+	return d.s.present && d.s.template.UploadID != nil && *d.s.template.UploadID == id, nil
 }
 
-func (s *templateStore) BeginTableData(_ context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, d := range s.tableData {
-		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataReceiving {
-			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+// tableRows is provisioning.TableDataRows over templateStore's tableData.
+type tableRows struct{ s *templateStore }
+
+// Begin stamps the row as dumpRows.Begin does.
+func (d tableRows) Begin(_ context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	for _, row := range d.s.tableData {
+		if row.ContestID == contestID && strings.EqualFold(row.Table, table) && row.Status == provisioning.UploadReceiving {
+			return provisioning.TableData{}, provisioning.ErrUploadInProgress
 		}
 	}
-	if s.tableData == nil {
-		s.tableData = map[uuid.UUID]provisioning.TableData{}
+	if d.s.tableData == nil {
+		d.s.tableData = map[uuid.UUID]provisioning.TableData{}
 	}
-	// Stamped like the column's DEFAULT now(): a zero time would make every
-	// row look abandoned to the janitor.
-	d := provisioning.TableData{
+	now := time.Now()
+	row := provisioning.TableData{
 		ID: id, ContestID: contestID, Table: table, DeclaredBytes: declaredBytes,
-		Status: provisioning.TableDataReceiving, UpdatedAt: time.Now(),
+		Status: provisioning.UploadReceiving, CreatedAt: now, UpdatedAt: now,
 	}
-	s.tableData[id] = d
-	return d, nil
+	d.s.tableData[id] = row
+	return row, nil
 }
 
-// ageTableData moves one row's updated_at back past a janitor cutoff.
-func (s *templateStore) ageTableData(id uuid.UUID, by time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d := s.tableData[id]
-	d.UpdatedAt = time.Now().Add(-by)
-	s.tableData[id] = d
-}
-
-func (s *templateStore) TableDataByID(_ context.Context, id uuid.UUID) (provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
+func (d tableRows) ByID(_ context.Context, id uuid.UUID) (provisioning.TableData, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	row, ok := d.s.tableData[id]
 	if !ok {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrUploadNotFound
 	}
-	return d, nil
+	return row, nil
 }
 
-// TableDataWithOwner answers ownerOfAll when set; otherwise each contest is
-// its own owner, so no two of them share one.
-func (s *templateStore) TableDataWithOwner(ctx context.Context, id uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
-	d, err := s.TableDataByID(ctx, id)
+func (d tableRows) WithOwner(ctx context.Context, id uuid.UUID) (provisioning.TableData, uuid.UUID, error) {
+	row, err := d.ByID(ctx, id)
 	if err != nil {
 		return provisioning.TableData{}, uuid.Nil, err
 	}
-	if s.ownerOfAll != uuid.Nil {
-		return d, s.ownerOfAll, nil
-	}
-	return d, d.ContestID, nil
+	return row, d.s.ownerOf(row.ContestID), nil
 }
 
-func (s *templateStore) CurrentTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, d := range s.tableData {
-		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataReceiving {
-			return d, nil
+func (d tableRows) Current(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	for _, row := range d.s.tableData {
+		if row.ContestID == contestID && strings.EqualFold(row.Table, table) && row.Status == provisioning.UploadReceiving {
+			return row, nil
 		}
 	}
-	return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	return provisioning.TableData{}, provisioning.ErrUploadNotFound
 }
 
-func (s *templateStore) ReadyTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
-	s.mu.Lock()
-	gate := s.tableDataReads
-	found, err := provisioning.TableData{}, error(provisioning.ErrTableDataNotFound)
-	for _, d := range s.tableData {
-		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
-			found, err = d, nil
+func (d tableRows) Ready(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	d.s.mu.Lock()
+	gate := d.s.tableDataReads
+	found, err := provisioning.TableData{}, error(provisioning.ErrUploadNotFound)
+	for _, row := range d.s.tableData {
+		if row.ContestID == contestID && strings.EqualFold(row.Table, table) && row.Status == provisioning.UploadComplete {
+			found, err = row, nil
 			break
 		}
 	}
-	s.mu.Unlock()
+	d.s.mu.Unlock()
 
 	// Released outside the lock, after the answer is taken, so every held
 	// caller leaves with the same snapshot.
@@ -919,144 +960,144 @@ func (s *templateStore) ReadyTableData(_ context.Context, contestID uuid.UUID, t
 	return found, err
 }
 
-func (s *templateStore) UpdateTableDataReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
-	if !ok || d.Status != provisioning.TableDataReceiving {
-		return provisioning.ErrTableDataAlreadyComplete
+func (d tableRows) UpdateReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	d.s.progressWrites++
+	row, ok := d.s.tableData[id]
+	if !ok || row.Status != provisioning.UploadReceiving {
+		return provisioning.ErrUploadAlreadyComplete
 	}
-	d.ReceivedBytes = max(d.ReceivedBytes, receivedBytes)
-	s.tableData[id] = d
+	row.ReceivedBytes, row.UpdatedAt = max(row.ReceivedBytes, receivedBytes), time.Now()
+	d.s.tableData[id] = row
 	return nil
 }
 
-func (s *templateStore) CompleteTableData(
-	_ context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID,
+func (d tableRows) Complete(
+	_ context.Context, _ uuid.UUID, _ string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID,
 ) (provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	row, ok := d.s.tableData[id]
 	if !ok {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrUploadNotFound
 	}
-	d.Status, d.ReceivedBytes, d.Lines = provisioning.TableDataComplete, receivedBytes, lines
-	s.tableData[id] = d
+	row.Status, row.ReceivedBytes, row.Lines, row.UpdatedAt = provisioning.UploadComplete, receivedBytes, lines, time.Now()
+	d.s.tableData[id] = row
 	if previous != nil {
-		if p, ok := s.tableData[*previous]; ok {
-			p.Status = provisioning.TableDataAborted
-			s.tableData[*previous] = p
+		if p, ok := d.s.tableData[*previous]; ok {
+			p.Status, p.UpdatedAt = provisioning.UploadAborted, time.Now()
+			d.s.tableData[*previous] = p
 		}
 	}
-	return d, nil
+	return row, nil
 }
 
-func (s *templateStore) CreateReadyTableData(
+func (d tableRows) CreateReady(
 	_ context.Context, id, contestID uuid.UUID, table string, bytes, lines int64,
 ) (provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, d := range s.tableData {
-		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
-			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	for _, row := range d.s.tableData {
+		if row.ContestID == contestID && strings.EqualFold(row.Table, table) && row.Status == provisioning.UploadComplete {
+			return provisioning.TableData{}, provisioning.ErrUploadInProgress
 		}
 	}
-	if s.tableData == nil {
-		s.tableData = map[uuid.UUID]provisioning.TableData{}
+	if d.s.tableData == nil {
+		d.s.tableData = map[uuid.UUID]provisioning.TableData{}
 	}
-	d := provisioning.TableData{
+	now := time.Now()
+	row := provisioning.TableData{
 		ID: id, ContestID: contestID, Table: table, DeclaredBytes: bytes, ReceivedBytes: bytes, Lines: lines,
-		Status: provisioning.TableDataComplete,
+		Status: provisioning.UploadComplete, CreatedAt: now, UpdatedAt: now,
 	}
-	s.tableData[id] = d
-	return d, nil
+	d.s.tableData[id] = row
+	return row, nil
 }
 
-func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
-	if !ok || d.Status != provisioning.TableDataComplete || d.ReceivedBytes != at {
+func (d tableRows) AppendRow(_ context.Context, id uuid.UUID, at, rowBytes int64) (provisioning.TableData, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	row, ok := d.s.tableData[id]
+	if !ok || row.Status != provisioning.UploadComplete || row.ReceivedBytes != at {
 		return provisioning.TableData{}, provisioning.ErrTableDataChanged
 	}
-	d.ReceivedBytes, d.Lines = d.ReceivedBytes+rowBytes, d.Lines+1
-	s.tableData[id] = d
-	return d, nil
+	row.ReceivedBytes, row.Lines = row.ReceivedBytes+rowBytes, row.Lines+1
+	d.s.tableData[id] = row
+	return row, nil
 }
 
-func (s *templateStore) AbortTableData(_ context.Context, id uuid.UUID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
+func (d tableRows) Abort(_ context.Context, id uuid.UUID) error {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	row, ok := d.s.tableData[id]
 	if !ok {
-		return provisioning.ErrTableDataNotFound
+		return provisioning.ErrUploadNotFound
 	}
-	d.Status = provisioning.TableDataAborted
-	s.tableData[id] = d
+	row.Status, row.UpdatedAt = provisioning.UploadAborted, time.Now()
+	d.s.tableData[id] = row
 	return nil
 }
 
-func (s *templateStore) DiscardTableData(_ context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (d tableRows) Discard(_ context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
 	var ids []uuid.UUID
-	for id, d := range s.tableData {
-		if d.ContestID != contestID {
+	for id, row := range d.s.tableData {
+		if row.ContestID != contestID {
 			continue
 		}
-		if d.Status != provisioning.TableDataReceiving && d.Status != provisioning.TableDataComplete {
+		if row.Status != provisioning.UploadReceiving && row.Status != provisioning.UploadComplete {
 			continue
 		}
-		d.Status = provisioning.TableDataAborted
-		s.tableData[id] = d
+		row.Status, row.UpdatedAt = provisioning.UploadAborted, time.Now()
+		d.s.tableData[id] = row
 		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
-func (s *templateStore) DeleteTableDataRow(_ context.Context, id uuid.UUID, row int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
+func (d tableRows) DeleteRow(_ context.Context, id uuid.UUID, row int64) error {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	data, ok := d.s.tableData[id]
 	if !ok {
-		return provisioning.ErrTableDataNotFound
+		return provisioning.ErrUploadNotFound
 	}
-	if s.deleteRowErr != nil {
-		return s.deleteRowErr
+	if d.s.deleteRowErr != nil {
+		return d.s.deleteRowErr
 	}
-	for _, r := range d.DeletedRows {
+	for _, r := range data.DeletedRows {
 		if r == row {
 			return provisioning.ErrTableRowAlreadyDeleted
 		}
 	}
-	d.DeletedRows = append(append([]int64{}, d.DeletedRows...), row)
-	s.tableData[id] = d
+	data.DeletedRows = append(append([]int64{}, data.DeletedRows...), row)
+	d.s.tableData[id] = data
 	return nil
 }
 
-func (s *templateStore) AbandonedTableData(_ context.Context, cutoff time.Time, limit int) ([]provisioning.TableData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (d tableRows) Abandoned(_ context.Context, cutoff time.Time, limit int) ([]provisioning.TableData, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
 	var out []provisioning.TableData
-	for _, d := range s.tableData {
-		if d.Status == provisioning.TableDataReceiving && d.UpdatedAt.Before(cutoff) {
-			out = append(out, d)
-			if len(out) >= limit {
-				break
-			}
+	for _, row := range d.s.tableData {
+		if row.Status == provisioning.UploadReceiving && row.UpdatedAt.Before(cutoff) {
+			out = append(out, row)
 		}
 	}
-	return out, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	return out[:min(len(out), limit)], nil
 }
 
-func (s *templateStore) TableDataInUse(_ context.Context, id uuid.UUID) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.tableData[id]
+func (d tableRows) InUse(_ context.Context, id uuid.UUID) (bool, error) {
+	d.s.mu.Lock()
+	defer d.s.mu.Unlock()
+	row, ok := d.s.tableData[id]
 	if !ok {
 		return false, nil
 	}
-	return d.Status == provisioning.TableDataReceiving || d.Status == provisioning.TableDataComplete, nil
+	return row.Status == provisioning.UploadReceiving || row.Status == provisioning.UploadComplete, nil
 }
 
 // buildCluster records what it was asked to build and can be told to refuse.
@@ -1181,7 +1222,15 @@ func games(editable bool) (*provisioning.Games, *templateStore, *buildCluster) {
 func gamesOf(author authoring) (*provisioning.Games, *templateStore, *buildCluster) {
 	store := &templateStore{policy: sqlpolicy.ReadOnly()}
 	cluster := &buildCluster{}
-	return provisioning.NewGames(store, cluster, author, noContest{}, directly{}), store, cluster
+	return provisioning.NewGames(store.stores(), cluster, author, noContest{}, directly{}), store, cluster
+}
+
+// onPostgres is every store a contest's game keeps, on the test database, with
+// builds as the build state.
+func onPostgres(builds provisioning.BuildRepository) provisioning.GameStores {
+	return provisioning.GameStores{
+		Builds: builds, Dumps: postgres.NewGameUploads(testPool), TableData: postgres.NewGameTableData(testPool),
+	}
 }
 
 // ownGame is the real repository with ClaimBuild kept to one contest's game.
@@ -1243,7 +1292,7 @@ func TestABuildInTheseTestsTakesItsOwnGameEvenWhenAnotherPackagesGameIsOlder(t *
 		t.Fatalf("age the other package's game: %v", err)
 	}
 
-	games := provisioning.NewGames(ownBuilds(contest.ID), &buildCluster{}, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(ownBuilds(contest.ID)), &buildCluster{}, editableContest{}, noContest{}, directly{})
 	if _, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `SELECT 1`); err != nil {
 		t.Fatalf("save this test's game: %v", err)
 	}

@@ -2777,6 +2777,8 @@ const en = {
       "One piece of the file is larger than this installation accepts. Send the file in smaller pieces.",
     game_upload_chunk_incomplete:
       "That piece did not arrive in full — the connection dropped, or the transfer was too slow. Nothing of it was kept, so sending it again is safe.",
+    game_upload_busy:
+      "The server is receiving as many pieces of files at once as it can hold. Nothing of this piece was stored; the upload will continue if you try again in a moment.",
     game_upload_length_mismatch:
       "Fewer or more bytes arrived than the upload declared, so it cannot be completed. Start the upload again.",
     game_upload_window_unreachable:

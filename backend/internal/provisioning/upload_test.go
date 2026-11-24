@@ -43,7 +43,7 @@ func gamesWithUploadsIn(t *testing.T, editable bool, uow interface {
 	if err != nil {
 		t.Fatalf("open the upload store: %v", err)
 	}
-	games := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}, noContest{}, uow).
+	games := provisioning.NewGames(onPostgres(postgres.NewGameInstances(testPool)), &buildCluster{}, authoring{editable: editable}, noContest{}, uow).
 		WithUploads(store, uploadLimits)
 	return games, dir
 }
@@ -82,7 +82,7 @@ func TestBeginningAnUploadReservesItOnDiskAndInTheDatabase(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	upload, err := games.BeginUpload(t.Context(), contest.ID, "dump.sql", 1024)
+	upload, err := games.DumpUploads().Begin(t.Context(), contest.ID, "dump.sql", 1024)
 	if err != nil {
 		t.Fatalf("begin upload: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestBeginningAnUploadForAContestThatIsNotEditableIsRefusedBeforeTouchingDis
 	games, dir := gamesWithUploads(t, false)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	if _, err := games.BeginUpload(t.Context(), contest.ID, "dump.sql", 1024); !errors.Is(err, provisioning.ErrGameNotEditable) {
+	if _, err := games.DumpUploads().Begin(t.Context(), contest.ID, "dump.sql", 1024); !errors.Is(err, provisioning.ErrGameNotEditable) {
 		t.Fatalf("error = %v, want ErrGameNotEditable", err)
 	}
 
@@ -118,8 +118,8 @@ func TestBeginningAnUploadRefusesAFilenameWithAControlCharacter(t *testing.T) {
 	contest, _ := contestFor(t, t.Context(), 0)
 
 	for _, name := range []string{"dump\x00.sql", "dump\n.sql", "dump\x1b[2J.sql"} {
-		if _, err := games.BeginUpload(t.Context(), contest.ID, name, 1024); !errors.Is(err, provisioning.ErrUploadFilenameInvalid) {
-			t.Fatalf("BeginUpload(%q) = %v, want ErrUploadFilenameInvalid", name, err)
+		if _, err := games.DumpUploads().Begin(t.Context(), contest.ID, name, 1024); !errors.Is(err, provisioning.ErrUploadFilenameInvalid) {
+			t.Fatalf("Begin(%q) = %v, want ErrUploadFilenameInvalid", name, err)
 		}
 	}
 
@@ -136,7 +136,7 @@ func TestADeclaredLengthPastTheConfiguredCeilingIsRefused(t *testing.T) {
 	games, _ := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	_, err := games.BeginUpload(t.Context(), contest.ID, "dump.sql", uploadLimits.MaxFileBytes+1)
+	_, err := games.DumpUploads().Begin(t.Context(), contest.ID, "dump.sql", uploadLimits.MaxFileBytes+1)
 	if !errors.Is(err, provisioning.ErrUploadTooLarge) {
 		t.Fatalf("error = %v, want ErrUploadTooLarge", err)
 	}
@@ -147,12 +147,12 @@ func TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode(t *tes
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	first, err := games.BeginUpload(t.Context(), contest.ID, "first.sql", 1024)
+	first, err := games.DumpUploads().Begin(t.Context(), contest.ID, "first.sql", 1024)
 	if err != nil {
 		t.Fatalf("first begin: %v", err)
 	}
 
-	_, err = games.BeginUpload(t.Context(), contest.ID, "second.sql", 1024)
+	_, err = games.DumpUploads().Begin(t.Context(), contest.ID, "second.sql", 1024)
 	if !errors.Is(err, provisioning.ErrUploadInProgress) {
 		t.Fatalf("second begin answered %v, want ErrUploadInProgress", err)
 	}
@@ -169,13 +169,13 @@ func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) 
 
 	// One receiving upload, so every later begin is refused.
 	quarter := uploadLimits.MaxDirBytes / 4
-	if _, err := games.BeginUpload(t.Context(), contest.ID, "first.sql", quarter); err != nil {
+	if _, err := games.DumpUploads().Begin(t.Context(), contest.ID, "first.sql", quarter); err != nil {
 		t.Fatalf("first begin: %v", err)
 	}
 
 	// Three refusals of a quarter each: held, they are the whole directory.
 	for i := 0; i < 3; i++ {
-		if _, err := games.BeginUpload(t.Context(), contest.ID, "again.sql", quarter); !errors.Is(err, provisioning.ErrUploadInProgress) {
+		if _, err := games.DumpUploads().Begin(t.Context(), contest.ID, "again.sql", quarter); !errors.Is(err, provisioning.ErrUploadInProgress) {
 			t.Fatalf("begin %d answered %v, want ErrUploadInProgress", i+2, err)
 		}
 	}
@@ -189,7 +189,7 @@ func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) 
 	}
 
 	other, _ := contestFor(t, t.Context(), 0)
-	if _, err := games.BeginUpload(t.Context(), other.ID, "elsewhere.sql", quarter); err != nil {
+	if _, err := games.DumpUploads().Begin(t.Context(), other.ID, "elsewhere.sql", quarter); err != nil {
 		t.Fatalf("a second contest's upload was refused %v — the refused begins are still "+
 			"holding the directory budget", err)
 	}
@@ -199,11 +199,11 @@ func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) 
 // chunk, leaving it ready for CompleteUpload.
 func beginWithContent(t *testing.T, games *provisioning.Games, contest uuid.UUID, filename, content string) provisioning.Upload {
 	t.Helper()
-	upload, err := games.BeginUpload(t.Context(), contest, filename, int64(len(content)))
+	upload, err := games.DumpUploads().Begin(t.Context(), contest, filename, int64(len(content)))
 	if err != nil {
 		t.Fatalf("begin upload: %v", err)
 	}
-	if _, err := games.AppendChunk(t.Context(), contest, upload.ID, 0, strings.NewReader(content)); err != nil {
+	if _, err := games.DumpUploads().Append(t.Context(), uuid.New(), contest, upload.ID, 0, strings.NewReader(content)); err != nil {
 		t.Fatalf("append chunk: %v", err)
 	}
 	return upload
@@ -255,7 +255,7 @@ func TestUploadResolvesTheRowAFileSourcedTemplatesUploadIDNames(t *testing.T) {
 		t.Fatal("a file-sourced template carries no upload id")
 	}
 
-	resolved, err := games.Upload(t.Context(), contest.ID, *template.UploadID)
+	resolved, err := games.DumpUploads().Get(t.Context(), contest.ID, *template.UploadID)
 	if err != nil {
 		t.Fatalf("Upload(): %v", err)
 	}
@@ -274,7 +274,7 @@ func TestUploadResolvesTheRowAFileSourcedTemplatesUploadIDNames(t *testing.T) {
 
 	// Another contest's upload answers "no such upload", not leaking the row.
 	other, _ := contestFor(t, t.Context(), 0)
-	if _, err := games.Upload(t.Context(), other.ID, *template.UploadID); !errors.Is(err, provisioning.ErrUploadNotFound) {
+	if _, err := games.DumpUploads().Get(t.Context(), other.ID, *template.UploadID); !errors.Is(err, provisioning.ErrUploadNotFound) {
 		t.Fatalf("cross-contest Upload() = %v, want ErrUploadNotFound", err)
 	}
 }
@@ -300,7 +300,7 @@ func TestACorruptLineIndexIsNamedRatherThanCollapsedIntoAnInternalError(t *testi
 		t.Fatalf("damage the line index: %v", err)
 	}
 
-	_, err = games.UploadWindow(t.Context(), contest.ID, upload.ID, 1, 10, 4096)
+	_, err = games.DumpUploads().Window(t.Context(), contest.ID, upload.ID, 1, 10, 4096)
 	if !errors.Is(err, provisioning.ErrUploadIndexCorrupt) {
 		t.Fatalf("a damaged line index answered %v, want ErrUploadIndexCorrupt", err)
 	}
@@ -336,7 +336,7 @@ func TestAbortingAnUploadDeletesTheFileAndLeavesNoGame(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	upload, err := games.BeginUpload(t.Context(), contest.ID, "dump.sql", 1024)
+	upload, err := games.DumpUploads().Begin(t.Context(), contest.ID, "dump.sql", 1024)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestAbortingAnUploadDeletesTheFileAndLeavesNoGame(t *testing.T) {
 		t.Fatal("nothing was reserved on disk to abort")
 	}
 
-	aborted, err := games.AbortUpload(t.Context(), uuid.New(), contest.ID, upload.ID)
+	aborted, err := games.DumpUploads().Abort(t.Context(), uuid.New(), contest.ID, upload.ID)
 	if err != nil {
 		t.Fatalf("abort: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestAbortingAnUploadRecordsFilenameAndLengthNeverContent(t *testing.T) {
 	upload := beginWithContent(t, games, contest.ID, "confidential.sql", "SECRET ROWS HERE")
 
 	actor := uuid.New()
-	if _, err := games.AbortUpload(t.Context(), actor, contest.ID, upload.ID); err != nil {
+	if _, err := games.DumpUploads().Abort(t.Context(), actor, contest.ID, upload.ID); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
 
@@ -395,7 +395,7 @@ func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) 
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	stale, err := games.BeginUpload(t.Context(), contest.ID, "forgotten.sql", 1024)
+	stale, err := games.DumpUploads().Begin(t.Context(), contest.ID, "forgotten.sql", 1024)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) 
 		t.Fatal("the orphan file — no row ever named it — is still on disk")
 	}
 
-	upload, err := postgres.NewGameInstances(testPool).Upload(t.Context(), stale.ID)
+	upload, err := postgres.NewGameUploads(testPool).ByID(t.Context(), stale.ID)
 	if err != nil {
 		t.Fatalf("read the swept upload back: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestSweepUploadsLeavesARecentUploadAlone(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	fresh, err := games.BeginUpload(t.Context(), contest.ID, "dump.sql", 1024)
+	fresh, err := games.DumpUploads().Begin(t.Context(), contest.ID, "dump.sql", 1024)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
 
-	upload, err := games.BeginUpload(t.Context(), contest.ID, "dump.sql", 1024)
+	upload, err := games.DumpUploads().Begin(t.Context(), contest.ID, "dump.sql", 1024)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	if _, err := games.AbortUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err == nil {
+	if _, err := games.DumpUploads().Abort(t.Context(), uuid.New(), contest.ID, upload.ID); err == nil {
 		t.Fatal("abort succeeded although the file could not be removed")
 	}
 
@@ -486,7 +486,7 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 		t.Fatalf("restore the upload directory's permissions: %v", err)
 	}
 
-	stored, err := postgres.NewGameInstances(testPool).Upload(t.Context(), upload.ID)
+	stored, err := postgres.NewGameUploads(testPool).ByID(t.Context(), upload.ID)
 	if err != nil {
 		t.Fatalf("read the upload back: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	}
 
 	// A retry with the directory writable again finishes the abort.
-	if _, err := games.AbortUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
+	if _, err := games.DumpUploads().Abort(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
 		t.Fatalf("retry after restoring permissions: %v", err)
 	}
 	if onDisk(t, dir, upload.ID) {
@@ -589,7 +589,7 @@ func TestAReplacementRefusedInsideItsTransactionLeavesTheDisplacedFileAlone(t *t
 	}
 	second := beginWithContent(t, games, contest.ID, "second.sql", "B;\n")
 
-	racing := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, &editableUntil{left: 1}, noContest{}, directly{}).
+	racing := provisioning.NewGames(onPostgres(postgres.NewGameInstances(testPool)), &buildCluster{}, &editableUntil{left: 1}, noContest{}, directly{}).
 		WithUploads(storeOn(t, dir), uploadLimits)
 
 	if _, err := racing.CompleteUpload(t.Context(), actor, contest.ID, second.ID); !errors.Is(err, provisioning.ErrGameNotEditable) {
@@ -642,13 +642,13 @@ func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
 	}
 }
 
-// BeginUpload reserves the file before its row commits; see orphanFileGrace.
+// Begin reserves the file before its row commits; see orphanFileGrace.
 func TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 
 	fresh := uuid.New()
 	if err := storeOn(t, dir).Begin(fresh.String(), 1<<16); err != nil {
-		t.Fatalf("reserve a file the way BeginUpload does: %v", err)
+		t.Fatalf("reserve a file the way Begin does: %v", err)
 	}
 
 	result, err := games.SweepUploads(t.Context(), 24*time.Hour)
@@ -659,6 +659,6 @@ func TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan(t *testing.T) {
 		t.Fatalf("orphan files = %d, want 0 — a reservation made moments ago is not an orphan", result.OrphanFiles)
 	}
 	if !onDisk(t, dir, fresh) {
-		t.Fatal("a file reserved moments ago was swept away; BeginUpload's own INSERT had not even committed yet")
+		t.Fatal("a file reserved moments ago was swept away; Begin's own INSERT had not even committed yet")
 	}
 }

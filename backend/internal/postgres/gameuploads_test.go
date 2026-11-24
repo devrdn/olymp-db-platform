@@ -14,10 +14,10 @@ import (
 func TestBeginningAnUploadCreatesARowInReceiving(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 
 		id := uuid.New()
-		upload, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 1024)
+		upload, err := uploads.Begin(ctx, id, contest, "dump.sql", 1024)
 		if err != nil {
 			t.Fatalf("begin upload: %v", err)
 		}
@@ -39,13 +39,13 @@ func TestBeginningAnUploadCreatesARowInReceiving(t *testing.T) {
 func TestASecondBeginForTheSameContestWhileOneIsReceivingIsRejectedByTheDatabase(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 
-		if _, err := repo.BeginUpload(ctx, uuid.New(), contest, "first.sql", 1024); err != nil {
+		if _, err := uploads.Begin(ctx, uuid.New(), contest, "first.sql", 1024); err != nil {
 			t.Fatalf("first begin: %v", err)
 		}
 
-		_, err := repo.BeginUpload(ctx, uuid.New(), contest, "second.sql", 2048)
+		_, err := uploads.Begin(ctx, uuid.New(), contest, "second.sql", 2048)
 		if !errors.Is(err, provisioning.ErrUploadInProgress) {
 			t.Fatalf("second begin answered %v, want ErrUploadInProgress", err)
 		}
@@ -55,12 +55,12 @@ func TestASecondBeginForTheSameContestWhileOneIsReceivingIsRejectedByTheDatabase
 func TestTwoDifferentContestsMayEachHaveAnUploadReceiving(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		a, b := aContest(t, ctx), aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 
-		if _, err := repo.BeginUpload(ctx, uuid.New(), a, "a.sql", 1024); err != nil {
+		if _, err := uploads.Begin(ctx, uuid.New(), a, "a.sql", 1024); err != nil {
 			t.Fatalf("begin for a: %v", err)
 		}
-		if _, err := repo.BeginUpload(ctx, uuid.New(), b, "b.sql", 1024); err != nil {
+		if _, err := uploads.Begin(ctx, uuid.New(), b, "b.sql", 1024); err != nil {
 			t.Fatalf("begin for b, a different contest: %v", err)
 		}
 	})
@@ -69,18 +69,18 @@ func TestTwoDifferentContestsMayEachHaveAnUploadReceiving(t *testing.T) {
 func TestCurrentUploadReadsTheOneReceivingRowAndNoneWhenThereIsNone(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 
-		if _, err := repo.CurrentUpload(ctx, contest); !errors.Is(err, provisioning.ErrUploadNotFound) {
+		if _, err := uploads.Current(ctx, contest); !errors.Is(err, provisioning.ErrUploadNotFound) {
 			t.Fatalf("a contest with no upload answered %v, want ErrUploadNotFound", err)
 		}
 
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 1024); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 1024); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
 
-		current, err := repo.CurrentUpload(ctx, contest)
+		current, err := uploads.Current(ctx, contest)
 		if err != nil {
 			t.Fatalf("current upload: %v", err)
 		}
@@ -96,29 +96,29 @@ func TestCurrentUploadReadsTheOneReceivingRowAndNoneWhenThereIsNone(t *testing.T
 func TestUpdateReceivedNeverLowersTheLengthNorTouchesAFinishedUpload(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 4096); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 4096); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		if err := repo.UpdateReceived(ctx, id, 2048); err != nil {
+		if err := uploads.UpdateReceived(ctx, id, 2048); err != nil {
 			t.Fatalf("update received: %v", err)
 		}
 
-		if err := repo.UpdateReceived(ctx, id, 1024); err != nil {
+		if err := uploads.UpdateReceived(ctx, id, 1024); err != nil {
 			t.Fatalf("an earlier chunk's progress: %v", err)
 		}
-		if upload, err := repo.Upload(ctx, id); err != nil || upload.ReceivedBytes != 2048 {
+		if upload, err := uploads.ByID(ctx, id); err != nil || upload.ReceivedBytes != 2048 {
 			t.Fatalf("received_bytes = %d (%v), want the 2048 already recorded", upload.ReceivedBytes, err)
 		}
 
-		if err := repo.AbortUpload(ctx, id); err != nil {
+		if err := uploads.Abort(ctx, id); err != nil {
 			t.Fatalf("abort: %v", err)
 		}
-		if err := repo.UpdateReceived(ctx, id, 4096); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
+		if err := uploads.UpdateReceived(ctx, id, 4096); !errors.Is(err, provisioning.ErrUploadAlreadyComplete) {
 			t.Fatalf("progress after the upload was cancelled = %v, want ErrUploadAlreadyComplete", err)
 		}
-		if upload, err := repo.Upload(ctx, id); err != nil || upload.ReceivedBytes != 2048 {
+		if upload, err := uploads.ByID(ctx, id); err != nil || upload.ReceivedBytes != 2048 {
 			t.Fatalf("received_bytes = %d (%v), want the 2048 the upload ended with", upload.ReceivedBytes, err)
 		}
 	})
@@ -127,17 +127,17 @@ func TestUpdateReceivedNeverLowersTheLengthNorTouchesAFinishedUpload(t *testing.
 func TestUpdateReceivedRecordsProgress(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 4096); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 4096); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
 
-		if err := repo.UpdateReceived(ctx, id, 2048); err != nil {
+		if err := uploads.UpdateReceived(ctx, id, 2048); err != nil {
 			t.Fatalf("update received: %v", err)
 		}
 
-		upload, err := repo.Upload(ctx, id)
+		upload, err := uploads.ByID(ctx, id)
 		if err != nil {
 			t.Fatalf("read back: %v", err)
 		}
@@ -150,9 +150,9 @@ func TestUpdateReceivedRecordsProgress(t *testing.T) {
 func TestCompletingAnUploadMarksItCompleteAndReplacesTheGame(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 4096); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 4096); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
 
@@ -174,7 +174,7 @@ func TestCompletingAnUploadMarksItCompleteAndReplacesTheGame(t *testing.T) {
 			t.Fatalf("script = %q, want empty for a file-sourced game", template.Script)
 		}
 
-		upload, err := repo.Upload(ctx, id)
+		upload, err := uploads.ByID(ctx, id)
 		if err != nil {
 			t.Fatalf("read the upload back: %v", err)
 		}
@@ -190,10 +190,10 @@ func TestCompletingAnUploadMarksItCompleteAndReplacesTheGame(t *testing.T) {
 func TestCompletingAnUploadRetiresThePreviousOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
 
 		first := uuid.New()
-		if _, err := repo.BeginUpload(ctx, first, contest, "first.sql", 10); err != nil {
+		if _, err := uploads.Begin(ctx, first, contest, "first.sql", 10); err != nil {
 			t.Fatalf("begin first: %v", err)
 		}
 		if _, err := repo.CompleteUpload(ctx, contest, first, "game_tpl_cabc",
@@ -202,7 +202,7 @@ func TestCompletingAnUploadRetiresThePreviousOne(t *testing.T) {
 		}
 
 		second := uuid.New()
-		if _, err := repo.BeginUpload(ctx, second, contest, "second.sql", 20); err != nil {
+		if _, err := uploads.Begin(ctx, second, contest, "second.sql", 20); err != nil {
 			t.Fatalf("begin second: %v", err)
 		}
 		template, err := repo.CompleteUpload(ctx, contest, second, "game_tpl_cabc",
@@ -217,7 +217,7 @@ func TestCompletingAnUploadRetiresThePreviousOne(t *testing.T) {
 			t.Fatalf("upload_id = %v, want %s", template.UploadID, second)
 		}
 
-		previous, err := repo.Upload(ctx, first)
+		previous, err := uploads.ByID(ctx, first)
 		if err != nil {
 			t.Fatalf("read the displaced upload back: %v", err)
 		}
@@ -230,17 +230,17 @@ func TestCompletingAnUploadRetiresThePreviousOne(t *testing.T) {
 func TestAbortingAnUploadMarksItAbortedAndNeverTouchesTheGame(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 10); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
 
-		if err := repo.AbortUpload(ctx, id); err != nil {
+		if err := uploads.Abort(ctx, id); err != nil {
 			t.Fatalf("abort: %v", err)
 		}
 
-		upload, err := repo.Upload(ctx, id)
+		upload, err := uploads.ByID(ctx, id)
 		if err != nil {
 			t.Fatalf("read back: %v", err)
 		}
@@ -253,13 +253,13 @@ func TestAbortingAnUploadMarksItAbortedAndNeverTouchesTheGame(t *testing.T) {
 	})
 }
 
-func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) {
+func TestAbandonedDumpsAreOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		uploads := NewGameUploads(testPool)
 
 		stale := uuid.New()
-		if _, err := repo.BeginUpload(ctx, stale, contest, "stale.sql", 10); err != nil {
+		if _, err := uploads.Begin(ctx, stale, contest, "stale.sql", 10); err != nil {
 			t.Fatalf("begin stale: %v", err)
 		}
 		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -269,7 +269,7 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 
 		fresh := uuid.New()
 		freshContest := aContest(t, ctx)
-		if _, err := repo.BeginUpload(ctx, fresh, freshContest, "fresh.sql", 10); err != nil {
+		if _, err := uploads.Begin(ctx, fresh, freshContest, "fresh.sql", 10); err != nil {
 			t.Fatalf("begin fresh: %v", err)
 		}
 
@@ -279,7 +279,7 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 		settled := map[string]uuid.UUID{"complete": uuid.New(), "aborted": uuid.New()}
 		for status, id := range settled {
 			contest := aContest(t, ctx)
-			if _, err := repo.BeginUpload(ctx, id, contest, status+".sql", 10); err != nil {
+			if _, err := uploads.Begin(ctx, id, contest, status+".sql", 10); err != nil {
 				t.Fatalf("begin the %s upload: %v", status, err)
 			}
 			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -289,7 +289,7 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 			}
 		}
 
-		abandoned, err := repo.AbandonedUploads(ctx, time.Now().Add(-24*time.Hour), 100)
+		abandoned, err := uploads.Abandoned(ctx, time.Now().Add(-24*time.Hour), 100)
 		if err != nil {
 			t.Fatalf("list abandoned: %v", err)
 		}
@@ -315,21 +315,21 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 	})
 }
 
-func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T) {
+func TestAnInUseDumpIsAFileSomethingNeedsAndNotOneNothingDoes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
 		name := "game_tpl_c" + uuid.NewString()[:12]
 
-		if inUse, err := repo.UploadInUse(ctx, uuid.New()); err != nil || inUse {
+		if inUse, err := uploads.InUse(ctx, uuid.New()); err != nil || inUse {
 			t.Fatalf("in use = %v, err = %v, want false for an id no row ever named", inUse, err)
 		}
 
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 10); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		if inUse, err := repo.UploadInUse(ctx, id); err != nil || !inUse {
+		if inUse, err := uploads.InUse(ctx, id); err != nil || !inUse {
 			t.Fatalf("in use = %v, err = %v, want true while the upload is still receiving", inUse, err)
 		}
 
@@ -337,7 +337,7 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 		if _, err := repo.CompleteUpload(ctx, contest, id, name, summary, nil); err != nil {
 			t.Fatalf("complete: %v", err)
 		}
-		if inUse, err := repo.UploadInUse(ctx, id); err != nil || !inUse {
+		if inUse, err := uploads.InUse(ctx, id); err != nil || !inUse {
 			t.Fatalf("in use = %v, err = %v, want true for the upload the game is built from", inUse, err)
 		}
 
@@ -346,7 +346,7 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 		if _, err := repo.SaveScript(ctx, contest, name, `SELECT 1`); err != nil {
 			t.Fatalf("save script: %v", err)
 		}
-		if inUse, err := repo.UploadInUse(ctx, id); err != nil || inUse {
+		if inUse, err := uploads.InUse(ctx, id); err != nil || inUse {
 			t.Fatalf("in use = %v, err = %v, want false once no game names the upload", inUse, err)
 		}
 	})
@@ -358,10 +358,10 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 func TestDeletingAnUploadAFileSourcedGameNamesTakesTheGameWithIt(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
-		repo := NewGameInstances(testPool)
+		repo, uploads := NewGameInstances(testPool), NewGameUploads(testPool)
 
 		id := uuid.New()
-		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
+		if _, err := uploads.Begin(ctx, id, contest, "dump.sql", 10); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
 		summary := provisioning.UploadSummary{Bytes: 10, SHA256: "d0", Lines: 1}

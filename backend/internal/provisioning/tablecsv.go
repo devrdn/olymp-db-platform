@@ -292,7 +292,7 @@ func (s *tableLineScanner) next() ([]byte, error) {
 
 // firstLineIfComplete returns r's first line once its newline has arrived,
 // reading at most MaxTableLineBytes+1 bytes. It serves a file still being
-// uploaded (AppendTableChunk's early header check):
+// uploaded (checkTableHeaderOnFirstChunk):
 //   - the newline has arrived: the line without it, and true;
 //   - no newline yet: nil, false, nil, since a header may span chunks;
 //   - past the bound with no newline: ErrTableLineTooLong.

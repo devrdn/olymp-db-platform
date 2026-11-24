@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
@@ -15,27 +14,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// The table builder's data: one CSV file per table of a builder-sourced game,
-// stored like an uploaded dump (gamefile id, bookkeeping row) but in its own
+// The table builder's data: one CSV file per table of a builder-sourced game.
+// A table's CSV is one kind of chunked upload (chunked.go), in its own
 // directory and table. Completing a table's CSV never replaces the game; the
 // file is loaded into a built database by Games.loadTableData.
 //
 // Row numbers count data rows only (the header is not row 1), are 1-based and
 // never reused: DeleteTableRow tombstones a row number rather than removing
 // its line, so the numbering an organiser sees never shifts.
-
-// TableDataStatus is where one table's CSV file has got to.
-type TableDataStatus string
-
-const (
-	// TableDataReceiving is a chunked upload still taking bytes.
-	TableDataReceiving TableDataStatus = "receiving"
-	// TableDataComplete is a fully validated file, the only status a build
-	// loads rows from.
-	TableDataComplete TableDataStatus = "complete"
-	// TableDataAborted is a chunked upload cancelled before it completed.
-	TableDataAborted TableDataStatus = "aborted"
-)
 
 // TableData is the bookkeeping row for one table's CSV file; the bytes live in
 // internal/gamefile under ID.
@@ -46,11 +32,11 @@ type TableData struct {
 	DeclaredBytes int64
 	ReceivedBytes int64
 	// Lines is the number of data rows, header excluded. Zero until Status is
-	// TableDataComplete.
+	// UploadComplete.
 	Lines int64
 	// DeletedRows are tombstoned row numbers, bounded at MaxTableDeletedRows.
 	DeletedRows []int64
-	Status      TableDataStatus
+	Status      UploadStatus
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -66,45 +52,16 @@ func (d TableData) deletedSet() map[int64]struct{} {
 	return set
 }
 
-// Why a table's data could not be received, completed, read back or edited
-// (CLAUDE.md rule 1).
+// Why a table's data could not be read back or edited (CLAUDE.md rule 1).
+// Receiving it is refused with the chunked-upload sentinels (chunked.go).
 var (
-	// ErrTableDataDisabled means Games was never given WithTableData.
-	ErrTableDataDisabled = errors.New("table data uploads are not configured on this installation")
 	// ErrTableUnknown is a table name not in the contest's current definition,
 	// compared as spelled.
 	ErrTableUnknown = errors.New("the table is not part of the contest's current definition")
-	// ErrTableDataInProgress is a second upload for a table that already has
-	// one 'receiving', or two callers bootstrapping the same table at once.
-	ErrTableDataInProgress = errors.New("this table already has an upload in progress")
-	// ErrTableDataNotFound is an id, or a (contest, table) pair, with no
-	// table-data row in the requested state.
-	ErrTableDataNotFound = errors.New("no such table data upload")
-	// ErrTableDataAlreadyComplete is an Append, Complete or Abort against an
-	// upload no longer 'receiving'.
-	ErrTableDataAlreadyComplete = errors.New("the table's data upload has already been completed or cancelled")
-	// ErrTableDataChunkOutOfOrder mirrors gamefile.ErrChunkOutOfOrder.
-	ErrTableDataChunkOutOfOrder = errors.New("the chunk does not continue where the upload left off")
-	// ErrTableDataChunkTooLarge mirrors gamefile.ErrChunkTooLarge.
-	ErrTableDataChunkTooLarge = errors.New("the chunk exceeds the maximum chunk size")
-	// ErrTableDataChunkIncomplete mirrors gamefile.ErrChunkIncomplete.
-	ErrTableDataChunkIncomplete = errors.New("the chunk body was not received in full")
-	// ErrTableDataTooLarge mirrors gamefile.ErrFileTooLarge.
-	ErrTableDataTooLarge = errors.New("the upload exceeds the maximum file size")
-	// ErrTableDataStoreFull mirrors gamefile.ErrStoreFull.
-	ErrTableDataStoreFull = errors.New("the table data directory is full")
-	// ErrTableDataLengthMismatch mirrors gamefile.ErrLengthMismatch.
-	ErrTableDataLengthMismatch = errors.New("the received bytes do not match the declared length")
 	// ErrTableDataChanged is an AppendTableRow that read the table before
 	// another form's row was recorded, or whose table file was replaced under
 	// the call. Nothing of its row is kept.
 	ErrTableDataChanged = errors.New("the table's data changed while this row was being added")
-	// ErrTableDataBusy is a chunk arriving while the table store already
-	// holds as many chunks in memory as it may (gamefile.ErrTooManyChunks),
-	// or while another chunk is still arriving for the same contest, from the
-	// same account, or for a contest of the same owner. The same chunk can be
-	// sent again shortly.
-	ErrTableDataBusy = errors.New("too many table data chunks are being received at once")
 	// ErrTableDataDamaged is a table's file missing, or holding fewer bytes
 	// than its record counts: the volume lost bytes that were stored. Nothing can be
 	// read from the table or added to it until its data is uploaded again.
@@ -119,39 +76,63 @@ var (
 	ErrTooManyDeletedRows = errors.New("too many rows have been deleted from this table")
 )
 
-// wrapTableFileErr maps gamefile's sentinels to this file's. It is separate
-// from wrapGamefileErr so a table-data handler never has to recognise an
-// upload's sentinels.
-func wrapTableFileErr(err error) error {
-	switch {
-	case errors.Is(err, gamefile.ErrNotFound), errors.Is(err, gamefile.ErrBadUploadID):
-		return ErrTableDataNotFound
-	case errors.Is(err, gamefile.ErrUploadSealed):
-		return ErrTableDataAlreadyComplete
-	case errors.Is(err, gamefile.ErrFileTooLarge):
-		return ErrTableDataTooLarge
-	case errors.Is(err, gamefile.ErrStoreFull):
-		return ErrTableDataStoreFull
-	case errors.Is(err, gamefile.ErrChunkOutOfOrder):
-		return ErrTableDataChunkOutOfOrder
-	case errors.Is(err, gamefile.ErrChunkTooLarge):
-		return ErrTableDataChunkTooLarge
-	case errors.Is(err, gamefile.ErrChunkIncomplete):
-		return fmt.Errorf("%w: %w", ErrTableDataChunkIncomplete, err)
-	case errors.Is(err, gamefile.ErrLengthMismatch):
-		return ErrTableDataLengthMismatch
-	case errors.Is(err, gamefile.ErrTooManyChunks):
-		return ErrTableDataBusy
-	case errors.Is(err, gamefile.ErrShorterThanRecorded):
-		return fmt.Errorf("%w: %w", ErrTableDataDamaged, err)
-	default:
-		return fmt.Errorf("gamefile: %w", err)
+func (d TableData) progress() uploadProgress {
+	return uploadProgress{ID: d.ID, ContestID: d.ContestID, ReceivedBytes: d.ReceivedBytes, Status: d.Status}
+}
+
+func (d TableData) aborted() TableData {
+	d.Status = UploadAborted
+	return d
+}
+
+func (d TableData) abortEntry(actor *uuid.UUID) audit.Entry {
+	return audit.Entry{
+		ActorID: actor, Action: audit.ActionGameTableDataUploadAbort,
+		Entity: "contest", EntityID: d.ContestID.String(),
+		Payload: map[string]any{"table": d.Table, "bytes": d.ReceivedBytes},
 	}
 }
 
-// WithTableData turns on per-table CSV storage. store must be a separate
-// gamefile.Store from the one given to WithUploads, with its own directory, so
-// neither orphan sweep mistakes the other's files for orphans.
+// TableDataRows is UploadRows for table CSVs, with what only a table's data
+// has: a file per table that stays the table's once complete, grows a typed
+// row at a time and tombstones rows rather than rewriting them.
+type TableDataRows interface {
+	UploadRows[TableData]
+	// WithOwner is ByID with the account that created the row's contest, in
+	// one read: a chunk is charged to that owner (chunkBound).
+	WithOwner(ctx context.Context, id uuid.UUID) (TableData, uuid.UUID, error)
+	// Current reads a table's one 'receiving' upload, or ErrUploadNotFound.
+	Current(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
+	// Ready reads a table's one 'complete' file, or ErrUploadNotFound when
+	// the table has none yet.
+	Ready(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
+	// Complete marks id 'complete' with what validation measured, and retires
+	// previous (nil unless another upload for the table is displaced).
+	Complete(ctx context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID) (TableData, error)
+	// CreateReady records a table's first row as a file that starts
+	// 'complete'. A table that already has one is ErrUploadInProgress.
+	CreateReady(ctx context.Context, id, contestID uuid.UUID, table string, bytes, lines int64) (TableData, error)
+	// AppendRow records one more row of rowBytes at the end of a 'complete'
+	// file, only while the file is still recorded as at bytes long.
+	// Otherwise ErrTableDataChanged: another row was recorded first, or the
+	// file is no longer the table's.
+	AppendRow(ctx context.Context, id uuid.UUID, at, rowBytes int64) (TableData, error)
+	// DeleteRow tombstones one row of a 'complete' file in one atomic update,
+	// refusing with ErrTooManyDeletedRows past the stored bound.
+	DeleteRow(ctx context.Context, id uuid.UUID, row int64) error
+	// Discard retires every table-data row of a contest and returns the ids
+	// whose files the caller removes after its transaction commits.
+	//
+	// Used when a game stops being builder-sourced. The rows are keyed by
+	// table name, so left behind they would be loaded by a later definition
+	// that reuses a name, against columns they were never validated for.
+	Discard(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error)
+}
+
+// WithTableData turns on per-table CSV storage on store (Uploads.use). store
+// must be a separate gamefile.Store from the one given to WithUploads, with
+// its own directory, so neither orphan sweep mistakes the other's files for
+// orphans.
 //
 // store must buffer its chunks (gamefile.Limits.BufferedChunks) and it is a
 // wiring mistake, answered with a panic, if it streams them: AppendTableRow
@@ -162,61 +143,13 @@ func (g *Games) WithTableData(store *gamefile.Store, limits gamefile.Limits) *Ga
 	if !store.BuffersChunks() {
 		panic("provisioning: the table data store must buffer its chunks (gamefile.Limits.BufferedChunks)")
 	}
-	g.tableFiles, g.tableLimits = store, limits
+	g.tables.use(store, limits)
 	return g
 }
 
-// chunksInFlight is who has a table chunk arriving: which contests and which
-// accounts. A chunk is charged to its contest, to the account sending it and
-// to the contest's owner, and each takes one of the table store's buffers at
-// a time. So one organiser cannot hold every buffer the installation has,
-// with however many contests, tables, parallel requests or managers of their
-// own appointing. The zero value is ready to use.
-type chunksInFlight struct {
-	mu       sync.Mutex
-	contests map[uuid.UUID]struct{}
-	accounts map[uuid.UUID]struct{}
-}
-
-// enter reports whether neither contest nor any of accounts had a chunk
-// arriving, and marks them all as having one until leave with the same
-// arguments.
-func (c *chunksInFlight) enter(contest uuid.UUID, accounts ...uuid.UUID) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, busy := c.contests[contest]; busy {
-		return false
-	}
-	for _, account := range accounts {
-		if _, busy := c.accounts[account]; busy {
-			return false
-		}
-	}
-	if c.contests == nil {
-		c.contests, c.accounts = map[uuid.UUID]struct{}{}, map[uuid.UUID]struct{}{}
-	}
-	c.contests[contest] = struct{}{}
-	for _, account := range accounts {
-		c.accounts[account] = struct{}{}
-	}
-	return true
-}
-
-func (c *chunksInFlight) leave(contest uuid.UUID, accounts ...uuid.UUID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.contests, contest)
-	for _, account := range accounts {
-		delete(c.accounts, account)
-	}
-}
-
-// TableDataLimits reports the table-data store's ceilings, which are
-// independent of UploadLimits. internal/api reads them here rather than from a
-// constant of its own (CLAUDE.md rule 11).
-func (g *Games) TableDataLimits() (gamefile.Limits, bool) {
-	return g.tableLimits, g.tableFiles != nil
-}
+// TableUploads begins, receives and aborts a table's CSV uploads;
+// CompleteTableUpload is what makes one the table's data.
+func (g *Games) TableUploads() *Uploads[TableData] { return g.tables }
 
 // committedTableFile is the part of a table's file its row records
 // (ReceivedBytes), which is all any reader may see. The file itself can run
@@ -233,21 +166,21 @@ type committedTableFile struct {
 func (c committedTableFile) Close() error { return c.file.Close() }
 
 func (g *Games) openCommitted(ctx context.Context, data TableData) (committedTableFile, error) {
-	f, err := g.tableFiles.Open(data.ID.String())
-	if errors.Is(err, gamefile.ErrNotFound) && data.Status == TableDataComplete {
+	f, err := g.tables.volume().Open(data.ID.String())
+	if errors.Is(err, gamefile.ErrNotFound) && data.Status == UploadComplete {
 		// Read again: an upload completed since data was read retires this
 		// file, and that is a table that changed, not a damaged one.
-		current, readErr := g.repo.TableDataByID(ctx, data.ID)
+		current, readErr := g.tableRows.ByID(ctx, data.ID)
 		switch {
-		case readErr != nil && !errors.Is(readErr, ErrTableDataNotFound):
+		case readErr != nil && !errors.Is(readErr, ErrUploadNotFound):
 			return committedTableFile{}, fmt.Errorf("read the table's current data: %w", readErr)
-		case readErr == nil && current.Status == TableDataComplete:
+		case readErr == nil && current.Status == UploadComplete:
 			return committedTableFile{}, fmt.Errorf("%w: upload %s of table %q has no file",
 				ErrTableDataDamaged, data.ID, data.Table)
 		}
 	}
 	if err != nil {
-		return committedTableFile{}, wrapTableFileErr(err)
+		return committedTableFile{}, wrapGamefileErr(err)
 	}
 	info, err := f.Stat()
 	if err == nil && info.Size() < data.ReceivedBytes {
@@ -287,13 +220,13 @@ func (g *Games) currentDefinitionTable(ctx context.Context, contestID uuid.UUID,
 // page can resume it. An unknown table is ErrTableUnknown, not "nothing in
 // progress".
 func (g *Games) CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error) {
-	if g.tableFiles == nil {
-		return TableData{}, ErrTableDataDisabled
+	if !g.tables.enabled() {
+		return TableData{}, ErrUploadsDisabled
 	}
 	if _, err := g.currentDefinitionTable(ctx, contestID, table); err != nil {
 		return TableData{}, err
 	}
-	return g.repo.CurrentTableData(ctx, contestID, table)
+	return g.tableRows.Current(ctx, contestID, table)
 }
 
 // checkTableDataCompatibility refuses a definition that would change the
@@ -313,9 +246,9 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 		// script save bypass the lock and load values validated against
 		// another column type.
 		for _, table := range next.Tables {
-			data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
+			data, err := g.tableRows.Ready(ctx, contestID, table.Name)
 			switch {
-			case errors.Is(err, ErrTableDataNotFound):
+			case errors.Is(err, ErrUploadNotFound):
 				continue
 			case err != nil:
 				return fmt.Errorf("read %s's own data: %w", table.Name, err)
@@ -334,9 +267,9 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 	}
 
 	for _, table := range current.Definition.Tables {
-		data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
+		data, err := g.tableRows.Ready(ctx, contestID, table.Name)
 		switch {
-		case errors.Is(err, ErrTableDataNotFound):
+		case errors.Is(err, ErrUploadNotFound):
 			continue
 		case err != nil:
 			return fmt.Errorf("read %s's own data: %w", table.Name, err)
@@ -352,107 +285,25 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 	return nil
 }
 
-// BeginTableUpload reserves a new chunked CSV upload for one table of the
-// contest's current definition. The file is reserved before the row is
-// inserted, so a refused insert leaves at worst a rowless file for the orphan
-// sweep.
-func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table string, declaredBytes int64) (TableData, error) {
-	if g.tableFiles == nil {
-		return TableData{}, ErrTableDataDisabled
-	}
-	if declaredBytes <= 0 || declaredBytes > g.tableLimits.MaxFileBytes {
-		return TableData{}, ErrTableDataTooLarge
-	}
-	if _, err := g.currentDefinitionTable(ctx, contestID, table); err != nil {
-		return TableData{}, err
-	}
-
-	if err := g.requireEditable(ctx, contestID); err != nil {
-		return TableData{}, err
-	}
-
-	id := uuid.New()
-	if err := g.tableFiles.Begin(id.String(), declaredBytes); err != nil {
-		return TableData{}, wrapTableFileErr(err)
-	}
-	data, err := g.repo.BeginTableData(ctx, id, contestID, table, declaredBytes)
-	if err != nil {
-		// Store.Begin counted declaredBytes against the directory; release
-		// it now rather than hold the budget until the janitor sweeps.
-		_ = g.retireTableDataFile(id)
-		if errors.Is(err, ErrTableDataInProgress) {
-			return TableData{}, ErrTableDataInProgress
-		}
-		return TableData{}, fmt.Errorf("record the upload: %w", err)
-	}
-	return data, nil
+// checkTableName is Uploads.checkName for a table's CSV: the table must be
+// in the contest's current definition.
+func (g *Games) checkTableName(ctx context.Context, contestID uuid.UUID, table string) error {
+	_, err := g.currentDefinitionTable(ctx, contestID, table)
+	return err
 }
 
-// AppendTableChunk writes one chunk of a table-data upload already begun.
-//
-// After the chunk at offset 0 is written, the header is checked if it arrived
-// in full, so a wrong file is refused after one chunk rather than the whole
-// upload. CompleteTableUpload still checks it again.
-func (g *Games) AppendTableChunk(ctx context.Context, actorID, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
-	if g.tableFiles == nil {
-		return 0, ErrTableDataDisabled
-	}
-	data, owner, err := g.repo.TableDataWithOwner(ctx, id)
-	if err != nil {
-		return 0, err
-	}
-	if data.ContestID != contestID {
-		// Another contest's upload reads as missing, so its existence does
-		// not leak.
-		return 0, ErrTableDataNotFound
-	}
-	if data.Status != TableDataReceiving {
-		return 0, ErrTableDataAlreadyComplete
-	}
-
-	if !g.tableChunks.enter(contestID, actorID, owner) {
-		return 0, ErrTableDataBusy
-	}
-	// Deferred: a body reader that panics must not leave the contest and the
-	// accounts refused until the process restarts.
-	defer g.tableChunks.leave(contestID, actorID, owner)
-	received, err := g.tableFiles.Append(id.String(), offset, r)
-	if err != nil {
-		return received, wrapTableFileErr(err)
-	}
-	if received == data.ReceivedBytes {
-		return received, nil // a retried chunk Append skipped
-	}
-	if err := g.repo.UpdateTableDataReceived(ctx, id, received); err != nil {
-		if errors.Is(err, ErrTableDataAlreadyComplete) {
-			// The upload completed or was cancelled while this chunk was
-			// arriving. Its bytes are past the record, where nothing reads.
-			return received, ErrTableDataAlreadyComplete
-		}
-		return received, fmt.Errorf("record the upload's progress: %w", err)
-	}
-
-	// Runs at most once per upload: a resent first chunk took the retry
-	// return above.
-	if offset == 0 {
-		if err := g.checkTableHeaderOnFirstChunk(ctx, contestID, id, data.Table); err != nil {
-			return received, err
-		}
-	}
-	return received, nil
-}
-
-// checkTableHeaderOnFirstChunk validates the header if its line has fully
-// arrived, reading no further than the first newline; otherwise it says
-// nothing and leaves the check to CompleteTableUpload.
-func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, contestID, id uuid.UUID, tableName string) error {
-	table, err := g.currentDefinitionTable(ctx, contestID, tableName)
+// checkTableHeaderOnFirstChunk is Uploads.firstChunk for a table's CSV. It
+// validates the header if its line has fully arrived, reading no further than
+// the first newline; otherwise it says nothing and leaves the check to
+// CompleteTableUpload, which checks it again anyway.
+func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, data TableData) error {
+	table, err := g.currentDefinitionTable(ctx, data.ContestID, data.Table)
 	if err != nil {
 		return err
 	}
-	f, err := g.tableFiles.Open(id.String())
+	f, err := g.tables.volume().Open(data.ID.String())
 	if err != nil {
-		return wrapTableFileErr(err)
+		return wrapGamefileErr(err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -470,33 +321,14 @@ func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, contestID, id 
 	return validateHeader(fields, table)
 }
 
-func (g *Games) tableDataByIDForContest(ctx context.Context, contestID, id uuid.UUID) (TableData, error) {
-	data, err := g.repo.TableDataByID(ctx, id)
-	if err != nil {
-		return TableData{}, err
-	}
-	if data.ContestID != contestID {
-		// Another contest's upload reads as missing, so its existence does
-		// not leak.
-		return TableData{}, ErrTableDataNotFound
-	}
-	return data, nil
-}
-
 // CompleteTableUpload finalises a chunked CSV upload: checks the received
 // length, then streams the file once, validating the header and then every
-// row. This pass is authoritative; AppendTableChunk's header check is only an
+// row. This pass is authoritative; the first chunk's header check is only an
 // early refusal and may not have run.
 func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (TableData, error) {
-	if g.tableFiles == nil {
-		return TableData{}, ErrTableDataDisabled
-	}
-	data, err := g.tableDataByIDForContest(ctx, contestID, id)
+	data, err := g.tables.receiving(ctx, contestID, id)
 	if err != nil {
 		return TableData{}, err
-	}
-	if data.Status != TableDataReceiving {
-		return TableData{}, ErrTableDataAlreadyComplete
 	}
 
 	table, err := g.currentDefinitionTable(ctx, contestID, data.Table)
@@ -509,7 +341,7 @@ func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id 
 	}
 
 	if data.ReceivedBytes != data.DeclaredBytes {
-		return TableData{}, ErrTableDataLengthMismatch
+		return TableData{}, ErrUploadLengthMismatch
 	}
 
 	lines, err := g.validateTableFile(ctx, data, table)
@@ -530,7 +362,7 @@ func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id 
 	}
 
 	if previous != nil {
-		_ = g.retireTableDataFile(*previous)
+		_ = g.tables.retire(*previous)
 	}
 	return completed, nil
 }
@@ -545,7 +377,7 @@ func (g *Games) completeTableDataAndAudit(
 			return err
 		}
 		var err error
-		completed, err = g.repo.CompleteTableData(ctx, contestID, table, id, bytes, lines, previous)
+		completed, err = g.tableRows.Complete(ctx, contestID, table, id, bytes, lines, previous)
 		if err != nil {
 			return fmt.Errorf("store the table's data: %w", err)
 		}
@@ -565,9 +397,9 @@ func (g *Games) completeTableDataAndAudit(
 // tableDataToDisplace returns the table's current 'complete' file, or nil when
 // there is none or it is keeping.
 func (g *Games) tableDataToDisplace(ctx context.Context, contestID uuid.UUID, table string, keeping uuid.UUID) (*uuid.UUID, error) {
-	ready, err := g.repo.ReadyTableData(ctx, contestID, table)
+	ready, err := g.tableRows.Ready(ctx, contestID, table)
 	switch {
-	case errors.Is(err, ErrTableDataNotFound):
+	case errors.Is(err, ErrUploadNotFound):
 		return nil, nil
 	case err != nil:
 		return nil, fmt.Errorf("read the table's current data: %w", err)
@@ -634,53 +466,6 @@ func (g *Games) validateTableFile(ctx context.Context, data TableData, table Tab
 	}
 }
 
-// AbortTableUpload cancels a chunked upload before it completed.
-func (g *Games) AbortTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (TableData, error) {
-	if g.tableFiles == nil {
-		return TableData{}, ErrTableDataDisabled
-	}
-	data, err := g.tableDataByIDForContest(ctx, contestID, id)
-	if err != nil {
-		return TableData{}, err
-	}
-	if data.Status != TableDataReceiving {
-		return TableData{}, ErrTableDataAlreadyComplete
-	}
-	return g.abortTableData(ctx, &actorID, data)
-}
-
-// abortTableData aborts an upload; a nil actor records a system event (the
-// janitor).
-func (g *Games) abortTableData(ctx context.Context, actor *uuid.UUID, data TableData) (TableData, error) {
-	mark := func(ctx context.Context) error {
-		if err := g.repo.AbortTableData(ctx, data.ID); err != nil {
-			return fmt.Errorf("mark the table upload aborted: %w", err)
-		}
-		return g.record(ctx, audit.Entry{
-			ActorID: actor, Action: audit.ActionGameTableDataUploadAbort,
-			Entity: "contest", EntityID: data.ContestID.String(),
-			Payload: map[string]any{"table": data.Table, "bytes": data.ReceivedBytes},
-		})
-	}
-
-	if err := g.retireTableDataFile(data.ID); err != nil {
-		return TableData{}, fmt.Errorf("remove the table upload's file: %w", err)
-	}
-	err := g.atomically(ctx, mark)
-	if err != nil {
-		return TableData{}, err
-	}
-	data.Status = TableDataAborted
-	return data, nil
-}
-
-func (g *Games) retireTableDataFile(id uuid.UUID) error {
-	if err := g.tableFiles.Abort(id.String()); err != nil && !errors.Is(err, gamefile.ErrNotFound) {
-		return wrapTableFileErr(err)
-	}
-	return nil
-}
-
 // AppendTableRow adds one row typed into a form to the table's file. values
 // are the field text in column order. The first row creates the file; later
 // rows are appended and only the new row is validated.
@@ -692,8 +477,8 @@ func (g *Games) retireTableDataFile(id uuid.UUID) error {
 // the other form is answered ErrTableDataChanged with nothing written, so the
 // client adds its row again (committedTableFile).
 func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID, tableName string, values []string) (TableData, error) {
-	if g.tableFiles == nil {
-		return TableData{}, ErrTableDataDisabled
+	if !g.tables.enabled() {
+		return TableData{}, ErrUploadsDisabled
 	}
 	table, err := g.currentDefinitionTable(ctx, contestID, tableName)
 	if err != nil {
@@ -720,15 +505,15 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return TableData{}, err
 	}
 
-	if _, err := g.repo.CurrentTableData(ctx, contestID, tableName); err == nil {
-		return TableData{}, ErrTableDataInProgress
-	} else if !errors.Is(err, ErrTableDataNotFound) {
+	if _, err := g.tableRows.Current(ctx, contestID, tableName); err == nil {
+		return TableData{}, ErrUploadInProgress
+	} else if !errors.Is(err, ErrUploadNotFound) {
 		return TableData{}, fmt.Errorf("check for an upload in progress: %w", err)
 	}
 
-	ready, err := g.repo.ReadyTableData(ctx, contestID, tableName)
+	ready, err := g.tableRows.Ready(ctx, contestID, tableName)
 	switch {
-	case errors.Is(err, ErrTableDataNotFound):
+	case errors.Is(err, ErrUploadNotFound):
 		return g.bootstrapTableRow(ctx, actorID, contestID, tableName, table, rowLine)
 	case err != nil:
 		return TableData{}, fmt.Errorf("read the table's current data: %w", err)
@@ -751,7 +536,7 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 			return err
 		}
 		var err error
-		updated, err = g.repo.AppendTableDataRow(ctx, ready.ID, ready.ReceivedBytes, int64(len(payload)))
+		updated, err = g.tableRows.AppendRow(ctx, ready.ID, ready.ReceivedBytes, int64(len(payload)))
 		if err != nil {
 			return fmt.Errorf("record the appended row: %w", err)
 		}
@@ -766,8 +551,11 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 			return err
 		}
 		// Last, so that only a failed commit leaves a tail.
-		if _, err := g.tableFiles.ReplaceTail(ready.ID.String(), ready.ReceivedBytes, strings.NewReader(payload)); err != nil {
-			return wrapTableFileErr(err)
+		if _, err := g.tables.volume().ReplaceTail(ready.ID.String(), ready.ReceivedBytes, strings.NewReader(payload)); err != nil {
+			if errors.Is(err, gamefile.ErrShorterThanRecorded) {
+				return fmt.Errorf("%w: %w", ErrTableDataDamaged, err)
+			}
+			return wrapGamefileErr(err)
 		}
 		return nil
 	}
@@ -813,12 +601,12 @@ func (g *Games) bootstrapTableRow(
 	content := header + "\n" + rowLine + "\n"
 
 	id := uuid.New()
-	if err := g.tableFiles.Begin(id.String(), int64(len(content))); err != nil {
-		return TableData{}, wrapTableFileErr(err)
+	if err := g.tables.volume().Begin(id.String(), int64(len(content))); err != nil {
+		return TableData{}, wrapGamefileErr(err)
 	}
-	if _, err := g.tableFiles.Append(id.String(), 0, strings.NewReader(content)); err != nil {
-		_ = g.retireTableDataFile(id)
-		return TableData{}, wrapTableFileErr(err)
+	if _, err := g.tables.volume().Append(id.String(), 0, strings.NewReader(content)); err != nil {
+		_ = g.tables.retire(id)
+		return TableData{}, wrapGamefileErr(err)
 	}
 
 	var created TableData
@@ -828,7 +616,7 @@ func (g *Games) bootstrapTableRow(
 			return err
 		}
 		var err error
-		created, err = g.repo.CreateReadyTableData(ctx, id, contestID, tableName, int64(len(content)), 1)
+		created, err = g.tableRows.CreateReady(ctx, id, contestID, tableName, int64(len(content)), 1)
 		if err != nil {
 			return fmt.Errorf("store the table's first row: %w", err)
 		}
@@ -852,10 +640,10 @@ func (g *Games) bootstrapTableRow(
 		// commit may have recorded the file, so it is left for the orphan
 		// sweep to judge.
 		if !ranToCommit {
-			_ = g.retireTableDataFile(id)
+			_ = g.tables.retire(id)
 		}
-		if errors.Is(err, ErrTableDataInProgress) {
-			return TableData{}, ErrTableDataInProgress
+		if errors.Is(err, ErrUploadInProgress) {
+			return TableData{}, ErrUploadInProgress
 		}
 		return TableData{}, err
 	}
@@ -889,15 +677,15 @@ type TableRowWindow struct {
 // tableRowIndex mark; without marks, paging through a whole file is quadratic
 // in its size.
 func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table string, fromRow int64, maxRows int, maxBytes int64) (TableRowWindow, error) {
-	if g.tableFiles == nil {
-		return TableRowWindow{}, ErrTableDataDisabled
+	if !g.tables.enabled() {
+		return TableRowWindow{}, ErrUploadsDisabled
 	}
 	if _, err := g.currentDefinitionTable(ctx, contestID, table); err != nil {
 		return TableRowWindow{}, err
 	}
-	data, err := g.repo.ReadyTableData(ctx, contestID, table)
+	data, err := g.tableRows.Ready(ctx, contestID, table)
 	if err != nil {
-		if errors.Is(err, ErrTableDataNotFound) {
+		if errors.Is(err, ErrUploadNotFound) {
 			return TableRowWindow{FromRow: fromRow}, nil // no file yet: an empty table
 		}
 		return TableRowWindow{}, fmt.Errorf("read the table's current data: %w", err)
@@ -998,15 +786,15 @@ func openTableRowScan(f io.ReadSeeker, size int64, marks *tableRowMarks, fromRow
 // (MaxTableDeletedRows) with one UPDATE, readers skip it, and an interruption
 // leaves nothing partial.
 func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID, table string, row int64) error {
-	if g.tableFiles == nil {
-		return ErrTableDataDisabled
+	if !g.tables.enabled() {
+		return ErrUploadsDisabled
 	}
 	if _, err := g.currentDefinitionTable(ctx, contestID, table); err != nil {
 		return err
 	}
-	data, err := g.repo.ReadyTableData(ctx, contestID, table)
+	data, err := g.tableRows.Ready(ctx, contestID, table)
 	if err != nil {
-		if errors.Is(err, ErrTableDataNotFound) {
+		if errors.Is(err, ErrUploadNotFound) {
 			return ErrTableRowNotFound
 		}
 		return fmt.Errorf("read the table's current data: %w", err)
@@ -1028,7 +816,7 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		if err := g.beginGameEdit(ctx, contestID); err != nil {
 			return err
 		}
-		if err := g.repo.DeleteTableDataRow(ctx, data.ID, row); err != nil {
+		if err := g.tableRows.DeleteRow(ctx, data.ID, row); err != nil {
 			return err
 		}
 		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
@@ -1047,12 +835,12 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 // database through COPY FROM STDIN (cluster.LoadTableData). A table with no
 // completed file is left empty.
 func (g *Games) loadTableData(ctx context.Context, contestID uuid.UUID, database string, definition Definition) error {
-	if g.tableFiles == nil {
+	if !g.tables.enabled() {
 		return nil
 	}
 	for _, table := range definition.Tables {
-		data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
-		if errors.Is(err, ErrTableDataNotFound) {
+		data, err := g.tableRows.Ready(ctx, contestID, table.Name)
+		if errors.Is(err, ErrUploadNotFound) {
 			continue
 		}
 		if err != nil {
@@ -1143,55 +931,3 @@ func (c *tableDataCopyReader) advance() {
 // copyEndOfData is the line COPY FROM STDIN takes as "no more rows", in CSV
 // format as well as text.
 var copyEndOfData = []byte(`\.`)
-
-// sweepAbandonedTableData aborts table-data uploads still 'receiving' past
-// olderThan, in batches of abandonedUploadBatchLimit.
-func (g *Games) sweepAbandonedTableData(ctx context.Context, olderThan time.Duration) (int, error) {
-	abandoned, err := g.repo.AbandonedTableData(ctx, g.now().Add(-olderThan), abandonedUploadBatchLimit)
-	if err != nil {
-		return 0, fmt.Errorf("list abandoned table uploads: %w", err)
-	}
-	var count int
-	var failures []error
-	for _, data := range abandoned {
-		if _, err := g.abortTableData(ctx, nil, data); err != nil {
-			failures = append(failures, fmt.Errorf("abandon table upload %s: %w", data.ID, err))
-			continue
-		}
-		count++
-	}
-	return count, errors.Join(failures...)
-}
-
-// sweepOrphanTableFiles removes table-data files no row uses. Files younger
-// than orphanFileGrace are spared: BeginTableUpload and bootstrapTableRow
-// create a file before the row naming it.
-func (g *Games) sweepOrphanTableFiles(ctx context.Context) (int, error) {
-	ids, err := g.tableFiles.UploadIDs(g.now().Add(-orphanFileGrace))
-	if err != nil {
-		return 0, fmt.Errorf("list the table data volume: %w", err)
-	}
-
-	var removed int
-	var failures []error
-	for _, idStr := range ids {
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			continue
-		}
-		inUse, err := g.repo.TableDataInUse(ctx, id)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("check table upload %s: %w", id, err))
-			continue
-		}
-		if inUse {
-			continue
-		}
-		if err := g.retireTableDataFile(id); err != nil {
-			failures = append(failures, fmt.Errorf("remove orphan table file %s: %w", id, err))
-			continue
-		}
-		removed++
-	}
-	return removed, errors.Join(failures...)
-}

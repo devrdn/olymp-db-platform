@@ -417,7 +417,7 @@ func TestRequestBuildLeavesTheStoredContentUntouched(t *testing.T) {
 			name: "upload",
 			setup: func(t *testing.T, ctx context.Context, repo *GameInstances, contest uuid.UUID) provisioning.Template {
 				id := uuid.New()
-				if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
+				if _, err := NewGameUploads(testPool).Begin(ctx, id, contest, "dump.sql", 10); err != nil {
 					t.Fatalf("begin upload: %v", err)
 				}
 				saved, err := repo.CompleteUpload(ctx, contest, id, "game_tpl_c"+uuid.NewString()[:12],

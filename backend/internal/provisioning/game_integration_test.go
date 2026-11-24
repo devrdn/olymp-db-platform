@@ -42,7 +42,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `
 		CREATE TABLE guests (id uuid PRIMARY KEY, full_name text NOT NULL);
@@ -129,7 +129,7 @@ func TestAScriptSavedInTheCoreDatabaseIsDescribedAsBuiltWhateverTheFirstParticip
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `
 		CREATE TABLE suspects (id serial PRIMARY KEY, name text NOT NULL);
 		CREATE TABLE evidence (id serial PRIMARY KEY, note text);
@@ -199,7 +199,7 @@ func TestAScriptSavedInTheCoreDatabaseWhoseDatabaseIsGoneIsFoundByTheTemplateChe
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
 	if err != nil {
 		t.Fatalf("save the script: %v", err)
@@ -256,7 +256,7 @@ func TestAScriptSavedInTheCoreDatabaseWhoseTemplateIsGoneIsRebuiltWhileTheContes
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	saved, err := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{}).
+	saved, err := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{}).
 		SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
 	if err != nil {
 		t.Fatalf("save the script: %v", err)
@@ -264,7 +264,7 @@ func TestAScriptSavedInTheCoreDatabaseWhoseTemplateIsGoneIsRebuiltWhileTheContes
 	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
 
 	// The real repository answers for the contest's status from here on.
-	games := provisioning.NewGames(repo, cluster, repo, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, repo, noContest{}, directly{})
 	built, err := games.Build(t.Context(), time.Minute)
 	if err != nil || built.Status != provisioning.TemplateReady {
 		t.Fatalf("build: %v, finished as %q", err, built.Status)
@@ -342,7 +342,7 @@ func TestAScriptSavedInTheCoreDatabaseLeavesNothingOnTheGameClusterOnceItsDraftI
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
 	if err != nil {
 		t.Fatalf("save the script: %v", err)
@@ -410,7 +410,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
 	if err != nil {
 		t.Fatalf("save the script: %v", err)
@@ -471,7 +471,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 
 	// Line 1 is the newline after the backtick, so the bad INSERT is line 5.
 	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `
@@ -529,7 +529,7 @@ func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 
 	const dump = "CREATE TABLE guests (id int, full_name text);\n" +
 		"\n" +
@@ -613,7 +613,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 		t.Fatalf("open the game cluster: %v", err)
 	}
 
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{})
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
 
 	definition := provisioning.Definition{Tables: []provisioning.TableDefinition{
 		{
@@ -737,7 +737,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	if err != nil {
 		t.Fatalf("open the table data store: %v", err)
 	}
-	games := provisioning.NewGames(repo, cluster, editableContest{}, noContest{}, directly{}).WithTableData(files, limits)
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{}).WithTableData(files, limits)
 
 	definition := provisioning.Definition{Tables: []provisioning.TableDefinition{
 		{
@@ -798,11 +798,11 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	// No trailing newline, as many exporters write: the form row appended
 	// below must start a line of its own, or COPY fails the whole build.
 	const suspectsCSV = "id,name,nickname\n1,Margot Feilhaber,\n2,Duplicate Suspect,Sparrow"
-	upload, err := games.BeginTableUpload(t.Context(), contest.ID, "suspects", int64(len(suspectsCSV)))
+	upload, err := games.TableUploads().Begin(t.Context(), contest.ID, "suspects", int64(len(suspectsCSV)))
 	if err != nil {
 		t.Fatalf("begin table upload: %v", err)
 	}
-	if _, err := games.AppendTableChunk(t.Context(), uuid.New(), contest.ID, upload.ID, 0, strings.NewReader(suspectsCSV)); err != nil {
+	if _, err := games.TableUploads().Append(t.Context(), uuid.New(), contest.ID, upload.ID, 0, strings.NewReader(suspectsCSV)); err != nil {
 		t.Fatalf("append table chunk: %v", err)
 	}
 	if _, err := games.CompleteTableUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
@@ -975,7 +975,7 @@ func TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm(t 
 	}
 
 	contest, _ := contestFor(t, t.Context(), 0)
-	games := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, editableContest{}, noContest{}, directly{}).
+	games := provisioning.NewGames(onPostgres(postgres.NewGameInstances(testPool)), &buildCluster{}, editableContest{}, noContest{}, directly{}).
 		WithTableData(files, limits)
 	if _, err := games.SetDefinition(t.Context(), uuid.New(), contest.ID,
 		provisioning.Definition{Tables: tables}); err != nil {

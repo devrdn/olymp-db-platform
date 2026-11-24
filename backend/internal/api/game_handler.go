@@ -12,16 +12,14 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
-	"github.com/devrdn/olymp-db-platform/backend/internal/platform/retry"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/devrdn/olymp-db-platform/backend/internal/rbac"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
-// Games is the slice of provisioning.Games this handler needs. The upload
-// methods answer provisioning.ErrUploadsDisabled when GAME_UPLOAD_DIR is not
-// configured; this handler only maps that sentinel.
+// Games is the slice of provisioning.Games this handler needs, apart from the
+// chunked uploads (ChunkedUploads).
 type Games interface {
 	Of(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
 	// StatusOf is Of without the script or definition: a console polls it every
@@ -32,39 +30,48 @@ type Games interface {
 	// in after the last build or for a running contest whose template is gone.
 	RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) (provisioning.Template, error)
 
-	BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error)
-	AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error)
+	// CurrentUpload finds a contest's dump upload still in progress, for a
+	// reloaded page.
 	CurrentUpload(ctx context.Context, contestID uuid.UUID) (provisioning.Upload, error)
-	// Upload resolves the upload a file-sourced Template.UploadID names.
-	Upload(ctx context.Context, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
-	UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error)
+	// CompleteUpload seals a dump and makes it the contest's game.
 	CompleteUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Template, error)
-	AbortUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
-
-	// UploadLimits reports the configured chunked-upload ceilings, so this
-	// handler keeps no copy of them (CLAUDE.md rule 11).
-	UploadLimits() (gamefile.Limits, bool)
 
 	// The table builder: tables described structurally instead of SQL, with
 	// each table's data uploaded as CSV.
 	SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, definition provisioning.Definition) (provisioning.Template, error)
 
-	BeginTableUpload(ctx context.Context, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error)
 	// CurrentTableData finds a table's chunked upload still in progress, for a
 	// reloaded page.
 	CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error)
-	AppendTableChunk(ctx context.Context, actorID, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error)
+	// CompleteTableUpload validates a table's CSV and makes it the table's data.
 	CompleteTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error)
-	AbortTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error)
 	TableDataWindow(ctx context.Context, contestID uuid.UUID, table string, fromRow int64, maxRows int, maxBytes int64) (provisioning.TableRowWindow, error)
 	// AppendTableRow adds one row typed into a form. It is refused while a
 	// chunked upload for the same table is still receiving.
 	AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID, table string, values []string) (provisioning.TableData, error)
 	DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID, table string, row int64) error
+}
 
-	// TableDataLimits is UploadLimits for the table-data store, which is
-	// configured separately; never assume the two are equal.
-	TableDataLimits() (gamefile.Limits, bool)
+// ChunkedUploads is the slice of provisioning.Uploads a chunked route needs,
+// the same for a dump and for a table's CSV. Every call answers
+// provisioning.ErrUploadsDisabled when the kind has no volume.
+type ChunkedUploads[R any] interface {
+	// Begin reserves an upload of name: a dump's filename, or a table.
+	Begin(ctx context.Context, contestID uuid.UUID, name string, declaredBytes int64) (R, error)
+	Append(ctx context.Context, actorID, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error)
+	Abort(ctx context.Context, actorID, contestID, id uuid.UUID) (R, error)
+	// Limits reports the configured ceilings, so this handler keeps no copy
+	// of them (CLAUDE.md rule 11). The two kinds are configured separately;
+	// never assume they are equal.
+	Limits() (gamefile.Limits, bool)
+}
+
+// DumpUploads is ChunkedUploads for a dump, which is also read back.
+type DumpUploads interface {
+	ChunkedUploads[provisioning.Upload]
+	// Get resolves the upload a file-sourced Template.UploadID names.
+	Get(ctx context.Context, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
+	Window(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error)
 }
 
 // GameDatabases is the slice of provisioning.Service this handler needs: a
@@ -80,12 +87,14 @@ type GameDatabases interface {
 // without one a stored script could never be built.
 type GameHandler struct {
 	games     Games
+	dumps     DumpUploads
+	tables    ChunkedUploads[provisioning.TableData]
 	databases GameDatabases
 	mw        *auth.Middleware
 	log       *slog.Logger
-	// budgets pace BeginUpload. They are kept in the shared cache, not an
-	// in-process map: an upload spans requests that may reach different
-	// replicas, and the disk it reserves is a cluster-wide resource.
+	// budgets pace beginning an upload. They are kept in the shared cache,
+	// not an in-process map: an upload spans requests that may reach
+	// different replicas, and the disk it reserves is a cluster-wide resource.
 	budgets budgets
 	// maxChunkBody bounds one chunk's HTTP body; a field so a test can shrink
 	// it.
@@ -96,9 +105,12 @@ type GameHandler struct {
 }
 
 // NewGameHandler assembles the endpoints.
-func NewGameHandler(games Games, databases GameDatabases, mw *auth.Middleware, log *slog.Logger, limiter httpx.Counter) *GameHandler {
+func NewGameHandler(
+	games Games, dumps DumpUploads, tables ChunkedUploads[provisioning.TableData],
+	databases GameDatabases, mw *auth.Middleware, log *slog.Logger, limiter httpx.Counter,
+) *GameHandler {
 	return &GameHandler{
-		games: games, databases: databases, mw: mw, log: log,
+		games: games, dumps: dumps, tables: tables, databases: databases, mw: mw, log: log,
 		budgets: newBudgets(limiter, log), maxChunkBody: defaultMaxGameChunkBodyBytes,
 		maxTableChunkBody: defaultMaxGameChunkBodyBytes,
 	}
@@ -145,10 +157,10 @@ func (h *GameHandler) Mount(r chi.Router) {
 		// Uploading a finished dump. Completing one replaces the game as
 		// SetScript does, so every write needs ContestEdit.
 		//
-		// Only BeginUpload is rate-limited, not chunks: an honest 3 GB upload
-		// is hundreds of chunks, and limiting each would break a legitimate
-		// transfer. Begin is the call that reserves disk and a game_uploads row
-		// before any byte arrives.
+		// Only beginning an upload is rate-limited, not chunks: an honest 3 GB
+		// upload is hundreds of chunks, and limiting each would break a
+		// legitimate transfer. Begin is the call that reserves disk and a
+		// game_uploads row before any byte arrives.
 		r.Route("/uploads", func(r chi.Router) {
 			r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).
 				Get("/current", h.currentUpload)
@@ -157,7 +169,7 @@ func (h *GameHandler) Mount(r chi.Router) {
 
 			r.Route("/{"+uploadIDParam+"}", func(r chi.Router) {
 				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
-					Put("/chunk", h.appendChunk)
+					Put("/chunk", h.appendDumpChunk)
 				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
 					Post("/complete", h.completeUpload)
 				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
@@ -210,8 +222,8 @@ const uploadIDParam = "uploadID"
 const databaseParam = "database"
 
 // uploadLimitsResponse is what a browser needs to slice a file into chunks: the
-// largest chunk and the largest file. Both come from
-// provisioning.Games.UploadLimits, never a copy kept here (CLAUDE.md rule 11).
+// largest chunk and the largest file. Both come from DumpUploads.Limits, never
+// a copy kept here (CLAUDE.md rule 11).
 //
 // Enabled is separate because a deployment without GAME_UPLOAD_DIR reports both
 // numbers as zero, and zero is also a value an operator could configure.
@@ -226,7 +238,7 @@ type uploadLimitsResponse struct {
 // uploadResponse carry them: a page needs them before starting an upload, and
 // after a reload even when no upload is in progress.
 func (h *GameHandler) uploadLimitsView() uploadLimitsResponse {
-	limits, enabled := h.games.UploadLimits()
+	limits, enabled := h.dumps.Limits()
 	if !enabled {
 		return uploadLimitsResponse{}
 	}
@@ -237,9 +249,9 @@ func (h *GameHandler) uploadLimitsView() uploadLimitsResponse {
 
 // builderLimitsResponse is every ceiling the table builder must respect,
 // published so the browser keeps no copy of its own (CLAUDE.md rule 11).
-// ChunkBytes and MaxFileBytes are per-deployment configuration
-// (provisioning.Games.TableDataLimits); the rest are the platform constants
-// that also bound the server side.
+// ChunkBytes and MaxFileBytes are per-deployment configuration (the table
+// uploads' Limits); the rest are the platform constants that also bound the
+// server side.
 type builderLimitsResponse struct {
 	// Enabled works as in uploadLimitsResponse: the byte ceilings mean
 	// something only when it is true.
@@ -266,7 +278,7 @@ type builderLimitsResponse struct {
 // store is configured: a definition can be described and validated without any
 // CSV.
 func (h *GameHandler) builderLimitsView() builderLimitsResponse {
-	limits, enabled := h.games.TableDataLimits()
+	limits, enabled := h.tables.Limits()
 	types := make([]string, len(provisioning.ColumnTypes))
 	for i, t := range provisioning.ColumnTypes {
 		types[i] = string(t)
@@ -363,7 +375,7 @@ func (h *GameHandler) gameView(ctx context.Context, template provisioning.Templa
 		resp.BuildErrorCode = codeGameTableDataDamaged.String()
 	}
 	if template.Source == provisioning.SourceFile && template.UploadID != nil {
-		upload, err := h.games.Upload(ctx, template.ContestID, *template.UploadID)
+		upload, err := h.dumps.Get(ctx, template.ContestID, *template.UploadID)
 		if err != nil {
 			h.log.ErrorContext(ctx, "could not read a file-sourced game's own upload",
 				"contest_id", template.ContestID, "upload_id", *template.UploadID, "error", err)
@@ -602,7 +614,7 @@ func (h *GameHandler) currentUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.fail(w, r, err)
+		h.failDump(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, h.uploadView(upload))
@@ -651,9 +663,9 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upload, err := h.games.BeginUpload(r.Context(), contestID, req.Filename, req.DeclaredBytes)
+	upload, err := h.dumps.Begin(r.Context(), contestID, req.Filename, req.DeclaredBytes)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failDump(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, h.uploadView(upload))
@@ -665,11 +677,11 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 //
 // A deployment that sets GAME_UPLOAD_CHUNK_BYTES gets that number here too
 // (app.go calls WithMaxChunkBody): a second, independent ceiling would silently
-// override the configured one. provisioning.Games.AppendChunk enforces the same
+// override the configured one. provisioning.Uploads.Append enforces the same
 // number as ErrUploadChunkTooLarge.
 const defaultMaxGameChunkBodyBytes = 64 << 20 // 64 MiB
 
-// These size appendChunk's read deadline.
+// These size a chunk's read deadline.
 //
 // The server's ReadTimeout is sized for JSON bodies. At the default 8 MiB chunk
 // its thirty seconds demands about 2.2 Mbit/s on every chunk, and Caddy streams
@@ -683,16 +695,9 @@ const (
 	maxChunkReadTimeout          = 10 * time.Minute
 )
 
-func (h *GameHandler) chunkReadTimeout() time.Duration {
-	return chunkTimeoutFor(h.maxChunkBody)
-}
-
-func (h *GameHandler) tableChunkReadTimeout() time.Duration {
-	return chunkTimeoutFor(h.maxTableChunkBody)
-}
-
-// tableDataBusyRetry is the Retry-After of game_table_data_busy: a chunk in
-// memory is written within moments of its last byte arriving.
+// tableDataBusyRetry is the Retry-After of game_table_data_busy and
+// game_upload_busy: a chunk in memory is written within moments of its last
+// byte arriving.
 const tableDataBusyRetry = 2 * time.Second
 
 func chunkTimeoutFor(maxBody int64) time.Duration {
@@ -706,15 +711,36 @@ type chunkResponse struct {
 	ReceivedBytes int64 `json:"received_bytes"`
 }
 
-// appendChunk writes one chunk of an upload already begun. The body streams
-// straight to Games.AppendChunk and is never read into memory here (CLAUDE.md
-// rule 12).
-func (h *GameHandler) appendChunk(w http.ResponseWriter, r *http.Request) {
+// appendDumpChunk writes one chunk of a dump already begun.
+func (h *GameHandler) appendDumpChunk(w http.ResponseWriter, r *http.Request) {
+	h.appendChunk(w, r, h.dumps, h.uploadID, h.maxChunkBody, dumpUploadErrors)
+}
+
+// appendTableChunk writes one chunk of a table's CSV. The table store reads
+// the chunk into memory, a bounded number at a time, and answers
+// ErrUploadBusy beyond that.
+func (h *GameHandler) appendTableChunk(w http.ResponseWriter, r *http.Request) {
+	h.appendChunk(w, r, h.tables, h.tableDataID, h.maxTableChunkBody, tableDataErrors)
+}
+
+// chunkAppender is what appendChunk asks of either kind of upload.
+type chunkAppender interface {
+	Append(ctx context.Context, actorID, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error)
+}
+
+// appendChunk hands one chunk of an upload already begun to uploads, under
+// the route's own body ceiling, read deadline and answers. The body is never
+// read here (CLAUDE.md rule 12): it streams on, and a store that buffers
+// reads it within its own bound.
+func (h *GameHandler) appendChunk(
+	w http.ResponseWriter, r *http.Request, uploads chunkAppender,
+	uploadID func(http.ResponseWriter, *http.Request) (uuid.UUID, bool), maxBody int64, answers errorTable,
+) {
 	contestID, ok := h.contestID(w, r)
 	if !ok {
 		return
 	}
-	uploadID, ok := h.uploadID(w, r)
+	id, ok := uploadID(w, r)
 	if !ok {
 		return
 	}
@@ -727,22 +753,22 @@ func (h *GameHandler) appendChunk(w http.ResponseWriter, r *http.Request) {
 	// ReadTimeout stays for every other route. A test recorder answers
 	// http.ErrNotSupported, which is no reason to refuse a chunk; any other
 	// failure means this body runs under the JSON timeout, so it is logged.
-	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(h.chunkReadTimeout())); err != nil &&
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(chunkTimeoutFor(maxBody))); err != nil &&
 		!errors.Is(err, http.ErrNotSupported) {
 		h.log.WarnContext(r.Context(), "could not extend the read deadline for an upload chunk", "error", err)
 	}
 
-	body := http.MaxBytesReader(w, r.Body, h.maxChunkBody)
-	received, err := h.games.AppendChunk(r.Context(), contestID, uploadID, offset, body)
+	body := http.MaxBytesReader(w, r.Body, maxBody)
+	identity, _ := auth.IdentityFrom(r.Context())
+	received, err := uploads.Append(r.Context(), identity.UserID, contestID, id, offset, body)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			// The transport ceiling tripped. It enforces the same number as the
 			// domain, so it answers ErrUploadChunkTooLarge too.
-			h.fail(w, r, provisioning.ErrUploadChunkTooLarge)
-			return
+			err = provisioning.ErrUploadChunkTooLarge
 		}
-		h.fail(w, r, err)
+		h.failUpload(w, r, answers, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, chunkResponse{ReceivedBytes: received})
@@ -774,7 +800,7 @@ func (h *GameHandler) completeUpload(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	template, err := h.games.CompleteUpload(r.Context(), identity.UserID, contestID, uploadID)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failDump(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusAccepted, h.gameView(r.Context(), template))
@@ -793,9 +819,9 @@ func (h *GameHandler) abortUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	upload, err := h.games.AbortUpload(r.Context(), identity.UserID, contestID, uploadID)
+	upload, err := h.dumps.Abort(r.Context(), identity.UserID, contestID, uploadID)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failDump(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, h.uploadView(upload))
@@ -836,9 +862,9 @@ func (h *GameHandler) uploadWindow(w http.ResponseWriter, r *http.Request) {
 	maxLines := clampedIntQueryParam(r, "max_lines", defaultUploadWindowLines, maxUploadWindowLines)
 	maxBytes := clampedInt64QueryParam(r, "max_bytes", defaultUploadWindowBytes, maxUploadWindowBytes)
 
-	window, err := h.games.UploadWindow(r.Context(), contestID, uploadID, fromLine, maxLines, maxBytes)
+	window, err := h.dumps.Window(r.Context(), contestID, uploadID, fromLine, maxLines, maxBytes)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failDump(w, r, err)
 		return
 	}
 	// Non-nil, so an empty window serialises as [] rather than null.
@@ -892,8 +918,10 @@ func int64QueryParam(r *http.Request, name string, def int64) int64 {
 // slash.
 const tableParam = "table"
 
-// tableDataIDParam names a table's chunked CSV upload in a path. An id
-// belonging to another contest or table reads as ErrTableDataNotFound.
+// tableDataIDParam names a table's chunked CSV upload in a path. An id of
+// another contest reads as ErrUploadNotFound; the path's table is not
+// compared with the upload's, which changes nothing the contest's ContestEdit
+// does not already allow.
 const tableDataIDParam = "dataID"
 
 // rowParam names a data row by its stable 1-based number: deleting a row
@@ -1074,9 +1102,9 @@ func (h *GameHandler) beginTableUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	table := chi.URLParam(r, tableParam)
-	data, err := h.games.BeginTableUpload(r.Context(), contestID, table, req.DeclaredBytes)
+	data, err := h.tables.Begin(r.Context(), contestID, table, req.DeclaredBytes)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, h.tableDataView(data))
@@ -1092,57 +1120,17 @@ func (h *GameHandler) currentTableData(w http.ResponseWriter, r *http.Request) {
 	table := chi.URLParam(r, tableParam)
 
 	data, err := h.games.CurrentTableData(r.Context(), contestID, table)
-	if errors.Is(err, provisioning.ErrTableDataNotFound) {
+	if errors.Is(err, provisioning.ErrUploadNotFound) {
 		httpx.JSON(w, r, http.StatusOK, tableDataResponse{
 			Table: table, Status: "absent", DeletedRows: []int64{}, BuilderLimits: h.builderLimitsView(),
 		})
 		return
 	}
 	if err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, h.tableDataView(data))
-}
-
-// appendTableChunk hands one chunk of a table's CSV upload on like appendChunk,
-// under the table store's own body ceiling and read deadline. The table store
-// reads the chunk into memory, a bounded number at a time, and answers
-// ErrTableDataBusy beyond that.
-func (h *GameHandler) appendTableChunk(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
-	if !ok {
-		return
-	}
-	dataID, ok := h.tableDataID(w, r)
-	if !ok {
-		return
-	}
-	offset, ok := h.chunkOffset(w, r)
-	if !ok {
-		return
-	}
-
-	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(h.tableChunkReadTimeout())); err != nil &&
-		!errors.Is(err, http.ErrNotSupported) {
-		h.log.WarnContext(r.Context(), "could not extend the read deadline for a table-data chunk", "error", err)
-	}
-
-	body := http.MaxBytesReader(w, r.Body, h.maxTableChunkBody)
-	identity, _ := auth.IdentityFrom(r.Context())
-	received, err := h.games.AppendTableChunk(r.Context(), identity.UserID, contestID, dataID, offset, body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			// The transport ceiling tripped; answered as the domain's refusal,
-			// as in appendChunk.
-			h.fail(w, r, provisioning.ErrTableDataChunkTooLarge)
-			return
-		}
-		h.fail(w, r, err)
-		return
-	}
-	httpx.JSON(w, r, http.StatusOK, chunkResponse{ReceivedBytes: received})
 }
 
 // completeTableUpload finalises a table's CSV upload. 200, not 202: unlike
@@ -1160,7 +1148,7 @@ func (h *GameHandler) completeTableUpload(w http.ResponseWriter, r *http.Request
 	identity, _ := auth.IdentityFrom(r.Context())
 	data, err := h.games.CompleteTableUpload(r.Context(), identity.UserID, contestID, dataID)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, h.tableDataView(data))
@@ -1178,9 +1166,9 @@ func (h *GameHandler) abortTableUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	data, err := h.games.AbortTableUpload(r.Context(), identity.UserID, contestID, dataID)
+	data, err := h.tables.Abort(r.Context(), identity.UserID, contestID, dataID)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, h.tableDataView(data))
@@ -1223,7 +1211,7 @@ func (h *GameHandler) tableDataWindow(w http.ResponseWriter, r *http.Request) {
 
 	window, err := h.games.TableDataWindow(r.Context(), contestID, table, fromRow, maxRows, maxBytes)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 
@@ -1259,7 +1247,7 @@ func (h *GameHandler) appendTableRow(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 	data, err := h.games.AppendTableRow(r.Context(), identity.UserID, contestID, table, req.Values)
 	if err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, h.tableDataView(data))
@@ -1281,7 +1269,7 @@ func (h *GameHandler) deleteTableRow(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.games.DeleteTableRow(r.Context(), identity.UserID, contestID, table, row); err != nil {
-		h.fail(w, r, err)
+		h.failTable(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1294,6 +1282,104 @@ func (h *GameHandler) tableDataID(w http.ResponseWriter, r *http.Request) (uuid.
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// The chunked-upload refusals (provisioning/chunked.go) are one family for
+// both kinds, answered under each route's own codes, so the interface and its
+// locales keep telling a dump's refusal from a table's. Each table lists what
+// its routes can reach.
+var (
+	dumpUploadErrors = errorTable{
+		{err: provisioning.ErrUploadsDisabled, status: http.StatusNotFound, code: codeGameUploadsDisabled,
+			message: "File uploads are not enabled on this installation"},
+		{err: provisioning.ErrUploadFilenameInvalid, status: http.StatusBadRequest, code: codeGameUploadFilenameInvalid,
+			message: "The upload's filename is missing or too long"},
+		{err: provisioning.ErrUploadTooLarge, status: http.StatusBadRequest, code: codeGameUploadTooLarge,
+			message: "The upload exceeds the maximum file size this installation accepts"},
+		{err: provisioning.ErrUploadStoreFull, status: http.StatusConflict, code: codeGameUploadStoreFull,
+			message: "The upload directory is full; try again once other uploads have finished or been removed"},
+		{err: provisioning.ErrUploadChunkOutOfOrder, status: http.StatusConflict, code: codeGameUploadChunkOutOfOrder,
+			message: "This chunk does not continue where the upload left off"},
+		{err: provisioning.ErrUploadChunkTooLarge, status: http.StatusBadRequest, code: codeGameUploadChunkTooLarge,
+			message: "The chunk exceeds the maximum chunk size this installation accepts"},
+		// 408: nothing was wrong with the request, it did not finish arriving,
+		// and the client should resend it.
+		{err: provisioning.ErrUploadChunkIncomplete, status: http.StatusRequestTimeout, code: codeGameUploadChunkIncomplete,
+			message: chunkIncompleteMessage},
+		{err: provisioning.ErrUploadLengthMismatch, status: http.StatusConflict, code: codeGameUploadLengthMismatch,
+			message: "The bytes received do not match the length declared when the upload began"},
+		{err: provisioning.ErrUploadNotFound, status: http.StatusNotFound, code: codeGameUploadNotFound,
+			message: "This contest has no upload by that identifier"},
+		{err: provisioning.ErrUploadInProgress, status: http.StatusConflict, code: codeGameUploadInProgress,
+			message: "This contest already has an upload in progress"},
+		{err: provisioning.ErrUploadAlreadyComplete, status: http.StatusConflict, code: codeGameUploadAlreadyComplete,
+			message: "This upload has already been completed or cancelled"},
+		{err: provisioning.ErrUploadIncomplete, status: http.StatusConflict, code: codeGameUploadIncomplete,
+			message: "This upload has not been completed yet"},
+		// 409 and not 500: the request was right, the state on the volume is
+		// not, and the organiser has a move — upload the file again.
+		{err: provisioning.ErrUploadIndexCorrupt, status: http.StatusConflict, code: codeGameUploadIndexCorrupt,
+			message: "The upload's line index is damaged and it can no longer be read; upload the file again"},
+		// 422 and not 500: the request is well-formed and the file is sound,
+		// but this particular line cannot be shown at a price a preview may
+		// pay. The organiser's move is a line nearer a mark.
+		{err: provisioning.ErrUploadWindowUnreachable, status: http.StatusUnprocessableEntity, code: codeGameUploadWindowUnreachable,
+			message: "That line is too far past the file's nearest index mark to preview; start the window nearer the beginning of its thousand-line block"},
+		// Only a store that buffers its chunks is busy, and the dump's streams
+		// them; answered as the table's is, should that change.
+		{err: provisioning.ErrUploadBusy, status: http.StatusServiceUnavailable, code: codeGameUploadBusy,
+			message:    "Too many chunks are being received at once; send this chunk again in a moment",
+			retryAfter: tableDataBusyRetry},
+	}
+
+	tableDataErrors = errorTable{
+		{err: provisioning.ErrUploadsDisabled, status: http.StatusNotFound, code: codeGameTableDataDisabled,
+			message: "table data uploads are not configured on this installation"},
+		{err: provisioning.ErrUploadInProgress, status: http.StatusConflict, code: codeGameTableDataInProgress,
+			message: "this table already has an upload in progress"},
+		{err: provisioning.ErrUploadNotFound, status: http.StatusNotFound, code: codeGameTableDataNotFound,
+			message: "no such table data upload"},
+		{err: provisioning.ErrUploadAlreadyComplete, status: http.StatusConflict, code: codeGameTableDataAlreadyComplete,
+			message: "the table's data upload has already been completed or cancelled"},
+		{err: provisioning.ErrUploadChunkOutOfOrder, status: http.StatusConflict, code: codeGameTableDataChunkOutOfOrder,
+			message: "the chunk does not continue where the upload left off"},
+		{err: provisioning.ErrUploadChunkTooLarge, status: http.StatusBadRequest, code: codeGameTableDataChunkTooLarge,
+			message: "the chunk exceeds the maximum chunk size"},
+		{err: provisioning.ErrUploadChunkIncomplete, status: http.StatusRequestTimeout, code: codeGameTableDataChunkIncomplete,
+			message: chunkIncompleteMessage},
+		{err: provisioning.ErrUploadTooLarge, status: http.StatusBadRequest, code: codeGameTableDataTooLarge,
+			message: "the upload exceeds the maximum file size"},
+		{err: provisioning.ErrUploadStoreFull, status: http.StatusConflict, code: codeGameTableDataStoreFull,
+			message: "the table data directory is full"},
+		{err: provisioning.ErrUploadLengthMismatch, status: http.StatusConflict, code: codeGameTableDataLengthMismatch,
+			message: "the received bytes do not match the declared length"},
+		// 503, as for cover_busy: the limit is the installation's memory,
+		// shared by every organiser, not a rate this caller exceeded.
+		{err: provisioning.ErrUploadBusy, status: http.StatusServiceUnavailable, code: codeGameTableDataBusy,
+			message:    "Too many chunks of table data are being received at once; send this chunk again in a moment",
+			retryAfter: tableDataBusyRetry},
+	}
+)
+
+const chunkIncompleteMessage = "The chunk did not arrive in full; nothing was kept, so send it again from the offset the server reports"
+
+// failDump answers a dump route.
+func (h *GameHandler) failDump(w http.ResponseWriter, r *http.Request, err error) {
+	h.failUpload(w, r, dumpUploadErrors, err)
+}
+
+// failTable answers a table route, a chunked upload's or not.
+func (h *GameHandler) failTable(w http.ResponseWriter, r *http.Request, err error) {
+	h.failUpload(w, r, tableDataErrors, err)
+}
+
+// failUpload answers err from the route's own upload codes, and anything
+// else as every game route does.
+func (h *GameHandler) failUpload(w http.ResponseWriter, r *http.Request, answers errorTable, err error) {
+	if answers.answer(w, r, h.log, err) {
+		return
+	}
+	h.fail(w, r, err)
 }
 
 // fail names every refusal, so the interface can say which one happened
@@ -1324,58 +1410,6 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, codeGameInstanceAlreadyDropped,
 			"That database has already been removed")
 
-	// --- The uploaded dump (provisioning/upload.go) ---
-
-	case errors.Is(err, provisioning.ErrUploadsDisabled):
-		httpx.Error(w, r, http.StatusNotFound, codeGameUploadsDisabled,
-			"File uploads are not enabled on this installation")
-	case errors.Is(err, provisioning.ErrUploadFilenameInvalid):
-		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadFilenameInvalid,
-			"The upload's filename is missing or too long")
-	case errors.Is(err, provisioning.ErrUploadTooLarge):
-		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadTooLarge,
-			"The upload exceeds the maximum file size this installation accepts")
-	case errors.Is(err, provisioning.ErrUploadStoreFull):
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadStoreFull,
-			"The upload directory is full; try again once other uploads have finished or been removed")
-	case errors.Is(err, provisioning.ErrUploadChunkOutOfOrder):
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadChunkOutOfOrder,
-			"This chunk does not continue where the upload left off")
-	case errors.Is(err, provisioning.ErrUploadChunkTooLarge):
-		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadChunkTooLarge,
-			"The chunk exceeds the maximum chunk size this installation accepts")
-	case errors.Is(err, provisioning.ErrUploadChunkIncomplete):
-		// 408: nothing was wrong with the request, it did not finish arriving,
-		// and the client should resend it.
-		httpx.Error(w, r, http.StatusRequestTimeout, codeGameUploadChunkIncomplete,
-			"The chunk did not arrive in full; nothing was kept, so send it again from the offset the server reports")
-	case errors.Is(err, provisioning.ErrUploadLengthMismatch):
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadLengthMismatch,
-			"The bytes received do not match the length declared when the upload began")
-	case errors.Is(err, provisioning.ErrUploadNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeGameUploadNotFound,
-			"This contest has no upload by that identifier")
-	case errors.Is(err, provisioning.ErrUploadInProgress):
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadInProgress,
-			"This contest already has an upload in progress")
-	case errors.Is(err, provisioning.ErrUploadAlreadyComplete):
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadAlreadyComplete,
-			"This upload has already been completed or cancelled")
-	case errors.Is(err, provisioning.ErrUploadIncomplete):
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadIncomplete,
-			"This upload has not been completed yet")
-	case errors.Is(err, provisioning.ErrUploadIndexCorrupt):
-		// 409 and not 500: the request was right, the state on the volume is
-		// not, and the organiser has a move — upload the file again.
-		httpx.Error(w, r, http.StatusConflict, codeGameUploadIndexCorrupt,
-			"The upload's line index is damaged and it can no longer be read; upload the file again")
-	case errors.Is(err, provisioning.ErrUploadWindowUnreachable):
-		// 422 and not 500: the request is well-formed and the file is sound,
-		// but this particular line cannot be shown at a price a preview may
-		// pay. The organiser's move is a line nearer a mark.
-		httpx.Error(w, r, http.StatusUnprocessableEntity, codeGameUploadWindowUnreachable,
-			"That line is too far past the file's nearest index mark to preview; start the window nearer the beginning of its thousand-line block")
-
 	// --- The table builder's structural description (provisioning/definition.go) --
 
 	case errors.Is(err, provisioning.ErrDefinitionEmpty):
@@ -1397,42 +1431,15 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// table's existing data.
 		httpx.Error(w, r, http.StatusConflict, codeGameDefinitionTableLocked, err.Error())
 
-	// --- The table builder's CSV data (provisioning/tabledata.go, tablecsv.go) ---
+	// --- The table builder's CSV data (provisioning/tabledata.go, tablecsv.go);
+	// receiving it is answered by tableDataErrors ---
 
-	case errors.Is(err, provisioning.ErrTableDataDisabled):
-		httpx.Error(w, r, http.StatusNotFound, codeGameTableDataDisabled, err.Error())
 	case errors.Is(err, provisioning.ErrTableUnknown):
 		httpx.Error(w, r, http.StatusNotFound, codeGameTableUnknown, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataInProgress):
-		httpx.Error(w, r, http.StatusConflict, codeGameTableDataInProgress, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeGameTableDataNotFound, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataAlreadyComplete):
-		httpx.Error(w, r, http.StatusConflict, codeGameTableDataAlreadyComplete, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataChunkOutOfOrder):
-		httpx.Error(w, r, http.StatusConflict, codeGameTableDataChunkOutOfOrder, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataChunkTooLarge):
-		httpx.Error(w, r, http.StatusBadRequest, codeGameTableDataChunkTooLarge, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataChunkIncomplete):
-		// 408, as for ErrUploadChunkIncomplete.
-		httpx.Error(w, r, http.StatusRequestTimeout, codeGameTableDataChunkIncomplete,
-			"The chunk did not arrive in full; nothing was kept, so send it again from the offset the server reports")
-	case errors.Is(err, provisioning.ErrTableDataTooLarge):
-		httpx.Error(w, r, http.StatusBadRequest, codeGameTableDataTooLarge, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataStoreFull):
-		httpx.Error(w, r, http.StatusConflict, codeGameTableDataStoreFull, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataLengthMismatch):
-		httpx.Error(w, r, http.StatusConflict, codeGameTableDataLengthMismatch, err.Error())
 	case errors.Is(err, provisioning.ErrTableDataChanged):
 		// 409: another row reached the end of the file first; this one has to
 		// be added again over the current state.
 		httpx.Error(w, r, http.StatusConflict, codeGameTableDataChanged, err.Error())
-	case errors.Is(err, provisioning.ErrTableDataBusy):
-		// 503, as for cover_busy: the limit is the installation's memory,
-		// shared by every organiser, not a rate this caller exceeded.
-		w.Header().Set("Retry-After", strconv.Itoa(retry.Seconds(tableDataBusyRetry)))
-		httpx.Error(w, r, http.StatusServiceUnavailable, codeGameTableDataBusy,
-			"Too many chunks of table data are being received at once; send this chunk again in a moment")
 	case errors.Is(err, provisioning.ErrTableDataDamaged):
 		// The installation's fault, so a 500 and a line in the log, but under
 		// its own code: the organiser's way out is to upload the data again.

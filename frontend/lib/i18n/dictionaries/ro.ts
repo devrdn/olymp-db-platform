@@ -2544,6 +2544,8 @@ const ro = {
       "O bucată a fișierului este mai mare decât acceptă această instalare. Trimiteți fișierul în bucăți mai mici.",
     game_upload_chunk_incomplete:
       "Această bucată nu a ajuns în întregime — conexiunea s-a întrerupt sau transferul a fost prea lent. Nimic din ea nu a fost păstrat, deci poate fi trimisă din nou fără riscuri.",
+    game_upload_busy:
+      "Serverul primește deja atâtea părți de fișiere simultan câte poate păstra. Această parte nu a fost salvată; reîncercați peste câteva secunde și încărcarea va continua.",
     game_upload_length_mismatch:
       "Au sosit mai mulți sau mai puțini octeți decât s-a declarat la începutul încărcării, deci nu poate fi finalizată. Începeți încărcarea din nou.",
     game_upload_window_unreachable:
