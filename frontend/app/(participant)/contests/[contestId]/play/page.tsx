@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { FeedbackLink } from "@/components/product/feedback-link";
+import { ReloadButton } from "@/components/product/reload-button";
 import { StoryText } from "@/components/product/story-text";
 import { branding } from "@/lib/api/branding";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
@@ -29,7 +30,6 @@ import { readPlay } from "./play-reads";
 import { isReadRateLimit } from "./refusals";
 import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
-import { ReloadLink } from "./reload-link";
 import { PLAY_SHELL, WorkspaceSkeleton } from "./skeleton";
 import { Workspace } from "./workspace";
 
@@ -275,7 +275,7 @@ function ScreenUnavailable({ body, code, dict }: { body: string; code?: string; 
     <div className="flex min-h-0 flex-col items-start gap-4 p-10 max-narrow:p-4.5 narrow:flex-1">
       {code !== undefined ? <RenderedRefusalSignal code={code} /> : null}
       <p className="max-w-body text-body text-ink">{body}</p>
-      {code !== undefined && isReadRateLimit(code) ? <ReloadLink dict={dict} /> : null}
+      {code !== undefined && isReadRateLimit(code) ? <ReloadButton label={dict.participant.play.unavailable.retry} /> : null}
     </div>
   );
 }
@@ -304,7 +304,7 @@ function UnavailablePage({
       <div className="flex flex-col gap-4">
         <h1 className="text-h2 text-ink">{title}</h1>
         <p className="max-w-body text-body text-ink">{body}</p>
-        {code !== undefined && isReadRateLimit(code) ? <ReloadLink dict={dict} /> : null}
+        {code !== undefined && isReadRateLimit(code) ? <ReloadButton label={dict.participant.play.unavailable.retry} /> : null}
         <FeedbackLink href={feedbackUrl} labels={dict.participant.feedback} className="self-start text-small" />
       </div>
     </Band>
