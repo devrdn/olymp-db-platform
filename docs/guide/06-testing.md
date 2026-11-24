@@ -382,11 +382,13 @@ so no database or Redis test skips. Steps:
 5. `go vet ./...`.
 6. Build `cmd/api`, `cmd/migrate` and `cmd/bootstrap` with `CGO_ENABLED=0`.
 7. Apply the migrations: `go run ./cmd/migrate up`.
-8. `go test -race -timeout 20m -coverprofile=coverage.out ./...`: twenty
-   minutes rather than the default ten, since `internal/api` alone runs for
-   minutes under the race detector on a small runner. With both DSNs and the
-   Redis address set, this one command covers what `make test`,
-   `make test-db`, `make test-game` and `make test-game-build` run locally.
+8. `make -C .. test-race RACE_FLAGS=-coverprofile=coverage.out`: the race
+   detector with the Makefile's `RACE_TIMEOUT` (twenty minutes rather than go
+   test's ten, since `internal/api` alone runs for minutes under the race
+   detector on a small runner). The timeout lives only in the Makefile; change
+   it there, never in the workflow. With both DSNs and the Redis address set,
+   this one command covers what `make test`, `make test-db`, `make test-game`
+   and `make test-game-build` run locally.
 9. Print the coverage summary, then `go build ./...`.
 
 **Job `security` ("security scan").** `govulncheck ./...` and
