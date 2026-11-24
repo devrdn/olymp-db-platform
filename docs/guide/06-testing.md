@@ -158,7 +158,7 @@ These keep two sides of a boundary in step. All run in `make test`:
 |---|---|
 | `sentineltest.AssertListed` in a package's `errors_test.go` (`contests`, `monitor`; `users_test.go`, `queryproxy_test.go`) | an exported sentinel is missing from `Errors()` |
 | `TestEvery<Pkg>ErrorHasItsAnswer` in `internal/api/errortable_test.go` | a listed sentinel has no row, a different answer, or a code missing from the catalogue |
-| `TestTheCommittedContractIsCurrent` in `cmd/apicontract` | `docs/api/error-codes.json` is stale; run `make api-contract` |
+| `TestTheCommittedContractIsCurrent` in `cmd/apicontract` | `docs/api/error-codes.json` or `docs/api/limits.json` is stale; run `make api-contract` |
 | `TestTheCommittedContractIsCurrent` in `cmd/auditcontract` | `docs/api/audit-actions.json` is stale; run `make audit-contract` |
 | `TestEveryActionIsListed` in `internal/audit` | an action constant is missing from the list |
 | `migrations/migrations_test.go` | a migration lacks a direction, reuses a version, is empty, or breaks the lock convention |
@@ -171,6 +171,11 @@ The frontend checks the other side of the same files:
 - `frontend/lib/i18n/dictionary.test.ts` fails when a locale misses a key the
   English dictionary has, or an action in `docs/api/audit-actions.json` has no
   translation.
+- `frontend/lib/api/limits-contract.test.ts` fails when a constant the
+  interface repeats differs from its entry in `docs/api/limits.json`, or when
+  an entry has no case there. `frontend/lib/i18n/bounds.test.ts` fails when a
+  sentence's bound placeholder is left unfilled, a bound in `BOUNDS` is stated
+  nowhere, or a locale states other bounds than English.
 
 ### Frontend tests
 
@@ -395,9 +400,10 @@ published.
 ### `frontend.yml`
 
 Runs on pushes to `main` and pull requests that touch `frontend/**`,
-`docs/api/error-codes.json`, `docs/api/audit-actions.json`, the workflow or
-`image.yml`, and on every `v*` tag. A change to either contract file runs the interface's checks,
-because it changes what the interface must be able to say.
+`docs/api/error-codes.json`, `docs/api/audit-actions.json`,
+`docs/api/limits.json`, the workflow or `image.yml`, and on every `v*` tag. A
+change to any contract file runs the interface's checks, because it changes
+what the interface must be able to say or stop at.
 
 **Job `build` ("check and build"),** on Node 22: `npm ci`, then `lint`,
 `contrast`, `type-scale`, `error-codes`, `typecheck`, `npm test`,
@@ -566,8 +572,9 @@ Patterns the existing tests follow, each with an example to copy.
    across the wire (`internal/rpc/integration_test.go`); a write path is tested
    as the role that writes.
 10. **Read a contract from its generated file, never a hand-typed copy.**
-    `frontend/app/(participant)/contests/[contestId]/play/refusals.test.ts`
-    and `frontend/lib/i18n/dictionary.test.ts` read `docs/api/*.json`.
+    `frontend/app/(participant)/contests/[contestId]/play/refusals.test.ts`,
+    `frontend/lib/i18n/dictionary.test.ts` and
+    `frontend/lib/api/limits-contract.test.ts` read `docs/api/*.json`.
 11. **Test a component the way a user meets it.** Query by role and
     accessible name, assert attributes a user or assistive technology relies
     on (`components/product/tab-strip.test.tsx`).
