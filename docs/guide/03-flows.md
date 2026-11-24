@@ -767,10 +767,12 @@ sequenceDiagram
     H-->>W: correct, points_awarded, attempts_remaining, closed
 ```
 
-- Handler: `ParticipantHandler.answer` and `admitAnswer` in
-  [backend/internal/api/participant_handler.go](../../backend/internal/api/participant_handler.go);
-  the per-registration budget is `ANSWER_RATE_PER_MINUTE` over a one-minute
-  window, refused with 429 `answer_too_often`.
+- Handler: `ParticipantHandler.answer` in
+  [backend/internal/api/participant_handler.go](../../backend/internal/api/participant_handler.go),
+  admitted with `answerBudget`: the play screen's read budget per account
+  before the lookup, then the per-registration answer budget,
+  `ANSWER_RATE_PER_MINUTE` over a one-minute window, before the gate, refused
+  with 429 `answer_too_often`.
 - Service: `Service.Submit` and `submitOnce` in
   [backend/internal/contests/submission.go](../../backend/internal/contests/submission.go).
   The deadline formula is `contests.Deadline` in
