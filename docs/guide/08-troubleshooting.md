@@ -794,9 +794,10 @@ named setting and rebuild.
 
 ### A table's data upload stalls, or a table says its data was lost
 
-**Symptom.** While a builder table's CSV uploads, the table says the server is
-receiving as much table data as it can hold (`game_table_data_busy`), and the
-upload goes on by itself or, after a while, offers **Retry**. Or a table, its
+**Symptom.** While a builder table's CSV uploads, the upload pauses and goes on
+by itself; after five refusals in a row, the table says the server is
+receiving as much table data as it can hold (`game_table_data_busy`) and
+offers **Retry**. Or a table, its
 build, or a row added to it answers that the server lost part of its stored
 data (`game_table_data_damaged`), and the API logs `a table's file is shorter
 than its record`.
@@ -809,8 +810,9 @@ again by itself after that wait, between 1 and 60 seconds, and leaves it to
 file under `GAME_UPLOAD_DIR/tables` is missing or shorter than what its record
 says was stored: the volume lost bytes.
 
-**Fix.** For a busy refusal, wait and press **Retry**; another organiser's
-upload is in the way, and nothing of the refused chunk was stored. For damaged
+**Fix.** For a busy refusal, wait and press **Retry**; another upload is in
+the way, perhaps your own of another table, and nothing of the refused chunk
+was stored. For damaged
 data, upload the table's CSV again, then look at the volume behind
 `GAME_UPLOAD_DIR` ([ARCHITECTURE.md §7.3](../ARCHITECTURE.md#73-content-as-implemented)).
 
@@ -1106,10 +1108,15 @@ status change, or the reveal of the standings answers "This contest changed
 while you were deciding: somebody saved it, or it started or ended"
 (`contest_changed`), with a **Reload the page** button under it.
 
-**Cause.** Every write of a contest is made against the version the screen
-read. Another organiser saved the contest, an edit of its content moved it,
-or the scheduler started or finished it after the screen was rendered, so
-the save was refused and nothing was written.
+**Cause.** The settings form sends the version of the contest it was loaded
+at, so its save is refused when another organiser saved the contest, a
+content edit moved it, or the scheduler started or finished it since the form
+was rendered. The other saves (prize places, archive settings, a status
+change, the reveal) carry no version from the screen: they are checked against
+the row they read while the save is decided, so they are refused only when
+the contest moved during the save itself, and a screen left open while
+somebody else saved overwrites what was saved. Either way, a refused save
+wrote nothing.
 
 **Fix.** Press **Reload the page**, which reads the contest as it now is and
 starts the form over, then make the change again.
