@@ -395,10 +395,11 @@ What `ActionForm` keeps for every form, so a screen does not handle it:
 
 ### A form submitted through a server action, traced
 
-Joining a contest from the participant's register: the button is
-[`app/(participant)/my/enroll-button.tsx`](../../frontend/app/(participant)/my/enroll-button.tsx),
+Joining a contest from the participant's register, which `/my` and `/open`
+share (`app/(participant)/participant-register.tsx`): the button is
+[`app/(participant)/enroll-button.tsx`](../../frontend/app/(participant)/enroll-button.tsx),
 the action is
-[`app/(participant)/my/actions.ts`](../../frontend/app/(participant)/my/actions.ts).
+[`app/(participant)/enroll-actions.ts`](../../frontend/app/(participant)/enroll-actions.ts).
 
 ```mermaid
 sequenceDiagram
@@ -847,7 +848,7 @@ three locales; `npm test` covers `refusals.test.ts`. Then `make front-check`.
 
 ### Add a server action with a form
 
-Modelled on `app/(participant)/my/actions.ts` and `enroll-button.tsx`, with
+Modelled on `app/(participant)/enroll-actions.ts` and `enroll-button.tsx`, with
 tests like `app/(admin)/contests/[contestId]/people/actions.test.ts`.
 
 1. In the route folder, create or extend `actions.ts` starting with
