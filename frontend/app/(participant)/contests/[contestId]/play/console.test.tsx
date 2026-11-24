@@ -10,6 +10,7 @@ import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 import { ConsoleEditor } from "./console";
 import { activeTabStorageKey } from "./use-sql-tabs";
@@ -384,6 +385,18 @@ describe("the editor's tabs", () => {
     expect(screen.getByRole("textbox", { name: en.participant.console.label })).toHaveTextContent(
       "SELECT * FROM suspects",
     );
+  });
+
+  test("sets the tab's own title apart in the question before closing what was typed in it", async () => {
+    const { container } = render(
+      <ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={TWO_WRITTEN_TABS} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+
+    await userEvent.click(screen.getByRole("button", { name: fill(te.close, { tab: "Suspects" }) }));
+
+    const dialog = await screen.findByRole("dialog", { name: fill(te.closeConfirm, { tab: isolate("Suspects") }) });
+    expect(within(dialog).getByRole("button", { name: fill(te.close, { tab: isolate("Suspects") }) })).toBeInTheDocument();
   });
 
   // The result outlives the tab switch, so it names its tab.

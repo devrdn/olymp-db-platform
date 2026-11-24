@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 import type { GameDefinition } from "@/lib/api/game";
 
 import { GameBuilder } from "./game-builder";
@@ -168,7 +168,7 @@ describe("the table builder's own structure editor", () => {
     show({ rowCounts: { suspects: 0 } });
 
     await userEvent.click(screen.getByRole("button", { name: tb.removeTable }));
-    expect(await screen.findByRole("dialog", { name: fill(tb.removeTableConfirm, { name: "suspects" }) })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: fill(tb.removeTableConfirm, { name: isolate("suspects") }) })).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: en.chrome.cancel })[0]);
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

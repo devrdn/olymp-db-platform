@@ -14,7 +14,7 @@ vi.mock("./actions", async (importOriginal) => ({
 
 import type { Account, Role } from "@/lib/api/accounts";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 import type { MailOffer } from "../email-delivery";
 import { AccountCard } from "./account-card";
@@ -186,7 +186,7 @@ describe("AccountCard, clearing a sign-in lockout", () => {
     fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
 
     const dialog = await screen.findByRole("dialog", {
-      name: fill(en.accounts.card.unlockSignInConfirmTitle, { login: "s.popescu" }),
+      name: fill(en.accounts.card.unlockSignInConfirmTitle, { login: isolate("s.popescu") }),
     });
     expect(dialog).toHaveTextContent(en.accounts.card.unlockSignInConfirmBody);
     fireEvent.click(screen.getAllByRole("button", { name: en.accounts.card.unlockSignInCancel })[0]);

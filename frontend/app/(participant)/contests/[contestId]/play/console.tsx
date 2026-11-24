@@ -7,7 +7,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/use-confirm";
 import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
 import type { PlayDictionary } from "./dictionary";
@@ -123,8 +123,8 @@ export function ConsoleEditor({
     localTitle: te.local,
     confirmClose: (title) =>
       ask({
-        title: fill(te.closeConfirm, { tab: title }),
-        answer: fill(te.close, { tab: title }),
+        title: fill(te.closeConfirm, { tab: isolate(title) }),
+        answer: fill(te.close, { tab: isolate(title) }),
         cancel: te.keep,
         danger: true,
       }).catch(() => false),

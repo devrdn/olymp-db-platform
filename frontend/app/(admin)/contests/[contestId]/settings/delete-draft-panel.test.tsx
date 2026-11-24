@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 import { answerYes } from "@/components/ui/confirm-dialog-test-support";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
@@ -39,7 +39,7 @@ describe("DeleteDraftPanel", () => {
 
     await user.click(screen.getByRole("button", { name: t().action }));
 
-    expect(await screen.findByRole("dialog", { name: fill(t().confirm, { title: "Spring round" }) })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: fill(t().confirm, { title: isolate("Spring round") }) })).toBeInTheDocument();
     await user.click(screen.getAllByRole("button", { name: dict.chrome.cancel })[0]);
     expect(serverRequest).not.toHaveBeenCalled();
   });

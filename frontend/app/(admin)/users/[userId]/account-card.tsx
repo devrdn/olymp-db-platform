@@ -10,7 +10,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { Account, Role } from "@/lib/api/accounts";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 import {
   blockAction,
@@ -103,7 +103,7 @@ function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary })
       action={unlockSignInAction}
       fields={{ userId: account.id }}
       confirm={{
-        title: fill(t.unlockSignInConfirmTitle, { login: account.login }),
+        title: fill(t.unlockSignInConfirmTitle, { login: isolate(account.login) }),
         detail: t.unlockSignInConfirmBody,
         answer: t.unlockSignInConfirm,
         cancel: t.unlockSignInCancel,

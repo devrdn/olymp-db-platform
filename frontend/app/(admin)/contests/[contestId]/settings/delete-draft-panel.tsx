@@ -2,7 +2,7 @@
 
 import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 
 import { deleteDraftAction } from "./actions";
 import { Panel } from "./settings-panels";
@@ -23,7 +23,7 @@ export function DeleteDraftPanel({
     <ActionForm
       action={deleteDraftAction}
       fields={{ contestId }}
-      confirm={{ title: fill(t.confirm, { title }), answer: t.action, cancel: dict.chrome.cancel, danger: true }}
+      confirm={{ title: fill(t.confirm, { title: isolate(title) }), answer: t.action, cancel: dict.chrome.cancel, danger: true }}
       errors={dict.errors}
       className="contents"
     >

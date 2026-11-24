@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/use-confirm";
 import type { GameDefinition, TableData } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { fill } from "@/lib/i18n/fill";
+import { fill, isolate } from "@/lib/i18n/fill";
 import { labelFor } from "@/lib/i18n/label";
 import { cn } from "@/lib/utils";
 
@@ -130,7 +130,12 @@ export function GameBuilder({
   }
 
   async function removeTable(key: string, name: string) {
-    const question = { title: fill(tb.removeTableConfirm, { name }), answer: tb.removeTable, cancel: dict.chrome.cancel, danger: true };
+    const question = {
+      title: fill(tb.removeTableConfirm, { name: isolate(name) }),
+      answer: tb.removeTable,
+      cancel: dict.chrome.cancel,
+      danger: true,
+    };
     if (!(await ask(question).catch(() => false))) return;
     setTables((prev) => prev.filter((t) => t.key !== key));
   }
