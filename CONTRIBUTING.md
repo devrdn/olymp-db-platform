@@ -74,7 +74,7 @@ columns. Name what a reader bisecting this in a year needs.>
 
 ```bash
 make check         # backend: gofmt (rewrites), vet, cgo-free build, unit tests
-make test-db       # repository tests against a throwaway core database
+make test-db       # repository tests against a throwaway core database, cache tests on a throwaway Redis
 make test-game     # game cluster tests against a throwaway cluster
 make front-check   # frontend: lint, design checks, error codes, types, tests, build
 make sec           # gosec
