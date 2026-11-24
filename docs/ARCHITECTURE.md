@@ -1686,8 +1686,9 @@ authentication as the rest of the participant handler:
   `DELETE /play/tabs/{tabId}`, `PUT /play/tabs/order`.
 
 **The workspace closes with the contest; there is no read-only mode.** Reading
-and writing are possible only while `Access` admits the participant — the same
-`Access` that guards `/play/story` and the console. Once the contest has ended
+and writing are possible only while admission (`participation.Admitter`) lets
+the participant in — the same admission that guards `/play/story` and the
+console. Once the contest has ended
 for them, every workspace route answers 409 `deadline_passed`,
 `contest_ended` or `contest_finished` (section 8.1), like the rest of
 `/play`. The `/play` screen itself is
