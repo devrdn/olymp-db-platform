@@ -792,6 +792,28 @@ stack set it. A build that never finishes ends after
 `INSERT ... SELECT generate_series(...)`, or upload a dump. For a limit, raise the
 named setting and rebuild.
 
+### A table's data upload stalls, or a table says its data was lost
+
+**Symptom.** While a builder table's CSV uploads, the table says the server is
+receiving as much table data as it can hold (`game_table_data_busy`), and the
+upload goes on by itself or, after a while, offers **Retry**. Or a table, its
+build, or a row added to it answers that the server lost part of its stored
+data (`game_table_data_damaged`), and the API logs `a table's file is shorter
+than its record`.
+
+**Cause.** The API holds at most four chunks of table data in memory at once,
+one per contest, per sending account and per contest owner, so a chunk past
+that is refused unread with a 503 and a `Retry-After`. The interface sends it
+again by itself after that wait, between 1 and 60 seconds, and leaves it to
+**Retry** after five refusals in a row. `game_table_data_damaged` means the
+file under `GAME_UPLOAD_DIR/tables` is missing or shorter than what its record
+says was stored: the volume lost bytes.
+
+**Fix.** For a busy refusal, wait and press **Retry**; another organiser's
+upload is in the way, and nothing of the refused chunk was stored. For damaged
+data, upload the table's CSV again, then look at the volume behind
+`GAME_UPLOAD_DIR` ([ARCHITECTURE.md §7.3](../ARCHITECTURE.md#73-content-as-implemented)).
+
 ### The API cannot create its directories
 
 **Symptom.** `fatal: open the cover directory: mkdir /var/lib/dbcontest: permission denied`
@@ -1076,6 +1098,21 @@ API and the runner read the same `QUERY_PER_MINUTE`, and `make run` and
 `make runner` both take it from `deploy/.env`. Change it there, or pass the same
 value to both on the make command line (`make QUERY_PER_MINUTE=120 run`, then
 `make QUERY_PER_MINUTE=120 runner`); see [how the host targets read `deploy/.env`](#a-setting-in-deployenv-does-not-reach-make-run-make-runner-or-make-front).
+
+### A save says the contest changed while you were deciding
+
+**Symptom.** Saving a contest's settings, prize places or archive settings, a
+status change, or the reveal of the standings answers "This contest changed
+while you were deciding: somebody saved it, or it started or ended"
+(`contest_changed`), with a **Reload the page** button under it.
+
+**Cause.** Every write of a contest is made against the version the screen
+read. Another organiser saved the contest, an edit of its content moved it,
+or the scheduler started or finished it after the screen was rendered, so
+the save was refused and nothing was written.
+
+**Fix.** Press **Reload the page**, which reads the contest as it now is and
+starts the form over, then make the change again.
 
 ### Mail does not send
 
