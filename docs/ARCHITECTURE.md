@@ -1751,9 +1751,10 @@ hundred at most).
 
 - Asking is a write. It closes with the contest, like every `/play` route:
   admission (`participation.Admitter`) lets it through only while the gate
-  says the participant may act. It spends its own budget before the gate is
-  asked: six a minute per account, then three a minute per registration after
-  it, refused attempts included. Reading the feed spends the play screen's
+  says the participant may act. Admission charges six a minute per account
+  before the gate is asked. Once admitted, a question spends three a minute
+  per registration, the first thing `clarifications.Service.Ask` does, before
+  the text is checked. Both count refused attempts. Reading the feed spends the play screen's
   read budget (`participation.Reads`) before the gate. A successful read of
   the feed, or a stored question, records the participant's start as the
   story does (`participation.Admission.Start`): under individual timing it
@@ -1868,13 +1869,17 @@ it, with the number of questions waiting beside it while the contest runs.
     sign-up, an external sign-in and the event form) checks it in one place,
     `users.Service.checkNewAccount`: the login, then the name and the
     address, then whether the login is free.
-    - A new login (`users.ParseNewLogin`) is at most 64 bytes, holds no
+    - A new login (`users.ParseNewLogin`) is at most 100 bytes
+      (`users.MaxLoginLength`; a login chosen at sign-up, at most 64), holds no
       control or format character, and holds no dot: neither `.` nor a code
       point a domain name reads as one (U+3002, U+FF0E, U+FF61, U+2024,
       U+FE52; `users.IsLabelSeparator`). The login is mailed in the sign-in
       letter, and a mail client turns a dotted one into a link to a domain.
-      A dotted login is refused with `login_has_dot`, and a roster import
-      skips its row with that reason. An account keeps the login it has, and
+      An administrator's form refuses a dotted login with `login_has_dot`,
+      and a roster import skips its row with that reason; sign-up's chosen
+      login has no dot in its alphabet and is refused, before the account is
+      made, with the form's generic refusal; an external sign-in never
+      offers one, since it turns a dot into a hyphen (below). An account keeps the login it has, and
       sign-in compares what was typed, trimmed and lower-cased
       (`users.ParseTypedLogin`), with no shape rule. The one new login that
       keeps its dots is the event form's, which is the person's own address,
