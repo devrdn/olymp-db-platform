@@ -63,7 +63,10 @@ function Slot({
           {(_state, uploading) => (
             <>
               <label
-                className={cn(buttonVariants({ variant: "secondary" }), "cursor-pointer")}
+                className={cn(
+                  buttonVariants({ variant: "secondary" }),
+                  "cursor-pointer has-disabled:cursor-not-allowed has-disabled:opacity-45",
+                )}
                 aria-busy={uploading}
               >
                 {hash ? t.replace : t.upload}
@@ -72,6 +75,9 @@ function Slot({
                   name="file"
                   accept="image/png,image/jpeg,image/gif,image/webp"
                   className="sr-only"
+                  // One upload at a time: a file picked meanwhile would be sent
+                  // after this one and replace it.
+                  disabled={uploading}
                   // Emptied as the picker opens: a refused file stays chosen,
                   // and the same file picked again would fire no change.
                   onClick={(event) => {

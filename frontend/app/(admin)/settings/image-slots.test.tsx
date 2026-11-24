@@ -108,3 +108,22 @@ describe("ImageSlots, an upload the server refused", () => {
     await vi.waitFor(() => expect(uploadImageAction).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("ImageSlots, an upload in flight", () => {
+  test("takes no second file until the first upload has answered", async () => {
+    uploadImageAction.mockClear();
+    let answer: (state: object) => void = () => {};
+    uploadImageAction.mockImplementationOnce(() => new Promise<object>((resolve) => (answer = resolve)));
+    const user = userEvent.setup();
+    render(<ImageSlots images={{}} dict={dict} />);
+    const input = screen.getAllByLabelText(dict.settings.images.upload)[0] as HTMLInputElement;
+
+    await user.upload(input, new File(["png"], "first.png", { type: "image/png" }));
+    await vi.waitFor(() => expect(uploadImageAction).toHaveBeenCalledOnce());
+    await user.upload(input, new File(["png"], "second.png", { type: "image/png" }));
+    answer({ ok: true });
+
+    await vi.waitFor(() => expect(input).toBeEnabled());
+    expect(uploadImageAction).toHaveBeenCalledOnce();
+  });
+});
