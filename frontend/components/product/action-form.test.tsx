@@ -354,7 +354,7 @@ describe("ActionForm without JavaScript", () => {
 });
 
 describe("ActionForm that does not ask", () => {
-  test("is not disabled in the server's markup, so a submission made before hydration is queued", () => {
+  test("is not disabled in the server's markup, so it can be posted before hydration", () => {
     const html = renderToString(
       <ActionForm action={recording().action} errors={dict.errors}>
         <ActionButton>Save</ActionButton>

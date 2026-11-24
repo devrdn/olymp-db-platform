@@ -16,8 +16,9 @@ export type RequiredReason = {
 
 /**
  * The reason a form refuses to send without, read from its `reason` field.
- * Before hydration React replays a submission without `onSubmit`; the server
- * refuses that one with the same code. `required` false asks for nothing.
+ * Before hydration a submission is the form's own POST, which runs no
+ * `onSubmit`; the server refuses that one with the same code. `required`
+ * false asks for nothing.
  */
 export function useRequiredReason(required = true): RequiredReason {
   const [missing, setMissing] = useState(false);

@@ -150,8 +150,9 @@ function BoundActionForm<S extends ActionState>({
   const [state, formAction, pending] = useActionState<S, FormData>(action, initial ?? (EMPTY as Awaited<S>));
   const formRef = useRef<HTMLFormElement>(null);
   const hydrated = useHydrated();
-  // React replays a submission queued before hydration without `onSubmit`,
-  // where the question is asked, so a form that asks cannot be sent until then.
+  // A submission made before hydration is the form's own POST to the server
+  // action and never runs `onSubmit`, where the question is asked, so a form
+  // that asks cannot be sent until then.
   const locked = confirm !== undefined && !hydrated;
   const [ask, dialog] = useConfirm(confirm !== undefined);
   // What a yes was given for, set only while its own submission is dispatched.
