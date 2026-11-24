@@ -22,7 +22,8 @@ uses). The backend's own notes on its tests are in
 |---|---|---|---|
 | Go unit tests | `foo_test.go` beside `foo.go` | Go and a C compiler | `make test` |
 | In-memory fakes and repository contracts | `internal/<pkg>/<pkg>test/` | Go and a C compiler | `make test` |
-| Repository tests on PostgreSQL | `internal/postgres`, `internal/provisioning`, `internal/queryproxy`, `cmd/migrate`, `internal/platform/storage`, `internal/app` (`app.New`'s pool check) | the core test database | `make test-db` |
+| Repository tests on PostgreSQL | `internal/postgres`, `internal/provisioning`, `internal/queryproxy`, `internal/participation`, `cmd/migrate`, `internal/platform/storage`, `internal/app` (`app.New`'s pool check) | the core test database | `make test-db` |
+| The cache's TTL contract on Redis | `internal/platform/cache` (`TestTTLIsWhatIsLeftOfAKeysLifeOnEveryBackend`): the in-process store always, Redis when `CACHE_TEST_REDIS_ADDR` names a server | a throwaway Redis | `make test-db` |
 | Game cluster tests | `internal/gamedb`, `internal/queryrunner`, `internal/rpc` | the test game cluster | `make test-game` |
 | The cross-cluster build tests | `internal/provisioning/game_integration_test.go` | both | `make test-game-build` |
 | Whole-service tests | `integration_test.go` in `internal/api`, `internal/contests`, `internal/provisioning`, `internal/queryproxy`, `internal/rpc` | varies by package | the target for that package |
@@ -280,7 +281,7 @@ or readable by other accounts.
 | `make test` | `go test ./...` | Go and a C compiler |
 | `make test-race` | the same, with the race detector | Go and a C compiler |
 | `make cover` | the tests with a coverage summary | Go and a C compiler |
-| `make test-db` | recreates and migrates the test database, then the repository packages with `-count=1` | Docker: `make dev-up` first, for `pg-core` |
+| `make test-db` | recreates and migrates the test database and recreates `redis-test` (`127.0.0.1:${REDIS_TEST_PORT}`, 56379 by default, nothing persisted), then the repository packages and the cache's TTL contract with `-count=1` | Docker: `make dev-up` first, for `pg-core` |
 | `make test-game` | recreates `pg-game-test`, then `internal/gamedb`, `internal/queryrunner`, `internal/rpc` | Docker |
 | `make test-game-build` | the cross-cluster tests | Docker: `pg-core` running; recreates both test databases |
 | `make test-all` | `fmt-check`, `tidy-check`, `vet`, `test-race`, `build`, `vuln`, `sec` | Go and a C compiler; installs `govulncheck` and `gosec` if missing |
@@ -302,7 +303,9 @@ go test -count=1 ./internal/postgres -run TestStories   # needs CORE_DB_DSN, see
 For a single database test, export the test DSN that `make test-db` uses
 (`postgres://<CORE_DB_USER>:<CORE_DB_PASSWORD>@localhost:<CORE_DB_PORT>/<CORE_DB_NAME>_test?sslmode=disable`)
 as `CORE_DB_DSN`. The database must exist and be migrated: run `make test-db`
-once, or `make test-db-reset`.
+once, or `make test-db-reset`. For the cache's contract on Redis, start the
+throwaway server with `make test-redis` and set
+`CACHE_TEST_REDIS_ADDR=localhost:56379`.
 
 From `frontend/`:
 
@@ -359,8 +362,10 @@ Runs on pushes to `main` and pull requests that touch `backend/**`,
 every `v*` tag.
 
 **Job `build` ("build and test").** A `postgres:16.16-alpine` service holds
-`dbcontest_core_test`; `CORE_DB_DSN`, `GAME_DB_DSN` and the three role
-passwords are set for the whole job, so no database test skips. Steps:
+`dbcontest_core_test`, and a `redis:7.4.12-alpine` service, the product's
+image, serves the cache's TTL contract; `CORE_DB_DSN`, `GAME_DB_DSN`, the
+three role passwords and `CACHE_TEST_REDIS_ADDR` are set for the whole job,
+so no database or Redis test skips. Steps:
 
 1. Start the game cluster from the development overlay's own `pg-game-test`
    definition (`docker compose ... --profile test up -d --wait pg-game-test`),
@@ -371,9 +376,11 @@ passwords are set for the whole job, so no database test skips. Steps:
 5. `go vet ./...`.
 6. Build `cmd/api`, `cmd/migrate` and `cmd/bootstrap` with `CGO_ENABLED=0`.
 7. Apply the migrations: `go run ./cmd/migrate up`.
-8. `go test -race -coverprofile=coverage.out ./...`. With both DSNs set, this
-   one command covers what `make test`, `make test-db`, `make test-game` and
-   `make test-game-build` run locally.
+8. `go test -race -timeout 20m -coverprofile=coverage.out ./...`: twenty
+   minutes rather than the default ten, since `internal/api` alone runs for
+   minutes under the race detector on a small runner. With both DSNs and the
+   Redis address set, this one command covers what `make test`,
+   `make test-db`, `make test-game` and `make test-game-build` run locally.
 9. Print the coverage summary, then `go build ./...`.
 
 **Job `security` ("security scan").** `govulncheck ./...` and
