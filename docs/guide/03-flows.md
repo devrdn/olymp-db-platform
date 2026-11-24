@@ -961,7 +961,8 @@ an advisory lock, and a game build is claimed by one worker through its row.
 
 Not periodic: `cmd/gameorphans` lists, and with `-apply` removes, game
 databases the product does not remove itself, and orphaned cover files without
-waiting for the sweep. `cmd/gamecheck` lists, and
+waiting for the sweep (`make game-orphans`, then `make ARGS=-apply
+game-orphans` to remove). `cmd/gamecheck` lists, and
 changes nothing, the contests whose template the core database records as
 built and the game cluster lacks, which is the state a restore onto a new
 host leaves. Both are run by hand.
