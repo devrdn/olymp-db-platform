@@ -121,7 +121,9 @@ flowchart TB
 - **`internal/platform/*`** is infrastructure. It sits beneath everything and
   imports no domain package.
 - **`cmd/*`** are thin: flags, signals, exit codes. `cmd/apicontract` and
-  `cmd/auditcontract` generate the two contract files under `docs/api/`.
+  `cmd/auditcontract` generate the contract files under `docs/api/`: the
+  error codes and the bounds the interface repeats (`limits.json`), and the
+  audit actions.
 
 Why the runner is a separate process, in one line: it links PostgreSQL's
 parser through cgo, and a crash in C code reading attacker-chosen text must not
@@ -349,7 +351,11 @@ Example: a new operation on a contest's story.
 1. **Service method.** Add it to the file named for its topic
    (`internal/contests/story.go`). Validate input, bound every string and list
    it accepts with a named constant (CLAUDE.md, security rule 2), and return
-   declared sentinels. A write goes through `s.uow.Do` with its audit entry
+   declared sentinels. If the interface repeats a bound, so its field stops
+   there or a sentence states it, add the constant to `limits()` in
+   `cmd/apicontract/limits.go` and run `make api-contract`; the frontend's
+   `lib/api/limits-contract.test.ts` then fails until its copy matches
+   ([05-frontend.md](05-frontend.md#bounds-the-interface-repeats)). A write goes through `s.uow.Do` with its audit entry
    inside. If the method needs no new query, check it now with `make test`;
    otherwise its check comes after step 2.
 2. **Storage, if the method needs a new query.**
@@ -845,7 +851,7 @@ Commands, roughly in the order you need them:
 | `make test-db` | the repository tests against a freshly migrated test database, and the cache's TTL contract against a throwaway Redis (`make dev-up` first) |
 | `make test-game` | the game cluster tests against a recreated `pg-game-test` |
 | `make test-game-build` | the cross-cluster tests (`TestAScriptSavedInTheCoreDatabase...` in `internal/provisioning`) |
-| `make api-contract`, `make audit-contract` | regenerate `docs/api/*.json` after changing codes or actions |
+| `make api-contract`, `make audit-contract` | regenerate `docs/api/*.json` after changing codes, a bound the interface repeats, or actions |
 | `make proto-check` | after changing the `.proto` |
 | `make front-check` | lint, contrast, type-scale, error-codes, typecheck, tests, build: CI's interface job except `npm run smoke`. Run it when codes, actions or strings changed |
 | `make test-all` | format and tidy checks, vet, race-enabled tests, build, `govulncheck`, `gosec` |
