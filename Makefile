@@ -391,10 +391,12 @@ observability-check: ## Check the alert rules and the dashboard against the code
 	$(PROMTOOL) -v "$(OBSERVABILITY_DIR):/rules:ro" $(PROMETHEUS_IMAGE) test rules /rules/dbcontest-rules.test.yml && \
 	$(PROMTOOL) -v "$$tmp:/rules:ro" $(PROMETHEUS_IMAGE) check rules /rules/dashboard.yml
 
-# The full gate, mirroring the CI workflow so a green run here means a green run
-# there. Unlike `check` it changes nothing on disk: every step verifies rather
-# than reformats, so it is safe to run on a dirty tree.
-test-all: fmt-check tidy-check vet test-race build vuln sec ## Run everything CI runs
+# Most of the backend workflow's Go steps. Unlike `check` it changes nothing on
+# disk: every step verifies rather than reformats, so it is safe to run on a
+# dirty tree. It is not all of CI: the tests that need PostgreSQL, Redis or the
+# game cluster skip here unless the environment names one, where CI's service
+# containers do, and .github/workflows/backend.yml has steps of its own.
+test-all: fmt-check tidy-check vet test-race build vuln sec ## Run most of the backend workflow's Go checks
 	@echo "test-all: all checks passed."
 
 # require-env fails with an explanation instead of letting the command reach the
