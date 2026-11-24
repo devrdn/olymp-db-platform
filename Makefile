@@ -295,10 +295,11 @@ fmt: ## Format the Go sources
 tidy: ## Sync go.mod and go.sum
 	cd $(BACKEND) && go mod tidy
 
-# The API's error vocabulary, published as data for the interface to check its
-# messages against. A test fails when the committed file is out of date, so
-# this is never something anybody has to remember on their own.
-api-contract: ## Regenerate docs/api/error-codes.json from the declared codes
+# The API's error vocabulary and the bounds the interface repeats, published as
+# data for the interface to check its messages and its fields against. A test
+# fails when a committed file is out of date, so this is never something
+# anybody has to remember on their own.
+api-contract: ## Regenerate docs/api/error-codes.json and docs/api/limits.json
 	cd $(BACKEND) && go run ./cmd/apicontract
 
 # The audit trail's action vocabulary, published the same way and for the same

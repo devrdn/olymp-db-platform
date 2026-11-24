@@ -72,7 +72,7 @@ export function isLiveActivity(status: ContestStatus): boolean {
 }
 
 /**
- * Mirrors `covers.MaxAttributionLen`, so the field stops at the limit instead
+ * `covers.MaxAttributionLen`, so the field stops at the limit instead
  * of being refused after the fact.
  */
 export const MAX_COVER_ATTRIBUTION = 200;
@@ -96,5 +96,17 @@ export function coverStaffHref(contestId: string, hash: string, size: 800 | 1600
   return `/api/v1/contests/${contestId}/cover/file?size=${size}&v=${hash}`;
 }
 
-/** Mirrors `maxGracePeriodMin` in `backend/internal/contests/contests.go`: 90 days. */
+/** `contests.MaxGracePeriodMin`: 90 days. */
 export const MAX_GRACE_PERIOD_MIN = 129_600;
+
+/** `contests.MaxPrizePlaces`: the most places one prize may cover. */
+export const MAX_PRIZE_PLACES = 1000;
+
+/** `contests.MaxICPCPenaltyMin`: the most minutes one wrong attempt may cost. */
+export const MAX_ICPC_PENALTY_MIN = 240;
+
+/** `contests.MaxQuestionTitleRunes`, in characters. */
+export const MAX_QUESTION_TITLE_CHARS = 200;
+
+/** `contests.MaxPenaltyPct`: a question's penalty is a percentage. */
+export const MAX_PENALTY_PCT = 100;

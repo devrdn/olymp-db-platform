@@ -1,5 +1,6 @@
 import type { MatchKind } from "@/lib/api/content";
 import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
+import { MAX_PENALTY_PCT } from "@/lib/api/contests-terms";
 
 /**
  * Reads the whole editor form into one request, which the API writes in one
@@ -41,7 +42,7 @@ export function questionFrom(form: FormData): Parsed {
   let penalty_pct: number | null = null;
   if (rawPenalty !== "") {
     const parsedPenalty = Number(rawPenalty);
-    if (!Number.isFinite(parsedPenalty) || parsedPenalty < 0 || parsedPenalty > 100) {
+    if (!Number.isFinite(parsedPenalty) || parsedPenalty < 0 || parsedPenalty > MAX_PENALTY_PCT) {
       return { ok: false, code: "invalid_request" };
     }
     penalty_pct = Math.floor(parsedPenalty);

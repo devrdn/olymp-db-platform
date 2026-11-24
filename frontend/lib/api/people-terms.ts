@@ -19,7 +19,7 @@ export function removable(participant: Participant): boolean {
 }
 
 /**
- * Mirrors `contests.MinDirectoryQueryLength`, the shortest query the trigram
+ * `contests.MinDirectoryQueryLength`, the shortest query the trigram
  * indexes can serve. The server answers anything shorter with nothing, so the
  * search box does not ask.
  */

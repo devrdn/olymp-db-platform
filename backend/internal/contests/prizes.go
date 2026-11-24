@@ -9,9 +9,9 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
 )
 
-// maxPrizePlaces bounds each prize count (CLAUDE.md rule 2), matching the
+// MaxPrizePlaces bounds each prize count (CLAUDE.md rule 2), matching the
 // migration's CHECK.
-const maxPrizePlaces = 1000
+const MaxPrizePlaces = 1000
 
 // PrizePlaces is how many places down the standings earn a first, second and
 // third prize. The zero value awards none.
@@ -21,11 +21,11 @@ type PrizePlaces struct {
 	Third  int
 }
 
-// Validate checks each count against 0..maxPrizePlaces.
+// Validate checks each count against 0..MaxPrizePlaces.
 func (p PrizePlaces) Validate() error {
 	for _, n := range []int{p.First, p.Second, p.Third} {
-		if n < 0 || n > maxPrizePlaces {
-			return fmt.Errorf("%w: a prize count of %d is outside 0..%d", ErrInvalidContest, n, maxPrizePlaces)
+		if n < 0 || n > MaxPrizePlaces {
+			return fmt.Errorf("%w: a prize count of %d is outside 0..%d", ErrInvalidContest, n, MaxPrizePlaces)
 		}
 	}
 	return nil

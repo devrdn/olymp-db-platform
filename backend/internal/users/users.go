@@ -514,16 +514,17 @@ func (f Filter) Validate() error {
 	return nil
 }
 
+// MaxPageSize is the most accounts one page of a listing carries; Normalize
+// clamps a larger limit to it.
+const MaxPageSize = 200
+
 func (f Filter) Normalize() Filter {
-	const (
-		defaultLimit = 50
-		maxLimit     = 200
-	)
+	const defaultLimit = 50
 	if f.Limit <= 0 {
 		f.Limit = defaultLimit
 	}
-	if f.Limit > maxLimit {
-		f.Limit = maxLimit
+	if f.Limit > MaxPageSize {
+		f.Limit = MaxPageSize
 	}
 	if f.Offset < 0 {
 		f.Offset = 0

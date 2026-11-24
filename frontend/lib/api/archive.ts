@@ -10,7 +10,7 @@ import { CONTEST_STATUSES } from "./contests";
  * rest (zod's default), and each array has the bound the API itself keeps.
  */
 
-/** The page size the screen asks for; the API's own maximum is 50. */
+/** The page size the screen asks for: at most `archive.MaxPageSize`. */
 export const ARCHIVE_PAGE_SIZE = 20;
 
 /** The last page asked for, so the offset stays a safe integer. */

@@ -6,7 +6,7 @@
  * bounds.
  */
 
-/** `signup.plainLogin` allows 3 to 64 characters. */
+/** The longest login `PLAIN_LOGIN` takes. */
 export const LOGIN_MAX_CHARS = 64;
 
 /** `users.MaxFullNameLength`, which Go checks with `len`: UTF-8 bytes, not characters. */
@@ -24,8 +24,8 @@ export const SIGNUP_CODE_DIGITS = 6;
 /** `signup.ResendCooldown`: how long after a code was mailed another may be. */
 export const RESEND_COOLDOWN_SECONDS = 60;
 
-/** The same pattern as `signup.plainLogin`. */
-const PLAIN_LOGIN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
+/** `users.ChosenLoginPattern`, character for character. */
+export const PLAIN_LOGIN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
 
 /** `users.IsWrittenAsAName`: letters and marks, space, hyphen, both apostrophes, period. */
 const OF_A_NAME = /^[\p{L}\p{M} '’.-]+$/u;

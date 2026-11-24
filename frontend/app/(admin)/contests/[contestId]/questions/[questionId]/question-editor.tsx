@@ -11,6 +11,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { type Question } from "@/lib/api/content";
 import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
 import type { Scoring } from "@/lib/api/contests";
+import { MAX_PENALTY_PCT, MAX_QUESTION_TITLE_CHARS } from "@/lib/api/contests-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
@@ -280,7 +281,7 @@ function ShapeSection({
                 name={penaltyUnused ? undefined : "penaltyPct"}
                 type="number"
                 min={0}
-                max={100}
+                max={MAX_PENALTY_PCT}
                 step={1}
                 defaultValue={question.penaltyPct}
                 onChange={(event) => {
@@ -456,9 +457,6 @@ function TextsSection({
   );
 }
 
-/** contests.maxQuestionTitleRunes; the API refuses a longer title. */
-const MAX_TITLE_CHARS = 200;
-
 /**
  * One language's title with a counter. `maxLength` counts UTF-16 code units,
  * never fewer than the API's characters, so the field stops first.
@@ -487,7 +485,7 @@ function TitleField({
         id={id}
         name={`title.${lang}`}
         defaultValue={initial}
-        maxLength={MAX_TITLE_CHARS}
+        maxLength={MAX_QUESTION_TITLE_CHARS}
         disabled={!editable}
         aria-describedby={`${id}-hint ${id}-counter`}
         onChange={(event) => setCount(event.currentTarget.value.length)}
@@ -500,10 +498,10 @@ function TitleField({
           id={`${id}-counter`}
           className={cn(
             "shrink-0 text-small tabular-nums",
-            count >= MAX_TITLE_CHARS ? "text-bad" : "text-ink-3",
+            count >= MAX_QUESTION_TITLE_CHARS ? "text-bad" : "text-ink-3",
           )}
         >
-          {fill(t.titleCounter, { n: count, max: MAX_TITLE_CHARS })}
+          {fill(t.titleCounter, { n: count, max: MAX_QUESTION_TITLE_CHARS })}
         </p>
       </div>
     </div>

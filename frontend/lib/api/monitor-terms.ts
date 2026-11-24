@@ -17,6 +17,15 @@ export type MonitorFlags = Record<MonitorFlag, boolean>;
 /** The most events one page of the feed carries (`monitor.MaxFeedPage`). */
 export const MAX_FEED_PAGE = 200;
 
+/** The shortest absence a participant's screen reports (`monitor.MinAway`). */
+export const SIGNAL_MIN_AWAY_MS = 1000;
+
+/** The most signals one batch carries (`monitor.MaxBatchEvents`). */
+export const SIGNAL_BATCH_MAX = 50;
+
+/** How much of a paste is kept (`monitor.MaxPasteTextRunes`). */
+export const SIGNAL_PASTE_TEXT_MAX = 500;
+
 /** The refusal a monitoring screen shows in place of what it read: the organiser's own read budget. */
 export const MONITOR_SHOWN = ["monitor_too_often"] as const;
 

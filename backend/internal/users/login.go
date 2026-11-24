@@ -48,11 +48,13 @@ func IsLabelSeparator(r rune) bool {
 	return false
 }
 
-// chosenLogin is the alphabet of a login a person picks on the public
+// ChosenLoginPattern is the alphabet of a login a person picks on the public
 // sign-up form. It holds no dot and no control or format character, so it is
 // narrower than ParseNewLogin's rule. The login is mailed to whatever address
 // was typed, so it must not carry a pitch.
-var chosenLogin = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
+const ChosenLoginPattern = `^[a-z0-9][a-z0-9_-]{2,63}$`
+
+var chosenLogin = regexp.MustCompile(ChosenLoginPattern)
 
 // ParseChosenLogin trims and lower-cases a self-chosen login and refuses,
 // with ErrInvalidAccount, one that is not 3 to 64 lowercase letters, digits,

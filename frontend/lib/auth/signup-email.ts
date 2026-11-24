@@ -13,7 +13,7 @@ import { EMAIL_MAX_CHARS } from "./signup-rules";
 const PATH = "/signup";
 
 /** `signup.CodeLifetime`: the address is worth keeping as long as a code confirms. */
-const MAX_AGE_SECONDS = 30 * 60;
+export const MAX_AGE_SECONDS = 30 * 60;
 
 /**
  * `__Secure-`, not the sign-up cookie's `__Host-`: a browser refuses a

@@ -14,7 +14,7 @@ export const ANNOUNCEMENT_MAX_CHARS = 4000;
 /** How many of one participant's questions may wait at once (`clarifications.MaxOpenPerRegistration`). */
 export const MAX_OPEN_QUESTIONS = 20;
 
-/** One page of the queue or the announcements; the server's `DefaultPageSize`. */
+/** One page of the queue or the announcements, sent as the limit: at most the server's `MaxPageSize`. */
 export const CLARIFICATION_PAGE_SIZE = 50;
 
 /** The most of one state the desk keeps live: the server's `MaxPageSize`. */

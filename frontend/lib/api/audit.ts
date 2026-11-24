@@ -45,6 +45,7 @@ export type AuditQuery = {
   offset?: number;
 };
 
+/** Rows per page of the trail, sent as the limit: at most `audit.MaxPageSize`. */
 export const AUDIT_PAGE = 50;
 
 /** The query string for a page of the trail, used to fetch, to link pages, and in the address. */

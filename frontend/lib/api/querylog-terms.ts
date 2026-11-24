@@ -3,7 +3,7 @@
  * (see content-terms.ts for why).
  */
 
-/** One "load more" page; mirrors `queryrunner.DefaultHistoryLimit`. */
+/** One "load more" page, sent as the limit: at most `queryrunner.MaxHistoryLimit`. */
 export const QUERY_LOG_PAGE_SIZE = 50;
 
 /**

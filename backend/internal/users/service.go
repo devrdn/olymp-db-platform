@@ -1084,9 +1084,9 @@ const (
 	SkipLoginHasDot = "login_has_dot"
 )
 
-// maxImportRows bounds a roster (CLAUDE.md rule 2): every row costs an
+// MaxImportRows bounds a roster (CLAUDE.md rule 2): every row costs an
 // argon2id hash.
-const maxImportRows = 500
+const MaxImportRows = 500
 
 var ErrRosterTooLarge = errors.New("too many rows in one import")
 
@@ -1129,9 +1129,9 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 	if err := s.refuseMailOff(cmd.Delivery); err != nil {
 		return ImportResult{}, err
 	}
-	if len(cmd.Rows) > maxImportRows {
+	if len(cmd.Rows) > MaxImportRows {
 		return ImportResult{}, fmt.Errorf("%w: %d rows, at most %d",
-			ErrRosterTooLarge, len(cmd.Rows), maxImportRows)
+			ErrRosterTooLarge, len(cmd.Rows), MaxImportRows)
 	}
 
 	// Checked once for the whole roster: a bad role is the request's fault,

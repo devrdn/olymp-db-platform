@@ -388,8 +388,8 @@ export function useSqlTabs({
 }
 
 /**
- * Whether a tab's text exceeds `sqlpolicy.MaxQueryBytes` in UTF-8 bytes, as
- * the server counts. A code unit is one to three UTF-8 bytes (an astral
+ * Whether a tab's text exceeds `TAB_BODY_MAX_BYTES` in UTF-8 bytes, as the
+ * server counts. A code unit is one to three UTF-8 bytes (an astral
  * character is four bytes in two units), so `length` and `3 × length` bound
  * the size, and only text between them is encoded.
  */

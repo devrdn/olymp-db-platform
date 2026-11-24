@@ -8,7 +8,16 @@ import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
-import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS, VISIBILITIES } from "@/lib/api/contests-terms";
+import {
+  ENROLLMENTS,
+  MAX_ICPC_PENALTY_MIN,
+  MAX_PRIZE_PLACES,
+  PROGRESSIONS,
+  QUESTION_MODES,
+  SCORINGS,
+  TIMINGS,
+  VISIBILITIES,
+} from "@/lib/api/contests-terms";
 import { FREEZE_UNITS, freezeForForm } from "@/lib/api/leaderboard-terms";
 import { type SqlPolicy } from "@/lib/api/policy";
 import { SQL_MODES } from "@/lib/api/policy-terms";
@@ -409,7 +418,7 @@ function ContestFields({
                 name="icpcPenaltyMin"
                 type="number"
                 min={0}
-                max={240}
+                max={MAX_ICPC_PENALTY_MIN}
                 step={1}
                 defaultValue={contest.icpcPenaltyMin}
                 disabled={!shapeOpen}
@@ -622,7 +631,7 @@ export function PrizePanel({
                 name={field.name}
                 type="number"
                 min={0}
-                max={1000}
+                max={MAX_PRIZE_PLACES}
                 step={1}
                 defaultValue={field.value}
                 disabled={!editable}

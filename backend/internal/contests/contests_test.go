@@ -29,6 +29,21 @@ func TestDraftCannotJumpStraightToRunning(t *testing.T) {
 	}
 }
 
+func TestTransitionsCannotChangeWhatCanTransitionToAllows(t *testing.T) {
+	table := contests.Transitions()
+	for i := range table[contests.StatusPublished] {
+		table[contests.StatusPublished][i] = contests.StatusFinished
+	}
+	delete(table, contests.StatusDraft)
+
+	if err := (contests.Contest{Status: contests.StatusPublished}).CanTransitionTo(contests.StatusDraft); err != nil {
+		t.Errorf("after editing the copy, published → draft = %v, want nil", err)
+	}
+	if err := (contests.Contest{Status: contests.StatusDraft}).CanTransitionTo(contests.StatusPublished); err != nil {
+		t.Errorf("after editing the copy, draft → published = %v, want nil", err)
+	}
+}
+
 func TestPublishedGoesBackToDraft(t *testing.T) {
 	// Undoing a publish before anybody starts must not require deleting it.
 	c := contests.Contest{Status: contests.StatusPublished}

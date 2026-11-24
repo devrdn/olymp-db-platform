@@ -51,10 +51,10 @@ var (
 // every page.
 const maxValueLength = 200
 
-// maxFeedbackURLLength is longer than maxValueLength because form services
+// MaxFeedbackURLLength is longer than maxValueLength because form services
 // put a long identifier in the path (a Microsoft Forms address runs to about
 // two hundred characters).
-const maxFeedbackURLLength = 500
+const MaxFeedbackURLLength = 500
 
 // Definition describes one setting the product knows about. The catalogue is
 // code and the values are data, so every stored key is one something reads.
@@ -138,8 +138,8 @@ func optionalFeedbackURL(value string) error {
 	if value == "" {
 		return nil
 	}
-	if len(value) > maxFeedbackURLLength {
-		return fmt.Errorf("%w: at most %d characters", ErrInvalidFeedbackURL, maxFeedbackURLLength)
+	if len(value) > MaxFeedbackURLLength {
+		return fmt.Errorf("%w: at most %d characters", ErrInvalidFeedbackURL, MaxFeedbackURLLength)
 	}
 	for i := 0; i < len(value); i++ {
 		if c := value[i]; c < 0x21 || c > 0x7e || c == '\\' {

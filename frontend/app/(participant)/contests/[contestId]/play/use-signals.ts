@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { ApiError } from "@/lib/api/client";
+import { SIGNAL_BATCH_MAX, SIGNAL_MIN_AWAY_MS, SIGNAL_PASTE_TEXT_MAX } from "@/lib/api/monitor-terms";
 import { sendSignals, type PasteTarget, type Signal } from "@/lib/api/workspace";
 
 import { refusalKind } from "./refusals";
@@ -44,14 +45,8 @@ export type { PasteTarget, Signal };
 
 /** How often a non-empty buffer is sent. */
 export const SIGNAL_FLUSH_MS = 10_000;
-/** The shortest absence recorded (`monitor.MinAway`). */
-export const SIGNAL_MIN_AWAY_MS = 1000;
-/** The most signals one batch carries (`monitor.MaxBatchEvents`). */
-export const SIGNAL_BATCH_MAX = 50;
 /** The most signals kept waiting; past it the oldest are dropped. */
 export const SIGNAL_BUFFER_MAX = 200;
-/** How much of a paste is kept (`monitor.MaxPasteTextRunes`). */
-export const SIGNAL_PASTE_TEXT_MAX = 500;
 /**
  * The largest `keepalive` batch body. Browsers allow 64 KiB of `keepalive`
  * bodies in flight per page, shared with the autosave's last save, which

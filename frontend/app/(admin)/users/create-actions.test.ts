@@ -233,7 +233,6 @@ describe("importAccountsAction", () => {
   });
 
   test("refuses a roster larger than one import carries, without ever calling the server", async () => {
-    // Mirrors `users.maxImportRows`; refused before a request.
     const roster = Array.from({ length: MAX_IMPORT_ROWS + 1 }, (_, i) => `s${i}, Student ${i}`).join("\n");
 
     const state = await importAccountsAction({}, form({ roster }));

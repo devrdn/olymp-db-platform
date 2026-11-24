@@ -8,9 +8,9 @@ import (
 )
 
 func TestTheContractNamesEveryDeclaredCode(t *testing.T) {
-	document, err := contract()
+	document, err := errorCodes()
 	if err != nil {
-		t.Fatalf("contract() = %v", err)
+		t.Fatalf("errorCodes() = %v", err)
 	}
 
 	var parsed struct {
@@ -34,21 +34,25 @@ func TestTheContractNamesEveryDeclaredCode(t *testing.T) {
 }
 
 func TestTheCommittedContractIsCurrent(t *testing.T) {
-	generated, err := contract()
-	if err != nil {
-		t.Fatalf("contract() = %v", err)
-	}
+	for _, c := range contracts {
+		t.Run(c.file, func(t *testing.T) {
+			generated, err := c.build()
+			if err != nil {
+				t.Fatalf("build %s: %v", c.file, err)
+			}
 
-	path, err := contractPath()
-	if err != nil {
-		t.Fatalf("contractPath() = %v", err)
-	}
-	committed, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v — run `make api-contract`", contractFile, err)
-	}
+			path, err := contractPath(c.file)
+			if err != nil {
+				t.Fatalf("contractPath() = %v", err)
+			}
+			committed, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v — run `make api-contract`", c.file, err)
+			}
 
-	if string(committed) != string(generated) {
-		t.Errorf("%s is out of date — run `make api-contract` and commit the result", contractFile)
+			if string(committed) != string(generated) {
+				t.Errorf("%s is out of date — run `make api-contract` and commit the result", c.file)
+			}
+		})
 	}
 }

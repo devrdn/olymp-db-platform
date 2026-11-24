@@ -1,9 +1,10 @@
 import { Band } from "@/components/layout/band";
 import { accountListSchema, roleListSchema } from "@/lib/api/accounts";
+import { ACCOUNTS_PAGE } from "@/lib/api/accounts-terms";
 import { readPage } from "@/lib/api/page-read";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
-import { AccountRegister, ACCOUNTS_PAGE } from "./account-register";
+import { AccountRegister } from "./account-register";
 import { readMailOffer } from "./delivery";
 import { AccountFilters } from "./filters";
 import { accountsHref } from "./search-href";

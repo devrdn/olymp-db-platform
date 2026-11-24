@@ -2,13 +2,12 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
+import { SIGNAL_BATCH_MAX, SIGNAL_PASTE_TEXT_MAX } from "@/lib/api/monitor-terms";
 
 import {
   PASTE_TARGET_ATTRIBUTE,
-  SIGNAL_BATCH_MAX,
   SIGNAL_BUFFER_MAX,
   SIGNAL_FLUSH_MS,
-  SIGNAL_PASTE_TEXT_MAX,
   SignalCollector,
   useSignals,
   type Signal,

@@ -5,7 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { ScrollBox } from "@/components/ui/scroll-box";
 import { Tag } from "@/components/ui/tag";
 import type { Account, Role } from "@/lib/api/accounts";
-import type { AccountStatus } from "@/lib/api/accounts-terms";
+import { ACCOUNTS_PAGE, type AccountStatus } from "@/lib/api/accounts-terms";
 import { formatDay, formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -25,9 +25,6 @@ import { RowCheckbox, SelectAllCheckbox } from "./selection";
  * caption under the account (SPEC.md §5); on a phone the row number goes and
  * the side padding halves, so a login keeps its own line beside the state.
  */
-
-/** Rows per page; matches the API's default. */
-export const ACCOUNTS_PAGE = 50;
 
 const STATUS_TONE: Record<AccountStatus, "good" | "bad" | "mute"> = {
   active: "good",

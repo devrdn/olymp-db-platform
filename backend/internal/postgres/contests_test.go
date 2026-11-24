@@ -163,7 +163,7 @@ func TestAContestStoredWithoutPrizePlacesHasNone(t *testing.T) {
 }
 
 // The CHECK bounds a row written past Contest.Validate, and is no tighter than
-// the domain's bound (maxPrizePlaces, prizes.go).
+// the domain's bound (MaxPrizePlaces, prizes.go).
 func TestPrizePlacesAreBoundedAtTheDatabaseToo(t *testing.T) {
 	for _, column := range []string{"prize_first", "prize_second", "prize_third"} {
 		t.Run(column, func(t *testing.T) {

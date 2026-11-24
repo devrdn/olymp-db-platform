@@ -17,7 +17,10 @@ export const SKIP_REASONS = [
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
-/** Mirrors `users.MaxBulkAccounts`. */
+/** Rows per page of the account register, sent as the limit: at most `users.MaxPageSize`. */
+export const ACCOUNTS_PAGE = 50;
+
+/** `users.MaxBulkAccounts`. */
 export const MAX_BULK_ACCOUNTS = 500;
 
 /**
@@ -27,7 +30,7 @@ export const MAX_BULK_ACCOUNTS = 500;
 export const IMPORT_SKIP_REASONS = ["login_taken", "email_taken", "login_has_dot", "invalid_row"] as const;
 export type ImportSkipReason = (typeof IMPORT_SKIP_REASONS)[number];
 
-/** Mirrors `users.maxImportRows`. */
+/** `users.MaxImportRows`. */
 export const MAX_IMPORT_ROWS = 500;
 
 /**

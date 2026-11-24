@@ -12,7 +12,7 @@ export const SETTING_KEYS = {
 /** The languages the API writes its email in (`mailing.Languages`). */
 export const MAIL_LANGUAGES = ["en", "ro", "ru"] as const;
 
-/** The API's bound on the feedback address, in bytes (`maxFeedbackURLLength`). */
+/** The API's bound on the feedback address, in bytes (`settings.MaxFeedbackURLLength`). */
 export const FEEDBACK_URL_MAX = 500;
 
 /** The API's `feedbackAuthority`: DNS labels, the last starting with a letter, and an optional port. */

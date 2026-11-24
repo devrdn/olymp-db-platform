@@ -3,7 +3,8 @@ name: backend
 # Only what this component owns. The interface used to have to run on every
 # backend change, because its contract check read the Go sources; it now reads
 # the file the backend generates, so the two are independent and their paths
-# can say so.
+# can say so. The generated files under docs/api are the backend's too: a
+# change to one alone must still run the test that compares it with the Go.
 #
 # One caveat before turning these into *required* checks in branch protection:
 # a filtered workflow does not run at all on an unrelated change, and a
@@ -22,12 +23,14 @@ on:
     tags: ["v*"]
     paths:
       - "backend/**"
+      - "docs/api/**"
       - "deploy/observability/import/**"
       - ".github/workflows/backend.yml"
       - ".github/workflows/image.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "docs/api/**"
       - "deploy/observability/import/**"
       - ".github/workflows/backend.yml"
       - ".github/workflows/image.yml"

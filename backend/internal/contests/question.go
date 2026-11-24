@@ -40,13 +40,13 @@ const maxAnswers = 50
 
 // Bounds on a question's authored text (CLAUDE.md rule 2), in characters.
 const (
-	maxQuestionTitleRunes = 200
+	MaxQuestionTitleRunes = 200
 	maxQuestionBodyRunes  = 20_000
 	maxChoiceLabelRunes   = 1_000
 )
 
-// maxPenaltyPct bounds questions.penalty_pct, a percentage (CLAUDE.md rule 2).
-const maxPenaltyPct = 100
+// MaxPenaltyPct bounds questions.penalty_pct, a percentage (CLAUDE.md rule 2).
+const MaxPenaltyPct = 100
 
 // maxPoints bounds questions.points, an int4 column. It keeps points_awarded
 // inside int4, but not penalty times attempts, which postgres.Submissions
@@ -121,8 +121,8 @@ func (q Question) Validate() error {
 	if q.MaxAttempts != nil && *q.MaxAttempts <= 0 {
 		return fmt.Errorf("%w: the attempt limit must be positive", ErrInvalidQuestion)
 	}
-	if q.PenaltyPct < 0 || q.PenaltyPct > maxPenaltyPct {
-		return fmt.Errorf("%w: penalty_pct must be between 0 and %d", ErrInvalidQuestion, maxPenaltyPct)
+	if q.PenaltyPct < 0 || q.PenaltyPct > MaxPenaltyPct {
+		return fmt.Errorf("%w: penalty_pct must be between 0 and %d", ErrInvalidQuestion, MaxPenaltyPct)
 	}
 	return q.validateChoices()
 }
@@ -162,8 +162,8 @@ func (q Question) validateChoices() error {
 
 // Validate checks the bounds on a question's wording in one language.
 func (t QuestionText) Validate() error {
-	if utf8.RuneCountInString(t.Title) > maxQuestionTitleRunes {
-		return fmt.Errorf("%w: a question title is at most %d characters", ErrInvalidQuestion, maxQuestionTitleRunes)
+	if utf8.RuneCountInString(t.Title) > MaxQuestionTitleRunes {
+		return fmt.Errorf("%w: a question title is at most %d characters", ErrInvalidQuestion, MaxQuestionTitleRunes)
 	}
 	if strings.ContainsAny(t.Title, "\r\n") {
 		return fmt.Errorf("%w: a question title is one line", ErrInvalidQuestion)

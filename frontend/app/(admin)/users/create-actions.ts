@@ -50,8 +50,8 @@ export async function importAccountsAction(
   form: FormData,
 ): Promise<ImportAccountsState> {
   const rows = parseRoster(String(form.get("roster") ?? ""));
-  // An empty paste or more than `MAX_IMPORT_ROWS` lines (mirrors
-  // `users.maxImportRows`) is refused before the request.
+  // An empty paste or more than `MAX_IMPORT_ROWS` lines is refused before the
+  // request.
   if (rows.length === 0 || rows.length > MAX_IMPORT_ROWS) return { code: "invalid_request" };
 
   return serverAction(() => importAccounts(rows, checkedRoles(form), sendByEmail(form)), {

@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   ENROLLMENTS,
   MAX_GRACE_PERIOD_MIN,
+  MAX_ICPC_PENALTY_MIN,
+  MAX_PRIZE_PLACES,
   PROGRESSIONS,
   QUESTION_MODES,
   SCORINGS,
@@ -29,9 +31,8 @@ export type Progression = (typeof PROGRESSIONS)[number];
 export type Scoring = (typeof SCORINGS)[number];
 
 /**
- * Which states are reachable from which, mirrored from the Go side so the
- * workspace offers only valid transitions. The API stays the authority: if the
- * two drift, a button fails with `invalid_transition`.
+ * Which states are reachable from which (`contests.Transitions`), so the
+ * workspace offers only valid transitions. The API stays the authority.
  *
  * Published → draft exists because publishing is how an author checks the
  * gate; undoing it must not mean deleting the contest.
@@ -286,14 +287,11 @@ export function titleIn(contest: Contest, lang: string): string {
   return "";
 }
 
-/** The most places one prize may cover, the column's `CHECK`. */
-const MAX_PRIZE_PLACES = 1000;
-
 export type PrizePlaces = { first: number; second: number; third: number };
 
 /**
  * The three prize counts as the form submitted them. A blank field is none;
- * anything but a whole number in 0..1000 refuses the save rather than being
+ * anything but a whole number in 0..`MAX_PRIZE_PLACES` refuses the save rather than being
  * rounded into a count nobody chose.
  */
 export function prizePlacesFromForm(form: FormData): { ok: true; value: PrizePlaces } | { ok: false } {
@@ -345,7 +343,7 @@ export function archiveSettingsFromForm(form: FormData): { ok: true; value: Arch
 /**
  * The submitted ICPC penalty as `icpc_penalty_min`. A disabled (locked) field
  * submits nothing, which means "send no key"; a penalty cannot be unset.
- * Anything but an integer in 0..240 (the column's `CHECK`) is refused, not
+ * Anything but an integer in 0..`MAX_ICPC_PENALTY_MIN` is refused, not
  * rounded, so the form never saves a value nobody chose.
  */
 export function icpcPenaltyFromForm(
@@ -357,7 +355,7 @@ export function icpcPenaltyFromForm(
   if (!/^\d+$/.test(raw)) return { ok: false };
 
   const whole = Number(raw);
-  if (whole > 240) return { ok: false };
+  if (whole > MAX_ICPC_PENALTY_MIN) return { ok: false };
   return { ok: true, value: whole };
 }
 

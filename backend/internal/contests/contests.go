@@ -83,9 +83,9 @@ const (
 // DefaultICPCPenaltyMin mirrors the migration's column default (000031).
 const DefaultICPCPenaltyMin = 20
 
-// maxICPCPenaltyMin bounds Contest.ICPCPenaltyMin (CLAUDE.md rule 2), matching
+// MaxICPCPenaltyMin bounds Contest.ICPCPenaltyMin (CLAUDE.md rule 2), matching
 // the migration's CHECK (icpc_penalty_min BETWEEN 0 AND 240).
-const maxICPCPenaltyMin = 240
+const MaxICPCPenaltyMin = 240
 
 // Leaderboard labels (docs/ARCHITECTURE.md §10). The table is public and a
 // self-registered participant's login is their email address, so a full name
@@ -112,9 +112,9 @@ const (
 // minutes into a deadline in the past that locks everybody out.
 const maxDurationMin = 7 * 24 * 60
 
-// maxGracePeriodMin bounds settings.grace_period_min (CLAUDE.md rule 2) at 90
+// MaxGracePeriodMin bounds settings.grace_period_min (CLAUDE.md rule 2) at 90
 // days, well inside what provisioning.Service.Reclaim's make_interval handles.
-const maxGracePeriodMin = 90 * 24 * 60
+const MaxGracePeriodMin = 90 * 24 * 60
 
 // Bounds on a contest's authored text and network list (CLAUDE.md rule 2).
 // Text is counted in characters, so Cyrillic gets the same room as Latin.
@@ -264,6 +264,16 @@ var allowedTransitions = map[string][]string{
 	StatusArchived:  {},
 }
 
+// Transitions is the table CanTransitionTo reads, every status a key, copied
+// so that no caller can change it.
+func Transitions() map[string][]string {
+	out := make(map[string][]string, len(allowedTransitions))
+	for from, to := range allowedTransitions {
+		out[from] = slices.Clone(to)
+	}
+	return out
+}
+
 // CanTransitionTo reports whether the contest may move to status.
 func (c Contest) CanTransitionTo(status string) error {
 	if slices.Contains(allowedTransitions[c.Status], status) {
@@ -391,9 +401,9 @@ func (c Contest) Validate() error {
 	if !slices.Contains([]string{ScoringPoints, ScoringWinner, ScoringICPC}, c.Scoring) {
 		return fmt.Errorf("%w: unknown scoring mode %q", ErrInvalidContest, c.Scoring)
 	}
-	if c.ICPCPenaltyMin < 0 || c.ICPCPenaltyMin > maxICPCPenaltyMin {
+	if c.ICPCPenaltyMin < 0 || c.ICPCPenaltyMin > MaxICPCPenaltyMin {
 		return fmt.Errorf("%w: icpc_penalty_min of %d is outside 0..%d",
-			ErrInvalidContest, c.ICPCPenaltyMin, maxICPCPenaltyMin)
+			ErrInvalidContest, c.ICPCPenaltyMin, MaxICPCPenaltyMin)
 	}
 
 	switch c.Timing {
@@ -422,9 +432,9 @@ func (c Contest) Validate() error {
 	if c.Settings.QueryRateLimitPerMin < 0 || c.Settings.GracePeriodMin < 0 {
 		return fmt.Errorf("%w: limits must not be negative", ErrInvalidContest)
 	}
-	if c.Settings.GracePeriodMin > maxGracePeriodMin {
+	if c.Settings.GracePeriodMin > MaxGracePeriodMin {
 		return fmt.Errorf("%w: grace_period_min of %d exceeds the %d-minute bound",
-			ErrInvalidContest, c.Settings.GracePeriodMin, maxGracePeriodMin)
+			ErrInvalidContest, c.Settings.GracePeriodMin, MaxGracePeriodMin)
 	}
 
 	if err := c.PrizePlaces.Validate(); err != nil {
