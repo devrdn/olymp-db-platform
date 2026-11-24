@@ -59,6 +59,12 @@ columns. Name what a reader bisecting this in a year needs.>
   dictionaries and exists in every locale the platform serves.
 - **Comments say what the code cannot**: the reason behind a non-obvious
   choice, or a contract a caller must keep (CLAUDE.md, Code rule 2).
+- **The code shape a review holds every change to** (CLAUDE.md, Code rules 1
+  and 3 to 6): reuse the module that already holds a rule before writing a
+  second copy; put a rule every caller must keep inside the module; add a
+  module, interface or hook only if it passes the deletion test; give one
+  concept one name; keep code two routes share in `lib/`, `components/` or
+  the folder that contains both.
 - **Tests with the change**, on the path the deployment uses: a repository
   test runs against a real database, a role-dependent behaviour connects as
   that role. A bug fix starts with a test that fails. See
