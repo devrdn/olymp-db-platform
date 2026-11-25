@@ -2,12 +2,15 @@
 
 import { useState } from "react";
 
-import { ActionFooter, ActionForm } from "@/components/product/action-form";
+import { ActionFooter, ActionForm, useDraftEdited } from "@/components/product/action-form";
 import { StoryText } from "@/components/product/story-text";
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
+import type { Contest } from "@/lib/api/contests";
+import { atVersion } from "@/lib/api/contests-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { storedMarkdown } from "@/lib/format/markdown";
 
+import { ReloadWhenChanged } from "../reload-when-changed";
 import type { TranslationsState } from "./actions";
 import { StoryPdfButton, type StoryPdfLabels } from "./story-pdf-button";
 
@@ -21,6 +24,8 @@ export type PerLanguageLabels = {
   save: string;
   saving: string;
   saved: string;
+  /** Offered under a save refused because the contest moved since the form was rendered. */
+  reload: string;
   /** Shown in place of a frozen language with no text; omitted shows the empty box. */
   empty?: string;
 };
@@ -42,7 +47,7 @@ export type PdfOffer = {
  * the content is frozen.
  */
 export function PerLanguageForm({
-  contestId,
+  contest,
   name,
   languages,
   defaultLanguage,
@@ -53,7 +58,7 @@ export function PerLanguageForm({
   errors,
   pdf,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   /** The field prefix the action reads. */
   name: string;
   languages: string[];
@@ -70,6 +75,37 @@ export function PerLanguageForm({
   /** Offers each language's saved text as a PDF file; omitted offers none. */
   pdf?: PdfOffer;
 }) {
+  return (
+    <ActionForm action={action} {...atVersion(contest, JSON.stringify(translations))} errors={errors} className="flex flex-col gap-8">
+      <PerLanguageFields
+        name={name}
+        languages={languages}
+        defaultLanguage={defaultLanguage}
+        translations={translations}
+        editable={editable}
+        labels={labels}
+        pdf={pdf}
+      />
+    </ActionForm>
+  );
+}
+
+/**
+ * The boxes, inside the form so a reload starts them over, with what they
+ * know of their own edits. A built editor whose text now differs from the
+ * saved one marks the form edited (`useDraftEdited`); the editor's own
+ * rewriting of the text it loaded does not.
+ */
+function PerLanguageFields({
+  name,
+  languages,
+  defaultLanguage,
+  translations,
+  editable,
+  labels,
+  pdf,
+}: Omit<Parameters<typeof PerLanguageForm>[0], "contest" | "action" | "errors">) {
+  const markEdited = useDraftEdited();
   // What each box holds now, once it has been edited; a language never touched is as saved.
   // It is compared with the editor's own writing of the text it loaded, which can differ from it
   // in form alone (`*em*` against `_em_`), for as long as that is the text saved; after a save the
@@ -86,15 +122,15 @@ export function PerLanguageForm({
     setLoaded({});
   }
 
-  const unsaved = (lang: string) => {
-    if (!editable || !(lang in edited)) return false;
+  const baseline = (lang: string) => {
     const saved = translations[lang] ?? "";
-    const baseline = loaded[lang]?.saved === saved ? loaded[lang].written : saved;
-    return storedMarkdown(edited[lang]) !== storedMarkdown(baseline);
+    return loaded[lang]?.saved === saved ? loaded[lang].written : saved;
   };
+  const unsaved = (lang: string) =>
+    editable && lang in edited && storedMarkdown(edited[lang]) !== storedMarkdown(baseline(lang));
 
   return (
-    <ActionForm action={action} fields={{ contestId }} errors={errors} className="flex flex-col gap-8">
+    <>
       <div className="grid gap-8 narrow:grid-cols-2">
         {languages.map((lang) => (
           <div key={lang} className="flex flex-col gap-2.5">
@@ -123,7 +159,13 @@ export function PerLanguageForm({
                 name={`${name}.${lang}`}
                 defaultValue={translations[lang] ?? ""}
                 placeholder={labels.placeholder}
-                onChange={(markdown) => setEdited((previous) => ({ ...previous, [lang]: markdown }))}
+                onChange={(markdown) => {
+                  setEdited((previous) => ({ ...previous, [lang]: markdown }));
+                  // Not before the editor reports itself built, when a change is its own
+                  // rewriting of the loaded text: an edit typed that early, unlikely as it
+                  // is, does not pin the form's version, and any typed after it does.
+                  if (lang in loaded && storedMarkdown(markdown) !== storedMarkdown(baseline(lang))) markEdited();
+                }}
                 onReady={(written, saved) => setLoaded((previous) => ({ ...previous, [lang]: { saved, written } }))}
                 labels={{ expand: labels.expand, collapse: labels.collapse, unavailable: labels.unavailable }}
               />
@@ -136,7 +178,9 @@ export function PerLanguageForm({
         ))}
       </div>
 
-      <ActionFooter labels={labels} disabled={!editable} />
-    </ActionForm>
+      <ActionFooter labels={labels} disabled={!editable}>
+        <ReloadWhenChanged label={labels.reload} />
+      </ActionFooter>
+    </>
   );
 }

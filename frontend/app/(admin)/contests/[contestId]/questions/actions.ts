@@ -1,9 +1,9 @@
 "use server";
 
 import { isId } from "@/lib/api/ids";
-import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
+import type { ActionState } from "@/lib/api/server";
 
-import { contestChanged } from "../revalidation";
+import { saveAtVersion } from "../save-at-version";
 
 export type QuestionListState = ActionState;
 
@@ -18,11 +18,6 @@ function ids(form: FormData): { contestId: string; questionId?: string } | null 
   return { contestId, questionId: isId(questionId) ? questionId : undefined };
 }
 
-/** The list, the publish gate and the question screen all change. */
-function change(contestId: string, path: string, init: { method: string; body?: unknown }): Promise<QuestionListState> {
-  return serverAction(() => serverRequest(path, init), { revalidate: contestChanged(contestId) });
-}
-
 /**
  * Creates a bare question, valid on the server, so the author gets a row to
  * fill in; the publish gate demands text and answers later.
@@ -34,8 +29,9 @@ export async function addQuestionAction(
   const parsed = ids(form);
   if (!parsed) return { code: "invalid_contest_id" };
 
-  return change(
+  return saveAtVersion(
     parsed.contestId,
+    form,
     `/contests/${parsed.contestId}/questions`,
     {
       method: "POST",
@@ -51,10 +47,12 @@ export async function deleteQuestionAction(
   const parsed = ids(form);
   if (!parsed?.questionId) return { code: "invalid_question_id" };
 
-  return change(
+  return saveAtVersion(
     parsed.contestId,
+    form,
     `/contests/${parsed.contestId}/questions/${parsed.questionId}`,
     { method: "DELETE" },
+    { versionIn: "query" },
   );
 }
 
@@ -72,8 +70,9 @@ export async function reorderQuestionsAction(
   const order = form.getAll("order").map(String);
   if (order.length === 0 || !order.every(isId)) return { code: "invalid_question_id" };
 
-  return change(
+  return saveAtVersion(
     parsed.contestId,
+    form,
     `/contests/${parsed.contestId}/questions/order`,
     { method: "PUT", body: { order } },
   );

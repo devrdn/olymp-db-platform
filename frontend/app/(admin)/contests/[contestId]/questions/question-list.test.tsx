@@ -5,16 +5,23 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-const { deleteQuestionAction, reorderQuestionsAction } = vi.hoisted(() => ({
-  deleteQuestionAction: vi.fn(async (): Promise<{ code?: string }> => ({})),
-  reorderQuestionsAction: vi.fn(async (): Promise<{ code?: string }> => ({})),
-}));
+const { addQuestionAction, deleteQuestionAction, reorderQuestionsAction } = vi.hoisted(() => {
+  // Typed so `.mock.calls[n][1]` is a `FormData`.
+  const action = () =>
+    vi.fn(async (previous: unknown, form: FormData): Promise<{ code?: string; ok?: true }> => {
+      void previous;
+      void form;
+      return {};
+    });
+  return { addQuestionAction: action(), deleteQuestionAction: action(), reorderQuestionsAction: action() };
+});
 
 // The real Server Actions would pull in Next's server runtime.
-vi.mock("./actions", () => ({
-  addQuestionAction: vi.fn(async () => ({})),
-  deleteQuestionAction,
-  reorderQuestionsAction,
+vi.mock("./actions", () => ({ addQuestionAction, deleteQuestionAction, reorderQuestionsAction }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
 }));
 
 import { QuestionList } from "./question-list";
@@ -48,7 +55,7 @@ describe("QuestionList, the points column", () => {
   test("shows each question's points in points scoring", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[question()]}
         languages={["en"]}
         editable={false}
@@ -65,7 +72,7 @@ describe("QuestionList, the points column", () => {
   test("has no points header and no points cell in ICPC scoring", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[question()]}
         languages={["en"]}
         editable={false}
@@ -90,7 +97,7 @@ describe("QuestionList, naming a question", () => {
   test("names a question by its title when it has one", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[question({ texts: { en: { title: "The culprit", bodyMd: "Who did it?", choices: {} } } })]}
         languages={["en"]}
         editable={false}
@@ -105,7 +112,7 @@ describe("QuestionList, naming a question", () => {
   test("falls back to the wording's first line without one", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[question({ texts: { en: { title: "", bodyMd: "Who did it?\nThink.", choices: {} } } })]}
         languages={["en"]}
         editable={false}
@@ -122,7 +129,7 @@ describe("QuestionList, a bonus question", () => {
   test("is marked as a bonus, and a regular one is not", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[
           question({ id: "q1", ord: 1, isBonus: true }),
           question({ id: "q2", ord: 2, texts: { en: { title: "", bodyMd: "Where?", choices: {} } } }),
@@ -145,7 +152,7 @@ describe("QuestionList on a phone", () => {
   test("keeps the table inside its own positioned scroller", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[question()]}
         languages={["en"]}
         editable
@@ -162,7 +169,7 @@ describe("QuestionList on a phone", () => {
   test("leaves the title column room before the box scrolls", () => {
     render(
       <QuestionList
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         questions={[question()]}
         languages={["en"]}
         editable={false}
@@ -175,9 +182,9 @@ describe("QuestionList on a phone", () => {
   });
 });
 
-function list(questions: Question[] = [question()]) {
+function list(questions: Question[] = [question()], version = 3) {
   return (
-    <QuestionList contestId="c1" questions={questions} languages={["en"]} editable scoring="points" dict={dict} />
+    <QuestionList contest={{ id: "c1", version }} questions={questions} languages={["en"]} editable scoring="points" dict={dict} />
   );
 }
 
@@ -211,5 +218,72 @@ describe("QuestionList, moving a question", () => {
     await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.moveDown }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.question_not_found);
+  });
+});
+
+const two = () => [question(), question({ id: "6a2b9d33-2c5f-4b88-8e1e-3d6c9f02b5e7", ord: 2 })];
+
+// Each control is its own form, and each sends the version the list was rendered at.
+describe.each([
+  ["adding", addQuestionAction, async () => userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.add }))],
+  [
+    "moving",
+    reorderQuestionsAction,
+    async () => userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.moveDown })),
+  ],
+  [
+    "deleting",
+    deleteQuestionAction,
+    async () => {
+      await userEvent.click(screen.getAllByRole("button", { name: dict.workspace.questions.remove })[0]);
+      await answerYes(dict.workspace.questions.remove);
+    },
+  ],
+] as const)("QuestionList, %s at the version the list was rendered at", (_name, action, press) => {
+  test("a refusal because the contest moved since says so, and the reload starts the form over", async () => {
+    action.mockReset();
+    action.mockResolvedValueOnce({ code: "contest_changed" });
+    refresh.mockReset();
+    render(list(two()));
+
+    await press();
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The write re-reads the page, whose contest now carries the moved version.
+  test("sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    action.mockReset();
+    action.mockResolvedValue({ ok: true });
+    const view = render(list(two()));
+
+    await press();
+    await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    view.rerender(list(two(), 4));
+    await press();
+
+    await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(2));
+    expect(action.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
+  });
+});
+
+// The list's controls hold no draft, so a list or a version that changed under
+// them is no reason to build them again: a keyboard user adding questions,
+// moving one down twice, or stepping to the next delete stays where they were.
+describe.each([
+  ["add", () => dict.workspace.questions.add, 0],
+  ["move down", () => dict.workspace.questions.moveDown, 0],
+  ["delete", () => dict.workspace.questions.remove, 1],
+] as const)("QuestionList, the %s control across a change of the list", (_name, label, at) => {
+  test("keeps the keyboard on the button", () => {
+    const view = render(list(two()));
+    screen.getAllByRole("button", { name: label() })[at].focus();
+
+    view.rerender(list(two(), 4));
+
+    expect(screen.getAllByRole("button", { name: label() })[at]).toHaveFocus();
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
   ActionReload,
   FailureAlert,
   useActionStatus,
+  useDraftEdited,
 } from "./action-form";
 
 const refresh = vi.hoisted(() => vi.fn());
@@ -705,6 +706,253 @@ describe("ActionReload", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Rate")).toHaveValue("0");
+  });
+});
+
+// A form's expected version is the one its draft is based on: an untouched
+// form follows each render's, an edited one keeps the one it had when first
+// edited, so a re-read of the page cannot hand a stale draft a fresh version.
+describe("ActionForm, the version the draft is based on", () => {
+  function Draft({
+    version,
+    answer = { ok: true },
+    revision,
+    title = "Night in the archive",
+    action = recording(answer).action,
+  }: {
+    version: number;
+    answer?: ActionState;
+    revision?: string;
+    /** The server's copy the field starts from. */
+    title?: string;
+    action?: (previous: ActionState, form: FormData) => Promise<ActionState>;
+  }) {
+    return (
+      <ActionForm action={action} version={version} revision={revision} errors={dict.errors}>
+        <input aria-label="Title" name="title" defaultValue={title} />
+        <EditedByButton />
+        <ActionButton>Save</ActionButton>
+        <ActionOutcome saved="Saved" />
+        <ActionReload code="contest_changed" label="Reload" />
+      </ActionForm>
+    );
+  }
+
+  /** A change no field reports, such as a row added by a button. */
+  function EditedByButton() {
+    const edited = useDraftEdited();
+    return (
+      <button type="button" onClick={edited}>
+        Add a row
+      </button>
+    );
+  }
+
+  function sentVersion(): FormDataEntryValue | null {
+    return new FormData(screen.getByLabelText("Title").closest("form")!).get("expectedVersion");
+  }
+
+  test("an untouched form follows each render's version", () => {
+    const { rerender } = render(<Draft version={3} />);
+    expect(sentVersion()).toBe("3");
+
+    rerender(<Draft version={4} />);
+
+    expect(sentVersion()).toBe("4");
+  });
+
+  test("a typed draft keeps the version it was based on when the page re-reads", async () => {
+    const { rerender } = render(<Draft version={3} />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    rerender(<Draft version={4} />);
+
+    expect(sentVersion()).toBe("3");
+  });
+
+  // Pinned at the first edit, not the latest: typing on after a re-read must
+  // not move the draft onto a version it was not based on.
+  test("typing on after the page re-reads keeps the version of the first edit", async () => {
+    const { rerender } = render(<Draft version={3} />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    rerender(<Draft version={4} />);
+    await userEvent.type(screen.getByLabelText("Title"), " again");
+
+    expect(sentVersion()).toBe("3");
+  });
+
+  // An edit made while the form's own save is sending is not in what that
+  // save stores: it is kept, and the save's answer does not release its pin.
+  test("an edit made while the save is sending is kept, and keeps the version", async () => {
+    let settle: (state: ActionState) => void = () => {};
+    const action = vi.fn(() => new Promise<ActionState>((resolve) => (settle = resolve)));
+    const { rerender } = render(<Draft version={3} action={action} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.type(screen.getByLabelText("Title"), ", typed meanwhile");
+    await act(async () => settle({ ok: true }));
+    rerender(<Draft version={4} action={action} />);
+
+    expect(screen.getByLabelText("Title")).toHaveValue("Night in the archive, typed meanwhile");
+    expect(sentVersion()).toBe("3");
+  });
+
+  /** An action whose answers the test settles one at a time, recording what each submission sent. */
+  function settling() {
+    const answers: ((state: ActionState) => void)[] = [];
+    const sent: (FormDataEntryValue | null)[] = [];
+    const action = vi.fn((_previous: ActionState, form: FormData) => {
+      sent.push(form.get("expectedVersion"));
+      return new Promise<ActionState>((resolve) => answers.push(resolve));
+    });
+    const settle = (state: ActionState) => act(async () => answers.shift()?.(state));
+    return { action, sent, settle };
+  }
+
+  // The answer names the version the save stored, so an edit typed during it
+  // is based on exactly that: saved again, it lands with nobody else involved.
+  test("an edit made while the save is sending is based on the version the save's answer names", async () => {
+    const { action, sent, settle } = settling();
+    const { rerender } = render(<Draft version={3} action={action} />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.type(screen.getByLabelText("Title"), " meanwhile");
+    await settle({ ok: true, version: 4 });
+    rerender(<Draft version={4} action={action} />);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await settle({ ok: true, version: 5 });
+
+    expect(sent).toEqual(["3", "4"]);
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  // Based on what its own save stored, and no further: a colleague's write
+  // after it still refuses the draft.
+  test("an edit made while the save is sending is not handed a colleague's later version", async () => {
+    const { action, settle } = settling();
+    const { rerender } = render(<Draft version={3} action={action} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.type(screen.getByLabelText("Title"), ", typed meanwhile");
+    await settle({ ok: true, version: 4 });
+    rerender(<Draft version={5} action={action} />);
+
+    expect(sentVersion()).toBe("4");
+  });
+
+  // The submission that sends an in-flight edit keeps the version that edit
+  // was based on, so a refusal of that submission's content leaves the next
+  // save at it, not at the version the first save was sent at.
+  test("an in-flight edit refused for its content is saved again at what the first save stored", async () => {
+    const { action, sent, settle } = settling();
+    const { rerender } = render(<Draft version={3} action={action} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.type(screen.getByLabelText("Title"), ", typed meanwhile");
+    await settle({ ok: true, version: 4 });
+    rerender(<Draft version={4} action={action} />);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await settle({ code: "invalid_cidr" });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await settle({ ok: true, version: 5 });
+
+    expect(sent).toEqual(["3", "4", "4"]);
+  });
+
+  // The submission that sends an in-flight edit makes its pin an ordinary one,
+  // so the next answer that works releases it, even when the save it was
+  // made during was refused.
+  test("an edit made during a refused save is released by the next save that works", async () => {
+    const { action, settle } = settling();
+    const { rerender } = render(<Draft version={3} action={action} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.type(screen.getByLabelText("Title"), ", typed meanwhile");
+    await settle({ code: "invalid_cidr" });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await settle({ ok: true, version: 4 });
+    rerender(<Draft version={4} action={action} />);
+    rerender(<Draft version={6} action={action} />);
+
+    expect(sentVersion()).toBe("6");
+  });
+
+  test("a draft changed with no input event keeps it too, once the screen says so", async () => {
+    const { rerender } = render(<Draft version={3} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a row" }));
+    rerender(<Draft version={4} />);
+
+    expect(sentVersion()).toBe("3");
+  });
+
+  test("a save that worked starts it following again", async () => {
+    const { action, sent } = recording({ ok: true });
+    const { rerender } = render(<Draft version={3} action={action} />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    rerender(<Draft version={4} action={action} />);
+
+    expect(sent[0].expectedVersion).toEqual(["3"]);
+    expect(sentVersion()).toBe("4");
+  });
+
+  test("a reload starts it over at the version the page now carries", async () => {
+    refresh.mockReset();
+    const { rerender } = render(<Draft version={3} answer={{ code: "contest_changed" }} />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    rerender(<Draft version={4} answer={{ code: "contest_changed" }} />);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    rerender(<Draft version={5} answer={{ code: "contest_changed" }} />);
+
+    expect(sentVersion()).toBe("5");
+  });
+
+  test("an untouched form takes a new copy from the server, fields and version", () => {
+    const { rerender } = render(<Draft version={3} revision="a" title="Night in the archive" />);
+
+    rerender(<Draft version={4} revision="b" title="The colleague's title" />);
+
+    expect(screen.getByLabelText("Title")).toHaveValue("The colleague's title");
+    expect(sentVersion()).toBe("4");
+  });
+
+  // What was typed is never replaced unannounced: the edited draft keeps the
+  // copy it shows and its version, so its save is refused and the reload is
+  // the explicit way to take the colleague's copy.
+  test("an edited form keeps what was typed over a new copy, is refused, and takes the copy after the reload", async () => {
+    refresh.mockReset();
+    const answer = { code: "contest_changed" };
+    const { rerender } = render(<Draft version={3} revision="a" title="Night in the archive" answer={answer} />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    rerender(<Draft version={4} revision="b" title="The colleague's title" answer={answer} />);
+    expect(screen.getByLabelText("Title")).toHaveValue("Night in the archive, revised");
+    expect(sentVersion()).toBe("3");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+
+    expect(screen.getByLabelText("Title")).toHaveValue("The colleague's title");
+    expect(sentVersion()).toBe("4");
+  });
+
+  test("an edited form takes the new copy once its own save worked", async () => {
+    const { rerender } = render(<Draft version={3} revision="a" title="Night in the archive" />);
+
+    await userEvent.type(screen.getByLabelText("Title"), ", revised");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    rerender(<Draft version={4} revision="b" title="Night in the archive, revised" />);
+
+    expect(screen.getByLabelText("Title")).toHaveValue("Night in the archive, revised");
+    expect(sentVersion()).toBe("4");
   });
 });
 

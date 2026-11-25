@@ -46,9 +46,16 @@ export function MarkdownEditor({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Crepe | null>(null);
-  // Held in state rather than read from the editor at submit, so the field is
-  // right while the editor initialises or after it is torn down.
+  // Held in state, so the field is right while the editor initialises or after
+  // it is torn down; read from the editor again at submit (below).
   const [markdown, setMarkdown] = useState(defaultValue);
+  const field = useRef<HTMLInputElement>(null);
+  // The editor's document as last reported to the caller (from the editor's
+  // own writing of what it loaded, once built). Every report goes through it,
+  // so only a change is reported, once: the editor's delayed report of a text
+  // a submit already sent is no new edit, and an untouched box sends the text
+  // it was loaded with.
+  const reported = useRef(defaultValue);
 
   // Read at the time of an edit, so the editor is built once whatever the caller passes.
   const notify = useRef(onChange);
@@ -57,6 +64,16 @@ export function MarkdownEditor({
     notify.current = onChange;
     ready.current = onReady;
   });
+
+  // Writes the field at once, ahead of the re-render, for a submit about to
+  // read it.
+  function report(value: string) {
+    if (value === reported.current) return;
+    reported.current = value;
+    if (field.current) field.current.value = value;
+    setMarkdown(value);
+    notify.current?.(value);
+  }
 
   // Captured once: rebuilding the editor on a prop change would tear it down
   // under the caret.
@@ -78,14 +95,12 @@ export function MarkdownEditor({
     void Promise.all([import("@milkdown/crepe"), import("./paste-as-markdown")])
       .then(([{ Crepe }, { pasteAsMarkdown }]) => {
         if (!live || !host.current) return;
-        started = build(Crepe, host.current, initial.current, pasteAsMarkdown, (value) => {
-          setMarkdown(value);
-          notify.current?.(value);
-        });
+        started = build(Crepe, host.current, initial.current, pasteAsMarkdown, report);
         return started.create().then(() => {
           if (!live || !started) return void started?.destroy();
           editor.current = started;
-          ready.current?.(started.getMarkdown(), initial.current);
+          reported.current = started.getMarkdown();
+          ready.current?.(reported.current, initial.current);
         });
       })
       .catch(() => {
@@ -98,6 +113,22 @@ export function MarkdownEditor({
       void started?.destroy();
     };
   }, []);
+
+  // Milkdown reports an edit only after a debounce (200 ms in
+  // @milkdown/plugin-listener), so the field and the caller can be behind the
+  // editor when its form is sent. A submit (capturing, so ahead of a React
+  // `onSubmit`, which builds the form's data) reports the editor's own
+  // document first, so no form using this editor sends an older text.
+  useEffect(() => {
+    const form = field.current?.form;
+    if (!form) return;
+    const flush = () => {
+      const current = editor.current?.getMarkdown();
+      if (current !== undefined) report(current);
+    };
+    form.addEventListener("submit", flush, true);
+    return () => form.removeEventListener("submit", flush, true);
+  }, [unavailable]);
 
   const [full, setFull] = useState(false);
 
@@ -192,7 +223,7 @@ export function MarkdownEditor({
         )}
       />
       {/* With the fallback, the textarea carries the name, so there is never a second field. */}
-      {unavailable ? null : <input type="hidden" name={name} value={markdown} />}
+      {unavailable ? null : <input ref={field} type="hidden" name={name} value={markdown} />}
     </div>
   );
 }
@@ -236,7 +267,10 @@ function build(
   });
 
   crepe.editor.use(pasteAsMarkdown);
-  crepe.on((api) => api.markdownUpdated((_ctx, value) => onChange(value)));
+  // The listener's own value serialises the transaction it last tracked, which
+  // can miss what Milkdown appends after it (a list renumbered); the editor's
+  // document is the rendering a submit reads too.
+  crepe.on((api) => api.markdownUpdated(() => onChange(crepe.getMarkdown())));
 
   return crepe;
 }

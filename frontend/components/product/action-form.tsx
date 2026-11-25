@@ -40,6 +40,8 @@ type Bound = {
   errors: ErrorSentences;
   /** Mounts the form afresh: its fields, its state and how the last submission went. */
   restart: () => void;
+  /** Marks the draft edited, which keeps the version it is based on (`version`). */
+  edited: () => void;
 };
 
 const BoundForm = createContext<Bound | null>(null);
@@ -59,6 +61,14 @@ function useBound(component: string): Bound {
 export function useActionStatus(): { pending: boolean; ok: boolean; code?: string } {
   const { state, pending } = useBound("useActionStatus");
   return { pending, ok: state.ok === true, code: state.code };
+}
+
+/**
+ * Marks the enclosing ActionForm's draft edited, for a change no field's input
+ * event reports: a row added or removed by a button, a draft held in state.
+ */
+export function useDraftEdited(): () => void {
+  return useBound("useDraftEdited").edited;
 }
 
 /**
@@ -99,17 +109,38 @@ function sent(form: FormData): string {
 
 const EMPTY = {};
 
+/**
+ * An edited draft's version, the server copy it shows and the answer it was
+ * edited under; `inFlight` for an edit made while its own save was sending.
+ */
+type Pin = { version: number; revision?: string | number; state: ActionState; inFlight?: boolean };
+
 type ActionFormProps<S extends ActionState> = {
   action: (previous: Awaited<S>, form: FormData) => Promise<S>;
   /** The state before anything is sent; empty unless the action's state needs more. */
   initial?: Awaited<S>;
   fields?: Record<string, string | number | readonly string[]>;
+  /**
+   * The version of the server's copy the draft is based on, sent as the hidden
+   * field `expectedVersion` (`atVersion`). While the form is untouched it is
+   * each render's; from the first edit (an input or change event in the form,
+   * or `useDraftEdited`) it is the one of that moment, until a save that worked
+   * or a restart. So a re-read of the page under an edited draft, after a save
+   * of another form or an action the server does not guard, cannot hand the
+   * draft a version it was not based on: its save is refused as changed rather
+   * than written over a colleague's. An edited draft keeps its `revision` too
+   * (below), so a newer server copy never replaces what was typed.
+   */
+  version?: number;
   confirm?: Confirmation;
   errors: ErrorSentences;
   /**
    * The version of the server's copy the fields show. A new one remounts the
    * form's contents, so uncontrolled fields take the saved values, while how
-   * the save went stays on screen; a `key` on the form would forget both.
+   * the save went stays on screen; a `key` on the form would forget both. A
+   * form with a `version` whose draft is edited keeps the copy it shows until
+   * its own save works or a reload starts it over: what was typed is never
+   * replaced unannounced, and the save is refused as changed instead.
    */
   revision?: string | number;
   /** Runs before the question; preventing the event sends nothing and asks nothing. */
@@ -136,6 +167,7 @@ function BoundActionForm<S extends ActionState>({
   action,
   initial,
   fields = {},
+  version,
   confirm,
   errors,
   revision,
@@ -158,6 +190,28 @@ function BoundActionForm<S extends ActionState>({
   // What a yes was given for, set only while its own submission is dispatched.
   const approved = useRef<string | null>(null);
   const [unasked, setUnasked] = useState<string | undefined>(undefined);
+  // The version and server copy the draft was based on when it was first
+  // edited. A save that worked since stored the draft, so the pin describes
+  // nothing any more and the form follows `version` and `revision` again;
+  // an edit made while that save was sending is not in it, so its pin holds
+  // through that save's answer and is released by the next one. Such a
+  // draft is based on what that save stored, so a draft typed while the save
+  // was sending saves next without a refusal: an answer that worked names
+  // it. With no version in the answer the pin keeps the one the save was
+  // sent at, which refuses once that save has stored; after a refused save
+  // it is still the current one.
+  const [pin, setPin] = useState<Pin | undefined>(undefined);
+  const holds = (pinned: Pin | undefined): pinned is Pin =>
+    pinned !== undefined && (pinned.state === state || !state.ok || pinned.inFlight === true);
+  const versionOf = (pinned: Pin): number =>
+    (pinned.inFlight && pinned.state !== state && state.ok ? state.version : undefined) ?? pinned.version;
+  const basedOn = holds(pin) ? versionOf(pin) : version;
+  const shown = holds(pin) ? pin.revision : revision;
+  const edited = () => {
+    if (basedOn === undefined) return;
+    if (pending) setPin({ version: basedOn, revision: shown, state, inFlight: true });
+    else setPin((pinned) => (holds(pinned) ? pinned : { version: basedOn, revision: shown, state }));
+  };
 
   // React resets a form's uncontrolled fields once its `action` settles, a
   // refusal included, which erases what was typed. A hydrated form therefore
@@ -174,25 +228,32 @@ function BoundActionForm<S extends ActionState>({
     const form = formRef.current;
     if (!sending.current || !form) return;
     sending.current = false;
-    if (state.ok) form.reset();
+    // An edit made during the save is not in what the save stored.
+    if (state.ok && !pin?.inFlight) form.reset();
     else if (state.code !== undefined) {
       for (const input of form.querySelectorAll<HTMLInputElement>('input[type="password"]')) input.value = "";
     }
-  }, [state, pending]);
+  }, [state, pending, pin]);
 
   return (
-    <BoundForm.Provider value={{ state, pending, locked, unasked, errors, restart }}>
+    <BoundForm.Provider value={{ state, pending, locked, unasked, errors, restart, edited }}>
       <form
         ref={formRef}
         action={formAction}
         className={className}
         noValidate={noValidate}
+        onInput={edited}
+        onChange={edited}
         onSubmit={(event) => {
           // Read and spent before anything can stop this submission, so a yes
           // never carries over to a later one.
           const yesFor = approved.current;
           approved.current = null;
           setUnasked(undefined);
+          // From here the in-flight pin is an ordinary one, whether this
+          // submission goes on or is stopped, released by the next answer
+          // that works.
+          setPin((pinned) => (pinned?.inFlight ? { ...pinned, version: versionOf(pinned), state, inFlight: false } : pinned));
           onSubmit?.(event);
           if (event.defaultPrevented) return;
 
@@ -236,7 +297,8 @@ function BoundActionForm<S extends ActionState>({
             <input key={`${name}-${index}`} type="hidden" name={name} value={one} />
           )),
         )}
-        <Fragment key={revision}>{typeof children === "function" ? children(state, pending) : children}</Fragment>
+        {version === undefined ? null : <input type="hidden" name="expectedVersion" value={basedOn} />}
+        <Fragment key={shown}>{typeof children === "function" ? children(state, pending) : children}</Fragment>
       </form>
       {dialog}
     </BoundForm.Provider>

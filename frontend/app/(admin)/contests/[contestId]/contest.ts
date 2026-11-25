@@ -25,14 +25,21 @@ export async function loadContest(contestId: string): Promise<Contest> {
 /** What a screen adds to the workspace's policy for one of a contest's sub-resources. */
 export type ResourcePolicy = Omit<ReadPolicy, "here" | "hideForbidden">;
 
-/** The same for a contest's sub-resources, `path` beneath the contest's own. */
+/**
+ * The same for a contest's sub-resources, `path` beneath the contest's own.
+ * It starts only once the contest is read (the render's one read of it,
+ * shared with the layout and the page), so whatever a screen reads beside the
+ * contest, a write landing between the two pairs a newer copy with an older
+ * version, which the form's save is refused at, never an older copy with a
+ * newer version, which the save would be written over the newer copy with.
+ */
 export async function loadContestResource<T, const P extends ResourcePolicy = Record<never, never>>(
   contestId: string,
   path: string,
   parse: (payload: unknown) => T,
   policy?: P,
 ): Promise<PageRead<T, P>> {
-  if (!isId(contestId)) notFound();
+  await loadContest(contestId);
   // The answer's type depends only on fields of `policy`, never on the two
   // bound here, but TypeScript cannot follow that through a generic `P`.
   return readPage(`/contests/${contestId}${path}`, parse, { ...policy, ...contestPolicy(contestId) }) as Promise<

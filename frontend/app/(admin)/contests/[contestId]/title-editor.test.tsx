@@ -16,6 +16,11 @@ const { saveTranslationsAction } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("./actions", () => ({ saveTranslationsAction }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
 import { TitleEditor } from "./title-editor";
 
@@ -51,6 +56,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     },
     createdAt: "2026-08-01T10:00:00Z",
     updatedAt: "2026-08-31T17:00:00Z",
+    version: 3,
     ...overrides,
   } as Contest;
 }
@@ -175,4 +181,85 @@ describe("TitleEditor: the explanation beside the title", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
+});
+
+describe("TitleEditor, the version it was rendered at", () => {
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
+    saveTranslationsAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
+    refresh.mockReset();
+    render(<TitleEditor contest={contest()} editable dict={dict} />);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    const { rerender } = render(<TitleEditor contest={contest()} editable dict={dict} />);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    rerender(<TitleEditor contest={contest({ version: 4 })} editable dict={dict} />);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+
+    await waitFor(() => expect(saveTranslationsAction).toHaveBeenCalledTimes(2));
+    expect(saveTranslationsAction.mock.calls.map(([, form]) => (form as FormData).get("expectedVersion"))).toEqual([
+      "3",
+      "4",
+    ]);
+  });
+});
+
+describe("TitleEditor, a title saved elsewhere while the dialog is open", () => {
+  // The fields read the title once, so an untouched form is built again from
+  // the newer copy: an old title at the fresh version would be saved over it.
+  test("an untouched form shows and sends the newer title at its version", async () => {
+    const view = render(<TitleEditor contest={contest()} editable dict={dict} />);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
+
+    const theirs = contest({
+      version: 4,
+      translations: { en: { title: "The colleague's title" }, ru: { title: "Ночь в архиве" } },
+    });
+    view.rerender(<TitleEditor contest={theirs} editable dict={dict} />);
+
+    expect(screen.getByDisplayValue("The colleague's title")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await waitFor(() => expect(saveTranslationsAction).toHaveBeenCalledTimes(1));
+    const form = saveTranslationsAction.mock.calls[0]![1] as FormData;
+    expect(form.get("title.en")).toBe("The colleague's title");
+    expect(form.get("expectedVersion")).toBe("4");
+  });
+});
+
+// The default language decides which field holds which language's title, so
+// a colleague's switch of it is a newer copy too: an untouched dialog is built
+// again, and sends each title under its own language.
+test("TitleEditor, an untouched dialog takes a default-language switch saved elsewhere", async () => {
+  saveTranslationsAction.mockClear();
+  const view = render(<TitleEditor contest={contest()} editable dict={dict} />);
+  await userEvent.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
+
+  const switched = contest({
+    version: 4,
+    languages: [
+      { code: "en", isDefault: false },
+      { code: "ru", isDefault: true },
+    ],
+  });
+  view.rerender(<TitleEditor contest={switched} editable dict={dict} />);
+  await userEvent.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+
+  await waitFor(() => expect(saveTranslationsAction).toHaveBeenCalledTimes(1));
+  const form = saveTranslationsAction.mock.calls[0]![1] as FormData;
+  expect(form.get("title.ru")).toBe("Ночь в архиве");
+  expect(form.get("title.en")).toBe("Night in the archive");
+  expect(form.get("expectedVersion")).toBe("4");
 });

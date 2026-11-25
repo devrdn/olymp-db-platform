@@ -11,13 +11,17 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
   serverRequest,
 }));
 
+import { ApiError } from "@/lib/api/client";
+
 import { addQuestionAction, deleteQuestionAction, reorderQuestionsAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 const questionId = "22222222-2222-2222-2222-222222222222";
 
+/** What a form rendered at contest version 7 submits. */
 function form(fields: Record<string, string | string[]>): FormData {
   const data = new FormData();
+  data.set("expectedVersion", "7");
   for (const [key, value] of Object.entries(fields)) {
     for (const one of Array.isArray(value) ? value : [value]) data.append(key, one);
   }
@@ -29,19 +33,60 @@ beforeEach(() => {
   revalidatePath.mockReset();
 });
 
-// Every question write moves the contest's version, and the settings page
-// sends the version back: each must leave that page to be read again.
+// Every question write moves the contest's version, and every form of the
+// contest sends the version back: each must leave the workspace to be read
+// again.
+// The delete carries the version in its query string: a proxy may drop the
+// body of a DELETE, and the guard would then fail open.
 describe.each([
-  ["adding", () => addQuestionAction({}, form({ contestId }))],
-  ["deleting", () => deleteQuestionAction({}, form({ contestId, questionId }))],
-  ["reordering", () => reorderQuestionsAction({}, form({ contestId, order: [questionId] }))],
-])("%s a question", (_, act) => {
-  test("re-reads the contest's pages, the settings form's version among them", async () => {
+  ["adding", addQuestionAction, form({ contestId }), "POST", `/contests/${contestId}/questions`, "body"],
+  [
+    "deleting",
+    deleteQuestionAction,
+    form({ contestId, questionId }),
+    "DELETE",
+    `/contests/${contestId}/questions/${questionId}`,
+    "query",
+  ],
+  [
+    "reordering",
+    reorderQuestionsAction,
+    form({ contestId, order: [questionId] }),
+    "PUT",
+    `/contests/${contestId}/questions/order`,
+    "body",
+  ],
+] as const)("%s a question", (_, action, data, method, path, versionIn) => {
+  test("sends the version the list was rendered at, then re-reads the contest's pages", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
 
-    expect(await act()).toEqual({ ok: true });
+    expect(await action({}, data)).toEqual({ ok: true });
 
+    const [sentPath, init] = serverRequest.mock.calls[0] as [string, { method: string; body?: Record<string, unknown> }];
+    expect(init.method).toBe(method);
+    if (versionIn === "query") {
+      expect(sentPath).toBe(`${path}?expected_version=7`);
+      expect(init.body).toBeUndefined();
+    } else {
+      expect(sentPath).toBe(path);
+      expect(init.body?.expected_version).toBe(7);
+    }
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
+  });
+
+  test("refuses a form with no version without asking the server", async () => {
+    const unversioned = new FormData();
+    for (const [key, value] of data.entries()) if (key !== "expectedVersion") unversioned.append(key, value);
+
+    expect(await action({}, unversioned)).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal of a contest that moved since", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+
+    expect(await action({}, data)).toEqual({ code: "contest_changed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 

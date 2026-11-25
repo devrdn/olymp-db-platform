@@ -1,3 +1,4 @@
+import type { Contest } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveStoryAction } from "./actions";
@@ -5,7 +6,7 @@ import { PerLanguageForm } from "./per-language-form";
 
 /** The story, one box per language (`per-language-form.tsx`). */
 export function StoryEditor({
-  contestId,
+  contest,
   languages,
   defaultLanguage,
   translations,
@@ -13,7 +14,7 @@ export function StoryEditor({
   dict,
   pdf,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   languages: string[];
   defaultLanguage?: string;
   translations: Record<string, string>;
@@ -25,7 +26,7 @@ export function StoryEditor({
   const t = dict.workspace.story;
   return (
     <PerLanguageForm
-      contestId={contestId}
+      contest={contest}
       name="body"
       languages={languages}
       defaultLanguage={defaultLanguage}
@@ -41,6 +42,7 @@ export function StoryEditor({
         save: t.save,
         saving: t.saving,
         saved: t.saved,
+        reload: dict.workspace.reload,
       }}
       errors={dict.errors}
       pdf={{

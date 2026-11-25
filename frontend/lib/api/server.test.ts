@@ -75,6 +75,22 @@ describe("serverRequest", () => {
       cookie: "dbcontest_session=abc",
     });
   });
+
+  // The one link between the API's answer headers and an action that reads
+  // them (`saveAtVersion`).
+  test("hands a caller's onHeaders the answer's headers", async () => {
+    vi.stubEnv("API_ORIGIN", "http://api:8080");
+    const fetchImpl: typeof fetch = async () => new Response(null, { status: 204, headers: { "contest-version": "4" } });
+    const seen: (string | null)[] = [];
+
+    await serverRequest("/contests/1/story", {
+      method: "PUT",
+      fetchImpl,
+      onHeaders: (headers) => seen.push(headers.get("contest-version")),
+    });
+
+    expect(seen).toEqual(["4"]);
+  });
 });
 
 describe("serverOutcome", () => {

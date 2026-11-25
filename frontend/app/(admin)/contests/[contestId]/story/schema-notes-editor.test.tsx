@@ -14,6 +14,11 @@ const { saveSchemaNotesAction } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("./actions", () => ({ saveSchemaNotesAction }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
 // ProseMirror does not survive jsdom; a plain field under the same name stands
 // in for the editor, which has tests of its own.
@@ -36,17 +41,21 @@ beforeEach(() => {
   saveSchemaNotesAction.mockClear();
 });
 
-function show(overrides: { editable?: boolean; translations?: Record<string, string> } = {}) {
-  return render(
+function editorFor(overrides: { editable?: boolean; translations?: Record<string, string>; version?: number } = {}) {
+  return (
     <SchemaNotesEditor
-      contestId={contestId}
+      contest={{ id: contestId, version: overrides.version ?? 3 }}
       languages={["en", "ro"]}
       defaultLanguage="ro"
       translations={overrides.translations ?? { ro: "Tabelul `suspects`." }}
       editable={overrides.editable ?? true}
       dict={dict}
-    />,
+    />
   );
+}
+
+function show(overrides: { editable?: boolean; translations?: Record<string, string> } = {}) {
+  return render(editorFor(overrides));
 }
 
 describe("SchemaNotesEditor", () => {
@@ -120,5 +129,33 @@ describe("SchemaNotesEditor", () => {
     show({ editable: false, translations: { en: long } });
 
     expect(screen.getAllByRole("heading", { level: 2, name: /^table_\d+$/ })).toHaveLength(200);
+  });
+});
+
+describe("SchemaNotesEditor, the version it was rendered at", () => {
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
+    saveSchemaNotesAction.mockResolvedValueOnce({ code: "contest_changed" });
+    refresh.mockReset();
+    show();
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.schemaNotes.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    const view = show();
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.schemaNotes.save }));
+    expect(await screen.findByRole("status")).toHaveTextContent(dict.workspace.schemaNotes.saved);
+    view.rerender(editorFor({ version: 4 }));
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.schemaNotes.save }));
+
+    await waitFor(() => expect(saveSchemaNotesAction).toHaveBeenCalledTimes(2));
+    expect(saveSchemaNotesAction.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
   });
 });

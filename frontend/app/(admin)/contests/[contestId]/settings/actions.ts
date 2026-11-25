@@ -12,7 +12,6 @@ import {
   icpcPenaltyFromForm,
   prizePlacesFromForm,
   shapeFromForm,
-  versionFromForm,
 } from "@/lib/api/contests";
 import { ENROLLMENTS } from "@/lib/api/contests-terms";
 import { isId } from "@/lib/api/ids";
@@ -24,6 +23,7 @@ import { instantFromWallClock } from "@/lib/format/datetime";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 
 import { contestChanged } from "../revalidation";
+import { saveAtVersion } from "../save-at-version";
 
 export type SettingsState = ActionState & {
   rejected?: string[];
@@ -39,22 +39,6 @@ function save(contestId: string, path: string, init: { method: string; body: unk
   return serverAction(() => serverRequest(path, init), {
     revalidate: contestChanged(contestId, { register: true }),
   });
-}
-
-/**
- * A save of the contest row. It carries the version its form was rendered at,
- * so the server refuses it as `contest_changed` once the contest moved since.
- */
-async function saveAtVersion(
-  contestId: string,
-  form: FormData,
-  path: string,
-  init: { method: string; body: Record<string, unknown> },
-): Promise<SettingsState> {
-  const expectedVersion = versionFromForm(form.get("expectedVersion"));
-  if (expectedVersion === undefined) return { code: "invalid_request" };
-
-  return save(contestId, path, { method: init.method, body: { ...init.body, expected_version: expectedVersion } });
 }
 
 /**
@@ -133,7 +117,7 @@ export async function saveSettingsAction(
   };
   if (icpcPenalty.value !== undefined) body.icpc_penalty_min = icpcPenalty.value;
 
-  return saveAtVersion(contestId, form, `/contests/${contestId}`, { method: "PATCH", body });
+  return saveAtVersion(contestId, form, `/contests/${contestId}`, { method: "PATCH", body }, { register: true });
 }
 
 /**
@@ -151,7 +135,13 @@ export async function savePrizePlacesAction(
   const places = prizePlacesFromForm(form);
   if (!places.ok) return { code: "invalid_request" };
 
-  return saveAtVersion(contestId, form, `/contests/${contestId}/prize-places`, { method: "PUT", body: places.value });
+  return saveAtVersion(
+    contestId,
+    form,
+    `/contests/${contestId}/prize-places`,
+    { method: "PUT", body: places.value },
+    { register: true },
+  );
 }
 
 /**
@@ -198,6 +188,7 @@ export async function saveArchiveSettingsAction(
     form,
     `/contests/${contestId}/archive-settings`,
     { method: "PUT", body: { visibility, archive_tasks: archiveTasks } },
+    { register: true },
   );
 }
 
@@ -221,13 +212,12 @@ export async function saveLanguagesAction(
   const asked = enumFromForm(form.get("defaultLanguage"), LOCALES);
   const fallback = asked && chosen.includes(asked) ? asked : chosen[0];
 
-  return save(
+  return saveAtVersion(
     contestId,
+    form,
     `/contests/${contestId}/languages`,
-    {
-      method: "PUT",
-      body: { languages: chosen.map((code) => ({ code, is_default: code === fallback })) },
-    },
+    { method: "PUT", body: { languages: chosen.map((code) => ({ code, is_default: code === fallback })) } },
+    { register: true },
   );
 }
 
@@ -250,8 +240,9 @@ export async function savePolicyAction(
 
   const quota = Number(form.get("diskQuotaRatio"));
 
-  return save(
+  return saveAtVersion(
     contestId,
+    form,
     `/contests/${contestId}/sql-policy`,
     {
       method: "PUT",
@@ -266,6 +257,7 @@ export async function savePolicyAction(
         disk_quota_ratio: Number.isFinite(quota) && quota > 0 ? Math.floor(quota) : 1,
       },
     },
+    { register: true },
   );
 }
 

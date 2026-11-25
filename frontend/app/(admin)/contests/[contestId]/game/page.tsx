@@ -118,7 +118,7 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
       ) : (
         <>
           <GameEditor
-            contestId={contestId}
+            contest={contest}
             initial={game}
             initialScript={script?.script ?? ""}
             editable={contentEditable(contest.status)}
@@ -133,7 +133,7 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
           />
           {definition ? (
             <GameBuilder
-              contestId={contestId}
+              contest={contest}
               definition={definition}
               rowCounts={tableRowCounts}
               currentTableUploads={tableCurrentUploads}

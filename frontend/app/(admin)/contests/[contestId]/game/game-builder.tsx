@@ -2,18 +2,21 @@
 
 import { useState } from "react";
 
-import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
+import { ActionButton, ActionForm, ActionOutcome, useDraftEdited } from "@/components/product/action-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useConfirm } from "@/components/ui/use-confirm";
+import { type Question, useConfirm } from "@/components/ui/use-confirm";
+import type { Contest } from "@/lib/api/contests";
+import { atVersion } from "@/lib/api/contests-terms";
 import type { GameDefinition, TableData } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill, isolate } from "@/lib/i18n/fill";
 import { labelFor } from "@/lib/i18n/label";
 import { cn } from "@/lib/utils";
 
+import { ReloadWhenChanged } from "../reload-when-changed";
 import { saveGameDefinitionAction } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
 
@@ -80,14 +83,14 @@ function toWireDefinition(tables: DraftTable[]) {
  * unlock. `activeRowCounts` is what the sentence shows.
  */
 export function GameBuilder({
-  contestId,
+  contest,
   definition,
   rowCounts: initialRowCounts,
   currentTableUploads = {},
   editable,
   dict,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   /** The saved definition; `GameBuilderTable` reads this, never the unsaved draft. */
   definition: GameDefinition;
   /**
@@ -108,7 +111,6 @@ export function GameBuilder({
   const errors = dict.errors;
   const limits = definition.builderLimits;
 
-  const [tables, setTables] = useState<DraftTable[]>(() => initialiseTables(definition.tables));
   // `rowCounts` (`Lines`) drives the lock and never drops on a delete;
   // `activeRowCounts` is what `TableCard` shows. Both start from the same read
   // and are updated separately, since one shared number let a delete and a
@@ -120,6 +122,111 @@ export function GameBuilder({
   function locked(table: DraftTable): boolean {
     return table.originalName !== null && (rowCounts[table.originalName] ?? 0) > 0;
   }
+
+  return (
+    <section className="flex flex-col gap-4 border-t border-line pt-8">
+      <div className="flex flex-col gap-1.5">
+        <h3 className="text-h3 text-ink">{tb.heading}</h3>
+        <p className="max-w-body text-small text-ink-2">{tb.lede}</p>
+      </div>
+
+      {!editable ? <p className="text-small text-ink-2">{dict.workspace.game.frozen}</p> : null}
+
+      <ActionForm
+        action={saveGameDefinitionAction}
+        {...atVersion(contest, JSON.stringify(definition.tables))}
+        errors={errors}
+        className="flex flex-col gap-5"
+      >
+        {(state) => (
+          <StructureEditor
+            saved={definition.tables}
+            limits={limits}
+            editable={editable}
+            locked={locked}
+            activeRowCounts={activeRowCounts}
+            ask={ask}
+            detail={state.code ? state.detail : undefined}
+            dict={dict}
+          />
+        )}
+      </ActionForm>
+
+      <div className="flex flex-col gap-4 border-t border-line pt-6">
+        <h4 className="text-control text-ink">{tb.data.heading}</h4>
+
+        {!limits.enabled ? (
+          <p className="max-w-body text-small text-ink-2">{tb.data.dataDisabled}</p>
+        ) : definition.tables.length === 0 ? (
+          <p className="text-small text-ink-2">{tb.data.noTables}</p>
+        ) : (
+          <Tabs value={activeTable} onValueChange={setActiveTable}>
+            <TabsList>
+              {definition.tables.map((table) => (
+                <TabsTrigger key={table.name} value={table.name}>
+                  {table.name}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {definition.tables.map((table) => (
+              <TabsContent key={table.name} value={table.name} fill={false} className="pt-4">
+                <GameBuilderTable
+                  contestId={contest.id}
+                  table={table}
+                  active={activeTable === table.name}
+                  limits={limits}
+                  editable={editable}
+                  onRowCountChange={(count) => setRowCounts((prev) => ({ ...prev, [table.name]: count }))}
+                  activeRowCount={activeRowCounts[table.name] ?? 0}
+                  onActiveRowCountChange={(count) =>
+                    setActiveRowCounts((prev) => ({ ...prev, [table.name]: count }))
+                  }
+                  initialTableData={currentTableUploads[table.name] ?? null}
+                  dict={dict}
+                />
+              </TabsContent>
+            ))}
+          </Tabs>
+        )}
+      </div>
+      {confirmation}
+    </section>
+  );
+}
+
+/**
+ * The structure being edited, inside the form so a reload starts it over from
+ * the saved definition. Its draft is held in state, so every change also marks
+ * the form edited (`useDraftEdited`): a button that adds or removes a table or
+ * column fires no input event.
+ */
+function StructureEditor({
+  saved,
+  limits,
+  editable,
+  locked,
+  activeRowCounts,
+  ask,
+  detail,
+  dict,
+}: {
+  saved: GameDefinition["tables"];
+  limits: GameDefinition["builderLimits"];
+  editable: boolean;
+  locked: (table: DraftTable) => boolean;
+  activeRowCounts: Record<string, number>;
+  ask: (question: Question) => Promise<boolean>;
+  /** The API's message beside a refusal that names the table or column at fault. */
+  detail?: string;
+  dict: Dictionary;
+}) {
+  const tb = dict.workspace.game.builder;
+  const edited = useDraftEdited();
+  const [tables, setDraft] = useState<DraftTable[]>(() => initialiseTables(saved));
+  const setTables = (update: (prev: DraftTable[]) => DraftTable[]) => {
+    edited();
+    setDraft(update);
+  };
 
   function updateTable(key: string, updater: (table: DraftTable) => DraftTable) {
     setTables((prev) => prev.map((t) => (t.key === key ? updater(t) : t)));
@@ -175,130 +282,75 @@ export function GameBuilder({
   const canSave = editable && tables.length > 0 && !oversized;
 
   return (
-    <section className="flex flex-col gap-4 border-t border-line pt-8">
-      <div className="flex flex-col gap-1.5">
-        <h3 className="text-h3 text-ink">{tb.heading}</h3>
-        <p className="max-w-body text-small text-ink-2">{tb.lede}</p>
+    <>
+      <input type="hidden" name="definition" value={JSON.stringify(wire)} />
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h4 className="text-control text-ink">{tb.structureHeading}</h4>
+          <span className="text-label text-ink-3">
+            {fill(tb.limitTables, { n: tables.length, max: limits.maxTables })}
+          </span>
+        </div>
+
+        {tables.length === 0 ? <p className="text-small text-ink-2">{tb.emptyTables}</p> : null}
+
+        {tables.map((table) => (
+          <TableCard
+            key={table.key}
+            table={table}
+            editable={editable}
+            locked={locked(table)}
+            rowCount={table.originalName ? activeRowCounts[table.originalName] ?? 0 : 0}
+            limits={limits}
+            dict={dict}
+            onNameChange={(name) => updateTable(table.key, (t) => ({ ...t, name }))}
+            onRemove={() => void removeTable(table.key, table.name)}
+            onAddColumn={() => addColumn(table.key)}
+            onRemoveColumn={(columnKey) => removeColumn(table.key, columnKey)}
+            onColumnNameChange={(columnKey, name) =>
+              updateColumn(table.key, columnKey, (c) => ({ ...c, name }))
+            }
+            onColumnTypeChange={(columnKey, type) =>
+              updateColumn(table.key, columnKey, (c) => ({ ...c, type }))
+            }
+            onColumnNullableChange={(columnKey, nullable) =>
+              updateColumn(table.key, columnKey, (c) => ({ ...c, nullable }))
+            }
+            onTogglePrimaryKey={(columnKey, checked) => togglePrimaryKey(table.key, columnKey, checked)}
+          />
+        ))}
+
+        <div>
+          <button
+            type="button"
+            disabled={!editable || tables.length >= limits.maxTables}
+            onClick={addTable}
+            className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+          >
+            {tb.addTable}
+          </button>
+        </div>
       </div>
 
-      {!editable ? <p className="text-small text-ink-2">{dict.workspace.game.frozen}</p> : null}
-
-      <ActionForm
-        action={saveGameDefinitionAction}
-        fields={{ contestId, definition: JSON.stringify(wire) }}
-        errors={errors}
-        className="flex flex-col gap-5"
-      >
-        {(state) => (
-          <>
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h4 className="text-control text-ink">{tb.structureHeading}</h4>
-                <span className="text-label text-ink-3">
-                  {fill(tb.limitTables, { n: tables.length, max: limits.maxTables })}
-                </span>
-              </div>
-
-              {tables.length === 0 ? <p className="text-small text-ink-2">{tb.emptyTables}</p> : null}
-
-              {tables.map((table) => (
-                <TableCard
-                  key={table.key}
-                  table={table}
-                  editable={editable}
-                  locked={locked(table)}
-                  rowCount={table.originalName ? activeRowCounts[table.originalName] ?? 0 : 0}
-                  limits={limits}
-                  dict={dict}
-                  onNameChange={(name) => updateTable(table.key, (t) => ({ ...t, name }))}
-                  onRemove={() => void removeTable(table.key, table.name)}
-                  onAddColumn={() => addColumn(table.key)}
-                  onRemoveColumn={(columnKey) => removeColumn(table.key, columnKey)}
-                  onColumnNameChange={(columnKey, name) =>
-                    updateColumn(table.key, columnKey, (c) => ({ ...c, name }))
-                  }
-                  onColumnTypeChange={(columnKey, type) =>
-                    updateColumn(table.key, columnKey, (c) => ({ ...c, type }))
-                  }
-                  onColumnNullableChange={(columnKey, nullable) =>
-                    updateColumn(table.key, columnKey, (c) => ({ ...c, nullable }))
-                  }
-                  onTogglePrimaryKey={(columnKey, checked) => togglePrimaryKey(table.key, columnKey, checked)}
-                />
-              ))}
-
-              <div>
-                <button
-                  type="button"
-                  disabled={!editable || tables.length >= limits.maxTables}
-                  onClick={addTable}
-                  className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
-                >
-                  {tb.addTable}
-                </button>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <ActionButton disabled={!canSave} pendingLabel={tb.saving}>
-                {tb.save}
-              </ActionButton>
-              <span className={cn("font-mono text-label", oversized ? "text-bad" : "text-ink-3")}>
-                {fill(tb.sizeHint, { n: definitionBytes, max: limits.maxDefinitionBytes })}
-              </span>
-              {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
-              <ActionOutcome saved={tb.saved} />
-            </div>
-            {/* Validation refusals name the table or column; shown beside the dictionary sentence. */}
-            {state.code && state.detail ? (
-              <div className="flex flex-col gap-1">
-                <p className="text-label text-ink-3">{tb.detailLabel}</p>
-                <pre className="max-w-body overflow-x-auto font-mono text-data text-bad">{state.detail}</pre>
-              </div>
-            ) : null}
-          </>
-        )}
-      </ActionForm>
-
-      <div className="flex flex-col gap-4 border-t border-line pt-6">
-        <h4 className="text-control text-ink">{tb.data.heading}</h4>
-
-        {!limits.enabled ? (
-          <p className="max-w-body text-small text-ink-2">{tb.data.dataDisabled}</p>
-        ) : definition.tables.length === 0 ? (
-          <p className="text-small text-ink-2">{tb.data.noTables}</p>
-        ) : (
-          <Tabs value={activeTable} onValueChange={setActiveTable}>
-            <TabsList>
-              {definition.tables.map((table) => (
-                <TabsTrigger key={table.name} value={table.name}>
-                  {table.name}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            {definition.tables.map((table) => (
-              <TabsContent key={table.name} value={table.name} fill={false} className="pt-4">
-                <GameBuilderTable
-                  contestId={contestId}
-                  table={table}
-                  active={activeTable === table.name}
-                  limits={limits}
-                  editable={editable}
-                  onRowCountChange={(count) => setRowCounts((prev) => ({ ...prev, [table.name]: count }))}
-                  activeRowCount={activeRowCounts[table.name] ?? 0}
-                  onActiveRowCountChange={(count) =>
-                    setActiveRowCounts((prev) => ({ ...prev, [table.name]: count }))
-                  }
-                  initialTableData={currentTableUploads[table.name] ?? null}
-                  dict={dict}
-                />
-              </TabsContent>
-            ))}
-          </Tabs>
-        )}
+      <div className="flex flex-wrap items-center gap-3">
+        <ActionButton disabled={!canSave} pendingLabel={tb.saving}>
+          {tb.save}
+        </ActionButton>
+        <span className={cn("font-mono text-label", oversized ? "text-bad" : "text-ink-3")}>
+          {fill(tb.sizeHint, { n: definitionBytes, max: limits.maxDefinitionBytes })}
+        </span>
+        {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
+        <ActionOutcome saved={tb.saved} />
       </div>
-      {confirmation}
-    </section>
+      <ReloadWhenChanged label={dict.workspace.reload} />
+      {/* Validation refusals name the table or column; shown beside the dictionary sentence. */}
+      {detail ? (
+        <div className="flex flex-col gap-1">
+          <p className="text-label text-ink-3">{tb.detailLabel}</p>
+          <pre className="max-w-body overflow-x-auto font-mono text-data text-bad">{detail}</pre>
+        </div>
+      ) : null}
+    </>
   );
 }
 

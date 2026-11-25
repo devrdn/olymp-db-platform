@@ -17,6 +17,7 @@ import type { Failure } from "@/lib/api/outcome";
 import { serverAction, serverOutcome, serverRequest, type ActionState, type Revalidation } from "@/lib/api/server";
 
 import { contestChanged } from "../revalidation";
+import { saveAtVersion } from "../save-at-version";
 
 /**
  * `detail` is the API's message, shown beside (never instead of) the
@@ -75,10 +76,7 @@ export async function saveGameScriptAction(_previous: GameState, form: FormData)
   // whitespace-only script with a known code.
   const script = String(form.get("script") ?? "");
 
-  return serverAction(
-    () => serverRequest(`/contests/${contestId}/game/script`, { method: "PUT", body: { script } }),
-    { revalidate: contestChanged(contestId) },
-  );
+  return saveAtVersion(contestId, form, `/contests/${contestId}/game/script`, { method: "PUT", body: { script } });
 }
 
 /**
@@ -213,13 +211,18 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
   } catch {
     return { code: "invalid_request" };
   }
+  if (typeof definition !== "object" || definition === null || Array.isArray(definition)) {
+    return { code: "invalid_request" };
+  }
 
   // Several validation refusals name the table or column at fault.
-  const saved = await serverOutcome(
-    () => serverRequest(`/contests/${contestId}/game/definition`, { method: "PUT", body: definition }),
-    { revalidate: contestChanged(contestId) },
+  return saveAtVersion(
+    contestId,
+    form,
+    `/contests/${contestId}/game/definition`,
+    { method: "PUT", body: definition as Record<string, unknown> },
+    { detail: true },
   );
-  return saved.ok ? { ok: true } : withDetail(saved);
 }
 
 /**

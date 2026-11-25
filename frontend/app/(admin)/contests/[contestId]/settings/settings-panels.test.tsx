@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 import type { Contest } from "@/lib/api/contests";
+import type { SqlPolicy } from "@/lib/api/policy";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
@@ -22,7 +23,7 @@ vi.mock("next/navigation", async (importOriginal) => ({
 }));
 
 import { saveSettingsAction } from "./actions";
-import { ArchivePanel, ContestPanel, PrizePanel } from "./settings-panels";
+import { ArchivePanel, ContestPanel, LanguagePanel, PolicyPanel, PrizePanel } from "./settings-panels";
 
 let dict: Dictionary;
 
@@ -86,15 +87,23 @@ describe("ContestPanel, after the server's copy changes", () => {
     );
   });
 
-  // The picked timing decides which fields show, so it must start over with
-  // the radios rather than keep a pick the server's copy no longer holds.
-  test("shows only the fields of the timing the server now holds", async () => {
+  // The picked timing decides which fields show. A pick is an edit, so a
+  // newer copy leaves it, and its fields, alone; the reload after the refused
+  // save starts the radios over with the server's copy.
+  test("keeps a picked timing over a newer copy, and shows the copy's once the reload starts it over", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
     const user = userEvent.setup();
     const { rerender } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
     await user.click(screen.getByRole("radio", { name: dict.workspace.timing.individual }));
-    expect(screen.getByLabelText(dict.workspace.settings.shape.duration)).toBeInTheDocument();
 
-    rerender(<ContestPanel contest={contest({ updatedAt: "2026-08-31T18:00:00Z" })} editable shapeOpen dict={dict} />);
+    rerender(
+      <ContestPanel contest={contest({ version: 4, updatedAt: "2026-08-31T18:00:00Z" })} editable shapeOpen dict={dict} />,
+    );
+    expect(screen.getByRole("radio", { name: dict.workspace.timing.individual })).toBeChecked();
+    expect(screen.getByLabelText(dict.workspace.settings.shape.duration)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
 
     expect(screen.getByRole("radio", { name: dict.workspace.timing.fixed })).toBeChecked();
     expect(screen.queryByLabelText(dict.workspace.settings.shape.duration)).not.toBeInTheDocument();
@@ -160,16 +169,37 @@ describe("ContestPanel, the version it was loaded at", () => {
   });
 
   // A title, language or question save moves the version without touching
-  // these fields, and re-reads the page; the next save must not be refused.
-  test("sends the moved version once a content save re-reads the page, keeping what is typed", () => {
+  // these fields, and re-reads the page. An untouched form takes the moved
+  // version, so its next save is not refused.
+  test("an untouched form sends the moved version once another save re-reads the page", () => {
     const { rerender } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
-    const field = screen.getByLabelText<HTMLInputElement>(t().schedule.endsAt);
-    field.value = "2026-11-09T05:00";
 
     rerender(<ContestPanel contest={contest({ version: 4 })} editable shapeOpen dict={dict} />);
 
     expect(sentVersion()).toBe("4");
-    expect(screen.getByLabelText(t().schedule.endsAt)).toHaveValue("2026-11-09T05:00");
+  });
+
+  // An edited one keeps the version its draft was based on: the re-read may
+  // carry a colleague's change the draft never saw, so its save is refused
+  // and offers the reload rather than writing over that change.
+  test("a form edited before another save re-reads the page keeps what is typed and is refused with the reload", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    const user = userEvent.setup();
+    const { rerender } = render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+    const rate = screen.getByLabelText(t().access.rate);
+    await user.clear(rate);
+    await user.type(rate, "12");
+
+    rerender(<ContestPanel contest={contest({ version: 4 })} editable shapeOpen dict={dict} />);
+    expect(sentVersion()).toBe("3");
+    expect(screen.getByLabelText(t().access.rate)).toHaveValue(12);
+    await user.click(screen.getByRole("button", { name: t().save }));
+
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.expected_version).toBe(3);
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    expect(screen.getByRole("button", { name: dict.workspace.reload })).toBeInTheDocument();
   });
 
   test("shows the sentence for a stale form's save, and offers to reload", async () => {
@@ -234,9 +264,27 @@ describe("ContestPanel, the version it was loaded at", () => {
   });
 });
 
+const readOnlyPolicy: SqlPolicy = {
+  mode: "read_only",
+  writableTables: [],
+  allowCreateView: false,
+  allowOwnTables: false,
+  allowTempTables: false,
+  allowCatalog: true,
+  diskQuotaRatio: 5,
+  updatedAt: undefined,
+};
+
 describe.each([
   ["the prize places", (at: Partial<Contest>) => <PrizePanel contest={contest(at)} editable dict={dict} />],
   ["the archive settings", (at: Partial<Contest>) => <ArchivePanel contest={contest({ visibility: "open", ...at })} archiveOn dict={dict} />],
+  ["the languages", (at: Partial<Contest>) => <LanguagePanel contest={contest(at)} editable dict={dict} />],
+  [
+    "the SQL policy",
+    (at: Partial<Contest>) => (
+      <PolicyPanel contest={contest(at)} policy={readOnlyPolicy} editable dict={dict} />
+    ),
+  ],
 ])("%s, the version they were loaded at", (_name, panel) => {
   function sentVersions(): unknown[] {
     return serverRequest.mock.calls.map(([, init]) => (init as { body: Record<string, unknown> }).body.expected_version);
@@ -945,5 +993,148 @@ describe("ArchivePanel", () => {
     rerender(<ArchivePanel contest={contest()} archiveOn dict={dict} />);
 
     expect(screen.queryByText(t().switchedOff)).not.toBeInTheDocument();
+  });
+});
+
+// The reload re-reads the page and starts the form over, a draft held in
+// state included: what is shown, and sent next, is the colleague's contest.
+describe("a reload after a refused save starts the draft over from the colleague's copy", () => {
+  function sentBody(call: number): Record<string, unknown> {
+    return (serverRequest.mock.calls[call][1] as { body: Record<string, unknown> }).body;
+  }
+
+  test("the languages", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    serverRequest.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const { rerender } = render(<LanguagePanel contest={contest()} editable dict={dict} />);
+
+    await user.click(screen.getByRole("checkbox", { name: /Română/ }));
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
+    const theirs = contest({
+      version: 4,
+      languages: [
+        { code: "en", isDefault: true },
+        { code: "ru", isDefault: false },
+      ],
+    });
+    rerender(<LanguagePanel contest={theirs} editable dict={dict} />);
+
+    expect(screen.getByRole("checkbox", { name: /Русский/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Română/ })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await vi.waitFor(() => expect(serverRequest).toHaveBeenCalledTimes(2));
+    expect(sentBody(1)).toEqual({
+      languages: [
+        { code: "en", is_default: true },
+        { code: "ru", is_default: false },
+      ],
+      expected_version: 4,
+    });
+  });
+
+  test("the SQL policy's mode", async () => {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    serverRequest.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const t = dict.workspace.settings.policy;
+    const { rerender } = render(<PolicyPanel contest={contest()} policy={readOnlyPolicy} editable dict={dict} />);
+
+    await user.click(screen.getByRole("radio", { name: t.modes.read_write }));
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
+    rerender(
+      <PolicyPanel
+        contest={contest({ version: 4 })}
+        policy={{ ...readOnlyPolicy, diskQuotaRatio: 9, updatedAt: "2026-08-31T18:00:00Z" }}
+        editable
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: t.modes.read_only })).toBeChecked();
+    expect(screen.queryByLabelText(t.tables)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    await vi.waitFor(() => expect(serverRequest).toHaveBeenCalledTimes(2));
+    expect(sentBody(1)).toMatchObject({ mode: "read_only", disk_quota_ratio: 9, expected_version: 4 });
+  });
+});
+
+// A newer copy of the contest reaching an edited form never replaces what was
+// typed: the form keeps its draft and the version it was based on, its save is
+// refused, and the reload is the explicit way to take the colleague's copy.
+describe("an edited form that receives a newer copy", () => {
+  async function refusedThenReloaded(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: dict.workspace.settings.save }));
+    const [, init] = serverRequest.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(init.body.expected_version).toBe(3);
+    await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
+  }
+
+  function refusingOnce() {
+    serverRequest.mockReset();
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+    return userEvent.setup();
+  }
+
+  test("the prize places", async () => {
+    const user = refusingOnce();
+    const first = () => screen.getByLabelText(dict.workspace.settings.prizes.first);
+    const { rerender } = render(<PrizePanel contest={contest()} editable dict={dict} />);
+
+    await user.clear(first());
+    await user.type(first(), "5");
+    rerender(<PrizePanel contest={contest({ version: 4, prizePlaces: { first: 2, second: 0, third: 0 } })} editable dict={dict} />);
+    expect(first()).toHaveValue(5);
+    await refusedThenReloaded(user);
+
+    expect(first()).toHaveValue(2);
+  });
+
+  test("the languages", async () => {
+    const user = refusingOnce();
+    const { rerender } = render(<LanguagePanel contest={contest()} editable dict={dict} />);
+
+    await user.click(screen.getByRole("checkbox", { name: /Română/ }));
+    const theirs = contest({
+      version: 4,
+      languages: [
+        { code: "en", isDefault: true },
+        { code: "ru", isDefault: false },
+      ],
+    });
+    rerender(<LanguagePanel contest={theirs} editable dict={dict} />);
+    expect(screen.getByRole("checkbox", { name: /Română/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Русский/ })).not.toBeChecked();
+    await refusedThenReloaded(user);
+
+    expect(screen.getByRole("checkbox", { name: /Русский/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Română/ })).not.toBeChecked();
+  });
+
+  test("the SQL policy", async () => {
+    const user = refusingOnce();
+    const t = dict.workspace.settings.policy;
+    const { rerender } = render(<PolicyPanel contest={contest()} policy={readOnlyPolicy} editable dict={dict} />);
+
+    await user.click(screen.getByRole("radio", { name: t.modes.read_write }));
+    rerender(
+      <PolicyPanel
+        contest={contest({ version: 4 })}
+        policy={{ ...readOnlyPolicy, diskQuotaRatio: 9, updatedAt: "2026-08-31T18:00:00Z" }}
+        editable
+        dict={dict}
+      />,
+    );
+    expect(screen.getByRole("radio", { name: t.modes.read_write })).toBeChecked();
+    expect(screen.getByLabelText(t.tables)).toBeInTheDocument();
+    expect(screen.getByLabelText(t.quota)).toHaveValue(5);
+    await refusedThenReloaded(user);
+
+    expect(screen.getByRole("radio", { name: t.modes.read_only })).toBeChecked();
+    expect(screen.getByLabelText(t.quota)).toHaveValue(9);
   });
 });

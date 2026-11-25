@@ -21,6 +21,11 @@ const { saveStoryAction, serializer, pendingReady } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("./actions", () => ({ saveStoryAction }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
 // ProseMirror does not survive jsdom; a plain field under the same name stands
 // in for the editor, which has tests of its own.
@@ -85,10 +90,10 @@ beforeEach(() => {
   pendingReady.length = 0;
 });
 
-function editorFor(translations: Record<string, string>, editable = true) {
+function editorFor(translations: Record<string, string>, editable = true, version = 3) {
   return (
     <StoryEditor
-      contestId={contestId}
+      contest={{ id: contestId, version }}
       languages={["en", "ro"]}
       defaultLanguage="en"
       translations={translations}
@@ -243,20 +248,21 @@ describe("StoryEditor", () => {
       expect(pdfButton("en")).toBeDisabled();
     });
 
-    test("the editor's writing is paired with the text it loaded, even when the saved text changed before it was ready", async () => {
+    // An untouched form takes a copy saved elsewhere: the box is built again
+    // from it, even before the first one was ready, and the file follows it.
+    test("an untouched box takes text saved elsewhere before it was ready, and its writing is paired with that text", async () => {
       Object.assign(serializer, { suffix: "\n", normalise: true, readyLater: true });
       const view = show({ translations: { en: "The *gardener* lied." } });
 
-      // Saved elsewhere while this editor was still being built; it still holds the old text.
       view.rerender(editorFor({ en: "Someone else wrote this." }));
       act(() => pendingReady.forEach((ready) => ready()));
 
       const box = screen.getByRole("textbox", { name: "body.en" });
+      expect(box).toHaveValue("Someone else wrote this.");
       await userEvent.type(box, "!");
       await userEvent.type(box, "{Backspace}");
 
-      // The editor holds the old text, which is not what is saved now.
-      expect(pdfButton("en")).toBeDisabled();
+      expect(pdfButton("en")).toBeEnabled();
     });
 
     test("once frozen, the story can still be downloaded", () => {
@@ -264,5 +270,72 @@ describe("StoryEditor", () => {
 
       expect(pdfButton("en")).toBeEnabled();
     });
+  });
+});
+
+describe("StoryEditor, the version it was rendered at", () => {
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
+    saveStoryAction.mockResolvedValueOnce({ code: "contest_changed" });
+    refresh.mockReset();
+    show();
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.story.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    const view = show();
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.story.save }));
+    expect(await screen.findByRole("status")).toHaveTextContent(dict.workspace.story.saved);
+    view.rerender(editorFor({ en: "A body in the stacks." }, true, 4));
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.story.save }));
+
+    await waitFor(() => expect(saveStoryAction).toHaveBeenCalledTimes(2));
+    expect(saveStoryAction.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
+  });
+});
+
+describe("StoryEditor, a reload after a refused save", () => {
+  const pdfButton = (lang: string) =>
+    screen.getByRole("button", { name: `${dict.workspace.story.pdf}, ${lang}` });
+
+  // What the boxes knew of their own edits is started over with them, so the
+  // reloaded story's file is offered: nothing on screen is unsaved any more.
+  test("starts the boxes over, an edit's hold on the file included", async () => {
+    saveStoryAction.mockResolvedValueOnce({ code: "contest_changed" });
+    refresh.mockReset();
+    const view = show();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "body.en" }), " Ours.");
+    expect(pdfButton("en")).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.story.save }));
+    // The reload's re-read and its restart land together, so the boxes are
+    // built from the re-read page.
+    const reload = await screen.findByRole("button", { name: dict.workspace.reload });
+    view.rerender(editorFor({ en: "The colleague's body." }, true, 4));
+    await userEvent.click(reload);
+
+    expect(screen.getByRole("textbox", { name: "body.en" })).toHaveValue("The colleague's body.");
+    expect(pdfButton("en")).toBeEnabled();
+  });
+
+  // An edited story keeps the version it was based on when another save on
+  // the page re-reads it, so a colleague's story saved meanwhile refuses it.
+  test("an edited story keeps the version it was based on across another save's re-read", async () => {
+    saveStoryAction.mockClear();
+    const view = show();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "body.en" }), " Ours.");
+    view.rerender(editorFor({ en: "A body in the stacks." }, true, 4));
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.story.save }));
+
+    await waitFor(() => expect(saveStoryAction).toHaveBeenCalledTimes(1));
+    expect(saveStoryAction.mock.calls[0][1].get("expectedVersion")).toBe("3");
   });
 });

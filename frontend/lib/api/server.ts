@@ -39,8 +39,12 @@ export type Revalidation = string | { layout: string };
 /** What changed, or a function of the answer when the answer decides (an import that added nobody). */
 export type Revalidate<T> = readonly Revalidation[] | ((value: T) => readonly Revalidation[]);
 
-/** A form bound to an action, after a call that worked. */
-export type ActionDone = { ok: true; code?: undefined };
+/**
+ * A form bound to an action, after a call that worked; `version` is the
+ * version the write left a versioned resource at, when its answer said
+ * (`saveAtVersion`), read by ActionForm.
+ */
+export type ActionDone = { ok: true; code?: undefined; version?: number };
 
 /** A form bound to an action, after a refusal: the code its sentence is found by. */
 export type ActionRefused = { ok?: undefined; code: string };

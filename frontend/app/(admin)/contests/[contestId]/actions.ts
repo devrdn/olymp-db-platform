@@ -5,6 +5,7 @@ import { isId } from "@/lib/api/ids";
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
 
 import { contestChanged } from "./revalidation";
+import { saveAtVersion } from "./save-at-version";
 
 export type StatusState = ActionState & { moved?: ContestStatus };
 
@@ -34,9 +35,12 @@ export async function saveTranslationsAction(
     translations[lang] = description ? { title, description } : { title };
   }
 
-  return serverAction(
-    () => serverRequest(`/contests/${contestId}/translations`, { method: "PUT", body: { translations } }),
-    { revalidate: contestChanged(contestId, { register: true }) },
+  return saveAtVersion(
+    contestId,
+    form,
+    `/contests/${contestId}/translations`,
+    { method: "PUT", body: { translations } },
+    { register: true },
   );
 }
 

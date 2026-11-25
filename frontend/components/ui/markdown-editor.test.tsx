@@ -4,7 +4,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 // The listener the component hands the editor, so a test can make an edit happen.
 const { editing } = vi.hoisted(() => {
-  const editing: { listening: boolean; emit: (markdown: string) => void } = { listening: false, emit: () => {} };
+  const editing: {
+    listening: boolean;
+    emit: (markdown: string) => void;
+    /** The document the editor holds once edited, by `emit` or by a test typing ahead of it. */
+    typed?: string;
+  } = { listening: false, emit: () => {} };
   return { editing };
 });
 
@@ -25,13 +30,18 @@ vi.mock("@milkdown/crepe", () => ({
     }
     // Milkdown writes a document back in its own form: emphasis with underscores.
     getMarkdown() {
-      return `${this.loaded.replace(/\*([^*]+)\*/g, "_$1_")}\n`;
+      return editing.typed ?? `${this.loaded.replace(/\*([^*]+)\*/g, "_$1_")}\n`;
     }
     on(listen: (api: { markdownUpdated: (callback: (ctx: unknown, markdown: string) => void) => void }) => void) {
       listen({
         markdownUpdated: (callback) => {
           editing.listening = true;
-          editing.emit = (markdown) => callback({}, markdown);
+          // The report is of a document the editor now holds, unless a test
+          // typed a different one ahead of it.
+          editing.emit = (markdown) => {
+            editing.typed ??= markdown;
+            callback({}, markdown);
+          };
         },
       });
       return this;
@@ -48,11 +58,14 @@ vi.mock("@milkdown/crepe", () => ({
   },
 }));
 
+vi.mock("./paste-as-markdown", () => import("./markdown-editor-test-support"));
+
 import { MarkdownEditor } from "./markdown-editor";
 
 const labels = { expand: "Open full screen", collapse: "Close full screen", unavailable: "нет" };
 
 afterEach(() => {
+  editing.typed = undefined;
   document.body.style.overflow = "";
 });
 
@@ -65,6 +78,75 @@ describe("MarkdownEditor, the field it submits", () => {
     const field = container.querySelector('input[name="body.en"]');
     expect(field).toHaveValue("A body in the stacks.");
   });
+});
+
+// Milkdown reports an edit only after a debounce (200 ms in
+// @milkdown/plugin-listener), so a Save pressed inside it must still send what
+// the editor holds, and the caller must still hear of the edit.
+describe("MarkdownEditor, a submit inside the editor's report delay", () => {
+  test("sends the document the editor holds, and reports it, though the editor has not yet", async () => {
+    const sent: (FormDataEntryValue | null)[] = [];
+    const onChange = vi.fn();
+    render(
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          sent.push(new FormData(event.currentTarget).get("body.en"));
+        }}
+      >
+        <MarkdownEditor name="body.en" defaultValue="Morning text." labels={labels} onChange={onChange} />
+        <button type="submit">Save</button>
+      </form>,
+    );
+    await waitFor(() => expect(editing.listening).toBe(true));
+    await act(async () => {});
+
+    editing.typed = "Morning text. Typed just now.";
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    editing.typed = undefined;
+
+    expect(sent).toEqual(["Morning text. Typed just now."]);
+    expect(onChange).toHaveBeenCalledWith("Morning text. Typed just now.");
+  });
+});
+
+// An untouched box sends the text it was loaded with, not the editor's
+// rewriting of it, and is no edit.
+test("MarkdownEditor, an untouched editor submits its original text and reports nothing", async () => {
+  const sent: (FormDataEntryValue | null)[] = [];
+  const onChange = vi.fn();
+  render(
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        sent.push(new FormData(event.currentTarget).get("body.en"));
+      }}
+    >
+      <MarkdownEditor name="body.en" defaultValue="A *b* c." labels={labels} onChange={onChange} />
+      <button type="submit">Save</button>
+    </form>,
+  );
+  await waitFor(() => expect(editing.listening).toBe(true));
+  await act(async () => {});
+
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(sent).toEqual(["A *b* c."]);
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+// The delayed report's own value can lag the editor's document (see `build`).
+test("MarkdownEditor, an edit is reported as the editor's document, not the delayed report's text", async () => {
+  const onChange = vi.fn();
+  render(<MarkdownEditor name="body.en" defaultValue="1. one" labels={labels} onChange={onChange} />);
+  await waitFor(() => expect(editing.listening).toBe(true));
+  await act(async () => {});
+
+  editing.typed = "1. one\n2. two\n";
+  act(() => editing.emit("1. one\n1. two\n"));
+  editing.typed = undefined;
+
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("1. one\n2. two\n");
 });
 
 describe("MarkdownEditor, telling the caller", () => {

@@ -75,14 +75,25 @@ function definition(overrides: Partial<GameDefinition> = {}): GameDefinition {
   };
 }
 
-function show({
+function builderAt({
   initial = definition(),
   rowCounts = {},
   editable = true,
-}: { initial?: GameDefinition; rowCounts?: Record<string, number>; editable?: boolean } = {}) {
-  return render(
-    <GameBuilder contestId={contestId} definition={initial} rowCounts={rowCounts} editable={editable} dict={en} />,
+  version = 3,
+}: { initial?: GameDefinition; rowCounts?: Record<string, number>; editable?: boolean; version?: number } = {}) {
+  return (
+    <GameBuilder
+      contest={{ id: contestId, version }}
+      definition={initial}
+      rowCounts={rowCounts}
+      editable={editable}
+      dict={en}
+    />
   );
+}
+
+function show(options: { initial?: GameDefinition; rowCounts?: Record<string, number>; editable?: boolean } = {}) {
+  return render(builderAt(options));
 }
 
 beforeEach(() => {
@@ -262,4 +273,116 @@ describe("the table builder's own data section", () => {
     expect(screen.getByRole("tab", { name: "clues" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByLabelText("id")).toBeVisible();
   });
+});
+
+describe("the table builder's structure, the version it was rendered at", () => {
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
+    saved.current = { code: "contest_changed" };
+    refresh.mockReset();
+    show();
+
+    await userEvent.click(screen.getByRole("button", { name: tb.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: en.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    const view = show();
+
+    await userEvent.click(screen.getByRole("button", { name: tb.save }));
+    await waitFor(() => expect(saveGameDefinitionAction).toHaveBeenCalledTimes(1));
+    view.rerender(builderAt({ version: 4 }));
+    await userEvent.click(screen.getByRole("button", { name: tb.save }));
+
+    await waitFor(() => expect(saveGameDefinitionAction).toHaveBeenCalledTimes(2));
+    expect(saveGameDefinitionAction.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
+  });
+});
+
+// The reload re-reads the page and starts the structure over: the draft held
+// in state is the colleague's definition afterwards, not the refused one.
+test("a reload after a refused save shows, and sends, the colleague's structure", async () => {
+  saved.current = { code: "contest_changed" };
+  refresh.mockReset();
+  const user = userEvent.setup();
+  const view = show();
+
+  const name = screen.getByDisplayValue("suspects");
+  await user.clear(name);
+  await user.type(name, "mine");
+  await user.click(screen.getByRole("button", { name: tb.save }));
+  await user.click(await screen.findByRole("button", { name: en.workspace.reload }));
+  const theirs = definition({
+    tables: [{ name: "witnesses", columns: [{ name: "alibi", type: "text", nullable: false }], primaryKey: [] }],
+  });
+  view.rerender(builderAt({ initial: theirs, version: 4 }));
+
+  expect(screen.getByDisplayValue("witnesses")).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("mine")).not.toBeInTheDocument();
+  saved.current = { ok: true };
+  saveGameDefinitionAction.mockClear();
+  await user.click(screen.getByRole("button", { name: tb.save }));
+  await waitFor(() => expect(saveGameDefinitionAction).toHaveBeenCalledTimes(1));
+  const form = saveGameDefinitionAction.mock.calls[0][1];
+  expect(form.get("expectedVersion")).toBe("4");
+  expect(JSON.parse(String(form.get("definition"))).tables[0].name).toBe("witnesses");
+});
+
+// A row added below, or a build asked for, moves the version and re-reads the
+// page without guarding: an edited structure keeps the version it was based
+// on, so a colleague's definition saved meanwhile refuses it instead of being
+// written over. An untouched one takes the moved version.
+describe("the table builder's structure across an unguarded re-read of the page", () => {
+  test("an edited structure keeps the version it was based on", async () => {
+    const user = userEvent.setup();
+    const view = show();
+
+    await user.type(screen.getByDisplayValue("suspects"), "_2");
+    view.rerender(builderAt({ version: 4 }));
+    saveGameDefinitionAction.mockClear();
+    await user.click(screen.getByRole("button", { name: tb.save }));
+
+    await waitFor(() => expect(saveGameDefinitionAction).toHaveBeenCalledTimes(1));
+    expect(saveGameDefinitionAction.mock.calls[0][1].get("expectedVersion")).toBe("3");
+  });
+
+  test("a structure changed by its buttons alone keeps it too", async () => {
+    const user = userEvent.setup();
+    const view = show();
+
+    await user.click(screen.getByRole("button", { name: tb.addTable }));
+    view.rerender(builderAt({ version: 4 }));
+    saveGameDefinitionAction.mockClear();
+    await user.click(screen.getByRole("button", { name: tb.save }));
+
+    await waitFor(() => expect(saveGameDefinitionAction).toHaveBeenCalledTimes(1));
+    expect(saveGameDefinitionAction.mock.calls[0][1].get("expectedVersion")).toBe("3");
+  });
+});
+
+// A newer saved definition reaching an edited structure never replaces it:
+// the save is refused, and the reload takes the colleague's structure.
+test("an edited structure keeps its draft over a newer definition, is refused, and takes the definition after the reload", async () => {
+  saved.current = { code: "contest_changed" };
+  const user = userEvent.setup();
+  const view = show();
+  const theirs = definition({
+    tables: [{ name: "witnesses", columns: [{ name: "alibi", type: "text", nullable: false }], primaryKey: [] }],
+  });
+
+  await user.type(screen.getByDisplayValue("suspects"), "_2");
+  view.rerender(builderAt({ initial: theirs, version: 4 }));
+  expect(screen.getByDisplayValue("suspects_2")).toBeInTheDocument();
+  saveGameDefinitionAction.mockClear();
+  await user.click(screen.getByRole("button", { name: tb.save }));
+  await waitFor(() => expect(saveGameDefinitionAction).toHaveBeenCalledTimes(1));
+  expect(saveGameDefinitionAction.mock.calls[0][1].get("expectedVersion")).toBe("3");
+  await user.click(await screen.findByRole("button", { name: en.workspace.reload }));
+
+  expect(screen.getByDisplayValue("witnesses")).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("suspects_2")).not.toBeInTheDocument();
 });

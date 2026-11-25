@@ -1,6 +1,6 @@
 /** The vocabulary of a contest's settings, apart from the wire schemas (see content-terms.ts for why). */
 
-import type { ContestStatus } from "./contests";
+import type { Contest, ContestStatus } from "./contests";
 
 export const ENROLLMENTS = ["open", "invite_only"] as const;
 
@@ -24,6 +24,30 @@ export const PROGRESSIONS = ["free", "sequential"] as const;
  * to participants.
  */
 export const SCORINGS = ["points", "winner", "icpc"] as const;
+
+/**
+ * The ActionForm props of a form that saves the contest or its content: the
+ * contest and the form's other hidden `fields`, the version of the page's one
+ * contest, which ActionForm sends as `expectedVersion` for the action to read
+ * back with `versionFromForm`, and the `revision` naming the server copy the
+ * form shows. The copy is required: an untouched form takes each re-read's
+ * version, and must take the copy with it, or it would send an old copy at a
+ * fresh version. ActionForm keeps both for an edited draft.
+ */
+export function atVersion<F extends Record<string, string | number | readonly string[]>>(
+  contest: Pick<Contest, "id" | "version">,
+  revision: string | number,
+  fields?: F,
+): { fields: { contestId: string } & F; version: number; revision: string | number } {
+  return { fields: { contestId: contest.id, ...(fields as F) }, version: contest.version, revision };
+}
+
+/**
+ * The revision of a guarded form that holds no draft, only a button and
+ * hidden fields that follow every render: nothing it shows can be stale, and
+ * a revision that moved would remount it and take the keyboard's focus away.
+ */
+export const NO_DRAFT = "";
 
 /** The tag tone of each status; the accent is spent only on what is happening now. */
 export const CONTEST_STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {

@@ -47,7 +47,7 @@ export default async function StoryPage(props: PageProps<"/contests/[contestId]/
       ) : (
         <>
           <StoryEditor
-            contestId={contest.id}
+            contest={contest}
             languages={languages}
             defaultLanguage={defaultLanguage(contest)}
             translations={story?.translations ?? {}}
@@ -59,7 +59,7 @@ export default async function StoryPage(props: PageProps<"/contests/[contestId]/
             }}
           />
           <SchemaNotesEditor
-            contestId={contest.id}
+            contest={contest}
             languages={languages}
             defaultLanguage={defaultLanguage(contest)}
             translations={schemaNotes?.translations ?? {}}

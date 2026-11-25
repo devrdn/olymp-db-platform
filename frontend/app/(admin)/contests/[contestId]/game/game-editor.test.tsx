@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -10,10 +11,20 @@ import { GameEditor } from "./game-editor";
 
 const saved = vi.hoisted(() => ({ current: { ok: true } as { ok?: true; code?: string } }));
 const status = vi.hoisted(() => ({ current: null as Game | null }));
-const saveGameScriptAction = vi.hoisted(() => vi.fn(async () => saved.current));
+const saveGameScriptAction = vi.hoisted(() =>
+  vi.fn(async (_previous: unknown, form: FormData) => {
+    void form;
+    return saved.current;
+  }),
+);
 const gameStatusAction = vi.hoisted(() => vi.fn(async () => status.current));
 
 vi.mock("./actions", () => ({ saveGameScriptAction, gameStatusAction }));
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
 function game(overrides: Partial<Game> = {}): Game {
   return {
@@ -34,16 +45,20 @@ function game(overrides: Partial<Game> = {}): Game {
   };
 }
 
-function show(initial: Game, { editable = true, script = "" } = {}) {
-  return render(
+function editorAt(initial: Game, { editable = true, script = "", version = 3 } = {}) {
+  return (
     <GameEditor
-      contestId="11111111-1111-1111-1111-111111111111"
+      contest={{ id: "11111111-1111-1111-1111-111111111111", version }}
       initial={initial}
       initialScript={script}
       editable={editable}
       dict={en}
-    />,
+    />
   );
+}
+
+function show(initial: Game, options: { editable?: boolean; script?: string } = {}) {
+  return render(editorAt(initial, options));
 }
 
 beforeEach(() => {
@@ -204,3 +219,70 @@ describe("the game editor", () => {
   });
 });
 
+
+describe("the game editor, the version it was rendered at", () => {
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
+    saved.current = { code: "contest_changed" };
+    refresh.mockReset();
+    show(game());
+
+    await userEvent.click(screen.getByRole("button", { name: t.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: en.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    saveGameScriptAction.mockClear();
+    const view = show(game());
+
+    await userEvent.click(screen.getByRole("button", { name: t.save }));
+    await waitFor(() => expect(saveGameScriptAction).toHaveBeenCalledTimes(1));
+    view.rerender(editorAt(game(), { version: 4 }));
+    await userEvent.click(screen.getByRole("button", { name: t.save }));
+
+    await waitFor(() => expect(saveGameScriptAction).toHaveBeenCalledTimes(2));
+    expect(saveGameScriptAction.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
+  });
+});
+
+describe("the game editor, a script saved elsewhere", () => {
+  /** What the form would send: its version and the script. */
+  function sent(container: HTMLElement) {
+    const form = new FormData(container.querySelector("form")!);
+    return { version: form.get("expectedVersion"), script: form.get("script") };
+  }
+
+  async function builtEditor(container: HTMLElement): Promise<EditorView> {
+    await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+    return EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-editor")!)!;
+  }
+
+  // CodeMirror reads its text once, so the form must build it again: an old
+  // script at the fresh version would be saved over the newer one.
+  test("an untouched editor shows and sends the newer script at its version", async () => {
+    const view = render(editorAt(game({ version: 1 }), { script: "CREATE TABLE morning (id int);" }));
+    await builtEditor(view.container);
+
+    view.rerender(editorAt(game({ version: 2 }), { script: "CREATE TABLE colleague (id int);", version: 4 }));
+    const editor = await builtEditor(view.container);
+
+    expect(editor.state.doc.toString()).toBe("CREATE TABLE colleague (id int);");
+    expect(sent(view.container)).toEqual({ version: "4", script: "CREATE TABLE colleague (id int);" });
+  });
+
+  // Enter, paste and undo reach CodeMirror through its own handlers, with no
+  // input event on the form: the editor's report of its text is what pins it.
+  test("an edit the editor makes without a DOM event keeps the script and the version it was based on", async () => {
+    const view = render(editorAt(game({ version: 1 }), { script: "CREATE TABLE morning (id int);" }));
+    const editor = await builtEditor(view.container);
+
+    act(() => editor.dispatch({ changes: { from: 0, insert: "-- ours\n" } }));
+    view.rerender(editorAt(game({ version: 2 }), { script: "CREATE TABLE colleague (id int);", version: 4 }));
+
+    expect(sent(view.container)).toEqual({ version: "3", script: "-- ours\nCREATE TABLE morning (id int);" });
+  });
+});

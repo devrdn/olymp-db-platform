@@ -28,6 +28,8 @@ export type RequestOptions = {
   keepalive?: boolean;
   /** Browser-side only; the server wrapper passes the session as a header. */
   credentials?: RequestCredentials;
+  /** Handed the headers of an answer that succeeded, by `request` and `requestDownload` alike (`saveAtVersion`). */
+  onHeaders?: (headers: Headers) => void;
   fetchImpl?: typeof fetch;
 };
 
@@ -140,6 +142,7 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   if (!response.ok) {
     throw await apiErrorOf(response);
   }
+  options.onHeaders?.(response.headers);
   return response;
 }
 
