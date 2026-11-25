@@ -551,20 +551,31 @@ describe("the table builder's own data panel", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
+  // Fake timers: the question arms on a real 400 ms clock, and a loaded machine could outlast the waits after it.
   test("brings the page back from the server after a row is deleted", async () => {
-    gameTableDataWindowAction.mockResolvedValueOnce({
-      value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 1, truncated: false },
-    });
-    deleteTableRowAction.mockResolvedValueOnce({});
+    vi.useFakeTimers();
+    try {
+      gameTableDataWindowAction.mockResolvedValueOnce({
+        value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 1, truncated: false },
+      });
+      deleteTableRowAction.mockResolvedValueOnce({});
 
-    show({ activeRowCount: 1 });
-    await screen.findByText("Ada");
+      show({ activeRowCount: 1 });
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByText("Ada")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
-    await answerYes(td.deleteRow);
+      fireEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      const dialog = screen.getByRole("dialog");
+      await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
+      fireEvent.click(within(dialog).getByRole("button", { name: td.deleteRow }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
 
-    await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalled());
-    await waitFor(() => expect(refresh).toHaveBeenCalled());
+      expect(deleteTableRowAction).toHaveBeenCalled();
+      expect(refresh).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("brings the page back from the server after a CSV upload completes", async () => {
