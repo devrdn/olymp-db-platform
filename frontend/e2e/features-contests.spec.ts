@@ -8,8 +8,9 @@ import { capture, cellUnder, chooseTheme, openPlay, openSideTab, runQuery, scrol
  * The contest-wide post-beta behaviour: what a sequential contest withholds,
  * what a closed catalogue hides, the prize places, the monitoring screen
  * with a roster of a few hundred, a settings save after every kind of
- * content save, a content edit refused over another session's write and
- * consecutive content saves, and a confirmation asked inside another dialog.
+ * content save, a content edit refused over another session's write,
+ * consecutive content saves, an edited form keeping the version its draft was
+ * based on, and a confirmation asked inside another dialog.
  */
 
 test.use({ viewport: { width: 1600, height: 900 } });
@@ -606,7 +607,7 @@ test.describe("a content edit is refused over a change from another session", ()
   });
 });
 
-test.describe("consecutive content saves in one session each send the version the last one moved to", () => {
+test.describe("consecutive saves of untouched content forms in one session each send the version the last one moved to", () => {
   test("the story twice, then the table descriptions on the same screen", async ({ page }) => {
     const id = await openSettings(page);
     await goToSection(page, "Story", "The crime story");
@@ -630,6 +631,74 @@ test.describe("consecutive content saves in one session each send the version th
 
     await savePanel(page.getByRole("main"));
     await savePanel(page.getByRole("main"));
+    expect(await storedVersion(id)).toBe(before + 2);
+  });
+});
+
+/**
+ * From its first edit a form keeps the version its draft was based on, so a
+ * save of another form on the same screen leaves it behind.
+ */
+test.describe("an edited form keeps the version its draft was based on", () => {
+  test("the story edited and not saved, then the table descriptions saved: the story is refused with a reload, and the reloaded story saves", async ({
+    page,
+  }) => {
+    const id = await openSettings(page);
+    const saved = `Saved before the story screen opened, run ${Date.now()}.`;
+    await changeElsewhere(id, saved);
+    await goToSection(page, "Story", "The crime story");
+
+    const form = storyForm(page);
+    // The editor has no name of its own; its saved text is where the caret goes.
+    await form.getByText(saved, { exact: true }).click();
+    await page.keyboard.press("End");
+    const typed = " Typed and not yet saved.";
+    await page.keyboard.insertText(typed);
+    await expect(form).toContainText(`${saved}${typed}`);
+
+    await savePanel(tableDescriptions(page), "Save the table descriptions");
+
+    await press(form.getByRole("button", { name: "Save the story", exact: true }));
+    await expect(form.getByRole("alert")).toContainText(CONTEST_CHANGED);
+    await expect(form.getByRole("status").filter({ hasText: SAVED })).toHaveCount(0);
+    // The draft is kept on the refusal, and none of it landed.
+    await expect(form).toContainText(`${saved}${typed}`);
+    expect(await storedStory(id)).toBe(saved);
+
+    const reload = form.getByRole("button", { name: "Reload the page" });
+    await reload.click();
+    await expect(form.getByRole("alert")).toHaveCount(0);
+    await expect(reload).toHaveCount(0);
+    await expect(form).toContainText(saved);
+    await expect(form).not.toContainText(typed.trim());
+    await savePanel(form, "Save the story");
+    expect(await storedStory(id)).toBe(saved);
+  });
+
+  test("the story typed in and saved, then typed in and saved again: each save releases the draft, and both land", async ({
+    page,
+  }) => {
+    const id = await openSettings(page);
+    const saved = `Saved before the story screen opened, run ${Date.now()}.`;
+    await changeElsewhere(id, saved);
+    await goToSection(page, "Story", "The crime story");
+    const before = await storedVersion(id);
+    const form = storyForm(page);
+
+    // The editor has no name of its own; its saved text is where the caret goes.
+    await form.getByText(saved, { exact: true }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.insertText(" First.");
+    await savePanel(form, "Save the story");
+    expect(await storedStory(id)).toBe(`${saved} First.`);
+
+    // An edited form that kept its first version after its own save would be
+    // refused here, its own save having moved the contest.
+    await form.getByText(`${saved} First.`, { exact: true }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.insertText(" Second.");
+    await savePanel(form, "Save the story");
+    expect(await storedStory(id)).toBe(`${saved} First. Second.`);
     expect(await storedVersion(id)).toBe(before + 2);
   });
 });
