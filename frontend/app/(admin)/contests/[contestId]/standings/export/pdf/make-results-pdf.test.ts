@@ -121,22 +121,14 @@ async function bytes(blob: Blob): Promise<Buffer> {
 }
 
 describe("makeResultsPdf", () => {
-  test("a Romanian and a Russian table and protocol draw every letter", async () => {
-    const languages: ("ro" | "ru")[] = ["ro", "ru"];
-    for (const language of languages) {
-      for (const detail of ["summary", "detailed"] as const) {
-        const table = await bytes(await makeResultsPdf("table", request(language, icpcReport("preliminary", detail)), options()));
-        const protocol = await bytes(await makeResultsPdf("protocol", request(language, icpcReport("final", detail)), options()));
+  // One test per language and detail, so each case's two documents have a timeout of their own.
+  const cases = (["ro", "ru"] as const).flatMap((language) => (["summary", "detailed"] as const).map((detail) => [language, detail] as const));
+  test.each(cases)("a %s %s table and protocol draw every letter", async (language, detail) => {
+    const table = await bytes(await makeResultsPdf("table", request(language, icpcReport("preliminary", detail)), options()));
+    const protocol = await bytes(await makeResultsPdf("protocol", request(language, icpcReport("final", detail)), options()));
 
-        expect({ language, detail, kind: "table", missing: missingGlyphs(table) }).toEqual({ language, detail, kind: "table", missing: 0 });
-        expect({ language, detail, kind: "protocol", missing: missingGlyphs(protocol) }).toEqual({
-          language,
-          detail,
-          kind: "protocol",
-          missing: 0,
-        });
-      }
-    }
+    expect({ kind: "table", missing: missingGlyphs(table) }).toEqual({ kind: "table", missing: 0 });
+    expect({ kind: "protocol", missing: missingGlyphs(protocol) }).toEqual({ kind: "protocol", missing: 0 });
   });
 
   test("a points table with a bonus column draws every letter too", async () => {
