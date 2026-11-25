@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -21,7 +21,7 @@ vi.mock("./actions", () => ({
 }));
 
 import { ManagerPanel, ParticipantPanel } from "./people-panels";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
 
@@ -256,12 +256,13 @@ describe("ParticipantPanel, removing a registered participant", () => {
     expect(title).not.toMatch(/[\u202A-\u202E\u2066\u2067]/);
   });
 
-  test("removes once the question is answered", async () => {
-    render(panel(true));
+  test("removes once the question is answered", () =>
+    onFakeClock(async () => {
+      render(panel(true));
 
-    await userEvent.click(screen.getByRole("button", { name: name() }));
-    await answerYes(name());
+      fireEvent.click(screen.getByRole("button", { name: name() }));
+      await answerYesOnFakeClock(name());
 
-    await vi.waitFor(() => expect(removeParticipantAction).toHaveBeenCalledOnce());
-  });
+      expect(removeParticipantAction).toHaveBeenCalledOnce();
+    }));
 });

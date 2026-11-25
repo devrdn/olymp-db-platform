@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock, flushFakeClock } from "@/components/ui/confirm-dialog-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -34,8 +34,8 @@ function show(onReset = vi.fn()) {
 }
 
 async function openAndConfirm() {
-  await userEvent.click(screen.getByRole("button", { name: t.open }));
-  await answerYes(t.confirm);
+  fireEvent.click(screen.getByRole("button", { name: t.open }));
+  await answerYesOnFakeClock(t.confirm);
 }
 
 describe("ResetDatabase", () => {
@@ -76,68 +76,75 @@ describe("ResetDatabase", () => {
     expect(onReset).not.toHaveBeenCalled();
   });
 
-  test("confirming resets this contest's database, says so and tells the screen", async () => {
-    const onReset = show();
+  test("confirming resets this contest's database, says so and tells the screen", () =>
+    onFakeClock(async () => {
+      const onReset = show();
 
-    await openAndConfirm();
+      await openAndConfirm();
 
-    expect(await screen.findByRole("status")).toHaveTextContent(t.done);
-    expect(resetDatabase).toHaveBeenCalledTimes(1);
-    expect(resetDatabase.mock.calls[0][1].get("contestId")).toBe(contestId);
-    expect(onReset).toHaveBeenCalledTimes(1);
-  });
+      expect(screen.getByRole("status")).toHaveTextContent(t.done);
+      expect(resetDatabase).toHaveBeenCalledTimes(1);
+      expect(resetDatabase.mock.calls[0][1].get("contestId")).toBe(contestId);
+      expect(onReset).toHaveBeenCalledTimes(1);
+    }));
 
-  test("a refusal is shown in the participant's language and changes nothing on screen", async () => {
-    resetDatabase.mockResolvedValueOnce({ kind: "refused", code: "reset_too_often", requestId: "req-7" });
-    const onReset = show();
+  test("a refusal is shown in the participant's language and changes nothing on screen", () =>
+    onFakeClock(async () => {
+      resetDatabase.mockResolvedValueOnce({ kind: "refused", code: "reset_too_often", requestId: "req-7" });
+      const onReset = show();
 
-    await openAndConfirm();
+      await openAndConfirm();
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(en.errors.reset_too_often);
-    // An ordinary refusal: a reference would read as a fault.
-    expect(alert).not.toHaveTextContent("req-7");
-    expect(onReset).not.toHaveBeenCalled();
-  });
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(en.errors.reset_too_often);
+      // An ordinary refusal: a reference would read as a fault.
+      expect(alert).not.toHaveTextContent("req-7");
+      expect(onReset).not.toHaveBeenCalled();
+    }));
 
-  test("a fault on our side carries the request reference", async () => {
-    resetDatabase.mockResolvedValueOnce({ kind: "refused", code: "internal_error", requestId: "req-9" });
-    show();
+  test("a fault on our side carries the request reference", () =>
+    onFakeClock(async () => {
+      resetDatabase.mockResolvedValueOnce({ kind: "refused", code: "internal_error", requestId: "req-9" });
+      show();
 
-    await openAndConfirm();
+      await openAndConfirm();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      fill(en.participant.console.reference, { id: "req-9" }),
-    );
-  });
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        fill(en.participant.console.reference, { id: "req-9" }),
+      );
+    }));
 
-  test("cannot be pressed twice while a reset is in flight", async () => {
-    let finish: (state: ResetState) => void = () => {};
-    resetDatabase.mockImplementationOnce(
-      () => new Promise<ResetState>((resolve) => (finish = resolve)),
-    );
-    show();
+  test("cannot be pressed twice while a reset is in flight", () =>
+    onFakeClock(async () => {
+      let finish: (state: ResetState) => void = () => {};
+      resetDatabase.mockImplementationOnce(
+        () => new Promise<ResetState>((resolve) => (finish = resolve)),
+      );
+      show();
 
-    await openAndConfirm();
+      await openAndConfirm();
 
-    const pressed = await screen.findByRole("button", { name: t.resetting });
-    expect(pressed).toBeDisabled();
-    expect(screen.getByRole("button", { name: t.cancel })).toBeDisabled();
-    finish({ kind: "done" });
-    expect(await screen.findByRole("status")).toHaveTextContent(t.done);
-  });
+      const pressed = screen.getByRole("button", { name: t.resetting });
+      expect(pressed).toBeDisabled();
+      expect(screen.getByRole("button", { name: t.cancel })).toBeDisabled();
+      finish({ kind: "done" });
+      await flushFakeClock();
+      expect(screen.getByRole("status")).toHaveTextContent(t.done);
+    }));
 
-  test("opened again, it asks again rather than showing the last outcome", async () => {
-    show();
+  test("opened again, it asks again rather than showing the last outcome", () =>
+    onFakeClock(async () => {
+      show();
 
-    await openAndConfirm();
-    await screen.findByRole("status");
-    // The footer's button; the dialog's corner control shares its name.
-    await userEvent.click(screen.getAllByRole("button", { name: t.close }).at(-1)!);
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: t.open }));
+      await openAndConfirm();
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      // The footer's button; the dialog's corner control shares its name.
+      fireEvent.click(screen.getAllByRole("button", { name: t.close }).at(-1)!);
+      await flushFakeClock();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: t.open }));
 
-    expect(screen.getByRole("button", { name: t.confirm })).toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  });
+      expect(screen.getByRole("button", { name: t.confirm })).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    }));
 });

@@ -1,8 +1,7 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
-import { CONFIRM_ARM_MS } from "@/components/ui/use-confirm";
+import { answerYesOnFakeClock, flushFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -148,6 +147,21 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+async function startUpload() {
+  beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ declaredBytes: 4 }) });
+  const view = show();
+  fireEvent.change(screen.getByLabelText(td.pick), {
+    target: { files: [new File(["a,b\n"], "rows.csv", { type: "text/csv" })] },
+  });
+  await flushFakeClock();
+  return view;
+}
+
+async function pressCancel() {
+  fireEvent.click(screen.getByRole("button", { name: td.cancel }));
+  await flushFakeClock();
+}
 
 describe("the table builder's own data panel", () => {
   test("says table data is off rather than offering controls nobody can use", () => {
@@ -346,84 +360,71 @@ describe("the table builder's own data panel", () => {
     expect(screen.getByText(en.errors.game_table_value_invalid)).toBeInTheDocument();
   });
 
-  test("says why when the server refuses the cancel, with the picker back", async () => {
-    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
-    request.mockImplementationOnce(
-      (_path: string, init: { signal: AbortSignal }) =>
-        new Promise((_resolve, reject) =>
-          init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
-        ),
-    );
-    abortTableUploadAction.mockResolvedValueOnce({ code: "game_table_data_already_complete" });
+  test("says why when the server refuses the cancel, with the picker back", () =>
+    onFakeClock(async () => {
+      request.mockImplementationOnce(
+        (_path: string, init: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) =>
+            init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+          ),
+      );
+      abortTableUploadAction.mockResolvedValueOnce({ code: "game_table_data_already_complete" });
 
-    show();
-    await userEvent.upload(screen.getByLabelText(td.pick), new File([new Uint8Array(12)], "suspects.csv"));
-    await userEvent.click(await screen.findByRole("button", { name: td.cancel }));
-    await answerYes(td.cancel);
+      await startUpload();
+      await pressCancel();
+      await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
-    expect(await screen.findByText(en.errors.game_table_data_already_complete)).toBeInTheDocument();
-    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
-  });
+      expect(screen.getByText(en.errors.game_table_data_already_complete)).toBeInTheDocument();
+      expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+    }));
 
-  test("cancels an upload in progress and lets the server know", async () => {
-    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
-    let chunkSignal: AbortSignal | undefined;
-    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
-      chunkSignal = init.signal;
-      return new Promise((_resolve, reject) => {
-        init.signal.addEventListener("abort", () =>
-          reject(new DOMException("The operation was aborted.", "AbortError")),
-        );
+  test("cancels an upload in progress and lets the server know", () =>
+    onFakeClock(async () => {
+      let chunkSignal: AbortSignal | undefined;
+      request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+        chunkSignal = init.signal;
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        });
       });
-    });
-    abortTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "aborted" }) });
+      abortTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "aborted" }) });
 
-    show();
-    const file = new File([new Uint8Array(12)], "suspects.csv");
-    await userEvent.upload(screen.getByLabelText(td.pick), file);
+      await startUpload();
+      expect(chunkSignal).toBeDefined();
+      await pressCancel();
+      await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
-    const cancelButton = await screen.findByRole("button", { name: td.cancel });
-    await waitFor(() => expect(chunkSignal).toBeDefined());
-    await userEvent.click(cancelButton);
-    expect(await screen.findByRole("dialog", { name: td.cancelConfirm })).toBeInTheDocument();
-    await answerYes(td.cancel);
-    expect(chunkSignal?.aborted).toBe(true);
-    await waitFor(() => expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId));
-    expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
-  });
+      expect(chunkSignal?.aborted).toBe(true);
+      expect(abortTableUploadAction).toHaveBeenCalledWith(contestId, "suspects", dataId);
+      expect(screen.getByLabelText(td.pick)).toBeInTheDocument();
+    }));
 
   // The question does not stop the page: the upload can finish while it is open.
-  test("a yes given after the upload finished sends no abort for it", async () => {
-    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ receivedBytes: 0 }) });
-    let release = () => {};
-    let received = 0;
-    request.mockImplementationOnce(
-      (_path: string, options: { rawBody?: Blob }) =>
-        new Promise((resolve) => {
-          release = () => {
-            received += options.rawBody?.size ?? 0;
-            resolve({ received_bytes: received });
-          };
-        }),
-    );
-    request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
-      received += options.rawBody?.size ?? 0;
-      return { received_bytes: received };
-    });
-    completeTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
+  test("a yes given after the upload finished sends no abort for it", () =>
+    onFakeClock(async () => {
+      let release = () => {};
+      request.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ received_bytes: 4 });
+          }),
+      );
+      completeTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
 
-    show();
-    await userEvent.upload(screen.getByLabelText(td.pick), new File([new Uint8Array(12)], "suspects.csv"));
-    await userEvent.click(await screen.findByRole("button", { name: td.cancel }));
-    await screen.findByRole("dialog", { name: td.cancelConfirm });
+      await startUpload();
+      await pressCancel();
+      expect(screen.getByRole("dialog", { name: td.cancelConfirm })).toBeInTheDocument();
 
-    release();
-    await waitFor(() => expect(completeTableUploadAction).toHaveBeenCalled());
-    await answerYes(td.cancel);
+      release();
+      await flushFakeClock();
+      expect(completeTableUploadAction).toHaveBeenCalled();
+      await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(abortTableUploadAction).not.toHaveBeenCalled();
-  });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(abortTableUploadAction).not.toHaveBeenCalled();
+    }));
 
   test("adds a row typed into the form, one input per column", async () => {
     gameTableDataWindowAction.mockResolvedValueOnce({
@@ -490,49 +491,54 @@ describe("the table builder's own data panel", () => {
     expect(appendTableRowAction).not.toHaveBeenCalled();
   });
 
-  test("deletes a row after confirming, and reloads the page it was on", async () => {
-    gameTableDataWindowAction.mockResolvedValueOnce({
-      value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 1, truncated: false },
-    });
-    deleteTableRowAction.mockResolvedValueOnce({});
-    gameTableDataWindowAction.mockResolvedValueOnce({
-      value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },
-    });
+  test("deletes a row after confirming, and reloads the page it was on", () =>
+    onFakeClock(async () => {
+      gameTableDataWindowAction.mockResolvedValueOnce({
+        value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 1, truncated: false },
+      });
+      deleteTableRowAction.mockResolvedValueOnce({});
+      gameTableDataWindowAction.mockResolvedValueOnce({
+        value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },
+      });
 
-    show({ activeRowCount: 1 });
-    await screen.findByText("Ada");
+      show({ activeRowCount: 1 });
+      await flushFakeClock();
+      expect(screen.getByText("Ada")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
-    expect(await screen.findByRole("dialog", { name: fill(td.deleteRowConfirm, { row: "4" }) })).toBeInTheDocument();
-    await answerYes(td.deleteRow);
-    await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalledWith(contestId, "suspects", 4));
-    expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
-  });
+      fireEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+      await flushFakeClock();
+      expect(screen.getByRole("dialog", { name: fill(td.deleteRowConfirm, { row: "4" }) })).toBeInTheDocument();
+      await answerYesOnFakeClock(td.deleteRow);
+      expect(deleteTableRowAction).toHaveBeenCalledWith(contestId, "suspects", 4);
+      expect(screen.getByText(td.emptyRows)).toBeInTheDocument();
+    }));
 
   // A delete moves only the active count; lowering `Lines` would unlock a table
   // the server still locks.
-  test("deleting a row lowers only the active count, never the total the structure lock reads", async () => {
-    gameTableDataWindowAction.mockResolvedValueOnce({
-      value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 5, truncated: false },
-    });
-    deleteTableRowAction.mockResolvedValueOnce({});
-    gameTableDataWindowAction.mockResolvedValueOnce({
-      value: { fromRow: 1, rows: [], totalRows: 5, truncated: false },
-    });
+  test("deleting a row lowers only the active count, never the total the structure lock reads", () =>
+    onFakeClock(async () => {
+      gameTableDataWindowAction.mockResolvedValueOnce({
+        value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 5, truncated: false },
+      });
+      deleteTableRowAction.mockResolvedValueOnce({});
+      gameTableDataWindowAction.mockResolvedValueOnce({
+        value: { fromRow: 1, rows: [], totalRows: 5, truncated: false },
+      });
 
-    const onRowCountChange = vi.fn();
-    const onActiveRowCountChange = vi.fn();
-    show({ activeRowCount: 3, onRowCountChange, onActiveRowCountChange });
-    await screen.findByText("Ada");
+      const onRowCountChange = vi.fn();
+      const onActiveRowCountChange = vi.fn();
+      show({ activeRowCount: 3, onRowCountChange, onActiveRowCountChange });
+      await flushFakeClock();
+      expect(screen.getByText("Ada")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
-    await answerYes(td.deleteRow);
+      fireEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+      await answerYesOnFakeClock(td.deleteRow);
 
-    await waitFor(() => expect(onActiveRowCountChange).toHaveBeenCalledWith(2));
-    // The follow-up fetch reports 5 again; the delete itself must never report
-    // 4.
-    expect(onRowCountChange).not.toHaveBeenCalledWith(4);
-  });
+      expect(onActiveRowCountChange).toHaveBeenCalledWith(2);
+      // The follow-up fetch reports 5 again; the delete itself must never report
+      // 4.
+      expect(onRowCountChange).not.toHaveBeenCalledWith(4);
+    }));
 
   // Rows can only be typed after the game is built empty, so the build notice
   // lives in a tree rendered before the first row existed; only a refresh
@@ -551,32 +557,23 @@ describe("the table builder's own data panel", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
-  // Fake timers: the question arms on a real 400 ms clock, and a loaded machine could outlast the waits after it.
-  test("brings the page back from the server after a row is deleted", async () => {
-    vi.useFakeTimers();
-    try {
+  test("brings the page back from the server after a row is deleted", () =>
+    onFakeClock(async () => {
       gameTableDataWindowAction.mockResolvedValueOnce({
         value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 1, truncated: false },
       });
       deleteTableRowAction.mockResolvedValueOnce({});
 
       show({ activeRowCount: 1 });
-      await act(() => vi.advanceTimersByTimeAsync(0));
+      await flushFakeClock();
       expect(screen.getByText("Ada")).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: td.deleteRow }));
-      await act(() => vi.advanceTimersByTimeAsync(0));
-      const dialog = screen.getByRole("dialog");
-      await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
-      fireEvent.click(within(dialog).getByRole("button", { name: td.deleteRow }));
-      await act(() => vi.advanceTimersByTimeAsync(0));
+      await answerYesOnFakeClock(td.deleteRow);
 
       expect(deleteTableRowAction).toHaveBeenCalled();
       expect(refresh).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
 
   test("brings the page back from the server after a CSV upload completes", async () => {
     beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ declaredBytes: 4 }) });
@@ -612,30 +609,6 @@ describe("a chunk refused as busy", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  async function startUpload() {
-    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ declaredBytes: 4 }) });
-    const view = show();
-    fireEvent.change(screen.getByLabelText(td.pick), {
-      target: { files: [new File(["a,b\n"], "rows.csv", { type: "text/csv" })] },
-    });
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    return view;
-  }
-
-  /** Presses the panel's Cancel; the question opens and arms on its own clock. */
-  async function pressCancel() {
-    fireEvent.click(screen.getByRole("button", { name: td.cancel }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
-  }
-
-  /** Answers the open question with a yes once it is armed. */
-  async function confirmCancel() {
-    const dialog = screen.getByRole("dialog", { name: td.cancelConfirm });
-    await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
-    fireEvent.click(within(dialog).getByRole("button", { name: td.cancel }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
-  }
 
   /** Holds `action`'s next answer until the returned function gives it. */
   function hold(action: ReturnType<typeof vi.fn>) {
@@ -684,11 +657,8 @@ describe("a chunk refused as busy", () => {
     abortTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "aborted" }) });
 
     await startUpload();
-    fireEvent.click(screen.getByRole("button", { name: td.cancel }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    const dialog = screen.getByRole("dialog", { name: td.cancelConfirm });
-    await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
-    fireEvent.click(within(dialog).getByRole("button", { name: td.cancel }));
+    await pressCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
     expect(request).toHaveBeenCalledTimes(1);
@@ -707,7 +677,7 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.pick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     view.unmount();
     answerBegin({ value: tableData({ declaredBytes: 4 }) });
@@ -727,10 +697,10 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.pick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
     answerBegin({ value: tableData({ declaredBytes: 4 }) });
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
@@ -754,13 +724,13 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.pick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
     answerBegin({ value: tableData({ declaredBytes: 4 }) });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(chunkSignal?.aborted).toBe(false);
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
     expect(chunkSignal?.aborted).toBe(true);
@@ -777,10 +747,10 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.resumePick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
     answerCount(tableData({ receivedBytes: 2, declaredBytes: 4 }));
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
@@ -796,12 +766,12 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.pick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
     answerBegin({ code: "game_upload_too_large" });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     expect(screen.queryByText(en.errors.game_upload_too_large)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: td.retry })).not.toBeInTheDocument();
@@ -818,17 +788,17 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.resumePick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
     hold(beginTableUploadAction);
     fireEvent.change(screen.getByLabelText(td.pick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     answerCount(tableData({ receivedBytes: 2, declaredBytes: 4 }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
   });
@@ -846,7 +816,7 @@ describe("a chunk refused as busy", () => {
     await pressCancel();
 
     release();
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(completeTableUploadAction).toHaveBeenCalled();
     let secondSignal: AbortSignal | undefined;
     request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
@@ -858,10 +828,10 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.pick), {
       target: { files: [new File(["efgh"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(secondSignal).toBeDefined();
 
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
     expect(secondSignal?.aborted).toBe(false);
     expect(abortTableUploadAction).not.toHaveBeenCalled();
@@ -879,17 +849,17 @@ describe("a chunk refused as busy", () => {
     await pressCancel();
 
     refuse();
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     let retrySignal: AbortSignal | undefined;
     request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
       retrySignal = init.signal;
       return new Promise(() => {});
     });
     fireEvent.click(screen.getByRole("button", { name: td.retry, hidden: true }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(retrySignal).toBeDefined();
 
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
     expect(retrySignal?.aborted).toBe(true);
     expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
@@ -900,7 +870,7 @@ describe("a chunk refused as busy", () => {
   test("a yes cancels the upload it was asked about even after it was resumed", async () => {
     show({ initialTableData: tableData({ receivedBytes: 0, declaredBytes: 4 }) });
     fireEvent.click(screen.getByRole("button", { name: td.resumeCancel }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     currentTableUploadAction.mockResolvedValueOnce(tableData({ receivedBytes: 0, declaredBytes: 4 }));
     let resumeSignal: AbortSignal | undefined;
@@ -911,10 +881,10 @@ describe("a chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(td.resumePick), {
       target: { files: [new File(["abcd"], "rows.csv", { type: "text/csv" })] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(resumeSignal).toBeDefined();
 
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
 
     expect(resumeSignal?.aborted).toBe(true);
     expect(abortTableUploadAction).toHaveBeenCalledTimes(1);
@@ -935,11 +905,11 @@ describe("a chunk refused as busy", () => {
     await pressCancel();
 
     release();
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(completeTableUploadAction).toHaveBeenCalled();
-    await confirmCancel();
+    await answerYesOnFakeClock(td.cancel, td.cancelConfirm);
     finish({ value: tableData({ status: "complete", lines: 1, activeRows: 1 }) });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     expect(abortTableUploadAction).not.toHaveBeenCalled();
     expect(screen.getByLabelText(td.pick)).toBeInTheDocument();

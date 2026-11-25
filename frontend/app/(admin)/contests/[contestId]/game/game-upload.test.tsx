@@ -1,8 +1,7 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
-import { CONFIRM_ARM_MS } from "@/components/ui/use-confirm";
+import { answerYesOnFakeClock, flushFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -130,32 +129,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Helpers for tests that run on fake timers: the question arms on a 400 ms clock, which a real one
-// would let a loaded machine outlast.
 async function startUpload() {
   beginGameUploadAction.mockResolvedValueOnce({ value: upload({ declaredBytes: 4 }) });
   const view = show();
   fireEvent.change(screen.getByLabelText(tu.pick), {
     target: { files: [new File(["abcd"], "dump.sql")] },
   });
-  await act(() => vi.advanceTimersByTimeAsync(0));
+  await flushFakeClock();
   return view;
 }
 
-/** Presses the panel's Cancel; the question opens and arms on its own clock. */
 async function pressCancel() {
   fireEvent.click(screen.getByRole("button", { name: tu.cancel }));
-  await act(() => vi.advanceTimersByTimeAsync(0));
+  await flushFakeClock();
 }
-
-/** Answers the open question with a yes once it is armed. */
-async function confirmCancel() {
-  const dialog = screen.getByRole("dialog", { name: tu.cancelConfirm });
-  await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
-  fireEvent.click(within(dialog).getByRole("button", { name: tu.cancel }));
-  await act(() => vi.advanceTimersByTimeAsync(0));
-}
-
 
 describe("the game upload panel", () => {
   test("says uploads are off rather than offering a picker nobody can use", () => {
@@ -308,10 +295,8 @@ describe("the game upload panel", () => {
 
   // Cancel must both tell the server and abort the chunk on the wire; a stub
   // ignoring `signal` would let a removed `abort()` pass.
-  // Fake timers: the question arms on a real 400 ms clock, and a loaded machine could outlast every wait after it.
-  test("says why when the server refuses the cancel, with the picker back", async () => {
-    vi.useFakeTimers();
-    try {
+  test("says why when the server refuses the cancel, with the picker back", () =>
+    onFakeClock(async () => {
       request.mockImplementationOnce(
         (_path: string, init: { signal: AbortSignal }) =>
           new Promise((_resolve, reject) =>
@@ -322,83 +307,67 @@ describe("the game upload panel", () => {
 
       await startUpload();
       await pressCancel();
-      await confirmCancel();
+      await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
 
       expect(screen.getByText(en.errors.game_upload_already_complete)).toBeInTheDocument();
       expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
 
-  test("cancels an upload in progress and lets the server know", async () => {
-    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
-    // The chunk stays in flight until aborted, the only state where aborting is
-    // observable.
-    let chunkSignal: AbortSignal | undefined;
-    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
-      chunkSignal = init.signal;
-      return new Promise((_resolve, reject) => {
-        init.signal.addEventListener("abort", () =>
-          reject(new DOMException("The operation was aborted.", "AbortError")),
-        );
+  test("cancels an upload in progress and lets the server know", () =>
+    onFakeClock(async () => {
+      // The chunk stays in flight until aborted, the only state where aborting is
+      // observable.
+      let chunkSignal: AbortSignal | undefined;
+      request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+        chunkSignal = init.signal;
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        });
       });
-    });
-    abortGameUploadAction.mockResolvedValueOnce({});
+      abortGameUploadAction.mockResolvedValueOnce({});
 
-    show();
-    const file = new File([new Uint8Array(12)], "dump.sql");
-    await userEvent.upload(screen.getByLabelText(tu.pick), file);
+      await startUpload();
+      expect(chunkSignal).toBeDefined();
+      await pressCancel();
+      await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
 
-    const cancelButton = await screen.findByRole("button", { name: tu.cancel });
-    await waitFor(() => expect(chunkSignal).toBeDefined());
-    await userEvent.click(cancelButton);
-    expect(await screen.findByRole("dialog", { name: tu.cancelConfirm })).toBeInTheDocument();
-    await answerYes(tu.cancel);
-
-    await waitFor(() => expect(chunkSignal?.aborted).toBe(true));
-    await waitFor(() => expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId));
-    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
-  });
+      expect(chunkSignal?.aborted).toBe(true);
+      expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
+      expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+    }));
 
   // The question does not stop the page: the upload can finish while it is open.
-  test("a yes given after the upload finished leaves the finished upload alone", async () => {
-    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
-    let release = () => {};
-    let received = 0;
-    request.mockImplementationOnce(
-      (_path: string, options: { rawBody?: Blob }) =>
-        new Promise((resolve) => {
-          release = () => {
-            received += options.rawBody?.size ?? 0;
-            resolve({ received_bytes: received });
-          };
-        }),
-    );
-    request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
-      received += options.rawBody?.size ?? 0;
-      return { received_bytes: received };
-    });
-    completeGameUploadAction.mockResolvedValueOnce({
-      value: game({ status: "pending", version: 2, building: true }),
-    });
-    gameUploadWindowAction.mockResolvedValue({
-      value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
-    });
+  test("a yes given after the upload finished leaves the finished upload alone", () =>
+    onFakeClock(async () => {
+      let release = () => {};
+      request.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ received_bytes: 4 });
+          }),
+      );
+      completeGameUploadAction.mockResolvedValueOnce({
+        value: game({ status: "pending", version: 2, building: true }),
+      });
+      gameUploadWindowAction.mockResolvedValue({
+        value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
+      });
 
-    show();
-    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
-    await userEvent.click(await screen.findByRole("button", { name: tu.cancel }));
-    await screen.findByRole("dialog", { name: tu.cancelConfirm });
+      await startUpload();
+      await pressCancel();
+      expect(screen.getByRole("dialog", { name: tu.cancelConfirm })).toBeInTheDocument();
 
-    release();
-    await waitFor(() => expect(screen.getByText(tu.done)).toBeInTheDocument());
-    await answerYes(tu.cancel);
+      release();
+      await flushFakeClock();
+      expect(screen.getByText(tu.done)).toBeInTheDocument();
+      await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByText(tu.done)).toBeInTheDocument();
-    expect(abortGameUploadAction).not.toHaveBeenCalled();
-  });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByText(tu.done)).toBeInTheDocument();
+      expect(abortGameUploadAction).not.toHaveBeenCalled();
+    }));
 
   // After a reload only `game.upload` names the file: the viewer is restored
   // (with `sourceNote`, not the live `done` message) and loads its first window
@@ -604,7 +573,7 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.pick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     view.unmount();
     answerBegin({ value: upload({ declaredBytes: 4 }) });
@@ -624,10 +593,10 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.pick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
     answerBegin({ value: upload({ declaredBytes: 4 }) });
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
@@ -651,13 +620,13 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.pick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
     answerBegin({ value: upload({ declaredBytes: 4 }) });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(chunkSignal?.aborted).toBe(false);
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
     expect(chunkSignal?.aborted).toBe(true);
@@ -674,10 +643,10 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.resumePick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
     answerCount(upload({ receivedBytes: 2, declaredBytes: 4 }));
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
@@ -694,9 +663,9 @@ describe("a dump chunk refused as busy", () => {
 
     const answerCount = hold(currentGameUploadAction);
     fireEvent.click(screen.getByRole("button", { name: tu.retry }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
     answerCount(upload({ receivedBytes: 2, declaredBytes: 4 }));
     await act(() => vi.advanceTimersByTimeAsync(60_000));
 
@@ -712,12 +681,12 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.pick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
     answerBegin({ code: "game_upload_too_large" });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     expect(screen.queryByText(en.errors.game_upload_too_large)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: tu.retry })).not.toBeInTheDocument();
@@ -734,17 +703,17 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.resumePick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     await pressCancel();
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
 
     hold(beginGameUploadAction);
     fireEvent.change(screen.getByLabelText(tu.pick), {
       target: { files: [new File(["abcd"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     answerCount(upload({ receivedBytes: 2, declaredBytes: 4 }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
   });
@@ -763,7 +732,7 @@ describe("a dump chunk refused as busy", () => {
     await pressCancel();
 
     release();
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(completeGameUploadAction).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: tu.replace, hidden: true }));
     let secondSignal: AbortSignal | undefined;
@@ -776,10 +745,10 @@ describe("a dump chunk refused as busy", () => {
     fireEvent.change(screen.getByLabelText(tu.pick), {
       target: { files: [new File(["efgh"], "dump.sql")] },
     });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(secondSignal).toBeDefined();
 
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
 
     expect(secondSignal?.aborted).toBe(false);
     expect(abortGameUploadAction).not.toHaveBeenCalled();
@@ -797,7 +766,7 @@ describe("a dump chunk refused as busy", () => {
     await pressCancel();
 
     refuse();
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     let retrySignal: AbortSignal | undefined;
     request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
       retrySignal = init.signal;
@@ -805,10 +774,10 @@ describe("a dump chunk refused as busy", () => {
     });
     currentGameUploadAction.mockResolvedValueOnce(upload({ receivedBytes: 0, declaredBytes: 4 }));
     fireEvent.click(screen.getByRole("button", { name: tu.retry, hidden: true }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(retrySignal).toBeDefined();
 
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
 
     expect(retrySignal?.aborted).toBe(true);
     expect(abortGameUploadAction).toHaveBeenCalledTimes(1);
@@ -830,11 +799,11 @@ describe("a dump chunk refused as busy", () => {
     await pressCancel();
 
     release();
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
     expect(completeGameUploadAction).toHaveBeenCalled();
-    await confirmCancel();
+    await answerYesOnFakeClock(tu.cancel, tu.cancelConfirm);
     finish({ value: game({ status: "pending", building: true }) });
-    await act(() => vi.advanceTimersByTimeAsync(0));
+    await flushFakeClock();
 
     expect(abortGameUploadAction).not.toHaveBeenCalled();
     expect(screen.getByText(tu.done)).toBeInTheDocument();

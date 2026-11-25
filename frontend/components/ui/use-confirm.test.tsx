@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, test } from "vitest";
 
 import { type Question, useConfirm } from "./use-confirm";
-import { answerYes } from "./confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "./confirm-dialog-test-support";
 
 const asked: Question = {
   title: "Ștergeți ciorna?",
@@ -68,13 +68,14 @@ describe("useConfirm", () => {
     expect(await screen.findByRole("button", { name: asked.answer })).toBeDisabled();
   });
 
-  test("answers yes once on the answer", async () => {
-    render(<Asker />);
+  test("answers yes once on the answer", () =>
+    onFakeClock(async () => {
+      render(<Asker />);
 
-    await userEvent.click(screen.getByRole("button", { name: "ask" }));
-    await answerYes(asked.answer);
+      fireEvent.click(screen.getByRole("button", { name: "ask" }));
+      await answerYesOnFakeClock(asked.answer, asked.title);
 
-    expect(await screen.findByText("answers: true")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  });
+      expect(screen.getByText("answers: true")).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    }));
 });
