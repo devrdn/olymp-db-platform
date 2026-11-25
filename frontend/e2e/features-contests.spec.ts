@@ -8,7 +8,8 @@ import { capture, cellUnder, chooseTheme, openPlay, openSideTab, runQuery, scrol
  * The contest-wide post-beta behaviour: what a sequential contest withholds,
  * what a closed catalogue hides, the prize places, the monitoring screen
  * with a roster of a few hundred, a settings save after every kind of
- * content save, and a confirmation asked inside another dialog.
+ * content save, a content edit refused over another session's write and
+ * consecutive content saves, and a confirmation asked inside another dialog.
  */
 
 test.use({ viewport: { width: 1600, height: 900 } });
@@ -310,6 +311,13 @@ function contestFields(page: Page): Locator {
   return panel(page, "Who may enter, and from where");
 }
 
+/** The answer to the next server action the page sends, which may be asked for only after a confirmation. */
+function actionAnswered(page: Page): Promise<unknown> {
+  return page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.request().headers()["next-action"] !== undefined,
+  );
+}
+
 /**
  * Presses a form's save and returns once its server action has settled. The
  * button reads its label again only then, so an outcome left on screen by an
@@ -318,9 +326,7 @@ function contestFields(page: Page): Locator {
 async function press(button: Locator): Promise<void> {
   const page = button.page();
   const label = ((await button.textContent()) ?? "").trim();
-  const answered = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.request().headers()["next-action"] !== undefined,
-  );
+  const answered = actionAnswered(page);
   await button.click();
   // The answer has arrived, so the action is pending; its body streams on,
   // and only the action's settling gives the button its label back.
@@ -329,9 +335,9 @@ async function press(button: Locator): Promise<void> {
   await expect(button).toBeEnabled();
 }
 
-/** Saves one panel's form and expects "Saved.", never a refusal. */
-async function savePanel(form: Locator): Promise<void> {
-  await press(form.getByRole("button", { name: "Save", exact: true }));
+/** Saves one form with its save button, "Save" unless named, and expects "Saved.", never a refusal. */
+async function savePanel(form: Locator, save = "Save"): Promise<void> {
+  await press(form.getByRole("button", { name: save, exact: true }));
   await expect(form.getByRole("alert")).toHaveCount(0);
   await expect(form.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
 }
@@ -341,16 +347,64 @@ async function saveSettings(page: Page): Promise<void> {
   await savePanel(contestFields(page));
 }
 
-/** Writes the contest from a session of its own, so the page's copy goes stale. */
-async function changeElsewhere(contestId: string): Promise<void> {
+/** Runs `work` as the organiser in an API session of its own, beside the page's. */
+async function elsewhere<T>(work: (other: Api) => Promise<T>): Promise<T> {
   const { organiser } = seed().accounts;
   const other = await Api.open();
   try {
     await other.signIn(organiser.login, organiser.password);
-    await other.call("PUT", `/contests/${contestId}/story`, { translations: { en: "Changed from another session." } });
+    return await work(other);
   } finally {
     await other.close();
   }
+}
+
+/** Writes the contest's story from a session of its own, so the page's copy goes stale. */
+async function changeElsewhere(contestId: string, story = "Changed from another session."): Promise<void> {
+  await elsewhere((other) => other.call("PUT", `/contests/${contestId}/story`, { translations: { en: story } }));
+}
+
+/** The story as the API holds it now, in English. */
+async function storedStory(contestId: string): Promise<string> {
+  const story = await elsewhere((other) =>
+    other.call<{ translations: Record<string, string> }>("GET", `/contests/${contestId}/story`),
+  );
+  return (story.translations.en ?? "").trim();
+}
+
+/** The contest's version as the API holds it now. */
+async function storedVersion(contestId: string): Promise<number> {
+  return (await elsewhere((other) => other.call<{ version: number }>("GET", `/contests/${contestId}`))).version;
+}
+
+/**
+ * The story's form on the story screen. It has no name of its own, so it is
+ * the form that holds the story's save; the table descriptions below it are
+ * a form of their own.
+ */
+function storyForm(page: Page): Locator {
+  return page.locator("form").filter({ has: page.getByRole("button", { name: "Save the story", exact: true }) });
+}
+
+/** The table descriptions' region on the story screen. */
+function tableDescriptions(page: Page): Locator {
+  return page.getByRole("region", { name: "Table descriptions" });
+}
+
+/** The question list's row of the question titled `title`. */
+function questionRow(page: Page, title: string): Locator {
+  return page.getByRole("row").filter({ has: page.getByRole("link", { name: title, exact: true }) });
+}
+
+/** Deletes a question from its row in the list, answering the confirmation; returns once the action has answered. */
+async function deleteFromList(row: Locator): Promise<void> {
+  const page = row.page();
+  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  const question = page.getByRole("dialog", { name: "Delete this question and its answers?" });
+  const answered = actionAnswered(page);
+  await question.getByRole("button", { name: "Delete", exact: true }).click();
+  await answered;
+  await expect(question).toHaveCount(0);
 }
 
 /** Opens the organiser's settings screen; every later screen is reached from it in the same session. */
@@ -393,10 +447,7 @@ test.describe("a settings save follows every content save", () => {
     await goToSection(page, "Questions", "Questions");
     await page.getByRole("link", { name: questions.editing.title }).click();
     await expect(page).toHaveURL(new RegExp(`/contests/${id}/questions/${questions.editing.id}$`));
-    const main = page.getByRole("main");
-    await press(main.getByRole("button", { name: "Save", exact: true }));
-    await expect(main.getByRole("alert")).toHaveCount(0);
-    await expect(main.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+    await savePanel(page.getByRole("main"));
 
     await goToSection(page, "Settings", "Settings");
     await saveSettings(page);
@@ -405,10 +456,7 @@ test.describe("a settings save follows every content save", () => {
   test("the table descriptions, then the settings", async ({ page }) => {
     await openSettings(page);
     await goToSection(page, "Story", "The crime story");
-    const notes = page.getByRole("region", { name: "Table descriptions" });
-    await press(notes.getByRole("button", { name: "Save the table descriptions" }));
-    await expect(notes.getByRole("alert")).toHaveCount(0);
-    await expect(notes.getByRole("status").filter({ hasText: SAVED })).toBeVisible();
+    await savePanel(tableDescriptions(page), "Save the table descriptions");
 
     await goToSection(page, "Settings", "Settings");
     await saveSettings(page);
@@ -484,6 +532,106 @@ test.describe("the settings, the prize places and the archive share one version"
       await savePanel(form);
     });
   }
+});
+
+/**
+ * The content edits move the same version as the settings, so a screen
+ * rendered before another session's write is refused, and every save hands
+ * the screen the version it moved to.
+ */
+test.describe("a content edit is refused over a change from another session", () => {
+  test("the story is refused with a reload, and the reloaded story saves the other session's text", async ({
+    page,
+  }) => {
+    const id = await openSettings(page);
+    await goToSection(page, "Story", "The crime story");
+    const theirs = `Rewritten in another session, run ${Date.now()}.`;
+    await changeElsewhere(id, theirs);
+
+    const form = storyForm(page);
+    await press(form.getByRole("button", { name: "Save the story", exact: true }));
+    await expect(form.getByRole("alert")).toContainText(CONTEST_CHANGED);
+    await expect(form.getByRole("status").filter({ hasText: SAVED })).toHaveCount(0);
+    expect(await storedStory(id)).toBe(theirs);
+
+    const reload = form.getByRole("button", { name: "Reload the page" });
+    await reload.click();
+    await expect(form.getByRole("alert")).toHaveCount(0);
+    await expect(reload).toHaveCount(0);
+    // The form starts over from the page as it is now, so it saves the other
+    // session's text rather than writing the old one back over it.
+    await expect(form).toContainText(theirs);
+    await savePanel(form, "Save the story");
+    expect(await storedStory(id)).toBe(theirs);
+  });
+
+  test("a question delete from a list another session's question edit has moved is refused with a reload, and the reloaded list deletes it", async ({
+    page,
+  }) => {
+    const id = await openSettings(page);
+    const { editing } = seed().questions;
+    const spare = `Spare question, run ${Date.now()}`;
+    const question = (title: string, body: string) => ({
+      is_visible: true,
+      kind: "text",
+      points: 10,
+      texts: { en: { title, body_md: body } },
+    });
+    await elsewhere((other) =>
+      other.call("POST", `/contests/${id}/questions`, question(spare, "Deleted by the browser checks.")),
+    );
+    await goToSection(page, "Questions", "Questions");
+    const row = questionRow(page, spare);
+    await expect(row).toBeVisible();
+
+    await elsewhere((other) =>
+      other.call("PUT", `/contests/${id}/questions/${editing.id}`, {
+        ...question(editing.title, `Who has no alibi? Edited in another session, run ${Date.now()}.`),
+        answers: [{ match_kind: "exact_ci", value: editing.answer }],
+      }),
+    );
+
+    await deleteFromList(row);
+    await expect(row.getByRole("alert")).toContainText(CONTEST_CHANGED);
+    const reload = row.getByRole("button", { name: "Reload the page" });
+    await reload.click();
+    await expect(row.getByRole("alert")).toHaveCount(0);
+    await expect(reload).toHaveCount(0);
+    await expect(row).toBeVisible();
+    await expect(questionRow(page, editing.title)).toBeVisible();
+
+    await deleteFromList(row);
+    await expect(row).toHaveCount(0);
+    await expect(questionRow(page, editing.title)).toBeVisible();
+  });
+});
+
+test.describe("consecutive content saves in one session each send the version the last one moved to", () => {
+  test("the story twice, then the table descriptions on the same screen", async ({ page }) => {
+    const id = await openSettings(page);
+    await goToSection(page, "Story", "The crime story");
+    const before = await storedVersion(id);
+
+    await savePanel(storyForm(page), "Save the story");
+    await savePanel(storyForm(page), "Save the story");
+    await savePanel(tableDescriptions(page), "Save the table descriptions");
+    // Each save moved the version, so a form that kept the one it was
+    // rendered at would have been refused above.
+    expect(await storedVersion(id)).toBe(before + 3);
+  });
+
+  test("a question saved twice on its own screen", async ({ page }) => {
+    const id = await openSettings(page);
+    const { editing } = seed().questions;
+    await goToSection(page, "Questions", "Questions");
+    await page.getByRole("link", { name: editing.title, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/contests/${id}/questions/${editing.id}$`));
+    const before = await storedVersion(id);
+
+    await savePanel(page.getByRole("main"));
+    await savePanel(page.getByRole("main"));
+    expect(await storedVersion(id)).toBe(before + 2);
+  });
 });
 
 test("the roles dialog's own question is answered, and the roles dialog stays usable with focus back in it", async ({
