@@ -2,7 +2,8 @@
  * Reading the SQL editor's completion popup, for the tests of the editor and
  * of the screens built on it.
  */
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
+import { vi } from "vitest";
 
 import { INTERACTION_DELAY_MS } from "./sql-completion";
 
@@ -13,20 +14,19 @@ export function offeredCompletions(): string[] {
     .map((option) => option.querySelector(".cm-completionLabel")?.textContent ?? "");
 }
 
-/** Waits until the popup offers `label`. */
-export async function waitForCompletion(label: string): Promise<void> {
-  await waitFor(() => {
-    const offered = offeredCompletions();
-    if (!offered.includes(label)) throw new Error(`the popup offers ${JSON.stringify(offered)}, not "${label}"`);
-  });
-}
+/** CodeMirror's default `activateOnTypingDelay`, which `sql-completion.ts` leaves as it is. */
+const TYPING_DELAY_MS = 100;
 
 /**
- * Waits until the popup offers `label` and a key may accept it. CodeMirror
- * ignores an accepting key for `INTERACTION_DELAY_MS` after the popup opens,
- * so a test that presses Tab or Enter sooner proves nothing about the choice.
+ * How far a fake clock goes for a key that accepts to work: the popup opens a
+ * typing delay after the last key, and CodeMirror ignores an accepting key for
+ * `INTERACTION_DELAY_MS` after that. The margin covers the pass between.
  */
-export async function waitForAcceptableCompletion(label: string): Promise<void> {
-  await waitForCompletion(label);
-  await new Promise((resolve) => setTimeout(resolve, INTERACTION_DELAY_MS + 25));
+const ACCEPTABLE_AFTER_MS = TYPING_DELAY_MS + INTERACTION_DELAY_MS + 25;
+
+/** For a test on a fake clock: lets the popup open and a key accept, then checks it offers `label`. */
+export async function offersAfterTyping(label: string): Promise<void> {
+  await act(() => vi.advanceTimersByTimeAsync(ACCEPTABLE_AFTER_MS));
+  const offered = offeredCompletions();
+  if (!offered.includes(label)) throw new Error(`the popup offers ${JSON.stringify(offered)}, not "${label}"`);
 }

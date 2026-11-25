@@ -5,7 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
+import { offeredCompletions, offersAfterTyping } from "@/components/product/completion-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import type { GameSchema } from "@/lib/api/schema";
 import type { WorkspaceTab } from "@/lib/api/workspace";
@@ -274,6 +274,10 @@ describe("⌘↵", () => {
 });
 
 describe("completion in the console", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const SCHEMA: GameSchema = {
     tables: [{ name: "suspects", columns: [{ name: "motive", type: "text", nullable: true, references: "" }] }],
     truncated: false,
@@ -284,10 +288,11 @@ describe("completion in the console", () => {
       <ConsoleEditor accountId="u1" contestId="c1" dict={en} tabs={ONE_TAB} schema={SCHEMA} onResult={vi.fn()} />,
     );
     await waitForRealEditor(container);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT * FROM sus");
 
-    await waitForCompletion("suspects");
+    await offersAfterTyping("suspects");
   });
 
   // The popup must not take the run shortcut for itself, nor have a choice
@@ -303,10 +308,12 @@ describe("completion in the console", () => {
     await waitForRealEditor(container);
     runQuery.mockClear();
     await userEvent.click(screen.getByRole("textbox"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     await userEvent.keyboard("SELECT * FROM sus");
-    await waitForCompletion("suspects");
+    await offersAfterTyping("suspects");
 
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    vi.useRealTimers();
 
     await waitFor(() => expect(runQuery).toHaveBeenCalled());
     expect(submitted.current?.get("sql")).toBe("SELECT * FROM sus");

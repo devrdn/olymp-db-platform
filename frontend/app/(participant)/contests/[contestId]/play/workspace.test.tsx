@@ -5,8 +5,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { offeredCompletions, waitForCompletion } from "@/components/product/completion-test-support";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { offeredCompletions, offersAfterTyping } from "@/components/product/completion-test-support";
+import { answerYesOnFakeClock, flushFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 import { expectTouchTarget } from "@/components/ui/touch-target-test-support";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill } from "@/lib/i18n/fill";
@@ -568,13 +568,21 @@ describe("the database reset", () => {
     schemaReads.count = 0;
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Resets on a fake clock, which it leaves for the real one before the test goes on. */
   async function reset() {
-    await userEvent.click(screen.getByRole("button", { name: r.open }));
-    await answerYes(r.confirm);
-    await screen.findByRole("status");
-    // The open dialog hides the screen behind it from the accessibility tree.
-    await userEvent.click(screen.getAllByRole("button", { name: r.close }).at(-1)!);
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await onFakeClock(async () => {
+      fireEvent.click(screen.getByRole("button", { name: r.open }));
+      await answerYesOnFakeClock(r.confirm);
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      // The open dialog hides the screen behind it from the accessibility tree.
+      fireEvent.click(screen.getAllByRole("button", { name: r.close }).at(-1)!);
+      await flushFakeClock();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
   }
 
   test("is offered by a contest that lets participants write", () => {
@@ -612,10 +620,11 @@ describe("the database reset", () => {
     await screen.findByRole("button", tableName("suspects"));
 
     await waitForRealEditor();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
     await userEvent.keyboard("SELECT * FROM sus");
 
-    await waitForCompletion("suspects");
+    await offersAfterTyping("suspects");
   });
 
   // The invariant is the server's; this checks the screen adds no way round it.
@@ -628,9 +637,10 @@ describe("the database reset", () => {
     await reset();
 
     await waitForRealEditor();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
     await userEvent.keyboard("SEL");
-    await waitForCompletion("SELECT");
+    await offersAfterTyping("SELECT");
 
     expect(offeredCompletions()).not.toContain("selfies");
     expect(schemaReads.count).toBe(0);
