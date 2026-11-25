@@ -11,6 +11,8 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
   serverRequest,
 }));
 
+import { ApiError } from "@/lib/api/client";
+
 import { saveQuestionAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
@@ -27,31 +29,48 @@ beforeEach(() => {
   revalidatePath.mockReset();
 });
 
+/** What the editor rendered at contest version 7 submits for a plain question. */
+function questionForm(): FormData {
+  return form([
+    ["contestId", contestId],
+    ["questionId", questionId],
+    ["expectedVersion", "7"],
+    ["kind", "text"],
+    ["points", "5"],
+    ["body.en", "Who did it?"],
+    ["answerValue", "the butler"],
+    ["answerKind", "exact_ci"],
+  ]);
+}
+
 describe("saveQuestionAction", () => {
-  // A question moves the contest's version, and the settings page sends the
-  // version back: it must be read again.
-  test("re-reads the contest's pages, the settings form's version among them", async () => {
+  // A question moves the contest's version, and every form of the contest
+  // sends the version back: the workspace must be read again.
+  test("sends the version it was rendered at, then re-reads the contest's pages", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
 
-    const state = await saveQuestionAction(
-      {},
-      form([
-        ["contestId", contestId],
-        ["questionId", questionId],
-        ["kind", "text"],
-        ["points", "5"],
-        ["body.en", "Who did it?"],
-        ["answerValue", "the butler"],
-        ["answerKind", "exact_ci"],
-      ]),
-    );
+    expect(await saveQuestionAction({}, questionForm())).toEqual({ ok: true });
 
-    expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(
       `/contests/${contestId}/questions/${questionId}`,
-      expect.objectContaining({ method: "PUT" }),
+      expect.objectContaining({ method: "PUT", body: expect.objectContaining({ expected_version: 7 }) }),
     );
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
+  });
+
+  test("refuses a form with no version without asking the server", async () => {
+    const data = questionForm();
+    data.delete("expectedVersion");
+
+    expect(await saveQuestionAction({}, data)).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal of a contest that moved since", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+
+    expect(await saveQuestionAction({}, questionForm())).toEqual({ code: "contest_changed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   test("never sends a request for an identifier that would move the path", async () => {

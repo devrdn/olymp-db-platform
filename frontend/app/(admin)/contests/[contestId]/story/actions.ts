@@ -2,9 +2,9 @@
 
 import { storedMarkdown } from "@/lib/format/markdown";
 import { isId } from "@/lib/api/ids";
-import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
+import type { ActionState } from "@/lib/api/server";
 
-import { contestChanged } from "../revalidation";
+import { saveAtVersion } from "../save-at-version";
 
 /** What a save of one per-language document reports back to its form. */
 export type TranslationsState = ActionState;
@@ -27,19 +27,15 @@ function translationsFrom(form: FormData, prefix: string): Record<string, string
   return translations;
 }
 
-/** PUTs the set to `/contests/{id}{path}`, then revalidates the workspace. */
+/** PUTs the set to `/contests/{id}{path}` at the version the form was rendered at. */
 async function saveTranslations(form: FormData, prefix: string, path: string): Promise<TranslationsState> {
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  return serverAction(
-    () =>
-      serverRequest(`/contests/${contestId}${path}`, {
-        method: "PUT",
-        body: { translations: translationsFrom(form, prefix) },
-      }),
-    { revalidate: contestChanged(contestId) },
-  );
+  return saveAtVersion(contestId, form, `/contests/${contestId}${path}`, {
+    method: "PUT",
+    body: { translations: translationsFrom(form, prefix) },
+  });
 }
 
 /**

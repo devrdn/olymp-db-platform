@@ -28,7 +28,7 @@ import {
   QUESTION_MAX_CHARS,
   QUEUE_MAX_SHOWN,
 } from "./clarifications-terms";
-import { NEXT_STATUSES } from "./contests";
+import { CONTEST_VERSION_HEADER, NEXT_STATUSES } from "./contests";
 import {
   COVER_MAX_BYTES,
   COVER_MAX_PIXELS,
@@ -61,7 +61,7 @@ import { FEEDBACK_URL_MAX, IMAGE_MAX_BYTES, IMAGE_MAX_EDGE } from "./settings-te
 import { MAX_TABS, NOTES_MAX_CHARS, TAB_BODY_MAX_BYTES, TAB_TITLE_MAX_CHARS } from "./workspace-terms";
 
 /**
- * The bounds the API generates (`docs/api/limits.json`, from `cmd/apicontract`),
+ * The bounds and header names the API generates (`docs/api/limits.json`, from `cmd/apicontract`),
  * so a Go bound changed without its copy here fails this test rather than
  * reaching a person as a refusal the field should have prevented.
  */
@@ -70,6 +70,7 @@ type Contract = {
   durationsMs: Record<string, number>;
   contestTransitions: Record<string, string[]>;
   patterns: Record<string, string>;
+  headers: Record<string, string>;
 };
 
 function contract(): Contract {
@@ -153,6 +154,11 @@ const PATTERNS: Record<string, string> = {
   "users.ChosenLoginPattern": PLAIN_LOGIN.source,
 };
 
+/** The response headers the interface reads. */
+const HEADERS: Record<string, string> = {
+  "api.ContestVersionHeader": CONTEST_VERSION_HEADER,
+};
+
 describe("the limits the API publishes", () => {
   test.each(Object.entries(SAME))("%s is the interface's bound too", (name, value) => {
     expect(value).toBe(api.limits[name]);
@@ -174,6 +180,7 @@ describe("the limits the API publishes", () => {
     expect(Object.keys(api.limits).filter((name) => !checked.has(name))).toEqual([]);
     expect(Object.keys(api.durationsMs).sort()).toEqual(Object.keys(DURATIONS_MS).sort());
     expect(Object.keys(api.patterns).sort()).toEqual(Object.keys(PATTERNS).sort());
+    expect(Object.keys(api.headers).sort()).toEqual(Object.keys(HEADERS).sort());
   });
 
   test("a return path stops where the API's does", () => {
@@ -197,6 +204,10 @@ describe("the limits the API publishes", () => {
 
   test.each(Object.entries(PATTERNS))("%s is the interface's pattern too", (name, source) => {
     expect(source).toBe(api.patterns[name]);
+  });
+
+  test.each(Object.entries(HEADERS))("%s is the header the interface reads", (name, header) => {
+    expect(header).toBe(api.headers[name]);
   });
 
   test("a chosen login is as short and as long as the field says", () => {

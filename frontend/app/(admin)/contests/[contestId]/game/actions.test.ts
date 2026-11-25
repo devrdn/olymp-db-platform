@@ -106,12 +106,13 @@ describe("saveGameScriptAction", () => {
   test("stores the script and revalidates, without trimming leading whitespace", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
 
-    const state = await saveGameScriptAction({}, form({ contestId, script: "  SELECT 1" }));
+    const state = await saveGameScriptAction({}, form({ contestId, expectedVersion: "7", script: "  SELECT 1" }));
 
     expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/script`, {
       method: "PUT",
-      body: { script: "  SELECT 1" },
+      body: { script: "  SELECT 1", expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
@@ -126,7 +127,7 @@ describe("saveGameScriptAction", () => {
   test("carries the server's own refusal code back to the form", async () => {
     serverRequest.mockRejectedValueOnce(new ApiError("game_script_empty", 400, "empty"));
 
-    const state = await saveGameScriptAction({}, form({ contestId, script: "" }));
+    const state = await saveGameScriptAction({}, form({ contestId, expectedVersion: "7", script: "" }));
 
     expect(state).toEqual({ code: "game_script_empty" });
   });
@@ -337,9 +338,11 @@ describe("abortGameUploadAction", () => {
 
 // --- The table builder: a structural description instead of SQL -----------
 
+/** What the builder rendered at contest version 7 submits. */
 function definitionForm(contestId: string, definition: unknown): FormData {
   const data = new FormData();
   data.set("contestId", contestId);
+  data.set("expectedVersion", "7");
   data.set("definition", JSON.stringify(definition));
   return data;
 }
@@ -354,7 +357,8 @@ describe("saveGameDefinitionAction", () => {
     expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/definition`, {
       method: "PUT",
-      body: definition,
+      body: { ...definition, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
@@ -377,6 +381,29 @@ describe("saveGameDefinitionAction", () => {
       code: "game_definition_duplicate_name",
       detail: 'table "Suspects" named twice',
     });
+  });
+});
+
+// The script and the definition are text an organiser typed, so each carries
+// the version its form was rendered at, as every content edit does.
+describe.each([
+  ["saveGameScriptAction", saveGameScriptAction, () => form({ contestId, expectedVersion: "7", script: "SELECT 1" })],
+  ["saveGameDefinitionAction", saveGameDefinitionAction, () => definitionForm(contestId, { tables: [] })],
+] as const)("%s, the version the form was rendered at", (_name, action, rendered) => {
+  test("refuses a form with no version without asking the server", async () => {
+    const data = rendered();
+    data.delete("expectedVersion");
+
+    expect(await action({}, data)).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal of a contest that moved since", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+
+    // The definition's refusals carry the API's message as detail besides.
+    expect(await action({}, rendered())).toMatchObject({ code: "contest_changed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 

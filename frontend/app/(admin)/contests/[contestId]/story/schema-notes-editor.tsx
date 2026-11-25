@@ -1,6 +1,7 @@
 import { useId } from "react";
 
 import { Tag } from "@/components/ui/tag";
+import type { Contest } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveSchemaNotesAction } from "./actions";
@@ -12,14 +13,14 @@ import { PerLanguageForm } from "./per-language-form";
  * Tables tab of their own.
  */
 export function SchemaNotesEditor({
-  contestId,
+  contest,
   languages,
   defaultLanguage,
   translations,
   editable,
   dict,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   languages: string[];
   defaultLanguage?: string;
   translations: Record<string, string>;
@@ -45,7 +46,7 @@ export function SchemaNotesEditor({
       </div>
 
       <PerLanguageForm
-        contestId={contestId}
+        contest={contest}
         name="schemaNotes"
         languages={languages}
         defaultLanguage={defaultLanguage}
@@ -61,6 +62,7 @@ export function SchemaNotesEditor({
           save: t.save,
           saving: t.saving,
           saved: t.saved,
+          reload: dict.workspace.reload,
           empty: t.empty,
         }}
         errors={dict.errors}

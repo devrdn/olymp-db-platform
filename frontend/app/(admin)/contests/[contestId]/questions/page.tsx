@@ -43,7 +43,7 @@ export default async function QuestionsPage(props: PageProps<"/contests/[contest
       </div>
 
       <QuestionList
-        contestId={contest.id}
+        contest={contest}
         questions={questions}
         languages={languages}
         editable={editable}

@@ -7,8 +7,9 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
-import { type Contest, type ContestSummary } from "@/lib/api/contests";
+import { type Contest } from "@/lib/api/contests";
 import {
+  atVersion,
   ENROLLMENTS,
   MAX_ICPC_PENALTY_MIN,
   MAX_PRIZE_PLACES,
@@ -206,16 +207,6 @@ function TrustedDomainSwitch({
   );
 }
 
-/**
- * The hidden fields of a form that saves the contest row: the contest, and the
- * version it was rendered at, which the action sends back as `expected_version`.
- * Read from the page's one contest, so a save that re-reads the page hands every
- * such form the moved version.
- */
-function atVersion(contest: Contest): { contestId: string; expectedVersion: number } {
-  return { contestId: contest.id, expectedVersion: contest.version };
-}
-
 type ContestPanelProps = {
   contest: Contest;
   editable: boolean;
@@ -235,9 +226,8 @@ export function ContestPanel(props: ContestPanelProps) {
   return (
     <ActionForm
       action={saveSettingsAction}
-      fields={atVersion(contest)}
+      {...atVersion(contest, contest.updatedAt)}
       errors={dict.errors}
-      revision={contest.updatedAt}
       className="contents"
     >
       <ContestFields {...props} />
@@ -623,9 +613,8 @@ export function PrizePanel({
   return (
     <ActionForm
       action={savePrizePlacesAction}
-      fields={atVersion(contest)}
+      {...atVersion(contest, `${first}-${second}-${third}`)}
       errors={dict.errors}
-      revision={`${first}-${second}-${third}`}
       className="contents"
     >
       <Panel
@@ -695,9 +684,8 @@ export function ArchivePanel({
   return (
     <ActionForm
       action={saveArchiveSettingsAction}
-      fields={atVersion(contest)}
+      {...atVersion(contest, `${contest.visibility}-${contest.archiveTasks}`)}
       errors={dict.errors}
-      revision={`${contest.visibility}-${contest.archiveTasks}`}
       className="contents"
     >
       <Panel title={t.heading} help={t.help} dict={dict}>
@@ -755,9 +743,33 @@ export function LanguagePanel({
   editable: boolean;
   dict: Dictionary;
 }) {
+  const revision = contest.languages.map((l) => `${l.code}${l.isDefault ? "*" : ""}`).join(",");
+
+  return (
+    <ActionForm
+      action={saveLanguagesAction}
+      {...atVersion(contest, revision)}
+      errors={dict.errors}
+      className="contents"
+    >
+      <LanguageFields languages={contest.languages} editable={editable} dict={dict} />
+    </ActionForm>
+  );
+}
+
+/** The languages being chosen, inside the form so a reload starts the choice over. */
+function LanguageFields({
+  languages,
+  editable,
+  dict,
+}: {
+  languages: Contest["languages"];
+  editable: boolean;
+  dict: Dictionary;
+}) {
   const t = dict.workspace.settings;
-  const declared = contest.languages.map((l) => l.code);
-  const fallbackCode = contest.languages.find((l) => l.isDefault)?.code ?? declared[0];
+  const declared = languages.map((l) => l.code);
+  const fallbackCode = languages.find((l) => l.isDefault)?.code ?? declared[0];
 
   const [chosen, setChosen] = useState<string[]>(declared);
   const [fallback, setFallback] = useState<string>(fallbackCode ?? "en");
@@ -771,56 +783,56 @@ export function LanguagePanel({
   }
 
   return (
-    <ActionForm action={saveLanguagesAction} fields={{ contestId: contest.id }} errors={dict.errors} className="contents">
-      <Panel title={t.languages.heading} help={t.languages.help} dict={dict}>
-        <div className="flex flex-col gap-2.5">
-          {LOCALES.map((code) => {
-            const on = chosen.includes(code);
+    <Panel title={t.languages.heading} help={t.languages.help} dict={dict}>
+      <div className="flex flex-col gap-2.5">
+        {LOCALES.map((code) => {
+          const on = chosen.includes(code);
 
-            return (
-              <div key={code} className="flex items-center gap-3">
+          return (
+            <div key={code} className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id={`lang-${code}`}
+                name="languages"
+                value={code}
+                checked={on}
+                disabled={!editable}
+                onChange={(event) => toggle(code, event.target.checked)}
+                className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+              />
+              <label htmlFor={`lang-${code}`} className="cursor-pointer text-control text-ink">
+                {LOCALE_NAMES[code]}
+                <span className="ml-2 font-mono text-data text-ink-3 uppercase">{code}</span>
+              </label>
+
+              <label
+                className={cn(
+                  "ml-auto flex items-center gap-2 text-small",
+                  on && editable ? "cursor-pointer text-ink-2" : "text-ink-3 opacity-45",
+                )}
+              >
                 <input
-                  type="checkbox"
-                  id={`lang-${code}`}
-                  name="languages"
+                  type="radio"
+                  name="defaultLanguage"
                   value={code}
-                  checked={on}
-                  disabled={!editable}
-                  onChange={(event) => toggle(code, event.target.checked)}
-                  className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+                  checked={fallback === code}
+                  disabled={!on || !editable}
+                  onChange={() => setFallback(code)}
+                  className="size-3.5 cursor-pointer accent-cta disabled:cursor-not-allowed"
                 />
-                <label htmlFor={`lang-${code}`} className="cursor-pointer text-control text-ink">
-                  {LOCALE_NAMES[code]}
-                  <span className="ml-2 font-mono text-data text-ink-3 uppercase">{code}</span>
-                </label>
+                {t.languages.fallback}
+              </label>
+            </div>
+          );
+        })}
+      </div>
 
-                <label
-                  className={cn(
-                    "ml-auto flex items-center gap-2 text-small",
-                    on && editable ? "cursor-pointer text-ink-2" : "text-ink-3 opacity-45",
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="defaultLanguage"
-                    value={code}
-                    checked={fallback === code}
-                    disabled={!on || !editable}
-                    onChange={() => setFallback(code)}
-                    className="size-3.5 cursor-pointer accent-cta disabled:cursor-not-allowed"
-                  />
-                  {t.languages.fallback}
-                </label>
-              </div>
-            );
-          })}
-        </div>
+      <p className="max-w-body text-small text-ink-3">{t.languages.warning}</p>
 
-        <p className="max-w-body text-small text-ink-3">{t.languages.warning}</p>
-
-        <ActionFooter labels={dict.workspace.settings} disabled={!editable} />
-      </Panel>
-    </ActionForm>
+      <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
+        <ReloadWhenChanged label={dict.workspace.reload} />
+      </ActionFooter>
+    </Panel>
   );
 }
 
@@ -835,9 +847,35 @@ export function PolicyPanel({
   editable,
   dict,
 }: {
-  contest: ContestSummary | Contest;
+  contest: Contest;
   policy: SqlPolicy;
   editable: boolean;
+  dict: Dictionary;
+}) {
+  // The policy has its own stamp.
+  return (
+    <ActionForm
+      action={savePolicyAction}
+      {...atVersion(contest, policy.updatedAt ?? "")}
+      errors={dict.errors}
+      className="contents"
+    >
+      {(state) => <PolicyFields policy={policy} editable={editable} rejected={state.rejected} dict={dict} />}
+    </ActionForm>
+  );
+}
+
+/** The policy being edited, inside the form so a reload starts its mode over. */
+function PolicyFields({
+  policy,
+  editable,
+  rejected,
+  dict,
+}: {
+  policy: SqlPolicy;
+  editable: boolean;
+  /** The writable tables this side refused, named because the server answers one code. */
+  rejected?: string[];
   dict: Dictionary;
 }) {
   const t = dict.workspace.settings;
@@ -850,95 +888,85 @@ export function PolicyPanel({
     { name: "allowCatalog", on: policy.allowCatalog, label: t.policy.catalog },
   ];
 
-  // The policy has its own stamp.
   return (
-    <ActionForm
-      action={savePolicyAction}
-      fields={{ contestId: contest.id }}
-      errors={dict.errors}
-      revision={policy.updatedAt}
-      className="contents"
+    <Panel
+      title={t.policy.heading}
+      help={t.policy.help}
+      dict={dict}
+      frozen={editable ? undefined : dict.workspace.facts.frozen}
     >
-      {(state) => (
-        <Panel
-          title={t.policy.heading}
-          help={t.policy.help}
-          dict={dict}
-          frozen={editable ? undefined : dict.workspace.facts.frozen}
+      <fieldset className="flex flex-col gap-3" disabled={!editable}>
+        <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
+          {t.policy.mode}
+        </legend>
+        <Choices
+          name="mode"
+          values={SQL_MODES}
+          labels={t.policy.modes}
+          initial={policy.mode}
+          disabled={!editable}
+          onPick={setMode}
+        />
+      </fieldset>
+
+      {/* Only read-write grants writable tables. */}
+      {mode === "read_write" ? (
+        <Field
+          id="writableTables"
+          label={t.policy.tables}
+          hint={t.policy.tablesHint}
+          help={t.policy.tablesHelp}
+          helpLabel={dict.chrome.helpLabel}
         >
-          <fieldset className="flex flex-col gap-3" disabled={!editable}>
-            <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
-              {t.policy.mode}
-            </legend>
-            <Choices
-              name="mode"
-              values={SQL_MODES}
-              labels={t.policy.modes}
-              initial={policy.mode}
+          <Input
+            name="writableTables"
+            defaultValue={policy.writableTables.join(", ")}
+            disabled={!editable}
+            className="font-mono text-data"
+          />
+        </Field>
+      ) : null}
+
+      <div className="flex flex-col gap-2.5">
+        {toggles.map((toggle) => (
+          <label
+            key={toggle.name}
+            className={cn(
+              "flex items-center gap-3 text-control",
+              editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
+            )}
+          >
+            <input
+              type="checkbox"
+              name={toggle.name}
+              defaultChecked={toggle.on}
               disabled={!editable}
-              onPick={setMode}
+              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
             />
-          </fieldset>
+            {toggle.label}
+          </label>
+        ))}
+      </div>
 
-          {/* Only read-write grants writable tables. */}
-          {mode === "read_write" ? (
-            <Field
-              id="writableTables"
-              label={t.policy.tables}
-              hint={t.policy.tablesHint}
-              help={t.policy.tablesHelp}
-              helpLabel={dict.chrome.helpLabel}
-            >
-              <Input
-                name="writableTables"
-                defaultValue={policy.writableTables.join(", ")}
-                disabled={!editable}
-                className="font-mono text-data"
-              />
-            </Field>
-          ) : null}
+      <Field id="diskQuotaRatio" label={t.policy.quota} hint={t.policy.quotaHint}>
+        <Input
+          name="diskQuotaRatio"
+          type="number"
+          min={1}
+          step={1}
+          defaultValue={policy.diskQuotaRatio}
+          disabled={!editable}
+          className="max-w-40"
+        />
+      </Field>
 
-          <div className="flex flex-col gap-2.5">
-            {toggles.map((toggle) => (
-              <label
-                key={toggle.name}
-                className={cn(
-                  "flex items-center gap-3 text-control",
-                  editable ? "cursor-pointer text-ink" : "cursor-not-allowed text-ink-3",
-                )}
-              >
-                <input
-                  type="checkbox"
-                  name={toggle.name}
-                  defaultChecked={toggle.on}
-                  disabled={!editable}
-                  className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
-                />
-                {toggle.label}
-              </label>
-            ))}
-          </div>
-
-          <Field id="diskQuotaRatio" label={t.policy.quota} hint={t.policy.quotaHint}>
-            <Input
-              name="diskQuotaRatio"
-              type="number"
-              min={1}
-              step={1}
-              defaultValue={policy.diskQuotaRatio}
-              disabled={!editable}
-              className="max-w-40"
-            />
-          </Field>
-
-          <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
-            {/* The server answers one code; only this side knows which entries were wrong. */}
-            {state.rejected && state.rejected.length > 0 ? (
-              <p className="max-w-body font-mono text-data text-warn">{state.rejected.join(", ")}</p>
-            ) : null}
-          </ActionFooter>
-        </Panel>
-      )}
-    </ActionForm>
+      <ActionFooter labels={dict.workspace.settings} disabled={!editable}>
+        {/* The server answers one code; only this side knows which entries were wrong. */}
+        {rejected && rejected.length > 0 ? (
+          <p className="max-w-body font-mono text-data text-warn">{rejected.join(", ")}</p>
+        ) : null}
+        <ReloadWhenChanged label={dict.workspace.reload} />
+      </ActionFooter>
+    </Panel>
   );
 }

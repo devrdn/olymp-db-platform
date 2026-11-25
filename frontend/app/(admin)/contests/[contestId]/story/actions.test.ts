@@ -17,9 +17,11 @@ import { saveSchemaNotesAction, saveStoryAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
 
+/** What a form rendered at contest version 7 submits. */
 function form(fields: Record<string, string>, id: string = contestId): FormData {
   const data = new FormData();
   data.set("contestId", id);
+  data.set("expectedVersion", "7");
   for (const [key, value] of Object.entries(fields)) data.set(key, value);
   return data;
 }
@@ -41,7 +43,8 @@ describe("saveSchemaNotesAction", () => {
     expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/schema-notes`, {
       method: "PUT",
-      body: { translations: { en: "The suspects table." } },
+      body: { translations: { en: "The suspects table." }, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
     // The save moves the contest's version, which the settings form sends back.
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
@@ -63,7 +66,8 @@ describe("saveSchemaNotesAction", () => {
 
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/schema-notes`, {
       method: "PUT",
-      body: { translations: {} },
+      body: { translations: {}, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
   });
 
@@ -96,7 +100,8 @@ describe("saveStoryAction", () => {
     expect(state).toEqual({ ok: true });
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/story`, {
       method: "PUT",
-      body: { translations: { en: "A body in the stacks." } },
+      body: { translations: { en: "A body in the stacks." }, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
     // The publish gate counts the story, so the whole contest layout refreshes.
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
@@ -120,6 +125,26 @@ describe("saveStoryAction", () => {
     serverRequest.mockRejectedValueOnce(new ApiError("not_editable", 409, "frozen"));
 
     expect(await saveStoryAction({}, form({ "body.en": "x" }))).toEqual({ code: "not_editable" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  ["saveStoryAction", saveStoryAction, "body"],
+  ["saveSchemaNotesAction", saveSchemaNotesAction, "schemaNotes"],
+] as const)("%s, the version the form was rendered at", (_name, action, prefix) => {
+  test("refuses a form with no version without asking the server", async () => {
+    const data = form({ [`${prefix}.en`]: "x" });
+    data.delete("expectedVersion");
+
+    expect(await action({}, data)).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal of a contest that moved since", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+
+    expect(await action({}, form({ [`${prefix}.en`]: "x" }))).toEqual({ code: "contest_changed" });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,11 @@ const { saveQuestionAction } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("./actions", () => ({ saveQuestionAction }));
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh }),
+}));
 
 import { QuestionEditor } from "./question-editor";
 
@@ -52,7 +57,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     const user = userEvent.setup();
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ points: 10, penaltyPct: 20 })}
         languages={["en"]}
         editable
@@ -82,7 +87,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     const user = userEvent.setup();
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ maxAttempts: undefined })}
         languages={["en"]}
         editable
@@ -110,7 +115,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     const user = userEvent.setup();
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ maxAttempts: undefined })}
         languages={["en"]}
         editable
@@ -133,7 +138,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
   test("says nothing about unlimited attempts under ICPC when the order is free", () => {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ maxAttempts: undefined })}
         languages={["en"]}
         editable
@@ -153,7 +158,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     const user = userEvent.setup();
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ kind: "final", maxAttempts: undefined })}
         languages={["en"]}
         editable
@@ -175,7 +180,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
   test("says nothing about a final question's attempts outside winner mode", () => {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ kind: "final", maxAttempts: undefined })}
         languages={["en"]}
         editable
@@ -193,7 +198,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
   test("says nothing about sequential order when this contest does not use it", () => {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ maxAttempts: undefined })}
         languages={["en"]}
         editable
@@ -216,7 +221,7 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
   function renderChoice() {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ kind: "choice", choiceIds: ["a", "b"] })}
         languages={["en"]}
         editable
@@ -276,7 +281,7 @@ describe("QuestionEditor, fields the scoring mode does not use", () => {
   function renderScored(scoring: "points" | "winner" | "icpc") {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ points: 10, penaltyPct: 20 })}
         languages={["en"]}
         editable
@@ -349,7 +354,7 @@ describe("QuestionEditor, the bonus question", () => {
   function renderBonus(overrides: Partial<Question> = {}, scoring: "points" | "winner" | "icpc" = "points", editable = true) {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ points: 4, penaltyPct: 25, ...overrides })}
         languages={["en"]}
         editable={editable}
@@ -428,7 +433,7 @@ describe("QuestionEditor, the reference answers", () => {
   test("says that a regular expression must match the whole answer", () => {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({ answers: [{ id: "a1", matchKind: "regex", value: "(?i)john\\s+smith" }] })}
         languages={["en"]}
         editable
@@ -452,7 +457,7 @@ describe("QuestionEditor, the title", () => {
   function renderTitled(editable = true) {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question({
           texts: {
             en: { title: "The culprit", bodyMd: "Who did it?", choices: {} },
@@ -533,7 +538,7 @@ describe("QuestionEditor, hiding the deciding question", () => {
   ) {
     render(
       <QuestionEditor
-        contestId="c1"
+        contest={{ id: "c1", version: 3 }}
         question={question(overrides)}
         languages={["en"]}
         editable={editable}
@@ -627,4 +632,118 @@ describe("QuestionEditor, hiding the deciding question", () => {
 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
+});
+
+describe("QuestionEditor, the version it was rendered at", () => {
+  function editorAt(version: number) {
+    return (
+      <QuestionEditor
+        contest={{ id: "c1", version }}
+        question={question()}
+        languages={["en"]}
+        editable
+        scoring="points"
+        sequentialActive={false}
+        otherVisibleQuestions={1}
+        otherVisibleFinals={1}
+        dict={dict}
+      />
+    );
+  }
+
+  test("a save over a contest that moved since says so, and the reload starts the form over", async () => {
+    saveQuestionAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
+    refresh.mockReset();
+    render(editorAt(3));
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // The save re-reads the page, whose contest now carries the moved version.
+  test("a save sends the version it was rendered at, and the next one the version the page re-read", async () => {
+    const view = render(editorAt(3));
+
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+    expect(await screen.findByRole("status")).toHaveTextContent(dict.workspace.question.saved);
+    view.rerender(editorAt(4));
+    await userEvent.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+
+    await vi.waitFor(() => expect(saveQuestionAction).toHaveBeenCalledTimes(2));
+    expect(saveQuestionAction.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
+  });
+});
+
+// The reload re-reads the page and starts the editor over: the kind held in
+// state is the colleague's afterwards, not the refused one.
+test("QuestionEditor, a reload after a refused save shows, and sends, the colleague's kind", async () => {
+  saveQuestionAction.mockClear();
+  saveQuestionAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
+  const user = userEvent.setup();
+  const editorFor = (q: Question, version: number) => (
+    <QuestionEditor
+      contest={{ id: "c1", version }}
+      question={q}
+      languages={["en"]}
+      editable
+      scoring="points"
+      sequentialActive={false}
+      otherVisibleQuestions={1}
+      otherVisibleFinals={1}
+      dict={dict}
+    />
+  );
+  const kind = (value: Question["kind"]) =>
+    screen.getByRole("radio", { name: new RegExp(dict.workspace.questions.kind[value]) });
+  const view = render(editorFor(question({ kind: "text" }), 3));
+
+  await user.click(kind("final"));
+  await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+  await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
+  view.rerender(editorFor(question({ kind: "choice", choiceIds: ["a", "b"] }), 4));
+
+  expect(kind("choice")).toBeChecked();
+  await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+  await vi.waitFor(() => expect(saveQuestionAction).toHaveBeenCalledTimes(2));
+  const form = saveQuestionAction.mock.calls[1][1];
+  expect(form.get("expectedVersion")).toBe("4");
+  expect(form.get("kind")).toBe("choice");
+});
+
+// A newer saved question reaching an edited editor never replaces the draft:
+// the save is refused, and the reload takes the colleague's question.
+test("QuestionEditor, an edited draft keeps its kind over a newer question, is refused, and takes the question after the reload", async () => {
+  saveQuestionAction.mockClear();
+  saveQuestionAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
+  const user = userEvent.setup();
+  const editorFor = (q: Question, version: number) => (
+    <QuestionEditor
+      contest={{ id: "c1", version }}
+      question={q}
+      languages={["en"]}
+      editable
+      scoring="points"
+      sequentialActive={false}
+      otherVisibleQuestions={1}
+      otherVisibleFinals={1}
+      dict={dict}
+    />
+  );
+  const kind = (value: Question["kind"]) =>
+    screen.getByRole("radio", { name: new RegExp(dict.workspace.questions.kind[value]) });
+  const view = render(editorFor(question({ kind: "text" }), 3));
+
+  await user.click(kind("final"));
+  view.rerender(editorFor(question({ kind: "choice", choiceIds: ["a", "b"] }), 4));
+  expect(kind("final")).toBeChecked();
+  await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+  await vi.waitFor(() => expect(saveQuestionAction).toHaveBeenCalledTimes(1));
+  expect(saveQuestionAction.mock.calls[0][1].get("expectedVersion")).toBe("3");
+  await user.click(await screen.findByRole("button", { name: dict.workspace.reload }));
+
+  expect(kind("choice")).toBeChecked();
 });

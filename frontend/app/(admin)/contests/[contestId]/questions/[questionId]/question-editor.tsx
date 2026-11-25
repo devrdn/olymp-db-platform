@@ -10,12 +10,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
 import { type Question } from "@/lib/api/content";
 import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
-import type { Scoring } from "@/lib/api/contests";
-import { MAX_PENALTY_PCT, MAX_QUESTION_TITLE_CHARS } from "@/lib/api/contests-terms";
+import type { Contest, Scoring } from "@/lib/api/contests";
+import { atVersion, MAX_PENALTY_PCT, MAX_QUESTION_TITLE_CHARS } from "@/lib/api/contests-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
+import { ReloadWhenChanged } from "../../reload-when-changed";
 import { saveQuestionAction } from "./actions";
 
 /**
@@ -25,7 +26,7 @@ import { saveQuestionAction } from "./actions";
  * what counts as right.
  */
 export function QuestionEditor({
-  contestId,
+  contest,
   question,
   languages,
   editable,
@@ -35,7 +36,7 @@ export function QuestionEditor({
   otherVisibleFinals,
   dict,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   question: Question;
   languages: string[];
   editable: boolean;
@@ -50,18 +51,45 @@ export function QuestionEditor({
   otherVisibleFinals: number | undefined;
   dict: Dictionary;
 }) {
+  return (
+    <ActionForm
+      action={saveQuestionAction}
+      {...atVersion(contest, JSON.stringify(question), { questionId: question.id })}
+      errors={dict.errors}
+      className="flex flex-col gap-12"
+    >
+      <QuestionFields
+        question={question}
+        languages={languages}
+        editable={editable}
+        sequentialActive={sequentialActive}
+        scoring={scoring}
+        otherVisibleQuestions={otherVisibleQuestions}
+        otherVisibleFinals={otherVisibleFinals}
+        dict={dict}
+      />
+    </ActionForm>
+  );
+}
+
+/** The question being edited, inside the form so a reload starts its kind and options over. */
+function QuestionFields({
+  question,
+  languages,
+  editable,
+  sequentialActive,
+  scoring,
+  otherVisibleQuestions,
+  otherVisibleFinals,
+  dict,
+}: Omit<Parameters<typeof QuestionEditor>[0], "contest">) {
   // Option ids are edited in one section and labelled in another, so the label
   // rows must follow what is typed before a save.
   const [choiceIds, setChoiceIds] = useState<string[]>(question.choiceIds);
   const [kind, setKind] = useState(question.kind);
 
   return (
-    <ActionForm
-      action={saveQuestionAction}
-      fields={{ contestId, questionId: question.id }}
-      errors={dict.errors}
-      className="flex flex-col gap-12"
-    >
+    <>
       <ShapeSection
         question={question}
         editable={editable}
@@ -93,9 +121,11 @@ export function QuestionEditor({
       />
 
       <div className="border-t border-line pt-5">
-        <ActionFooter labels={dict.workspace.question} disabled={!editable} />
+        <ActionFooter labels={dict.workspace.question} disabled={!editable}>
+          <ReloadWhenChanged label={dict.workspace.reload} />
+        </ActionFooter>
       </div>
-    </ActionForm>
+    </>
   );
 }
 

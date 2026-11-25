@@ -19,6 +19,32 @@ describe("request", () => {
     ).resolves.toBeUndefined();
   });
 
+  // A save of the contest names the version it stored in a header.
+  test("hands an answer's headers to onHeaders, and only an answer that succeeded", async () => {
+    const seen: (string | null)[] = [];
+    const onHeaders = (headers: Headers) => seen.push(headers.get("contest-version"));
+    const stored: typeof fetch = async () => new Response(null, { status: 204, headers: { "contest-version": "4" } });
+
+    await request("/contests/1/languages", { method: "PUT", fetchImpl: stored, onHeaders });
+    await request("/contests/1/languages", {
+      method: "PUT",
+      fetchImpl: respondWith({ error: { code: "contest_changed", message: "" } }, 409),
+      onHeaders,
+    }).catch(() => undefined);
+
+    expect(seen).toEqual(["4"]);
+  });
+
+  test("hands a download's headers to onHeaders too, so the option is never passed in vain", async () => {
+    const seen: (string | null)[] = [];
+    const fetchImpl: typeof fetch = async () =>
+      new Response("a,b\n", { status: 200, headers: { "contest-version": "4" } });
+
+    await requestDownload("/contests/1/results.csv", { fetchImpl, onHeaders: (h) => seen.push(h.get("contest-version")) });
+
+    expect(seen).toEqual(["4"]);
+  });
+
   test("raises the machine code the server sent, not its human message", async () => {
     const fetchImpl = respondWith(
       {

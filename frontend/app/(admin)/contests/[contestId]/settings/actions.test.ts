@@ -22,6 +22,7 @@ import {
   extendGraceAction,
   saveArchiveSettingsAction,
   saveLanguagesAction,
+  savePolicyAction,
   savePrizePlacesAction,
   saveSettingsAction,
 } from "./actions";
@@ -157,11 +158,17 @@ describe("saveSettingsAction, the leaderboard's names", () => {
   });
 });
 
-/** The three saves of the contest row, each with the least its form submits besides the version. */
+/**
+ * The saves on this page that carry the version, each with the least its form
+ * submits besides it: the three of the contest row, and the languages and SQL
+ * policy, which are content.
+ */
 const versionGuardedSaves = [
   ["saveSettingsAction", saveSettingsAction, "", "PATCH", {}],
   ["savePrizePlacesAction", savePrizePlacesAction, "/prize-places", "PUT", { prizeFirst: "1" }],
   ["saveArchiveSettingsAction", saveArchiveSettingsAction, "/archive-settings", "PUT", { visibility: "open" }],
+  ["saveLanguagesAction", saveLanguagesAction, "/languages", "PUT", { languages: "en" }],
+  ["savePolicyAction", savePolicyAction, "/sql-policy", "PUT", { mode: "read_only" }],
 ] as const;
 
 describe.each(versionGuardedSaves)("%s, the version the form was loaded at", (_name, action, suffix, method, fields) => {
@@ -186,7 +193,7 @@ describe.each(versionGuardedSaves)("%s, the version the form was loaded at", (_n
     expect(init.body.expected_version).toBe(0);
   });
 
-  // All three saves move the one version the other forms on the page send.
+  // Every one of them moves the one version the other forms on the page send.
   test("re-reads the workspace once saved, so every form on the page sends the moved version", async () => {
     serverRequest.mockResolvedValueOnce({});
 
@@ -221,12 +228,9 @@ describe.each(versionGuardedSaves)("%s, the version the form was loaded at", (_n
 });
 
 describe("saveLanguagesAction", () => {
-  // The language set moves the contest's version, and the settings, prize
-  // places and archive forms on the same page send the version back: they
-  // must read the new one.
-  test("re-reads the contest's pages, the settings form's version among them", async () => {
+  test("replaces the set whole, with the default the form chose", async () => {
     serverRequest.mockResolvedValueOnce(undefined);
-    const data = form({ defaultLanguage: "ro" });
+    const data = renderedForm({ defaultLanguage: "ro" });
     data.append("languages", "en");
     data.append("languages", "ro");
 
@@ -239,9 +243,10 @@ describe("saveLanguagesAction", () => {
           { code: "en", is_default: false },
           { code: "ro", is_default: true },
         ],
+        expected_version: 7,
       },
+      onHeaders: expect.any(Function),
     });
-    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 });
 
@@ -295,6 +300,7 @@ describe("savePrizePlacesAction", () => {
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/prize-places`, {
       method: "PUT",
       body: { first: 1, second: 2, third: 0, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
   });
 
@@ -363,6 +369,7 @@ describe("saveArchiveSettingsAction", () => {
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/archive-settings`, {
       method: "PUT",
       body: { visibility: "closed", archive_tasks: true, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
   });
 

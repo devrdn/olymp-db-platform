@@ -9,11 +9,13 @@ import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
 import { type Question } from "@/lib/api/content";
 import { answerable, untranslated } from "@/lib/api/content-terms";
-import type { Scoring } from "@/lib/api/contests";
+import type { Contest, Scoring } from "@/lib/api/contests";
+import { atVersion, NO_DRAFT } from "@/lib/api/contests-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
+import { ReloadWhenChanged } from "../reload-when-changed";
 import { addQuestionAction, deleteQuestionAction, reorderQuestionsAction } from "./actions";
 
 const HEAD =
@@ -27,14 +29,14 @@ const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-top";
  * since both rows briefly share a position.
  */
 export function QuestionList({
-  contestId,
+  contest,
   questions,
   languages,
   editable,
   scoring,
   dict,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   questions: Question[];
   languages: string[];
   editable: boolean;
@@ -50,7 +52,7 @@ export function QuestionList({
       <div className="flex flex-col gap-8 border-t border-line">
         {/* This list has no filters to clear. */}
         <StateView state={{ kind: "empty", title: t.empty.title, body: t.empty.body }} />
-        {editable ? <AddQuestion contestId={contestId} dict={dict} /> : null}
+        {editable ? <AddQuestion contest={contest} dict={dict} /> : null}
       </div>
     );
   }
@@ -97,7 +99,7 @@ export function QuestionList({
 
                   <td className={CELL}>
                     <Link
-                      href={`/contests/${contestId}/questions/${question.id}`}
+                      href={`/contests/${contest.id}/questions/${question.id}`}
                       className="block w-fit max-w-body text-row text-ink underline decoration-edge underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:decoration-ink"
                     >
                       {/* The title, or else the body's first line, in any
@@ -138,7 +140,7 @@ export function QuestionList({
                   <td className={cn(CELL, "text-right")}>
                     {editable ? (
                       <RowControls
-                        contestId={contestId}
+                        contest={contest}
                         questions={questions}
                         index={index}
                         dict={dict}
@@ -152,7 +154,7 @@ export function QuestionList({
         </table>
       </ScrollBox>
 
-      {editable ? <AddQuestion contestId={contestId} dict={dict} /> : null}
+      {editable ? <AddQuestion contest={contest} dict={dict} /> : null}
     </div>
   );
 }
@@ -165,17 +167,20 @@ function firstLine(question: Question): string {
   return "";
 }
 
+/** The contest as the list was rendered, whose version every control's form sends. */
+type ListedAt = Pick<Contest, "id" | "version">;
+
 /**
  * Move and delete controls. Separate forms, so the delete's confirmation,
  * pending state and refusal do not affect the moves.
  */
 function RowControls({
-  contestId,
+  contest,
   questions,
   index,
   dict,
 }: {
-  contestId: string;
+  contest: ListedAt;
   questions: Question[];
   index: number;
   dict: Dictionary;
@@ -192,7 +197,7 @@ function RowControls({
     <div className="flex items-start justify-end gap-1">
       {index > 0 ? (
         <ReorderButton
-          contestId={contestId}
+          contest={contest}
           order={swapped(index, index - 1)}
           label={t.moveUp}
           glyph="↑"
@@ -204,7 +209,7 @@ function RowControls({
 
       {index < questions.length - 1 ? (
         <ReorderButton
-          contestId={contestId}
+          contest={contest}
           order={swapped(index, index + 1)}
           label={t.moveDown}
           glyph="↓"
@@ -214,19 +219,19 @@ function RowControls({
         <span className="inline-block size-7" />
       )}
 
-      <DeleteQuestion contestId={contestId} questionId={questions[index].id} dict={dict} />
+      <DeleteQuestion contest={contest} questionId={questions[index].id} dict={dict} />
     </div>
   );
 }
 
 function ReorderButton({
-  contestId,
+  contest,
   order,
   label,
   glyph,
   dict,
 }: {
-  contestId: string;
+  contest: ListedAt;
   order: string[];
   label: string;
   glyph: string;
@@ -235,7 +240,7 @@ function ReorderButton({
   return (
     <ActionForm
       action={reorderQuestionsAction}
-      fields={{ contestId, order }}
+      {...atVersion(contest, NO_DRAFT, { order })}
       errors={dict.errors}
       className="flex flex-col items-end gap-1"
     >
@@ -243,16 +248,17 @@ function ReorderButton({
         <span aria-hidden>{glyph}</span>
       </ActionButton>
       <ActionOutcome narrow />
+      <ReloadWhenChanged label={dict.workspace.reload} />
     </ActionForm>
   );
 }
 
 function DeleteQuestion({
-  contestId,
+  contest,
   questionId,
   dict,
 }: {
-  contestId: string;
+  contest: ListedAt;
   questionId: string;
   dict: Dictionary;
 }) {
@@ -262,7 +268,7 @@ function DeleteQuestion({
   return (
     <ActionForm
       action={deleteQuestionAction}
-      fields={{ contestId, questionId }}
+      {...atVersion(contest, NO_DRAFT, { questionId })}
       confirm={{ title: t.confirmRemove, answer: t.remove, cancel: dict.chrome.cancel, danger: true }}
       errors={dict.errors}
       className="flex flex-col items-end gap-1"
@@ -273,19 +279,21 @@ function DeleteQuestion({
         </span>
       </ActionButton>
       <ActionOutcome narrow />
+      <ReloadWhenChanged label={dict.workspace.reload} />
     </ActionForm>
   );
 }
 
-function AddQuestion({ contestId, dict }: { contestId: string; dict: Dictionary }) {
+function AddQuestion({ contest, dict }: { contest: ListedAt; dict: Dictionary }) {
   const t = dict.workspace.questions;
 
   return (
-    <ActionForm action={addQuestionAction} fields={{ contestId }} errors={dict.errors} className="flex flex-col gap-3">
+    <ActionForm action={addQuestionAction} {...atVersion(contest, NO_DRAFT)} errors={dict.errors} className="flex flex-col gap-3">
       <ActionButton pendingLabel={t.adding} className="self-start">
         {t.add}
       </ActionButton>
       <ActionOutcome />
+      <ReloadWhenChanged label={dict.workspace.reload} />
     </ActionForm>
   );
 }

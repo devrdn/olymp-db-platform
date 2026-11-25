@@ -11,6 +11,8 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
   serverRequest,
 }));
 
+import { ApiError } from "@/lib/api/client";
+
 import { saveTranslationsAction } from "./actions";
 
 const contestId = "11111111-1111-1111-1111-111111111111";
@@ -20,22 +22,45 @@ beforeEach(() => {
   revalidatePath.mockReset();
 });
 
-describe("saveTranslationsAction", () => {
-  // A title moves the contest's version, and the settings form below the
-  // heading sends the version back: it must read the new one.
-  test("re-reads the contest's pages, the settings form's version among them", async () => {
-    serverRequest.mockResolvedValueOnce(undefined);
-    const data = new FormData();
-    data.set("contestId", contestId);
-    data.set("title.en", "Night in the archive");
+/** What the title form rendered at contest version 7 submits. */
+function titleForm(): FormData {
+  const data = new FormData();
+  data.set("contestId", contestId);
+  data.set("expectedVersion", "7");
+  data.set("title.en", "Night in the archive");
+  return data;
+}
 
-    expect(await saveTranslationsAction({}, data)).toEqual({ ok: true });
+describe("saveTranslationsAction", () => {
+  // A title moves the contest's version, and every other form on the page
+  // sends the version back: it must read the new one.
+  test("sends the version it was rendered at, then re-reads the contest's pages", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    expect(await saveTranslationsAction({}, titleForm())).toEqual({ ok: true });
 
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/translations`, {
       method: "PUT",
-      body: { translations: { en: { title: "Night in the archive" } } },
+      body: { translations: { en: { title: "Night in the archive" } }, expected_version: 7 },
+      onHeaders: expect.any(Function),
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
+    expect(revalidatePath).toHaveBeenCalledWith("/contests");
+  });
+
+  test("refuses a form with no version without asking the server", async () => {
+    const data = titleForm();
+    data.delete("expectedVersion");
+
+    expect(await saveTranslationsAction({}, data)).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("hands back the server's refusal of a contest that moved since", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("contest_changed", 409, "changed"));
+
+    expect(await saveTranslationsAction({}, titleForm())).toEqual({ code: "contest_changed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   test("never sends a request for a contest segment that is not an identifier", async () => {

@@ -21,9 +21,11 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { type Contest } from "@/lib/api/contests";
+import { atVersion } from "@/lib/api/contests-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveTranslationsAction } from "./actions";
+import { ReloadWhenChanged } from "./reload-when-changed";
 
 type TitleDictionary = Pick<Dictionary, "workspace" | "chrome" | "errors">;
 
@@ -52,7 +54,8 @@ function TitleForm({
   if (!primary) return null;
 
   return (
-    <ActionForm action={saveTranslationsAction} fields={{ contestId: contest.id }} errors={dict.errors} className="flex flex-col gap-5">
+    // The languages too: the default decides which field holds which title.
+    <ActionForm action={saveTranslationsAction} {...atVersion(contest, JSON.stringify([contest.languages, contest.translations]))} errors={dict.errors} className="flex flex-col gap-5">
       {/* A success closes the form: the header shows the saved title. */}
       <ActionDialogBinding reportDismissible={reportDismissible} onSuccess={onClose} />
 
@@ -115,6 +118,7 @@ function TitleForm({
       ) : null}
 
       <ActionOutcome />
+      <ReloadWhenChanged label={dict.workspace.reload} />
 
       <DialogFooter>
         <CancelButton label={t.cancel} onClose={onClose} />

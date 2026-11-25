@@ -12,6 +12,12 @@ const { serverRequest, notFound } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
+// Every read of a contest's content waits for the contest itself; its wire
+// format is `contests.test.ts`'s business.
+vi.mock("@/lib/api/contests", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/contests")>()),
+  contestSchema: { parse: (payload: unknown) => payload },
+}));
 vi.mock("next/navigation", () => ({
   notFound,
   redirect: vi.fn(),
@@ -65,6 +71,7 @@ const rosterRow = {
 const base = `/contests/${CONTEST}/monitor/participants/${REG}`;
 
 function answer(path: string): unknown {
+  if (path === `/contests/${CONTEST}`) return { id: CONTEST, version: 3 };
   if (path === `/contests/${CONTEST}/monitor/participants`) {
     return { generated_at: "x", truncated: false, rows: [rosterRow] };
   }

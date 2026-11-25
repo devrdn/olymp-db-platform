@@ -1,9 +1,9 @@
 "use server";
 
 import { isId } from "@/lib/api/ids";
-import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
+import type { ActionState } from "@/lib/api/server";
 
-import { contestChanged } from "../../revalidation";
+import { saveAtVersion } from "../../save-at-version";
 import { questionFrom } from "./question-form";
 
 export type QuestionState = ActionState;
@@ -31,8 +31,8 @@ export async function saveQuestionAction(
   const parsed = questionFrom(form);
   if (!parsed.ok) return { code: parsed.code };
 
-  return serverAction(
-    () => serverRequest(`/contests/${at.contestId}/questions/${at.questionId}`, { method: "PUT", body: parsed.body }),
-    { revalidate: contestChanged(at.contestId) },
-  );
+  return saveAtVersion(at.contestId, form, `/contests/${at.contestId}/questions/${at.questionId}`, {
+    method: "PUT",
+    body: parsed.body,
+  });
 }

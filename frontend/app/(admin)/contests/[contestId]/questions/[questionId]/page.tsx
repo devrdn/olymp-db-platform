@@ -68,7 +68,7 @@ export default async function QuestionPage(
       </div>
 
       <QuestionEditor
-        contestId={contest.id}
+        contest={contest}
         question={question}
         languages={contest.languages.map((l) => l.code)}
         editable={editable}

@@ -2,9 +2,11 @@
 
 import { useRef, useState } from "react";
 
-import { ActionButton, ActionForm, ActionOutcome } from "@/components/product/action-form";
+import { ActionButton, ActionForm, ActionOutcome, useDraftEdited } from "@/components/product/action-form";
 import { CodeEditor } from "@/components/product/code-editor";
 import { Tag } from "@/components/ui/tag";
+import type { Contest } from "@/lib/api/contests";
+import { atVersion } from "@/lib/api/contests-terms";
 import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -12,6 +14,7 @@ import { labelFor } from "@/lib/i18n/label";
 import { fill } from "@/lib/i18n/fill";
 import { cn } from "@/lib/utils";
 
+import { ReloadWhenChanged } from "../reload-when-changed";
 import { saveGameScriptAction } from "./actions";
 import { useGamePoll } from "./game-poll";
 
@@ -21,7 +24,7 @@ import { useGamePoll } from "./game-poll";
  * polling stops when it ends.
  */
 export function GameEditor(props: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   initial: Game;
   initialScript: string;
   editable: boolean;
@@ -30,7 +33,8 @@ export function GameEditor(props: {
   return (
     <ActionForm
       action={saveGameScriptAction}
-      fields={{ contestId: props.contestId }}
+      // The game's version moves with every stored script.
+      {...atVersion(props.contest, props.initial.version)}
       errors={props.dict.errors}
       className="flex flex-col gap-4"
     >
@@ -41,14 +45,14 @@ export function GameEditor(props: {
 
 /** The editor inside the form; `saved` is whether the last save was accepted. */
 function ScriptEditor({
-  contestId,
+  contest,
   initial,
   initialScript,
   editable,
   saved,
   dict,
 }: {
-  contestId: string;
+  contest: Pick<Contest, "id" | "version">;
   initial: Game;
   initialScript: string;
   editable: boolean;
@@ -57,6 +61,9 @@ function ScriptEditor({
 }) {
   const t = dict.workspace.game;
   const [polled, setPolled] = useState<Game | null>(null);
+  // The editor writes its text into a field it does not type in, so no input
+  // event reaches the form.
+  const markEdited = useDraftEdited();
 
   // Derived rather than set from an effect: after a save the server said
   // `pending`, and this holds whether or not revalidation has refreshed
@@ -70,7 +77,7 @@ function ScriptEditor({
 
   // Shared with GameUpload, so both panels get the same snapshot (see
   // useGamePoll).
-  useGamePoll(contestId, game.building, setPolled);
+  useGamePoll(contest.id, game.building, setPolled);
 
   // The server's ceiling, never a bundled constant (CLAUDE.md rule 11). Zero
   // means an older API did not send it.
@@ -130,6 +137,7 @@ function ScriptEditor({
         placeholder={t.placeholder}
         getInitialValue={() => mirrorRef.current?.value ?? ""}
         onChange={(text) => {
+          markEdited();
           if (mirrorRef.current) mirrorRef.current.value = text;
           setBytes(new TextEncoder().encode(text).length);
         }}
@@ -146,6 +154,7 @@ function ScriptEditor({
         {!editable ? <span className="text-small text-ink-2">{t.frozen}</span> : null}
         <ActionOutcome saved={t.saved} />
       </div>
+      <ReloadWhenChanged label={dict.workspace.reload} />
     </>
   );
 }
