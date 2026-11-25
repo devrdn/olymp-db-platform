@@ -354,8 +354,8 @@ Patterns an action must follow:
   revalidated only once the call worked. Every action that writes a contest
   revalidates through `contestChanged(contestId)` from
   `app/(admin)/contests/[contestId]/revalidation.ts`: the workspace header,
-  the publish gate and the version the settings, prize-places and archive
-  forms send all read the contest, and a stale version refuses the
+  the publish gate and the version every form that saves the contest or its
+  content sends all read the contest, and a stale version refuses the
   organiser's next save from any of them. To move to the next screen, run the
   call with `serverOutcome` and call `redirect()` once it has returned,
   outside the call.
@@ -392,18 +392,54 @@ What `ActionForm` keeps for every form, so a screen does not handle it:
   through `isolate` (section 4). If the dialog cannot be loaded, nothing is
   sent and the form says so.
 - **A contest that moved meanwhile** is refused with `contest_changed`: for
-  the settings, prize-places and archive forms, which send the `version` they
-  were loaded at, since they were rendered; for status actions and the
-  reveal, which send none, only while the save is decided. The three forms
-  take their hidden fields from `atVersion` in `settings-panels.tsx`, their
-  actions send the version through `saveAtVersion` in the settings
-  `actions.ts`, and all three move the one version, so each save revalidates
-  the page and hands the other two the new one. A status action
-  whose status moved during the save is refused as `status_changed` instead,
-  which offers no reload. Under `contest_changed`, `ReloadWhenChanged`
+  the forms that save the contest or its content, which send the `version`
+  they were loaded at, since they were rendered; for status actions and the
+  reveal, which send none, only while the save is decided. The guarded forms
+  are the settings, prize-places, archive, languages and SQL policy panels,
+  the title editor, the story and table descriptions, the question list
+  (add, move, delete) and question editor, and the game's script editor and
+  table-builder structure; the game's uploads, build and single rows send
+  none. The question delete sends the version as `?expected_version=`, since
+  a proxy may drop the body of a `DELETE` (`versionIn: "query"`). They
+  take their hidden fields from `atVersion` in `lib/api/contests-terms.ts`,
+  their actions send the version through `saveAtVersion`
+  (`app/(admin)/contests/[contestId]/save-at-version.ts`), and every one of
+  them moves the one version, so each save revalidates the workspace and
+  hands every untouched form the new one. An edited form keeps the version
+  its draft was based on (ActionForm's `version`: pinned at the first input or
+  change event in the form, or at `useDraftEdited` for a change made by a
+  button or held in state; released by a save of its own that worked or a
+  reload). An edit made while that save was sending keeps its pin, based on
+  the version the save's answer names in `Contest-Version`
+  (`CONTEST_VERSION_HEADER`, pinned to `docs/api/limits.json` by
+  `lib/api/limits-contract.test.ts`), which
+  `saveAtVersion` hands back as the state's `version`: saved again it lands,
+  and a colleague's later write still refuses it. It keeps the server copy it
+  shows the same way: a newer copy (`revision`, which `atVersion` requires and
+  which names everything the fields show, the title dialog's languages
+  included, so no guarded form can show an old copy at a fresh version;
+  `NO_DRAFT` for a form of buttons and hidden fields alone) remounts an
+  untouched form with it, but never replaces an edited draft, whose save is
+  then refused instead. A screen reads the contest before its content
+  (`loadContestResource` waits for the render's one read of the contest), so a
+  write landing between the two reads leaves a
+  newer copy at an older version, which refuses, never the reverse. So a sibling save or an
+  unguarded action
+  that re-reads the page makes it refuse with the reload rather than write a
+  stale draft over a colleague's change. One organiser editing two forms of a
+  page at once and saving one is then refused on the other, the accepted
+  cost. A draft a screen holds in state lives inside the form (`ScriptEditor`,
+  `StructureEditor`, `LanguageFields`, `PolicyFields`, `QuestionFields`,
+  `PerLanguageFields`), so the reload's restart rebuilds it from the re-read
+  page. The version is the contest's, so a tab
+  left open is refused after any write to its contest, even one to another
+  question: parallel tabs of one contest see more refusals than their edits
+  strictly conflict. A status action whose status moved
+  during the save is refused as `status_changed` instead, which offers no
+  reload. Under `contest_changed`, `ReloadWhenChanged`
   (`app/(admin)/contests/[contestId]/reload-when-changed.tsx`) offers a
   reload, which re-reads the page and starts the form over with the fresh
-  copy. All five forms carry it.
+  copy. Every form that can get it carries it.
 
 ### A form submitted through a server action, traced
 
@@ -923,8 +959,12 @@ tests like `app/(admin)/contests/[contestId]/people/actions.test.ts`.
    `ActionOutcome`, or an `ActionFooter` for a save row. Pass ids as `fields`,
    a question as `confirm` for a destructive step, and `revision` where the
    fields show a server copy that a save changes; do not key the form. A
-   contest form that can be refused with `contest_changed` adds
-   `ReloadWhenChanged`.
+   contest form that saves the contest or its content spreads
+   `atVersion(contest, revision)` on the form, naming the server copy it
+   shows, its action sends through `saveAtVersion`, and it adds
+   `ReloadWhenChanged` for the `contest_changed` refusal. A draft it holds in
+   state goes in a component inside the form, which calls `useDraftEdited`
+   for a change no field's input event reports.
 5. Test the action in `actions.test.ts` with `vi.mock("next/cache")` and a
    partial mock of `@/lib/api/server` that replaces `serverRequest` and keeps
    the real `serverAction` (see `people/actions.test.ts`). A mock of
