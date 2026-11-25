@@ -597,13 +597,21 @@ ones you hear about, and what to do
 
 #### A save says the contest changed
 
-A settings, prize-places or archive save made on a form loaded before another
-organiser's save, a content edit, or the scheduler's start or finish meets
-"This contest changed while you were deciding" (`contest_changed`); a status
+A save of the settings, prize places, archive settings or any of the content
+(the title, languages, SQL policy, story, table descriptions, questions, and
+the game's script and table structure) made on a form loaded before another
+organiser's save, a
+content edit, or the scheduler's start or finish meets "This contest changed
+while you were deciding" (`contest_changed`); a status
 change and the reveal meet it only when the contest moves while they are
 being saved. Nothing was saved. Press **Reload the page** under the sentence,
 check the contest as it now is, and save again
 ([8. Troubleshooting](08-troubleshooting.md#a-save-says-the-contest-changed-while-you-were-deciding)).
+The version is the whole contest's: two organisers editing different
+questions in two tabs still refuse each other's stale screens, so reload a
+tab that has been open a while before saving from it. A form you have typed
+into keeps the version it was loaded at even when another save on the same
+page moves it, so save one form before starting on the next.
 
 A stale status change is refused unless the move is still allowed from where
 the contest now is (`invalid_transition`, or `status_changed` when the status

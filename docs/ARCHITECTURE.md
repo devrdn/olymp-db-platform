@@ -2781,14 +2781,35 @@ A decision taken against a row that has since moved is refused with
 published contest cannot land on the running one the scheduler made of it, and
 of two organisers saving at once the second reloads instead of silently
 overwriting the first. The contest response carries the version, and
-`PATCH /contests/{id}`, `PUT .../prize-places` and `PUT .../archive-settings`
-take it back as an optional `expected_version`: when present, `Update`,
-`SetPrizePlaces` and `SetArchiveSettings` refuse a row at any other version the
-same way (one check, `Contest.checkVersion`), so the check covers the time the
-screen was open, not only the request. Without it the save applies to
+`PATCH /contests/{id}`, `PUT .../prize-places`, `PUT .../archive-settings` and
+every route that edits the content (below) take it back as an optional
+`expected_version`: when present, `Update`, `SetPrizePlaces`,
+`SetArchiveSettings` and `BeginContentEdit` refuse a row at any other version
+the same way (one check, `VersionGuard.check`), so the check covers the time
+the screen was open, not only the request. Without it the save applies to
 whatever is stored. The interface's settings, prize-places and archive forms
-always send it, and under a `contest_changed` refusal offer a reload that
-starts the form over with the contest as it now is. The repository decides
+and every content form always send it, and under a `contest_changed` refusal
+offer a reload that starts the form over with the contest as it now is, a
+draft held in the screen's state included. The version a form sends is the
+one its draft is based on: an untouched form takes each re-read of the page,
+and from its first edit a form keeps the version it had then, until a save of
+its own works or a reload starts it over. A save of another form on the page,
+or an action the server does not guard, therefore cannot hand an edited draft
+a version it never saw; its save is refused with the reload instead of
+written over a colleague's change. The cost is a refusal when one organiser
+edits two forms of a page at once and saves one, accepted because nothing is
+then overwritten silently. Every save of the contest or its content takes
+the expected version in one shape, a `contests.VersionGuard`, and its
+answer names the version it left the contest at in a `Contest-Version`
+header (`headers` in `docs/api/limits.json`), sent only once the save
+succeeded: a content edit records the version `BeginContentEdit` wrote
+while the edit holds the contest's lock, and the settings, prize-places and
+archive saves the version of the row their own conditional write returned.
+A draft typed while its own save was sending is based on exactly what that
+save stored. Every read of a contest's content waits for the contest's
+(`loadContestResource`), so a write landing between the two reads pairs a
+newer copy with an older version, which refuses, never an older copy with
+a newer one. The repository decides
 only that refusal and `ErrNotFound`; the rules (the running-contest locks, an
 archived contest's prize places, the self-registration visibility) are the
 domain's alone.
@@ -2800,11 +2821,33 @@ The publish gate reads more than the row: the story, the questions, the
 languages and titles, and whether the game is built. Every edit of a contest's
 content, the SQL policy, a game replacement, a build request and a table's
 data included, begins with `contests.BeginContentEdit` in its own transaction:
-it locks the contest row, refuses a contest whose content is frozen, and moves
-the version. Two edits of one contest therefore take turns rather than refuse
-each other, an edit that waited on a start sees the running contest and is
-refused as not editable, and a publish or start whose gate counted a question
-deleted since, or saw a game built that has since been replaced, is refused.
+it locks the contest row, refuses an edit whose `expected_version` the row has
+moved past, refuses a contest whose content is frozen, and moves the version.
+The version is checked before the freeze, so a screen loaded before the start
+is told the contest changed. Two edits of one contest therefore take turns
+rather than refuse each other, an edit that waited on a start sees the
+running contest and is refused as not editable, and a publish or start whose
+gate counted a question deleted since, or saw a game built that has since
+been replaced, is refused. Of two edits decided against the same screen, the
+second is refused as `contest_changed` when it carries the version. Every edit
+of text an organiser typed takes it: the title, languages, SQL policy, story,
+table descriptions, every question route (add, save, reorder, and delete,
+which reads it from its query string, since a proxy may drop the body of a
+`DELETE` and the guard would then fail open; the query is read as strictly as
+the body, so one that does not parse, any other parameter, a misspelt or
+differently cased name among them, and a padded value are refused rather than
+read as no version), and the game's script and
+table-builder definition. The game's other edits pass none: an upload
+replaces the game with a file, a build request asks for what is stored, and a
+table row is added or removed one at a time under its own guard
+(`game_table_data_changed`). The version is the contest's, not the edited
+part's, so the guard is coarse on purpose: a screen left open is refused
+after any write to its contest, a colleague's change to another question or
+the scheduler's start included, and organisers working in several tabs of one
+contest see more `contest_changed` refusals than the edits strictly conflict.
+For the game the editability check outside the transaction comes first, so a
+stale screen on a contest that has started meanwhile is answered
+`game_not_editable`.
 `internal/provisioning` calls it with `contests.ContentRows`, a required
 argument of `NewGames` with the unit of work, and answers its refusals in its
 own terms; `contests` therefore never imports `provisioning`. A cover change
@@ -5053,10 +5096,10 @@ sessions.
 
 
 **CI is split by component.** The error-dictionary check reads
-`docs/api/error-codes.json`, and the check of the bounds the interface repeats
-reads `docs/api/limits.json`, both generated by the backend, rather than the
-backend's sources — so the path filters are honest: a change in Go no longer
-drags a frontend run with it, and the reverse. Images are built on a push to
+`docs/api/error-codes.json`, and the check of the bounds and header names the
+interface repeats reads `docs/api/limits.json`, both generated by the backend,
+rather than the backend's sources — so the path filters are honest: a change
+in Go no longer drags a frontend run with it, and the reverse. Images are built on a push to
 `main` and published only from a tag, after the tests and the security scan
 (the frontend's is a dependency audit). Each image is built for linux/amd64 and
 linux/arm64 on runners of those architectures, without emulation; a publish

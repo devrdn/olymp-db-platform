@@ -126,8 +126,8 @@ flowchart TB
   imports no domain package.
 - **`cmd/*`** are thin: flags, signals, exit codes. `cmd/apicontract` and
   `cmd/auditcontract` generate the contract files under `docs/api/`: the
-  error codes and the bounds the interface repeats (`limits.json`), and the
-  audit actions.
+  error codes, the bounds the interface repeats and the response headers it
+  reads (`limits.json`), and the audit actions.
 
 Why the runner is a separate process, in one line: it links PostgreSQL's
 parser through cgo, and a crash in C code reading attacker-chosen text must not

@@ -1103,18 +1103,30 @@ value to both on the make command line (`make QUERY_PER_MINUTE=120 run`, then
 
 ### A save says the contest changed while you were deciding
 
-**Symptom.** Saving a contest's settings, prize places or archive settings, a
-status change, or the reveal of the standings answers "This contest changed
+**Symptom.** Saving a contest's settings, prize places or archive settings, its
+title, languages, SQL policy, story, table descriptions, questions, game
+script or table structure, a status
+change, or the reveal of the standings answers "This contest changed
 while you were deciding: somebody saved it, or it started or ended"
 (`contest_changed`), with a **Reload the page** button under it.
 
-**Cause.** The settings, prize-places and archive forms send the version of
-the contest they were loaded at, so a save from any of them is refused when
-another organiser saved the contest, a content edit moved it, or the
-scheduler started or finished it since the form was rendered. The three move
-one version: a prize-places save makes a settings form loaded before it
-stale, and the other way round, while a save on the same page re-reads it and
-hands the other forms the new version. A status change and the reveal carry
+**Cause.** The settings, prize-places and archive forms and every content form
+(the title, languages, SQL policy, story, table descriptions, the question
+list, the question editor, the game's script and its table structure) send
+the version of the contest they were
+loaded at, so a save from any of them is refused when another organiser saved
+the contest, a content edit moved it, or the scheduler started or finished it
+since the form was rendered. All of them move one version: a story saved in
+one tab makes a question editor or a settings form loaded before it stale,
+and the other way round, while a save on the same page re-reads it and hands
+the other untouched forms the new version. A form you have already typed
+into keeps the version it was loaded at, so saving another form of the page
+first, or adding a table row or starting a build, makes its save refused
+with the reload too: reload, and make that change again over the contest as
+it now is. The version is per contest, not per
+question, so organisers working in parallel tabs of one contest see this
+more often than their edits actually conflict. The game's uploads, build and
+single table rows send none. A status change and the reveal carry
 no version from the screen: they are checked against the row they read while
 the save is decided, so they are refused only when the contest moved during
 the save itself. They are decided against the contest as it now is: a stale
