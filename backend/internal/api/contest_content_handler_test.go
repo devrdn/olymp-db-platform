@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -399,9 +400,14 @@ func TestQuestionTextRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 
 func (f *contestFixture) addQuestion(t *testing.T, contestID uuid.UUID) string {
 	t.Helper()
+	return f.addQuestionWorth(t, contestID, 5)
+}
+
+func (f *contestFixture) addQuestionWorth(t *testing.T, contestID uuid.UUID, points int) string {
+	t.Helper()
 
 	rec := f.do(http.MethodPost, "/contests/"+contestID.String()+"/questions",
-		`{"kind": "text", "points": 5}`)
+		fmt.Sprintf(`{"kind": "text", "points": %d}`, points))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("could not add a question: %d %s", rec.Code, rec.Body.String())
 	}
@@ -570,5 +576,24 @@ func TestTheSupersededQuestionRoutesAreGone(t *testing.T) {
 		if rec := f.do(call.method, call.path, `{}`); rec.Code != call.want {
 			t.Errorf("%s %s = %d, want %d", call.method, call.path, rec.Code, call.want)
 		}
+	}
+}
+
+// A query string can name a parameter twice, which a body field cannot; the
+// delete refuses to pick one rather than guess which version was meant.
+func TestAQuestionDeleteNamingTheVersionTwiceIsRefused(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	question := f.addQuestion(t, c.ID)
+	stored, _ := f.stores.Contests.ByID(t.Context(), c.ID)
+	current := fmt.Sprint(stored.Version)
+
+	rec := f.do(http.MethodDelete, questionPath(c.ID, question)+"?expected_version="+current+"&expected_version="+current, "")
+
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+		t.Fatalf("status = %d (%s), want 400 invalid_request", rec.Code, rec.Body.String())
+	}
+	if questions, _ := f.stores.Questions.List(t.Context(), c.ID); len(questions) != 1 {
+		t.Error("the refused delete removed the question")
 	}
 }

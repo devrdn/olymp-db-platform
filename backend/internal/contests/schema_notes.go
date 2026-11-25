@@ -55,10 +55,10 @@ func (s *Service) SchemaNotes(ctx context.Context, contestID uuid.UUID) (SchemaN
 // SetSchemaNotes replaces the table descriptions' whole language set. A blank
 // text is dropped rather than stored, so a language is either written or
 // absent and the participant's tab never opens on nothing.
-func (s *Service) SetSchemaNotes(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (SchemaNotes, error) {
+func (s *Service) SetSchemaNotes(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, bodies map[string]string) (SchemaNotes, error) {
 	var saved SchemaNotes
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID, guard); err != nil {
 			return err
 		}
 		written := make(map[string]string, len(bodies))

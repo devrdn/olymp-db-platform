@@ -315,16 +315,39 @@ func (c Contest) FreezeFitsWindow() bool {
 	return ok && c.StartsAt != nil && c.StartsAt.Before(freezeAt)
 }
 
-// checkVersion is the guard of UpdateCommand.ExpectedVersion, which
-// SetPrizePlaces and SetArchiveSettings take too: a write decided against
-// expected is refused once the contest has moved past it, and nil expects
+// VersionGuard is how every save of a contest or its content takes the
+// version it was decided against, and reports the one it left the contest
+// at: Update, SetPrizePlaces and SetArchiveSettings for the row, and every
+// content edit through BeginContentEdit. A nil guard expects and reports
 // nothing.
-func (c Contest) checkVersion(expected *int64) error {
-	if expected != nil && *expected != c.Version {
+type VersionGuard struct {
+	// Expected is the version the save was decided against; nil expects nothing.
+	Expected *int64
+	// Stored is the version the save wrote, set once its write is done. It
+	// names a committed version only when the save returned no error.
+	Stored int64
+}
+
+// Expect is a guard expecting version; nil expects nothing.
+func Expect(version *int64) *VersionGuard {
+	return &VersionGuard{Expected: version}
+}
+
+// check refuses a save decided against an expected version once the contest
+// c has moved past it.
+func (g *VersionGuard) check(c Contest) error {
+	if g != nil && g.Expected != nil && *g.Expected != c.Version {
 		return fmt.Errorf("%w: it was read at version %d and is now at %d",
-			ErrContestChanged, *expected, c.Version)
+			ErrContestChanged, *g.Expected, c.Version)
 	}
 	return nil
+}
+
+// stored records the version of the row the save wrote.
+func (g *VersionGuard) stored(written Contest) {
+	if g != nil {
+		g.Stored = written.Version
+	}
 }
 
 // SettingsEditable reports whether the contest's own fields may still change.

@@ -17,7 +17,7 @@ func TestSchemaNotesAreStoredInEveryLanguageTheyWereWrittenIn(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	saved, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, map[string]string{
+	saved, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 		"en": "`suspects`: one row per person of interest.",
 		"ro": "`suspects`: câte un rând pentru fiecare suspect.",
 	})
@@ -57,7 +57,7 @@ func TestSchemaNotesOfAContestThatIsNotThereAreNotFound(t *testing.T) {
 	if _, err := f.Service.SchemaNotes(context.Background(), uuid.New()); !errors.Is(err, contests.ErrNotFound) {
 		t.Errorf("SchemaNotes() = %v, want ErrNotFound", err)
 	}
-	if _, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), uuid.New(), map[string]string{"en": "x"}); !errors.Is(err, contests.ErrNotFound) {
+	if _, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), uuid.New(), nil, map[string]string{"en": "x"}); !errors.Is(err, contests.ErrNotFound) {
 		t.Errorf("SetSchemaNotes() = %v, want ErrNotFound", err)
 	}
 }
@@ -68,7 +68,7 @@ func TestABlankSchemaNoteIsNotStored(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	saved, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, map[string]string{
+	saved, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 		"en": "Every table is described here.",
 		"ro": "  \n\t ",
 		"ru": "",
@@ -91,7 +91,7 @@ func TestSchemaNotesRefuseALanguageTheInstallationDoesNotOffer(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	_, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, map[string]string{
+	_, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 		"rus": "Таблицы.",
 	})
 
@@ -108,7 +108,7 @@ func TestSchemaNotesCannotChangeOnceTheContestHasStarted(t *testing.T) {
 			f := conteststest.NewFixture()
 			c := f.SeedContest(status)
 
-			_, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, map[string]string{
+			_, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 				"en": "A different schema entirely.",
 			})
 
@@ -126,7 +126,7 @@ func TestSchemaNotesStayEditableWhilePublished(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
 
-	if _, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, map[string]string{"en": "Late fix."}); err != nil {
+	if _, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, nil, map[string]string{"en": "Late fix."}); err != nil {
 		t.Errorf("SetSchemaNotes() = %v, want nil before the start", err)
 	}
 }
@@ -136,7 +136,7 @@ func TestChangingTheSchemaNotesIsAuditedWithItsLanguages(t *testing.T) {
 	c := f.SeedContest(contests.StatusDraft)
 	actor := uuid.New()
 
-	if _, err := f.Service.SetSchemaNotes(context.Background(), actor, c.ID,
+	if _, err := f.Service.SetSchemaNotes(context.Background(), actor, c.ID, nil,
 		map[string]string{"ro": "Tabelele.", "en": "The tables."}); err != nil {
 		t.Fatalf("SetSchemaNotes() = %v", err)
 	}
@@ -168,7 +168,7 @@ func TestSchemaNotesAreBoundedPerLanguage(t *testing.T) {
 			f := conteststest.NewFixture()
 			c := f.SeedContest(contests.StatusDraft)
 
-			_, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, map[string]string{
+			_, err := f.Service.SetSchemaNotes(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 				"en": "The tables.",
 				"ro": strings.Repeat("ș", tc.runes),
 			})

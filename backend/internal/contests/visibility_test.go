@@ -139,7 +139,7 @@ func TestSetArchiveSettingsRefusesAnExpectedVersionTheContestHasMovedPast(t *tes
 	trail := len(f.Audit.Entries)
 
 	stale := c.Version
-	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, &stale,
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, contests.Expect(&stale),
 		contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
 
 	if !errors.Is(err, contests.ErrContestChanged) {
@@ -164,7 +164,7 @@ func TestAStaleArchiveSaveClosingASelfRegistrationContestIsAContestChange(t *tes
 	opened.Enrollment, opened.Visibility, opened.Version = contests.EnrollmentOpen, contests.VisibilityOpen, c.Version+1
 	f.Contests.Put(opened)
 
-	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, &stale,
+	_, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, contests.Expect(&stale),
 		contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
 
 	if !errors.Is(err, contests.ErrContestChanged) {
@@ -176,7 +176,7 @@ func TestSetArchiveSettingsSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	updated, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, &c.Version,
+	updated, err := f.Service.SetArchiveSettings(context.Background(), uuid.New(), c.ID, contests.Expect(&c.Version),
 		contests.ArchiveSettings{Visibility: contests.VisibilityOpen})
 
 	if err != nil {

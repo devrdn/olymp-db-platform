@@ -580,10 +580,23 @@ func (h *ContestsHandler) mayOffer(r *http.Request, permission string, contestID
 }
 
 // versionGuard is the version a client decided a contest save against, which
-// the settings, prize places and archive settings saves take; absent or null,
-// the save applies to whatever is stored.
+// the settings, prize places and archive settings saves take, and every edit
+// of the contest's content; absent or null, the save applies to whatever is
+// stored.
 type versionGuard struct {
 	ExpectedVersion *int64 `json:"expected_version"`
+}
+
+// ContestVersionHeader names, in the answer of every save versionGuard
+// guards and only once it succeeded, the version the save left the contest
+// at, so a draft typed while the save was sending can be based on what it
+// stored. cmd/apicontract publishes it in docs/api/limits.json, which the
+// interface is tested against.
+const ContestVersionHeader = "Contest-Version"
+
+// sayContestVersion writes ContestVersionHeader; call it before the answer.
+func sayContestVersion(w http.ResponseWriter, version int64) {
+	w.Header().Set(ContestVersionHeader, strconv.FormatInt(version, 10))
 }
 
 type contestUpdateRequest struct {
@@ -607,16 +620,18 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
+	guard := contests.Expect(req.ExpectedVersion)
 	updated, err := h.service.Update(r.Context(), contests.UpdateCommand{
-		ActorID:         identity.UserID,
-		ContestID:       id,
-		ExpectedVersion: req.ExpectedVersion,
-		Patch:           patch,
+		ActorID:   identity.UserID,
+		ContestID: id,
+		Guard:     guard,
+		Patch:     patch,
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
 }
 
@@ -663,13 +678,15 @@ func (h *ContestsHandler) setPrizePlaces(w http.ResponseWriter, r *http.Request)
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	updated, err := h.service.SetPrizePlaces(r.Context(), identity.UserID, id, req.ExpectedVersion, contests.PrizePlaces{
+	guard := contests.Expect(req.ExpectedVersion)
+	updated, err := h.service.SetPrizePlaces(r.Context(), identity.UserID, id, guard, contests.PrizePlaces{
 		First: req.First, Second: req.Second, Third: req.Third,
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
 }
 
@@ -697,13 +714,15 @@ func (h *ContestsHandler) setArchiveSettings(w http.ResponseWriter, r *http.Requ
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	updated, err := h.service.SetArchiveSettings(r.Context(), identity.UserID, id, req.ExpectedVersion, contests.ArchiveSettings{
+	guard := contests.Expect(req.ExpectedVersion)
+	updated, err := h.service.SetArchiveSettings(r.Context(), identity.UserID, id, guard, contests.ArchiveSettings{
 		Visibility: req.Visibility, ArchiveTasks: *req.ArchiveTasks,
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
 }
 
@@ -813,6 +832,7 @@ func problemsOf(err error) []problemPayload {
 
 type languagesRequest struct {
 	Languages []LanguageResponse `json:"languages"`
+	versionGuard
 }
 
 func (h *ContestsHandler) setLanguages(w http.ResponseWriter, r *http.Request) {
@@ -827,15 +847,18 @@ func (h *ContestsHandler) setLanguages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.SetLanguages(r.Context(), identity.UserID, id, toDomainLanguages(req.Languages)); err != nil {
+	guard := contests.Expect(req.ExpectedVersion)
+	if err := h.service.SetLanguages(r.Context(), identity.UserID, id, guard, toDomainLanguages(req.Languages)); err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.NoContent(w, r)
 }
 
 type translationsRequest struct {
 	Translations map[string]TranslationResponse `json:"translations"`
+	versionGuard
 }
 
 func (h *ContestsHandler) setTranslations(w http.ResponseWriter, r *http.Request) {
@@ -850,10 +873,12 @@ func (h *ContestsHandler) setTranslations(w http.ResponseWriter, r *http.Request
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.SetTranslations(r.Context(), identity.UserID, id, toDomainTranslations(req.Translations)); err != nil {
+	guard := contests.Expect(req.ExpectedVersion)
+	if err := h.service.SetTranslations(r.Context(), identity.UserID, id, guard, toDomainTranslations(req.Translations)); err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.NoContent(w, r)
 }
 
@@ -889,13 +914,17 @@ func (h *ContestsHandler) setPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req PolicyResponse
+	var req struct {
+		PolicyResponse
+		versionGuard
+	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	err := h.service.SetPolicy(r.Context(), identity.UserID, id, contests.SQLPolicy{
+	guard := contests.Expect(req.ExpectedVersion)
+	err := h.service.SetPolicy(r.Context(), identity.UserID, id, guard, contests.SQLPolicy{
 		Mode:            req.Mode,
 		WritableTables:  req.WritableTables,
 		AllowCreateView: req.AllowCreateView,
@@ -908,6 +937,7 @@ func (h *ContestsHandler) setPolicy(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.NoContent(w, r)
 }
 

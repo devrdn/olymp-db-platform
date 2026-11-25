@@ -102,7 +102,7 @@ func anyAge() time.Time { return time.Now().Add(time.Hour) }
 // withSuspects saves a builder definition holding only suspectsTable.
 func withSuspects(t testing.TB, service *provisioning.Games, contest uuid.UUID) {
 	t.Helper()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest,
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil,
 		provisioning.Definition{Tables: []provisioning.TableDefinition{suspectsTable()}}); err != nil {
 		t.Fatalf("save the definition: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString(t *testing.T) 
 	t.Parallel()
 	service, _, cluster, _ := tableDataGames(t, true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, provisioning.Definition{
 		Tables: []provisioning.TableDefinition{{
 			Name: "witnesses",
 			Columns: []provisioning.ColumnDefinition{
@@ -536,7 +536,7 @@ func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 		t.Fatalf("row 1: %v", err)
 	}
 
-	if _, err := service.SetScript(t.Context(), uuid.New(), contest, "SELECT 1;"); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, nil, "SELECT 1;"); err != nil {
 		t.Fatalf("save a script: %v", err)
 	}
 	ids, err := files.UploadIDs(anyAge())
@@ -547,7 +547,7 @@ func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 		t.Fatalf("%d table data file(s) outlived the game they belonged to", len(ids))
 	}
 
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, provisioning.Definition{
 		Tables: []provisioning.TableDefinition{{
 			Name: "suspects",
 			Columns: []provisioning.ColumnDefinition{
@@ -819,7 +819,7 @@ func TestBuildingATableBuilderGameQuotesARowCopyWouldReadAsEndOfData(t *testing.
 	t.Parallel()
 	service, _, cluster, _ := tableDataGames(t, true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, provisioning.Definition{
 		Tables: []provisioning.TableDefinition{{
 			Name:    "notes",
 			Columns: []provisioning.ColumnDefinition{{Name: "body", Type: provisioning.ColumnText}},
@@ -1087,7 +1087,7 @@ func TestSwitchingASourceClearsWhatTheOtherOneLeftBehind(t *testing.T) {
 	}
 
 	// The definition must be cleared, or the CHECK refuses the upsert.
-	if _, err := service.SetScript(t.Context(), uuid.New(), contest.ID, "CREATE TABLE t (id integer);"); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest.ID, nil, "CREATE TABLE t (id integer);"); err != nil {
 		t.Fatalf("switch to an editor script: %v", err)
 	}
 	stored, err = postgres.NewGameInstances(testPool).Template(t.Context(), contest.ID)
@@ -1109,7 +1109,7 @@ func TestSwitchingASourceClearsWhatTheOtherOneLeftBehind(t *testing.T) {
 // index can be told from a per-contest one.
 func withTwoTables(t *testing.T, service *provisioning.Games, contest uuid.UUID) {
 	t.Helper()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, provisioning.Definition{
 		Tables: []provisioning.TableDefinition{
 			suspectsTable(),
 			{
@@ -1168,7 +1168,7 @@ func BenchmarkCompleteTableUpload(b *testing.B) {
 		b.StopTimer()
 		service, _, _, _ := tableDataGames(b, true)
 		contest := uuid.New()
-		if _, err := service.SetDefinition(b.Context(), uuid.New(), contest,
+		if _, err := service.SetDefinition(b.Context(), uuid.New(), contest, nil,
 			provisioning.Definition{Tables: []provisioning.TableDefinition{benchmarkTable()}}); err != nil {
 			b.Fatalf("save the definition: %v", err)
 		}
@@ -1190,7 +1190,7 @@ func BenchmarkTableDataWindowLastPage(b *testing.B) {
 
 	service, _, _, _ := tableDataGames(b, true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(b.Context(), uuid.New(), contest,
+	if _, err := service.SetDefinition(b.Context(), uuid.New(), contest, nil,
 		provisioning.Definition{Tables: []provisioning.TableDefinition{benchmarkTable()}}); err != nil {
 		b.Fatalf("save the definition: %v", err)
 	}

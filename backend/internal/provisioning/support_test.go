@@ -1305,7 +1305,7 @@ func TestABuildInTheseTestsTakesItsOwnGameEvenWhenAnotherPackagesGameIsOlder(t *
 	}
 
 	games := provisioning.NewGames(onPostgres(ownBuilds(contest.ID)), &buildCluster{}, editableContest{}, noContest{}, directly{})
-	if _, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `SELECT 1`); err != nil {
+	if _, err := games.SetScript(t.Context(), uuid.New(), contest.ID, nil, `SELECT 1`); err != nil {
 		t.Fatalf("save this test's game: %v", err)
 	}
 

@@ -149,7 +149,7 @@ func TestSetPrizePlacesRefusesAnExpectedVersionTheContestHasMovedPast(t *testing
 	trail := len(f.Audit.Entries)
 
 	stale := c.Version
-	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, &stale, contests.PrizePlaces{Third: 4})
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, contests.Expect(&stale), contests.PrizePlaces{Third: 4})
 
 	if !errors.Is(err, contests.ErrContestChanged) {
 		t.Fatalf("SetPrizePlaces() = %v, want ErrContestChanged", err)
@@ -172,7 +172,7 @@ func TestAStalePrizeSaveOnAContestArchivedSinceIsAContestChange(t *testing.T) {
 	archived.Status, archived.Version = contests.StatusArchived, c.Version+1
 	f.Contests.Put(archived)
 
-	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, &stale, contests.PrizePlaces{First: 1})
+	_, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, contests.Expect(&stale), contests.PrizePlaces{First: 1})
 
 	if !errors.Is(err, contests.ErrContestChanged) {
 		t.Errorf("SetPrizePlaces() = %v, want ErrContestChanged", err)
@@ -183,7 +183,7 @@ func TestSetPrizePlacesSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	updated, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, &c.Version, contests.PrizePlaces{Third: 4})
+	updated, err := f.Service.SetPrizePlaces(context.Background(), uuid.New(), c.ID, contests.Expect(&c.Version), contests.PrizePlaces{Third: 4})
 
 	if err != nil {
 		t.Fatalf("SetPrizePlaces() = %v", err)

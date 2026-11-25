@@ -565,7 +565,7 @@ func TestSwitchingToTheEditorRetiresTheUploadedFileItReplaces(t *testing.T) {
 		t.Fatalf("complete: %v", err)
 	}
 
-	template, err := games.SetScript(t.Context(), actor, contest.ID, "CREATE TABLE t (id int);\n")
+	template, err := games.SetScript(t.Context(), actor, contest.ID, nil, "CREATE TABLE t (id int);\n")
 	if err != nil {
 		t.Fatalf("set script: %v", err)
 	}
@@ -622,7 +622,7 @@ func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
 	if _, err := games.CompleteUpload(t.Context(), actor, contest.ID, upload.ID); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	if _, err := games.SetScript(t.Context(), actor, contest.ID, "CREATE TABLE t (id int);\n"); err != nil {
+	if _, err := games.SetScript(t.Context(), actor, contest.ID, nil, "CREATE TABLE t (id int);\n"); err != nil {
 		t.Fatalf("set script: %v", err)
 	}
 

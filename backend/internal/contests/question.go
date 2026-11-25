@@ -299,6 +299,8 @@ type QuestionCommand struct {
 	ChoiceIDs []string
 	// Texts, when given, are the question's authored text.
 	Texts map[string]QuestionText
+	// Guard is BeginContentEdit's: nil expects nothing.
+	Guard *VersionGuard
 }
 
 // Questions returns the contest's questions in display order.
@@ -329,7 +331,7 @@ func (s *Service) questionOf(ctx context.Context, contestID, questionID uuid.UUI
 func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Question, error) {
 	var created Question
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		c, err := BeginContentEdit(ctx, s.contests, cmd.ContestID)
+		c, err := BeginContentEdit(ctx, s.contests, cmd.ContestID, cmd.Guard)
 		if err != nil {
 			return err
 		}
@@ -402,6 +404,8 @@ type SaveQuestionCommand struct {
 	ChoiceIDs  []string
 	Texts      map[string]QuestionText
 	Answers    []Answer
+	// Guard is BeginContentEdit's: nil expects nothing.
+	Guard *VersionGuard
 }
 
 // SaveQuestion replaces a question whole: fields, texts and answers are
@@ -411,7 +415,7 @@ type SaveQuestionCommand struct {
 func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Question, error) {
 	var updated Question
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		c, err := BeginContentEdit(ctx, s.contests, cmd.ContestID)
+		c, err := BeginContentEdit(ctx, s.contests, cmd.ContestID, cmd.Guard)
 		if err != nil {
 			return err
 		}
@@ -506,9 +510,9 @@ func sameAnswers(before, after []Answer) bool {
 }
 
 // DeleteQuestion removes a question from a contest.
-func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID, questionID uuid.UUID) error {
+func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, questionID uuid.UUID) error {
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID, guard); err != nil {
 			return err
 		}
 		if _, err := s.questionOf(ctx, contestID, questionID); err != nil {
@@ -525,9 +529,9 @@ func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID, questi
 
 // ReorderQuestions sets the display order. The list must name every question
 // exactly once, or positions would be duplicated or missing.
-func (s *Service) ReorderQuestions(ctx context.Context, actorID, contestID uuid.UUID, ordered []uuid.UUID) error {
+func (s *Service) ReorderQuestions(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, ordered []uuid.UUID) error {
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID, guard); err != nil {
 			return err
 		}
 		existing, err := s.questions.List(ctx, contestID)

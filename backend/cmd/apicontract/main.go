@@ -1,7 +1,9 @@
 // Command apicontract writes what the interface must agree with the API on:
 // the error codes it checks its translations against, and the bounds it
-// repeats so that a field stops at them (limits.go). The code catalog is
-// complete by construction: httpx.Error accepts only declared codes.
+// repeats so that a field stops at them and the response headers it reads
+// (limits.go). The code catalog is complete by construction: httpx.Error
+// accepts only declared codes, and limits.go links internal/api in, whose
+// codes are declared at init.
 //
 // It is generated, committed and checked by a test:
 //
@@ -15,9 +17,6 @@ import (
 	"os"
 	"path/filepath"
 
-	// Imported to declare codes at init; every package with codes must be
-	// linked in.
-	_ "github.com/devrdn/olymp-db-platform/backend/internal/api"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 )
 

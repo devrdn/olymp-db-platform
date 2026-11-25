@@ -362,7 +362,7 @@ func TestAQuestionOfAnotherContestCannotBeReached(t *testing.T) {
 		t.Fatalf("AddQuestion() = %v", err)
 	}
 
-	err = f.Service.DeleteQuestion(context.Background(), uuid.New(), mine.ID, victim.ID)
+	err = f.Service.DeleteQuestion(context.Background(), uuid.New(), mine.ID, nil, victim.ID)
 
 	if !errors.Is(err, contests.ErrQuestionNotFound) {
 		t.Errorf("DeleteQuestion() across contests = %v, want ErrQuestionNotFound", err)
@@ -375,7 +375,7 @@ func TestDeletingAQuestionClosesTheGapInTheOrder(t *testing.T) {
 	first, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 	_, _ = f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 
-	if err := f.Service.DeleteQuestion(context.Background(), uuid.New(), c.ID, first.ID); err != nil {
+	if err := f.Service.DeleteQuestion(context.Background(), uuid.New(), c.ID, nil, first.ID); err != nil {
 		t.Fatalf("DeleteQuestion() = %v", err)
 	}
 
@@ -392,7 +392,7 @@ func TestReorderMustNameEveryQuestion(t *testing.T) {
 	first, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 	_, _ = f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 
-	err := f.Service.ReorderQuestions(context.Background(), uuid.New(), c.ID, []uuid.UUID{first.ID})
+	err := f.Service.ReorderQuestions(context.Background(), uuid.New(), c.ID, nil, []uuid.UUID{first.ID})
 
 	if !errors.Is(err, contests.ErrInvalidQuestion) {
 		t.Errorf("ReorderQuestions() with a partial list = %v, want ErrInvalidQuestion", err)
@@ -405,7 +405,7 @@ func TestReorderPutsTheQuestionsInTheGivenOrder(t *testing.T) {
 	first, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 	second, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
 
-	if err := f.Service.ReorderQuestions(context.Background(), uuid.New(), c.ID,
+	if err := f.Service.ReorderQuestions(context.Background(), uuid.New(), c.ID, nil,
 		[]uuid.UUID{second.ID, first.ID}); err != nil {
 		t.Fatalf("ReorderQuestions() = %v", err)
 	}

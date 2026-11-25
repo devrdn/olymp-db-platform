@@ -282,9 +282,10 @@ type Authoring interface {
 
 // beginGameEdit is contests.BeginContentEdit for the game, answered in this
 // package's terms: a frozen contest is ErrGameNotEditable and a missing one
-// ErrNoGame, as every game route already says.
-func (g *Games) beginGameEdit(ctx context.Context, contestID uuid.UUID) error {
-	_, err := contests.BeginContentEdit(ctx, g.contests, contestID)
+// ErrNoGame, as every game route already says; a contest moved past
+// guard.Expected stays contests.ErrContestChanged.
+func (g *Games) beginGameEdit(ctx context.Context, contestID uuid.UUID, guard *contests.VersionGuard) error {
+	_, err := contests.BeginContentEdit(ctx, g.contests, contestID, guard)
 	switch {
 	case errors.Is(err, contests.ErrNotEditable):
 		return fmt.Errorf("%w: %w", ErrGameNotEditable, err)
@@ -459,7 +460,7 @@ func (g *Games) Script(ctx context.Context, contestID uuid.UUID) (script string,
 //
 // It does not build: the game goes back to pending and a worker builds it
 // (Build), because a build can take far longer than an HTTP request should.
-func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, script string) (Template, error) {
+func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, guard *contests.VersionGuard, script string) (Template, error) {
 	switch {
 	case len(script) == 0:
 		return Template{}, ErrScriptEmpty
@@ -473,7 +474,7 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 		return Template{}, err
 	}
 
-	return g.replaceGame(ctx, contestID, displaced,
+	return g.replaceGame(ctx, contestID, guard, displaced,
 		func(ctx context.Context) (Template, error) {
 			return g.repo.SaveScript(ctx, contestID, templateName(contestID), script)
 		},
@@ -494,7 +495,7 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 // It is validated on save, not at build time, so the organiser sees the
 // mistake when they make it; that includes changes to a table that already
 // holds data (checkTableDataCompatibility). Like SetScript, it does not build.
-func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, definition Definition) (Template, error) {
+func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, guard *contests.VersionGuard, definition Definition) (Template, error) {
 	if err := definition.Validate(); err != nil {
 		return Template{}, err
 	}
@@ -508,7 +509,7 @@ func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID,
 		return Template{}, err
 	}
 
-	return g.replaceGame(ctx, contestID, displaced,
+	return g.replaceGame(ctx, contestID, guard, displaced,
 		func(ctx context.Context) (Template, error) {
 			return g.repo.SaveDefinition(ctx, contestID, templateName(contestID), definition)
 		},
@@ -558,7 +559,7 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		// A recovery build is of a running contest, which no gate is still
 		// deciding on.
 		if !recovery {
-			if err := g.beginGameEdit(ctx, contestID); err != nil {
+			if err := g.beginGameEdit(ctx, contestID, nil); err != nil {
 				return err
 			}
 		}
@@ -618,10 +619,14 @@ func (g *Games) recoverable(ctx context.Context, contestID uuid.UUID, current Te
 // CompleteUpload, SetDefinition): one editability gate, one transaction for
 // the save and its audit entry.
 //
+// guard is beginGameEdit's: the script and the definition are text an
+// organiser typed and carry it, while an upload replaces the game with a
+// file and passes nil.
+//
 // displaced, when not nil, is the upload the new game leaves behind; its file
 // is removed only after the transaction commits.
 func (g *Games) replaceGame(
-	ctx context.Context, contestID uuid.UUID, displaced *uuid.UUID,
+	ctx context.Context, contestID uuid.UUID, guard *contests.VersionGuard, displaced *uuid.UUID,
 	save func(context.Context) (Template, error),
 	entry func(Template) audit.Entry,
 ) (Template, error) {
@@ -632,7 +637,7 @@ func (g *Games) replaceGame(
 	var saved Template
 	var discardedTableFiles []uuid.UUID
 	run := func(ctx context.Context) error {
-		if err := g.beginGameEdit(ctx, contestID); err != nil {
+		if err := g.beginGameEdit(ctx, contestID, guard); err != nil {
 			return err
 		}
 		var err error

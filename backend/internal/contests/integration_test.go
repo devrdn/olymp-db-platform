@@ -56,15 +56,15 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 			return err
 		}},
 		{"SetLanguages", func() error {
-			return f.Service.SetLanguages(ctx, actor, c.ID,
+			return f.Service.SetLanguages(ctx, actor, c.ID, nil,
 				[]contests.ContestLanguage{{Code: "en", IsDefault: true}})
 		}},
 		{"SetTranslations", func() error {
-			return f.Service.SetTranslations(ctx, actor, c.ID,
+			return f.Service.SetTranslations(ctx, actor, c.ID, nil,
 				[]contests.Translation{{Lang: "en", Title: "The Library Murder"}})
 		}},
 		{"SetStory", func() error {
-			_, err := f.Service.SetStory(ctx, actor, c.ID, map[string]string{"en": "A body in the stacks."})
+			_, err := f.Service.SetStory(ctx, actor, c.ID, nil, map[string]string{"en": "A body in the stacks."})
 			return err
 		}},
 		{"AddQuestion", func() error {
@@ -99,13 +99,13 @@ func TestEveryChangeIsRecordedInsideItsTransaction(t *testing.T) {
 			for _, q := range existing {
 				order = append(order, q.ID)
 			}
-			return f.Service.ReorderQuestions(ctx, actor, c.ID, order)
+			return f.Service.ReorderQuestions(ctx, actor, c.ID, nil, order)
 		}},
 		{"DeleteQuestion", func() error {
-			return f.Service.DeleteQuestion(ctx, actor, c.ID, added.ID)
+			return f.Service.DeleteQuestion(ctx, actor, c.ID, nil, added.ID)
 		}},
 		{"SetPolicy", func() error {
-			return f.Service.SetPolicy(ctx, actor, c.ID, contests.SQLPolicy{
+			return f.Service.SetPolicy(ctx, actor, c.ID, nil, contests.SQLPolicy{
 				ContestID:      c.ID,
 				Mode:           contests.ModeReadOnly,
 				DiskQuotaRatio: 2,
@@ -333,13 +333,13 @@ func TestEveryContentEditTheGateReadsMovesTheContestVersion(t *testing.T) {
 	actor := uuid.New()
 	for name, edit := range map[string]func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error{
 		"SetLanguages": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
-			return f.Service.SetLanguages(ctx, actor, c.ID, []contests.ContestLanguage{{Code: "en", IsDefault: true}})
+			return f.Service.SetLanguages(ctx, actor, c.ID, nil, []contests.ContestLanguage{{Code: "en", IsDefault: true}})
 		},
 		"SetTranslations": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
-			return f.Service.SetTranslations(ctx, actor, c.ID, []contests.Translation{{Lang: "en", Title: "Renamed"}})
+			return f.Service.SetTranslations(ctx, actor, c.ID, nil, []contests.Translation{{Lang: "en", Title: "Renamed"}})
 		},
 		"SetStory": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
-			_, err := f.Service.SetStory(ctx, actor, c.ID, map[string]string{"en": "Another body."})
+			_, err := f.Service.SetStory(ctx, actor, c.ID, nil, map[string]string{"en": "Another body."})
 			return err
 		},
 		"AddQuestion": func(f *conteststest.Fixture, c contests.Contest, _ contests.Question) error {
@@ -354,10 +354,10 @@ func TestEveryContentEditTheGateReadsMovesTheContestVersion(t *testing.T) {
 			return err
 		},
 		"DeleteQuestion": func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error {
-			return f.Service.DeleteQuestion(ctx, actor, c.ID, q.ID)
+			return f.Service.DeleteQuestion(ctx, actor, c.ID, nil, q.ID)
 		},
 		"ReorderQuestions": func(f *conteststest.Fixture, c contests.Contest, q contests.Question) error {
-			return f.Service.ReorderQuestions(ctx, actor, c.ID, []uuid.UUID{q.ID})
+			return f.Service.ReorderQuestions(ctx, actor, c.ID, nil, []uuid.UUID{q.ID})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

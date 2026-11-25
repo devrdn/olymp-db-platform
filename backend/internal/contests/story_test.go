@@ -16,7 +16,7 @@ func TestStoryIsStoredInEveryLanguageItWasAuthoredIn(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, map[string]string{
+	_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 		"en": "A body in the stacks.",
 		"ro": "Un cadavru între rafturi.",
 	})
@@ -37,7 +37,7 @@ func TestStoryRefusesALanguageTheInstallationDoesNotOffer(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, map[string]string{
+	_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 		"rus": "Тело между полками.",
 	})
 
@@ -51,7 +51,7 @@ func TestStoryCannotChangeOnceTheContestIsRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 
-	_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, map[string]string{
+	_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 		"en": "A different body entirely.",
 	})
 
@@ -64,7 +64,7 @@ func TestChangingTheStoryIsAudited(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	if _, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID,
+	if _, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, nil,
 		map[string]string{"en": "A body in the stacks."}); err != nil {
 		t.Fatalf("SetStory() = %v", err)
 	}
@@ -98,7 +98,7 @@ func TestStoryIsBoundedPerLanguage(t *testing.T) {
 			f := conteststest.NewFixture()
 			c := f.SeedContest(contests.StatusDraft)
 
-			_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, map[string]string{
+			_, err := f.Service.SetStory(context.Background(), uuid.New(), c.ID, nil, map[string]string{
 				"en": "A body in the stacks.",
 				"ro": strings.Repeat("ș", tc.runes),
 			})

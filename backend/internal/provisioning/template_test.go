@@ -23,7 +23,7 @@ func TestSettingTheScriptStoresItPendingAndBuildsNothingYet(t *testing.T) {
 	service, store, cluster := games(true)
 	contest := uuid.New()
 
-	saved, err := service.SetScript(t.Context(), uuid.New(), contest, `CREATE TABLE guests (id int);`)
+	saved, err := service.SetScript(t.Context(), uuid.New(), contest, nil, `CREATE TABLE guests (id int);`)
 	if err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestTheGameOfARunningContestCannotBeReplaced(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(false)
 
-	_, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`)
+	_, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `SELECT 1`)
 	if !errors.Is(err, provisioning.ErrGameNotEditable) {
 		t.Fatalf("answered %v, want ErrGameNotEditable", err)
 	}
@@ -74,7 +74,7 @@ func TestAnEmptyOrOversizedScriptIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service, store, _ := games(true)
-			if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), tc.script); !errors.Is(err, tc.want) {
+			if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, tc.script); !errors.Is(err, tc.want) {
 				t.Fatalf("answered %v, want %v", err, tc.want)
 			}
 			if store.present {
@@ -89,10 +89,10 @@ func TestASecondScriptBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	service, _, _ := games(true)
 	contest := uuid.New()
 
-	if _, err := service.SetScript(t.Context(), uuid.New(), contest, `SELECT 1`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, nil, `SELECT 1`); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	second, err := service.SetScript(t.Context(), uuid.New(), contest, `SELECT 2`)
+	second, err := service.SetScript(t.Context(), uuid.New(), contest, nil, `SELECT 2`)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestSettingTheDefinitionStoresItPendingAndBuildsNothingYet(t *testing.T) {
 	service, store, cluster := games(true)
 	contest := uuid.New()
 
-	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition())
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition())
 	if err != nil {
 		t.Fatalf("setting the definition: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestTheGameOfARunningContestCannotHaveItsDefinitionReplaced(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(false)
 
-	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), aDefinition())
+	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), nil, aDefinition())
 	if !errors.Is(err, provisioning.ErrGameNotEditable) {
 		t.Fatalf("answered %v, want ErrGameNotEditable", err)
 	}
@@ -157,7 +157,7 @@ func TestAnInvalidDefinitionIsRefusedBeforeAnythingIsAsked(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
 
-	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), provisioning.Definition{})
+	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), nil, provisioning.Definition{})
 	if !errors.Is(err, provisioning.ErrDefinitionEmpty) {
 		t.Fatalf("answered %v, want ErrDefinitionEmpty", err)
 	}
@@ -171,12 +171,12 @@ func TestASecondDefinitionBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	service, _, _ := games(true)
 	contest := uuid.New()
 
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	second := aDefinition()
 	second.Tables[0].Name = "witnesses"
-	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, second)
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, second)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestSavingADefinitionIsRecordedUnderItsOwnAction(t *testing.T) {
 	service = service.WithAudit(audit.New(trail))
 	contest, actor := uuid.New(), uuid.New()
 
-	saved, err := service.SetDefinition(t.Context(), actor, contest, aDefinition())
+	saved, err := service.SetDefinition(t.Context(), actor, contest, nil, aDefinition())
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 	service, store, _ := games(true)
 	contest := uuid.New()
 
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("save the first definition: %v", err)
 	}
 	// Only the row recording three lines is needed, not a file on disk.
@@ -295,7 +295,7 @@ func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := service.SetDefinition(t.Context(), uuid.New(), contest, tc.next)
+			_, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, tc.next)
 			if !errors.Is(err, provisioning.ErrDefinitionTableLocked) {
 				t.Fatalf("answered %v, want ErrDefinitionTableLocked", err)
 			}
@@ -312,7 +312,7 @@ func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
 	service, store, _ := games(true)
 	contest := uuid.New()
 
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("save the first definition: %v", err)
 	}
 	dataID := uuid.New()
@@ -326,7 +326,7 @@ func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
 		Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
 	})
 
-	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, next)
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, next)
 	if err != nil {
 		t.Fatalf("adding a sibling table beside a locked one: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestATableWithACompletedButEmptyFileIsNotLocked(t *testing.T) {
 	service, store, _ := games(true)
 	contest := uuid.New()
 
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("save the first definition: %v", err)
 	}
 	dataID := uuid.New()
@@ -358,7 +358,7 @@ func TestATableWithACompletedButEmptyFileIsNotLocked(t *testing.T) {
 		},
 		PrimaryKey: []string{"id"},
 	}}}
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, renamed); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, renamed); err != nil {
 		t.Fatalf("renaming a column of an empty table: %v", err)
 	}
 }
@@ -367,7 +367,7 @@ func TestBuildingRunsTheScriptAndRecordsTheOutcome(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
 	contest := uuid.New()
-	if _, err := service.SetScript(t.Context(), uuid.New(), contest, `CREATE TABLE guests (id int);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, nil, `CREATE TABLE guests (id int);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 
@@ -394,7 +394,7 @@ func TestABuildDescribesTheTemplateItBuiltBeforeItIsReady(t *testing.T) {
 	cluster.schema = provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "guests", Columns: []provisioning.Column{{Name: "id", Type: "integer"}}},
 	}}
-	saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE guests (id int);`)
+	saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE guests (id int);`)
 	if err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestABuildsDescriptionIsServedFromTheCache(t *testing.T) {
 	cluster.schema = provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "guests", Columns: []provisioning.Column{{Name: "id", Type: "integer"}}, PrimaryKey: []string{"id"}},
 	}}
-	saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE guests (id int PRIMARY KEY);`)
+	saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE guests (id int PRIMARY KEY);`)
 	if err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestABuildWhoseTemplateCannotBeDescribedFailsAndDropsIt(t *testing.T) {
 			t.Parallel()
 			service, store, cluster := games(true)
 			arrange(store, cluster)
-			saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE guests (id int);`)
+			saved, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE guests (id int);`)
 			if err != nil {
 				t.Fatalf("setting the script: %v", err)
 			}
@@ -488,7 +488,7 @@ func TestABuildWhoseTemplateCannotBeDescribedFailsAndDropsIt(t *testing.T) {
 func TestABuilderSourcedBuildDescribesItsTemplate(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), nil, aDefinition()); err != nil {
 		t.Fatalf("setting the definition: %v", err)
 	}
 
@@ -527,7 +527,7 @@ func TestAFailedBuildKeepsThePostgresErrorForWhoeverWroteTheScript(t *testing.T)
 	t.Parallel()
 	service, store, cluster := games(true)
 	cluster.fail = scriptRefusal{says: `the game script was refused: type "nosuchtype" does not exist (SQLSTATE 42704)`}
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE oops (x nosuchtype);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE oops (x nosuchtype);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 
@@ -558,7 +558,7 @@ func TestABuildPastTheTemplateSizeLimitTellsTheOrganiserTheGameIsTooLarge(t *tes
 	t.Parallel()
 	service, store, cluster := games(true)
 	cluster.fail = tooLarge
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE big (x int);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE big (x int);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 
@@ -598,7 +598,7 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 	trail := &sink{}
 	service = service.WithAudit(audit.New(trail))
 	cluster.fail = errors.New(connectFailureText)
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE fine (x int);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 
@@ -661,7 +661,7 @@ func TestAScriptRefusalIsBoundedAndFitToStoreBeforeItIsStored(t *testing.T) {
 	service = service.WithAudit(audit.New(trail))
 	cluster.fail = scriptRefusal{says: "line 1: \xff\xfe\x00 " + strings.Repeat("q", 4<<20)}
 
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE fine (x int);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 	built, err := service.Build(t.Context(), time.Minute)
@@ -707,7 +707,7 @@ func TestAPolicyThatCouldNotBeReadIsNotDescribedToTheOrganiserEither(t *testing.
 	store.policyErr = errors.New(
 		`read the contest's SQL policy: failed to connect to ` +
 			"`user=dbcontest database=dbcontest_core`: [::1]:5432: server closed the connection")
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `SELECT 1`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 
@@ -734,7 +734,7 @@ func TestTheBuildGrantsTheContestsOwnPolicyAndNotTheDefault(t *testing.T) {
 	writable.WritableTables = []string{"notes"}
 	store.policy = writable
 
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `SELECT 1`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 	if _, err := service.Build(t.Context(), time.Minute); err != nil {
@@ -999,7 +999,7 @@ func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *tes
 	}
 
 	contest := uuid.New()
-	if _, err := service.SetScript(t.Context(), uuid.New(), contest, `CREATE TABLE suspects (id int);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, nil, `CREATE TABLE suspects (id int);`); err != nil {
 		t.Fatalf("SetScript() returned error: %v", err)
 	}
 
@@ -1054,7 +1054,7 @@ func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScri
 	service, _, _ := games(true)
 	contest := uuid.New()
 
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("setting the definition: %v", err)
 	}
 
@@ -1115,7 +1115,7 @@ func TestNeedsBuildOnlyWhenReadyAndMarked(t *testing.T) {
 func TestABuildClearsAMarkItActuallySaw(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `SELECT 1`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 	before := time.Now().Add(-time.Hour)
@@ -1135,7 +1135,7 @@ func TestABuildClearsAMarkItActuallySaw(t *testing.T) {
 func TestABuildLeavesAMarkThatAppearedAfterTheClaim(t *testing.T) {
 	t.Parallel()
 	service, store, _ := games(true)
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `SELECT 1`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 	after := time.Now().Add(time.Hour)
@@ -1155,7 +1155,7 @@ func TestAFailedBuildLeavesTheDataMarkWhereItFoundIt(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
 	cluster.fail = scriptRefusal{says: `the game script was refused: type "nosuchtype" does not exist (SQLSTATE 42704)`}
-	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE oops (x nosuchtype);`); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, `CREATE TABLE oops (x nosuchtype);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
 	before := time.Now().Add(-time.Hour)
@@ -1179,7 +1179,7 @@ func TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion(t *testing.T
 	t.Parallel()
 	service, store, _ := games(true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("save the definition: %v", err)
 	}
 	before, err := store.TemplateStatus(t.Context(), contest)
@@ -1399,7 +1399,7 @@ func TestRequestBuildIsRefusedWhileOneIsAlreadyRunning(t *testing.T) {
 	t.Parallel()
 	service, _, _ := games(true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, aDefinition()); err != nil {
 		t.Fatalf("save the definition: %v", err)
 	}
 	// SetDefinition leaves the game 'pending': a build is already waiting.
@@ -1418,10 +1418,11 @@ func TestRequestBuildWithoutAGameSaysSo(t *testing.T) {
 	}
 }
 
-// contestRows is contests.ContentRows over one contest in status, or none
-// when missing; it records the contests whose version an edit moved.
+// contestRows is contests.ContentRows over one contest in status at version,
+// or none when missing; it records the contests whose version an edit moved.
 type contestRows struct {
 	status  string
+	version int64
 	missing bool
 	moved   []uuid.UUID
 }
@@ -1434,7 +1435,7 @@ func (r *contestRows) LockContest(context.Context, uuid.UUID) error {
 }
 
 func (r *contestRows) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
-	return contests.Contest{ID: id, Status: r.status}, nil
+	return contests.Contest{ID: id, Status: r.status, Version: r.version}, nil
 }
 
 func (r *contestRows) MarkContentChanged(_ context.Context, read contests.Contest) (contests.Contest, error) {
@@ -1452,7 +1453,7 @@ func TestReplacingAGameMovesTheContestVersion(t *testing.T) {
 		authoring{editable: true}, rows, directly{})
 	contest := uuid.New()
 
-	if _, err := service.SetScript(t.Context(), uuid.New(), contest, "CREATE TABLE suspects (name text);"); err != nil {
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, nil, "CREATE TABLE suspects (name text);"); err != nil {
 		t.Fatalf("SetScript() = %v", err)
 	}
 
@@ -1478,7 +1479,7 @@ func TestAGameReplacementOnAContestThatMovedSavesNothing(t *testing.T) {
 			service := provisioning.NewGames(store.stores(), &buildCluster{}, authoring{editable: true}, tc.rows, directly{}).
 				WithAudit(audit.New(trail))
 
-			_, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), "CREATE TABLE suspects (name text);")
+			_, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), nil, "CREATE TABLE suspects (name text);")
 
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("SetScript() = %v, want %v", err, tc.want)
@@ -1517,6 +1518,52 @@ func TestRequestingABuildMovesTheContestVersionUnlessItIsARecovery(t *testing.T)
 
 			if moved := len(rows.moved) == 1 && rows.moved[0] == contest; moved != tc.moves {
 				t.Errorf("moved the version of %v, want moved = %v", rows.moved, tc.moves)
+			}
+		})
+	}
+}
+
+// The script and the definition are text an organiser typed: one saved from a
+// screen loaded before a colleague's edit would write over it, so it is
+// refused with nothing saved or recorded, and the version the contest now
+// carries saves.
+func TestAGameTypedOverAContestThatMovedSinceIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, replace := range map[string]func(*provisioning.Games, uuid.UUID, *contests.VersionGuard) error{
+		"script": func(g *provisioning.Games, contest uuid.UUID, guard *contests.VersionGuard) error {
+			_, err := g.SetScript(t.Context(), uuid.New(), contest, guard, "CREATE TABLE suspects (name text);")
+			return err
+		},
+		"definition": func(g *provisioning.Games, contest uuid.UUID, guard *contests.VersionGuard) error {
+			_, err := g.SetDefinition(t.Context(), uuid.New(), contest, guard, aDefinition())
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store, trail := &templateStore{policy: sqlpolicy.ReadOnly()}, &sink{}
+			rows := &contestRows{status: contests.StatusDraft, version: 7}
+			service := provisioning.NewGames(store.stores(), &buildCluster{}, authoring{editable: true}, rows, directly{}).
+				WithAudit(audit.New(trail))
+			contest, stale, current := uuid.New(), int64(6), int64(7)
+
+			if err := replace(service, contest, contests.Expect(&stale)); !errors.Is(err, contests.ErrContestChanged) {
+				t.Fatalf("save(stale version) = %v, want ErrContestChanged", err)
+			}
+			if store.present || len(trail.entries) != 0 || len(rows.moved) != 0 {
+				t.Fatalf("saved = %v, %d audit entries, moved %v: want nothing", store.present, len(trail.entries), rows.moved)
+			}
+
+			guard := contests.Expect(&current)
+			if err := replace(service, contest, guard); err != nil {
+				t.Fatalf("save(current version) = %v", err)
+			}
+			if !store.present {
+				t.Error("the save at the current version stored nothing")
+			}
+			// The game handler answers it as the version the save stored.
+			if guard.Stored != current+1 {
+				t.Errorf("guard.Stored = %d, want the version the edit wrote, %d", guard.Stored, current+1)
 			}
 		})
 	}

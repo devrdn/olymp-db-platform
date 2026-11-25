@@ -49,10 +49,10 @@ func (s *Service) Story(ctx context.Context, contestID uuid.UUID) (Story, error)
 
 // SetStory replaces the story's whole language set, which the publish gate
 // checks as a unit.
-func (s *Service) SetStory(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (Story, error) {
+func (s *Service) SetStory(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, bodies map[string]string) (Story, error) {
 	var saved Story
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID, guard); err != nil {
 			return err
 		}
 		for _, body := range bodies {

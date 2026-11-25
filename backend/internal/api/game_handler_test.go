@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,6 +34,10 @@ type fakeGames struct {
 	setErr   error
 	gotSet   string
 	gotActor uuid.UUID
+	// replaced counts the script and definition saves that reached the
+	// service; gotExpected is the version the last one carried.
+	replaced    int
+	gotExpected *int64
 
 	// Upload half. gotX fields are set even on the error path.
 	beginErr        error
@@ -167,8 +172,10 @@ func (g *fakeGames) CurrentTableData(_ context.Context, contestID uuid.UUID, tab
 	return g.currentTableResult, nil
 }
 
-func (g *fakeGames) SetDefinition(_ context.Context, actorID, _ uuid.UUID, definition provisioning.Definition) (provisioning.Template, error) {
+func (g *fakeGames) SetDefinition(_ context.Context, actorID, _ uuid.UUID, guard *contests.VersionGuard, definition provisioning.Definition) (provisioning.Template, error) {
 	g.gotSetDefinition, g.gotSetDefinitionFor = definition, actorID
+	g.replaced, g.gotExpected = g.replaced+1, guard.Expected
+	guard.Stored = storedByTheFake
 	if g.setDefinitionErr != nil {
 		return provisioning.Template{}, g.setDefinitionErr
 	}
@@ -284,8 +291,10 @@ func (g *fakeGames) StatusOf(context.Context, uuid.UUID) (provisioning.Template,
 	return status, nil
 }
 
-func (g *fakeGames) SetScript(_ context.Context, actorID, _ uuid.UUID, script string) (provisioning.Template, error) {
+func (g *fakeGames) SetScript(_ context.Context, actorID, _ uuid.UUID, guard *contests.VersionGuard, script string) (provisioning.Template, error) {
 	g.gotSet, g.gotActor = script, actorID
+	g.replaced, g.gotExpected = g.replaced+1, guard.Expected
+	guard.Stored = storedByTheFake
 	if g.setErr != nil {
 		return provisioning.Template{}, g.setErr
 	}
@@ -2246,5 +2255,96 @@ func TestAskingForABuildIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testin
 	rec := f.do(http.MethodPost, "/contests/"+uuid.NewString()+"/game/build", "")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+	}
+}
+
+// storedByTheFake is the contest version fakeGames says a typed save wrote.
+const storedByTheFake = 41
+
+// gameTypedSaves are the game's saves of text an organiser typed, which take
+// expected_version as every content edit does; failWith makes the service
+// refuse the next one.
+var gameTypedSaves = []struct {
+	name, path, ours string
+	failWith         func(*fakeGames, error)
+}{
+	{
+		name: "script", path: "/game/script", ours: `"script": "CREATE TABLE guests (id int);"`,
+		failWith: func(g *fakeGames, err error) { g.setErr = err },
+	},
+	{
+		name: "definition", path: "/game/definition",
+		ours:     `"tables": [{"name": "suspects", "columns": [{"name": "id", "type": "integer"}], "primary_key": ["id"]}]`,
+		failWith: func(g *fakeGames, err error) { g.setDefinitionErr = err },
+	},
+}
+
+func TestAGameSaveHandsTheServiceTheVersionItWasLoadedAt(t *testing.T) {
+	seven := int64(7)
+	for _, save := range gameTypedSaves {
+		for version, want := range map[string]*int64{"7": &seven, "null": nil, "": nil} {
+			t.Run(save.name+" "+cmp.Or(version, "absent"), func(t *testing.T) {
+				f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+				rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+save.path, bodyOf(version, save.ours))
+
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("status %d (%s), want 202", rec.Code, rec.Body)
+				}
+				if got := f.games.gotExpected; (got == nil) != (want == nil) || (got != nil && *got != *want) {
+					t.Errorf("the service was handed %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
+
+// Read as strictly as on every other guarded save: never as absent.
+func TestAMalformedVersionOnAGameSaveIsRefusedBeforeTheService(t *testing.T) {
+	for _, save := range gameTypedSaves {
+		for _, raw := range []string{`"1"`, `"abc"`, `1.5`, `9223372036854775808`} {
+			t.Run(save.name+" "+raw, func(t *testing.T) {
+				f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+				rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+save.path, bodyOf(raw, save.ours))
+
+				if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+					t.Errorf("status %d (%s), want 400 invalid_request", rec.Code, rec.Body)
+				}
+				if f.games.replaced != 0 {
+					t.Error("a malformed version reached the service")
+				}
+			})
+		}
+	}
+}
+
+func TestAGameSaveOverAContestThatMovedSinceIsAConflict(t *testing.T) {
+	for _, save := range gameTypedSaves {
+		t.Run(save.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			save.failWith(f.games, fmt.Errorf("%w: read at 6, now at 7", contests.ErrContestChanged))
+
+			rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+save.path, bodyOf("6", save.ours))
+
+			if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_changed" {
+				t.Errorf("status %d (%s), want 409 contest_changed", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// The answer names the version the save left the contest at (api.ContestVersionHeader).
+func TestAGameSaveAnswersTheVersionItStored(t *testing.T) {
+	for _, save := range gameTypedSaves {
+		t.Run(save.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+			rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+save.path, bodyOf("7", save.ours))
+
+			if rec.Code != http.StatusAccepted || rec.Header().Get(api.ContestVersionHeader) != fmt.Sprint(storedByTheFake) {
+				t.Errorf("status %d, Contest-Version %q, want 202 and %d", rec.Code, rec.Header().Get(api.ContestVersionHeader), storedByTheFake)
+			}
+		})
 	}
 }

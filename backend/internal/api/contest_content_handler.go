@@ -51,6 +51,7 @@ func (h *ContestsHandler) story(w http.ResponseWriter, r *http.Request) {
 
 type storyRequest struct {
 	Translations map[string]string `json:"translations"`
+	versionGuard
 }
 
 func (h *ContestsHandler) setStory(w http.ResponseWriter, r *http.Request) {
@@ -65,11 +66,13 @@ func (h *ContestsHandler) setStory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	saved, err := h.service.SetStory(r.Context(), identity.UserID, id, req.Translations)
+	guard := contests.Expect(req.ExpectedVersion)
+	saved, err := h.service.SetStory(r.Context(), identity.UserID, id, guard, req.Translations)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusOK, toStoryResponse(saved))
 }
 
@@ -109,6 +112,7 @@ func (h *ContestsHandler) schemaNotes(w http.ResponseWriter, r *http.Request) {
 
 type schemaNotesRequest struct {
 	Translations map[string]string `json:"translations"`
+	versionGuard
 }
 
 func (h *ContestsHandler) setSchemaNotes(w http.ResponseWriter, r *http.Request) {
@@ -123,11 +127,13 @@ func (h *ContestsHandler) setSchemaNotes(w http.ResponseWriter, r *http.Request)
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	saved, err := h.service.SetSchemaNotes(r.Context(), identity.UserID, id, req.Translations)
+	guard := contests.Expect(req.ExpectedVersion)
+	saved, err := h.service.SetSchemaNotes(r.Context(), identity.UserID, id, guard, req.Translations)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusOK, toSchemaNotesResponse(saved))
 }
 
@@ -244,6 +250,7 @@ type questionRequest struct {
 	IsBonus   *bool                           `json:"is_bonus"`
 	ChoiceIDs []string                        `json:"choice_ids"`
 	Texts     map[string]QuestionTextResponse `json:"texts"`
+	versionGuard
 }
 
 func (req questionRequest) command(contestID, actorID uuid.UUID) contests.QuestionCommand {
@@ -258,6 +265,7 @@ func (req questionRequest) command(contestID, actorID uuid.UUID) contests.Questi
 		IsBonus:     req.IsBonus,
 		ChoiceIDs:   req.ChoiceIDs,
 		Texts:       toDomainTexts(req.Texts),
+		Guard:       contests.Expect(req.ExpectedVersion),
 	}
 }
 
@@ -273,11 +281,13 @@ func (h *ContestsHandler) addQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	created, err := h.service.AddQuestion(r.Context(), req.command(id, identity.UserID))
+	cmd := req.command(id, identity.UserID)
+	created, err := h.service.AddQuestion(r.Context(), cmd)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, cmd.Guard.Stored)
 	httpx.JSON(w, r, http.StatusCreated, toQuestionResponse(created))
 }
 
@@ -287,11 +297,18 @@ func (h *ContestsHandler) deleteQuestion(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var req versionGuard
+	if !decodeVersionQuery(w, r, &req) {
+		return
+	}
+
 	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.DeleteQuestion(r.Context(), identity.UserID, contestID, questionID); err != nil {
+	guard := contests.Expect(req.ExpectedVersion)
+	if err := h.service.DeleteQuestion(r.Context(), identity.UserID, contestID, guard, questionID); err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.NoContent(w, r)
 }
 
@@ -299,6 +316,7 @@ type reorderRequest struct {
 	// Order names every question exactly once; a partial list would duplicate
 	// or lose positions.
 	Order []string `json:"order"`
+	versionGuard
 }
 
 func (h *ContestsHandler) reorderQuestions(w http.ResponseWriter, r *http.Request) {
@@ -324,10 +342,12 @@ func (h *ContestsHandler) reorderQuestions(w http.ResponseWriter, r *http.Reques
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.ReorderQuestions(r.Context(), identity.UserID, id, ordered); err != nil {
+	guard := contests.Expect(req.ExpectedVersion)
+	if err := h.service.ReorderQuestions(r.Context(), identity.UserID, id, guard, ordered); err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.NoContent(w, r)
 }
 
@@ -356,6 +376,7 @@ func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 		answers = append(answers, contests.Answer{MatchKind: a.MatchKind, Value: a.Value})
 	}
 
+	guard := contests.Expect(req.ExpectedVersion)
 	saved, err := h.service.SaveQuestion(r.Context(), contests.SaveQuestionCommand{
 		ActorID:     identity.UserID,
 		ContestID:   contestID,
@@ -369,12 +390,14 @@ func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 		ChoiceIDs:   req.ChoiceIDs,
 		Texts:       toDomainTexts(req.Texts),
 		Answers:     answers,
+		Guard:       guard,
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusOK, toQuestionResponse(saved))
 }
 
