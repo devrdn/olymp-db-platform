@@ -130,6 +130,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Helpers for tests that run on fake timers: the question arms on a 400 ms clock, which a real one
+// would let a loaded machine outlast.
+async function startUpload() {
+  beginGameUploadAction.mockResolvedValueOnce({ value: upload({ declaredBytes: 4 }) });
+  const view = show();
+  fireEvent.change(screen.getByLabelText(tu.pick), {
+    target: { files: [new File(["abcd"], "dump.sql")] },
+  });
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  return view;
+}
+
+/** Presses the panel's Cancel; the question opens and arms on its own clock. */
+async function pressCancel() {
+  fireEvent.click(screen.getByRole("button", { name: tu.cancel }));
+  await act(() => vi.advanceTimersByTimeAsync(0));
+}
+
+/** Answers the open question with a yes once it is armed. */
+async function confirmCancel() {
+  const dialog = screen.getByRole("dialog", { name: tu.cancelConfirm });
+  await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
+  fireEvent.click(within(dialog).getByRole("button", { name: tu.cancel }));
+  await act(() => vi.advanceTimersByTimeAsync(0));
+}
+
+
 describe("the game upload panel", () => {
   test("says uploads are off rather than offering a picker nobody can use", () => {
     show({ uploadLimits: { enabled: false, chunkBytes: 0, maxFileBytes: 0 } });
@@ -211,7 +238,8 @@ describe("the game upload panel", () => {
     ]);
     expect(sizes).toEqual([5, 5, 2]);
     expect(completeGameUploadAction).toHaveBeenCalledWith(contestId, uploadId);
-    expect(screen.getByText("CREATE TABLE guests (id uuid);")).toBeInTheDocument();
+    // The dump's first lines are fetched after the panel says it is done, so they are awaited, not read at once.
+    expect(await screen.findByText("CREATE TABLE guests (id uuid);")).toBeInTheDocument();
     expect(refresh).toHaveBeenCalled();
   });
 
@@ -280,23 +308,27 @@ describe("the game upload panel", () => {
 
   // Cancel must both tell the server and abort the chunk on the wire; a stub
   // ignoring `signal` would let a removed `abort()` pass.
+  // Fake timers: the question arms on a real 400 ms clock, and a loaded machine could outlast every wait after it.
   test("says why when the server refuses the cancel, with the picker back", async () => {
-    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
-    request.mockImplementationOnce(
-      (_path: string, init: { signal: AbortSignal }) =>
-        new Promise((_resolve, reject) =>
-          init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
-        ),
-    );
-    abortGameUploadAction.mockResolvedValueOnce({ code: "game_upload_already_complete" });
+    vi.useFakeTimers();
+    try {
+      request.mockImplementationOnce(
+        (_path: string, init: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) =>
+            init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+          ),
+      );
+      abortGameUploadAction.mockResolvedValueOnce({ code: "game_upload_already_complete" });
 
-    show();
-    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
-    await userEvent.click(await screen.findByRole("button", { name: tu.cancel }));
-    await answerYes(tu.cancel);
+      await startUpload();
+      await pressCancel();
+      await confirmCancel();
 
-    expect(await screen.findByText(en.errors.game_upload_already_complete)).toBeInTheDocument();
-    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+      expect(screen.getByText(en.errors.game_upload_already_complete)).toBeInTheDocument();
+      expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("cancels an upload in progress and lets the server know", async () => {
@@ -520,30 +552,6 @@ describe("a dump chunk refused as busy", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  async function startUpload() {
-    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ declaredBytes: 4 }) });
-    const view = show();
-    fireEvent.change(screen.getByLabelText(tu.pick), {
-      target: { files: [new File(["abcd"], "dump.sql")] },
-    });
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    return view;
-  }
-
-  /** Presses the panel's Cancel; the question opens and arms on its own clock. */
-  async function pressCancel() {
-    fireEvent.click(screen.getByRole("button", { name: tu.cancel }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
-  }
-
-  /** Answers the open question with a yes once it is armed. */
-  async function confirmCancel() {
-    const dialog = screen.getByRole("dialog", { name: tu.cancelConfirm });
-    await act(() => vi.advanceTimersByTimeAsync(CONFIRM_ARM_MS));
-    fireEvent.click(within(dialog).getByRole("button", { name: tu.cancel }));
-    await act(() => vi.advanceTimersByTimeAsync(0));
-  }
 
   /** Holds `action`'s next answer until the returned function gives it. */
   function hold(action: ReturnType<typeof vi.fn>) {
