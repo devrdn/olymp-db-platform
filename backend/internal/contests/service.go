@@ -277,10 +277,9 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 type UpdateCommand struct {
 	ActorID   uuid.UUID
 	ContestID uuid.UUID
-	// ExpectedVersion is the Version the caller decided the change against;
-	// a contest written since is refused with ErrContestChanged. Nil applies
-	// the patch to whatever is stored.
-	ExpectedVersion *int64
+	// Guard is the change's VersionGuard; a contest written since its
+	// expected version is refused with ErrContestChanged.
+	Guard *VersionGuard
 	// Patch is applied to the stored contest.
 	Patch Patch
 }
@@ -293,7 +292,7 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		if err != nil {
 			return err
 		}
-		if err := current.checkVersion(cmd.ExpectedVersion); err != nil {
+		if err := cmd.Guard.check(current); err != nil {
 			return err
 		}
 		updated, err := s.decideUpdate(ctx, current, cmd.Patch.ApplyTo(current))
@@ -303,6 +302,7 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		if written, err = s.contests.Update(ctx, updated); err != nil {
 			return err
 		}
+		cmd.Guard.stored(written)
 		changes := audit.Between(current.auditFields(), updated.auditFields())
 		return s.record(ctx, cmd.ActorID, audit.ActionContestUpdate, updated.ID, changes.Payload())
 	})
@@ -476,11 +476,11 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Contest, int, error) {
 }
 
 // SetLanguages sets the languages a contest is offered in.
-func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID, langs []ContestLanguage) error {
+func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, langs []ContestLanguage) error {
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		// A language added to a running contest would have nothing authored
 		// in it.
-		c, err := BeginContentEdit(ctx, s.contests, contestID)
+		c, err := BeginContentEdit(ctx, s.contests, contestID, guard)
 		if err != nil {
 			return err
 		}
@@ -501,9 +501,9 @@ func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID
 }
 
 // SetTranslations replaces a contest's authored titles.
-func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.UUID, translations []Translation) error {
+func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, translations []Translation) error {
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID, guard); err != nil {
 			return err
 		}
 		if err := s.checkTranslationLanguages(ctx, translations); err != nil {
@@ -623,9 +623,9 @@ func (s *Service) Policy(ctx context.Context, contestID uuid.UUID) (SQLPolicy, e
 // SetPolicy changes how much SQL power the contest hands out. Not once it is
 // running: the template grants are built from this row and would stop
 // matching what the validator enforces.
-func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p SQLPolicy) error {
+func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, guard *VersionGuard, p SQLPolicy) error {
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if _, err := BeginContentEdit(ctx, s.contests, contestID); err != nil {
+		if _, err := BeginContentEdit(ctx, s.contests, contestID, guard); err != nil {
 			return err
 		}
 		current, err := s.policies.ByContest(ctx, contestID)
@@ -742,12 +742,15 @@ type ContentRows interface {
 // BeginContentEdit is the first step of every edit of a contest's content
 // (its story, schema notes, questions, languages, titles, SQL policy and
 // game), inside the edit's unit of work. It locks the row, so two edits of one
-// contest take turns instead of refusing each other; refuses a contest whose
+// contest take turns instead of refusing each other; refuses an edit decided
+// against guard.Expected once the contest has moved past it, with
+// ErrContestChanged (a nil guard expects nothing); refuses a contest whose
 // content is frozen with ErrNotEditable; and moves the version, so a publish
 // or start whose gate read the content before the edit is refused
-// (docs/ARCHITECTURE.md section 7.3). It returns the row at its new version,
-// for the edit's own decisions and any write it conditions on the row.
-func BeginContentEdit(ctx context.Context, rows ContentRows, contestID uuid.UUID) (Contest, error) {
+// (docs/ARCHITECTURE.md section 7.3), recording it in guard.Stored. It returns
+// the row at its new version, for the edit's own decisions and any write it
+// conditions on the row.
+func BeginContentEdit(ctx context.Context, rows ContentRows, contestID uuid.UUID, guard *VersionGuard) (Contest, error) {
 	if err := rows.LockContest(ctx, contestID); err != nil {
 		return Contest{}, err
 	}
@@ -755,10 +758,20 @@ func BeginContentEdit(ctx context.Context, rows ContentRows, contestID uuid.UUID
 	if err != nil {
 		return Contest{}, err
 	}
+	if err := guard.check(c); err != nil {
+		return Contest{}, err
+	}
 	if !c.ContentEditable() {
 		return Contest{}, fmt.Errorf("%w: it is %s", ErrNotEditable, c.Status)
 	}
-	return rows.MarkContentChanged(ctx, c)
+	written, err := rows.MarkContentChanged(ctx, c)
+	if err != nil {
+		return Contest{}, err
+	}
+	// The edit's unit of work holds the lock until it commits, so nothing
+	// writes the row after this.
+	guard.stored(written)
+	return written, nil
 }
 
 // checkLanguageCodes rejects codes the installation does not offer.

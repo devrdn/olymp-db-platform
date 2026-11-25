@@ -375,7 +375,7 @@ func (g *Games) completeTableDataAndAudit(
 ) (TableData, error) {
 	var completed TableData
 	run := func(ctx context.Context) error {
-		if err := g.beginGameEdit(ctx, contestID); err != nil {
+		if err := g.beginGameEdit(ctx, contestID, nil); err != nil {
 			return err
 		}
 		var err error
@@ -534,7 +534,7 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 
 	var updated TableData
 	run := func(ctx context.Context) error {
-		if err := g.beginGameEdit(ctx, contestID); err != nil {
+		if err := g.beginGameEdit(ctx, contestID, nil); err != nil {
 			return err
 		}
 		var err error
@@ -614,7 +614,7 @@ func (g *Games) bootstrapTableRow(
 	var created TableData
 	ranToCommit := false
 	run := func(ctx context.Context) error {
-		if err := g.beginGameEdit(ctx, contestID); err != nil {
+		if err := g.beginGameEdit(ctx, contestID, nil); err != nil {
 			return err
 		}
 		var err error
@@ -815,7 +815,7 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 	}
 
 	run := func(ctx context.Context) error {
-		if err := g.beginGameEdit(ctx, contestID); err != nil {
+		if err := g.beginGameEdit(ctx, contestID, nil); err != nil {
 			return err
 		}
 		if err := g.tableRows.DeleteRow(ctx, data.ID, row); err != nil {

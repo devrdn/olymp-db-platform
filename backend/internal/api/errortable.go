@@ -47,6 +47,11 @@ type errorRow struct {
 	retryAfter time.Duration
 }
 
+// contestChangedRow answers a write refused because the contest moved since
+// it was read, on every handler that can meet it: the contests table, the
+// reveal and the game's typed saves.
+var contestChangedRow = errorRow{err: contests.ErrContestChanged, status: http.StatusConflict, code: codeContestChanged}
+
 // errorTable is a domain package's errors, answered. Rows are matched in order
 // with errors.Is, so a wrapped sentinel finds its row.
 type errorTable []errorRow
@@ -522,7 +527,7 @@ var contestsErrors = joined(errorTable{
 	// Its own code: the request was legal when sent, so the interface says to
 	// look again rather than that it was wrong.
 	{err: contests.ErrStatusChanged, status: http.StatusConflict, code: codeStatusChanged},
-	{err: contests.ErrContestChanged, status: http.StatusConflict, code: codeContestChanged},
+	contestChangedRow,
 	{err: contests.ErrNotEditable, status: http.StatusConflict, code: codeNotEditable},
 	{err: contests.ErrFreezeAlreadyReached, status: http.StatusConflict, code: codeFreezeAlreadyReached},
 	{err: contests.ErrICPCStartLocked, status: http.StatusConflict, code: codeICPCStartLocked},

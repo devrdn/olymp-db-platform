@@ -971,6 +971,8 @@ func raceService(repo contests.Repository, questions contests.QuestionRepository
 		GameReadiness: games,
 		Covers:        NewCovers(testPool),
 		Appointees:    NewUsers(testPool),
+		SchemaNotes:   NewSchemaNotes(testPool),
+		Languages:     NewLanguages(testPool),
 	})
 }
 
@@ -1036,7 +1038,7 @@ func TestASaveExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T
 			},
 			ours: func(ctx context.Context, s *contests.Service, id uuid.UUID, expected *int64) (contests.Contest, error) {
 				return s.Update(ctx, contests.UpdateCommand{
-					ContestID: id, ExpectedVersion: expected,
+					ContestID: id, Guard: contests.Expect(expected),
 					Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
 				})
 			},
@@ -1051,7 +1053,7 @@ func TestASaveExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T
 				return err
 			},
 			ours: func(ctx context.Context, s *contests.Service, id uuid.UUID, expected *int64) (contests.Contest, error) {
-				return s.SetPrizePlaces(ctx, uuid.Nil, id, expected, contests.PrizePlaces{First: 1, Second: 2, Third: 3})
+				return s.SetPrizePlaces(ctx, uuid.Nil, id, contests.Expect(expected), contests.PrizePlaces{First: 1, Second: 2, Third: 3})
 			},
 			landed: func(c contests.Contest) bool {
 				return c.PrizePlaces == contests.PrizePlaces{First: 1, Second: 2, Third: 3}
@@ -1065,7 +1067,7 @@ func TestASaveExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T
 				return err
 			},
 			ours: func(ctx context.Context, s *contests.Service, id uuid.UUID, expected *int64) (contests.Contest, error) {
-				return s.SetArchiveSettings(ctx, uuid.Nil, id, expected,
+				return s.SetArchiveSettings(ctx, uuid.Nil, id, contests.Expect(expected),
 					contests.ArchiveSettings{Visibility: contests.VisibilityClosed})
 			},
 			landed: func(c contests.Contest) bool {
@@ -1221,7 +1223,7 @@ func TestAPublishDecidedBeforeAQuestionIsDeletedIsRefused(t *testing.T) {
 	repo := NewContests(testPool)
 	organiser := raceService(repo, NewQuestions(testPool), games)
 	deletes := func() error {
-		return organiser.DeleteQuestion(context.Background(), uuid.Nil, id, question)
+		return organiser.DeleteQuestion(context.Background(), uuid.Nil, id, nil, question)
 	}
 	service := raceService(repo, &listedThen{Questions: NewQuestions(testPool), other: deletes, t: t}, games)
 
@@ -1254,7 +1256,7 @@ func TestAPublishDecidedBeforeTheGameIsReplacedIsRefused(t *testing.T) {
 	games := provisioning.NewGames(gameStores(templates), nil, templates, repo, storage.NewUnitOfWork(testPool)).
 		WithAudit(audit.New(NewAuditSink(testPool)))
 	replaces := func() error {
-		_, err := games.SetScript(context.Background(), author.CreatedBy, id, "CREATE TABLE witnesses (name text);")
+		_, err := games.SetScript(context.Background(), author.CreatedBy, id, nil, "CREATE TABLE witnesses (name text);")
 		return err
 	}
 	service := raceService(repo, NewQuestions(testPool), &readyThen{GameInstances: templates, other: replaces, t: t})
@@ -1266,6 +1268,211 @@ func TestAPublishDecidedBeforeTheGameIsReplacedIsRefused(t *testing.T) {
 	}
 	if got, err := repo.ByID(ctx, id); err != nil || got.Status != contests.StatusDraft {
 		t.Errorf("ByID() = %s, %v, want a draft: the publish landed with the game unbuilt", got.Status, err)
+	}
+}
+
+// A content edit decided against a version the contest has moved past is
+// refused with nothing written, whichever edit it is, and the version the
+// contest now carries saves. The colleague's edit is a content edit too,
+// committed before ours locks the row.
+func TestAContentEditExpectingAnOlderVersionIsRefusedAndTheCurrentOneSaves(t *testing.T) {
+	type question struct{ first, second uuid.UUID }
+	// editors are the two services a content edit goes through, and the
+	// contest's author, an account an edit that names its actor can record.
+	type editors struct {
+		contests *contests.Service
+		games    *provisioning.Games
+		author   uuid.UUID
+	}
+	for _, edit := range []struct {
+		name   string
+		ours   func(context.Context, editors, uuid.UUID, question, *contests.VersionGuard) error
+		landed func(context.Context, uuid.UUID, question) bool
+	}{
+		{
+			name: "title",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				return e.contests.SetTranslations(ctx, uuid.Nil, id, guard, []contests.Translation{{Lang: "en", Title: "The Second Case"}})
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				c, err := NewContests(testPool).ByID(ctx, id)
+				return err == nil && c.Translations["en"].Title == "The Second Case"
+			},
+		},
+		{
+			name: "languages",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				return e.contests.SetLanguages(ctx, uuid.Nil, id, guard,
+					[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}})
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				c, err := NewContests(testPool).ByID(ctx, id)
+				return err == nil && len(c.Languages) == 2
+			},
+		},
+		{
+			name: "story",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				_, err := e.contests.SetStory(ctx, uuid.Nil, id, guard, map[string]string{"en": "Our body."})
+				return err
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				story, err := NewStories(testPool).ByContest(ctx, id)
+				return err == nil && story.Bodies["en"] == "Our body."
+			},
+		},
+		{
+			name: "schema notes",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				_, err := e.contests.SetSchemaNotes(ctx, uuid.Nil, id, guard, map[string]string{"en": "One row per suspect."})
+				return err
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				notes, err := NewSchemaNotes(testPool).ByContest(ctx, id)
+				return err == nil && notes.Bodies["en"] == "One row per suspect."
+			},
+		},
+		{
+			name: "sql policy",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				policy := contests.DefaultSQLPolicy(id)
+				policy.DiskQuotaRatio = 3
+				return e.contests.SetPolicy(ctx, e.author, id, guard, policy)
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				policy, err := NewSQLPolicies(testPool).ByContest(ctx, id)
+				return err == nil && policy.DiskQuotaRatio == 3
+			},
+		},
+		{
+			name: "question added",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				_, err := e.contests.AddQuestion(ctx, contests.QuestionCommand{ContestID: id, Points: 3, Guard: guard})
+				return err
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				questions, err := NewQuestions(testPool).List(ctx, id)
+				return err == nil && len(questions) == 3
+			},
+		},
+		{
+			name: "question saved",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, q question, guard *contests.VersionGuard) error {
+				_, err := e.contests.SaveQuestion(ctx, contests.SaveQuestionCommand{
+					ContestID: id, QuestionID: q.second, Kind: contests.KindText, Points: 9, Guard: guard,
+				})
+				return err
+			},
+			landed: func(ctx context.Context, _ uuid.UUID, q question) bool {
+				saved, err := NewQuestions(testPool).ByID(ctx, q.second)
+				return err == nil && saved.Points == 9
+			},
+		},
+		{
+			name: "question deleted",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, q question, guard *contests.VersionGuard) error {
+				return e.contests.DeleteQuestion(ctx, uuid.Nil, id, guard, q.second)
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				questions, err := NewQuestions(testPool).List(ctx, id)
+				return err == nil && len(questions) == 1
+			},
+		},
+		{
+			name: "questions reordered",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, q question, guard *contests.VersionGuard) error {
+				return e.contests.ReorderQuestions(ctx, uuid.Nil, id, guard, []uuid.UUID{q.second, q.first})
+			},
+			landed: func(ctx context.Context, id uuid.UUID, q question) bool {
+				questions, err := NewQuestions(testPool).List(ctx, id)
+				return err == nil && len(questions) == 2 && questions[0].ID == q.second
+			},
+		},
+		{
+			name: "game script",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				_, err := e.games.SetScript(ctx, e.author, id, guard, "CREATE TABLE witnesses (name text);")
+				return err
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				game, err := NewGameInstances(testPool).Template(ctx, id)
+				return err == nil && game.Script == "CREATE TABLE witnesses (name text);"
+			},
+		},
+		{
+			name: "game definition",
+			ours: func(ctx context.Context, e editors, id uuid.UUID, _ question, guard *contests.VersionGuard) error {
+				_, err := e.games.SetDefinition(ctx, e.author, id, guard, provisioning.Definition{
+					Tables: []provisioning.TableDefinition{{
+						Name:       "witnesses",
+						Columns:    []provisioning.ColumnDefinition{{Name: "name", Type: provisioning.ColumnText}},
+						PrimaryKey: []string{"name"},
+					}},
+				})
+				return err
+			},
+			landed: func(ctx context.Context, id uuid.UUID, _ question) bool {
+				game, err := NewGameInstances(testPool).Template(ctx, id)
+				return err == nil && game.Source == provisioning.SourceBuilder
+			},
+		},
+	} {
+		t.Run(edit.name, func(t *testing.T) {
+			ctx := context.Background()
+			id, first, games := publishableRow(t, ctx)
+			service := raceService(NewContests(testPool), NewQuestions(testPool), games)
+			templates := NewGameInstances(testPool)
+			author, err := service.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+			e := editors{
+				contests: service,
+				games: provisioning.NewGames(gameStores(templates), nil, templates, NewContests(testPool),
+					storage.NewUnitOfWork(testPool)).WithAudit(audit.New(NewAuditSink(testPool))),
+				author: author.CreatedBy,
+			}
+			second, err := service.AddQuestion(ctx, contests.QuestionCommand{ContestID: id, Kind: contests.KindText, Points: 2})
+			if err != nil {
+				t.Fatalf("AddQuestion() = %v", err)
+			}
+			q := question{first: first, second: second.ID}
+
+			loaded, err := service.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+			if _, err := service.SetStory(ctx, uuid.Nil, id, nil, map[string]string{"en": "The colleague's body."}); err != nil {
+				t.Fatalf("the colleague's SetStory() = %v", err)
+			}
+			moved, err := service.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID() = %v", err)
+			}
+
+			if err := edit.ours(ctx, e, id, q, contests.Expect(&loaded.Version)); !errors.Is(err, contests.ErrContestChanged) {
+				t.Fatalf("edit(stale version) = %v, want ErrContestChanged", err)
+			}
+			if edit.landed(ctx, id, q) {
+				t.Fatal("the stale edit landed")
+			}
+			if after, _ := service.ByID(ctx, id); after.Version != moved.Version {
+				t.Fatalf("version = %d after the refusal, want the colleague's %d", after.Version, moved.Version)
+			}
+
+			current := contests.Expect(&moved.Version)
+			if err := edit.ours(ctx, e, id, q, current); err != nil {
+				t.Fatalf("edit(current version) = %v", err)
+			}
+			if !edit.landed(ctx, id, q) {
+				t.Error("the edit at the current version did not land")
+			}
+			// What the edit's answer names is the version the committed row
+			// holds, after the trigger that moves it on every write.
+			if committed, err := service.ByID(ctx, id); err != nil || current.Stored != committed.Version {
+				t.Errorf("guard.Stored = %d, want the committed version %d (%v)", current.Stored, committed.Version, err)
+			}
+		})
 	}
 }
 
@@ -1291,6 +1498,39 @@ func (r *meanwhileThen) ByID(ctx context.Context, id uuid.UUID) (contests.Contes
 		}
 	})
 	return c, err
+}
+
+// Two content edits decided against the same version race: the colleague's
+// is seen waiting on the contest's lock while ours holds it, and once ours
+// commits it reads the version ours moved, so only ours lands.
+func TestOfTwoContentEditsAtOneVersionOnlyTheFirstLands(t *testing.T) {
+	ctx := context.Background()
+	id := contestRow(t, ctx)
+	repo := NewContests(testPool)
+	if err := repo.ReplaceLanguages(ctx, id, []contests.ContestLanguage{{Code: "en", IsDefault: true}}); err != nil {
+		t.Fatalf("ReplaceLanguages() = %v", err)
+	}
+	loaded, err := repo.ByID(ctx, id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	service := raceService(repo, NewQuestions(testPool), conteststest.NewGames())
+	save := func(body string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := service.SetStory(ctx, uuid.Nil, id, contests.Expect(&loaded.Version), map[string]string{"en": body})
+			return err
+		}
+	}
+
+	theirs := raceOnTwoConnections(t, save("Our body."), save("The colleague's body."), "FOR NO KEY UPDATE")
+
+	if !errors.Is(theirs, contests.ErrContestChanged) {
+		t.Errorf("the colleague's SetStory() = %v, want ErrContestChanged", theirs)
+	}
+	story, err := NewStories(testPool).ByContest(ctx, id)
+	if err != nil || story.Bodies["en"] != "Our body." {
+		t.Errorf("story = %v, %v, want ours alone", story.Bodies, err)
+	}
 }
 
 // Two authors adding a question at the same moment both succeed, the second
@@ -1365,7 +1605,7 @@ func TestAPolicyDecidedBeforeTheStartDoesNotLandOnTheRunningContest(t *testing.T
 	policy := contests.DefaultSQLPolicy(id)
 	policy.Mode = contests.ModeReadWrite
 
-	saveErr := service.SetPolicy(ctx, author.CreatedBy, id, policy)
+	saveErr := service.SetPolicy(ctx, author.CreatedBy, id, nil, policy)
 
 	select {
 	case <-meanwhile.done:
@@ -1425,7 +1665,7 @@ func TestAGameReplacementDecidedBeforeTheStartIsRefused(t *testing.T) {
 	games := provisioning.NewGames(gameStores(templates), nil, &editableUntilRead{GameInstances: templates, start: start, t: t},
 		repo, storage.NewUnitOfWork(testPool)).WithAudit(audit.New(NewAuditSink(testPool)))
 
-	_, err = games.SetScript(ctx, author.CreatedBy, id, "CREATE TABLE suspects (name text);")
+	_, err = games.SetScript(ctx, author.CreatedBy, id, nil, "CREATE TABLE suspects (name text);")
 
 	if !errors.Is(err, provisioning.ErrGameNotEditable) {
 		t.Errorf("SetScript() = %v, want ErrGameNotEditable", err)

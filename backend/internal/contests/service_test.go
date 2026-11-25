@@ -174,7 +174,7 @@ func TestUpdateRefusesAnExpectedVersionTheContestHasMovedPast(t *testing.T) {
 
 	stale := c.Version
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ExpectedVersion: &stale,
+		ActorID: uuid.New(), ContestID: c.ID, Guard: contests.Expect(&stale),
 		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
 	})
 
@@ -199,8 +199,9 @@ func TestUpdateSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.T) {
 		t.Fatalf("ByID() = %v", err)
 	}
 
+	guard := contests.Expect(&read.Version)
 	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, ExpectedVersion: &read.Version,
+		ActorID: uuid.New(), ContestID: c.ID, Guard: guard,
 		Patch: contests.Patch{QuestionMode: contests.QuestionModeSingle},
 	})
 
@@ -210,6 +211,9 @@ func TestUpdateSavesWhenTheExpectedVersionIsTheStoredOne(t *testing.T) {
 	if updated.QuestionMode != contests.QuestionModeSingle || updated.Version == read.Version {
 		t.Errorf("question mode, version = %s, %d, want single and a version past %d",
 			updated.QuestionMode, updated.Version, read.Version)
+	}
+	if guard.Stored != updated.Version {
+		t.Errorf("guard.Stored = %d, want the version written, %d", guard.Stored, updated.Version)
 	}
 }
 
@@ -1080,7 +1084,7 @@ func TestPolicyCannotChangeWhileTheContestIsRunning(t *testing.T) {
 
 	policy := contests.DefaultSQLPolicy(c.ID)
 	policy.Mode = contests.ModeReadWrite
-	err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, policy)
+	err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, nil, policy)
 
 	if !errors.Is(err, contests.ErrNotEditable) {
 		t.Errorf("SetPolicy() = %v, want ErrNotEditable", err)
@@ -1094,7 +1098,7 @@ func TestPolicyChangesBeforeTheStart(t *testing.T) {
 	policy := contests.DefaultSQLPolicy(c.ID)
 	policy.Mode = contests.ModeReadWrite
 	policy.WritableTables = []string{"notes"}
-	if err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, policy); err != nil {
+	if err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, nil, policy); err != nil {
 		t.Fatalf("SetPolicy() = %v", err)
 	}
 
@@ -1109,7 +1113,7 @@ func TestSetLanguagesRefusesOnceTheContestIsRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
 
-	err := f.Service.SetLanguages(context.Background(), uuid.New(), c.ID,
+	err := f.Service.SetLanguages(context.Background(), uuid.New(), c.ID, nil,
 		[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}})
 
 	if !errors.Is(err, contests.ErrNotEditable) {
@@ -1262,7 +1266,7 @@ func TestChangingTheSQLPolicyRecordsWhatWasLoosened(t *testing.T) {
 	policy.Mode = contests.ModeReadWrite
 	policy.WritableTables = []string{"notes"}
 	policy.AllowCreateView = true
-	if err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, policy); err != nil {
+	if err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, nil, policy); err != nil {
 		t.Fatalf("SetPolicy() = %v", err)
 	}
 
@@ -1281,7 +1285,7 @@ func TestChangingTheLanguagesRecordsTheSetItReplaced(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	if err := f.Service.SetLanguages(context.Background(), uuid.New(), c.ID,
+	if err := f.Service.SetLanguages(context.Background(), uuid.New(), c.ID, nil,
 		[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}}); err != nil {
 		t.Fatalf("SetLanguages() = %v", err)
 	}
@@ -1320,7 +1324,7 @@ func TestTitlesPastTheirBoundAreRefusedBeforeAnythingIsWritten(t *testing.T) {
 	c := f.SeedContest(contests.StatusDraft)
 	before := len(f.Audit.Entries)
 
-	err := f.Service.SetTranslations(context.Background(), uuid.New(), c.ID,
+	err := f.Service.SetTranslations(context.Background(), uuid.New(), c.ID, nil,
 		[]contests.Translation{{Lang: "en", Title: strings.Repeat("a", 201)}})
 
 	if !errors.Is(err, contests.ErrInvalidContest) {
@@ -1336,7 +1340,7 @@ func TestChangingTheTitlesRecordsTheLanguagesButNotTheText(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
 
-	if err := f.Service.SetTranslations(context.Background(), uuid.New(), c.ID,
+	if err := f.Service.SetTranslations(context.Background(), uuid.New(), c.ID, nil,
 		[]contests.Translation{{Lang: "en", Title: "The Library Murder"}}); err != nil {
 		t.Fatalf("SetTranslations() = %v", err)
 	}
@@ -1561,7 +1565,7 @@ func TestBeginContentEditHandsBackTheRowAtItsNewVersion(t *testing.T) {
 	var begun contests.Contest
 	if err := f.UnitOfWork.Do(t.Context(), func(ctx context.Context) error {
 		var err error
-		begun, err = contests.BeginContentEdit(ctx, f.Contests, seeded.ID)
+		begun, err = contests.BeginContentEdit(ctx, f.Contests, seeded.ID, nil)
 		return err
 	}); err != nil {
 		t.Fatalf("BeginContentEdit() = %v", err)
@@ -1576,5 +1580,54 @@ func TestBeginContentEditHandsBackTheRowAtItsNewVersion(t *testing.T) {
 	}
 	if _, err := f.Contests.SetPrizePlaces(t.Context(), begun); err != nil {
 		t.Errorf("a write conditioned on the handed row = %v, want it to land", err)
+	}
+}
+
+// An edit decided against a version the contest has moved past is refused
+// before anything moves, and before the freeze is asked: a screen loaded
+// before the start is told the contest changed, and its reload shows why.
+func TestBeginContentEditRefusesAVersionTheContestHasMovedPast(t *testing.T) {
+	for _, status := range []string{contests.StatusDraft, contests.StatusRunning} {
+		t.Run(status, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			seeded := f.SeedContest(contests.StatusDraft)
+			stale := seeded.Version
+			moved := seeded
+			moved.Status, moved.Version = status, seeded.Version+1
+			f.Contests.Put(moved)
+
+			err := f.UnitOfWork.Do(t.Context(), func(ctx context.Context) error {
+				_, err := contests.BeginContentEdit(ctx, f.Contests, seeded.ID, contests.Expect(&stale))
+				return err
+			})
+
+			if !errors.Is(err, contests.ErrContestChanged) {
+				t.Errorf("BeginContentEdit() = %v, want ErrContestChanged", err)
+			}
+			if stored, _ := f.Contests.ByID(t.Context(), seeded.ID); stored.Version != moved.Version {
+				t.Errorf("version = %d, want %d: the refused edit moved it", stored.Version, moved.Version)
+			}
+		})
+	}
+}
+
+func TestBeginContentEditGoesAheadAtTheStoredVersion(t *testing.T) {
+	f := conteststest.NewFixture()
+	seeded := f.SeedContest(contests.StatusDraft)
+
+	var begun contests.Contest
+	guard := contests.Expect(&seeded.Version)
+	err := f.UnitOfWork.Do(t.Context(), func(ctx context.Context) error {
+		var err error
+		begun, err = contests.BeginContentEdit(ctx, f.Contests, seeded.ID, guard)
+		return err
+	})
+
+	if err != nil || begun.Version == seeded.Version {
+		t.Errorf("BeginContentEdit() = version %d, %v, want one past %d", begun.Version, err, seeded.Version)
+	}
+	// What the edit's answer names (api.ContestVersionHeader).
+	if guard.Stored != begun.Version {
+		t.Errorf("guard.Stored = %d, want the version written, %d", guard.Stored, begun.Version)
 	}
 }

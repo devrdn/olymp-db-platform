@@ -258,7 +258,7 @@ func TestAppendTableRowAcceptsATimestampWithNoSecondsField(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest,
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil,
 		provisioning.Definition{Tables: []provisioning.TableDefinition{witnessTable()}}); err != nil {
 		t.Fatalf("save the definition: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat(t *testing.T) 
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, provisioning.Definition{
 		Tables: []provisioning.TableDefinition{{
 			Name: "prices",
 			Columns: []provisioning.ColumnDefinition{
@@ -473,7 +473,7 @@ func TestCompleteTableUploadRefusesOneRowPastMaxTableDataRows(t *testing.T) {
 	t.Parallel()
 	service, _, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, nil, provisioning.Definition{
 		Tables: []provisioning.TableDefinition{{
 			Name:    "codes",
 			Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},

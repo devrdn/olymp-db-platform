@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -212,11 +214,11 @@ func TestStaffSeeEveryTranslationOfTheirContest(t *testing.T) {
 	// negotiated one.
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
-	if err := f.service.SetLanguages(t.Context(), f.actor.ID, c.ID,
+	if err := f.service.SetLanguages(t.Context(), f.actor.ID, c.ID, nil,
 		[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}}); err != nil {
 		t.Fatalf("SetLanguages() returned error: %v", err)
 	}
-	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, []contests.Translation{
+	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, nil, []contests.Translation{
 		{Lang: "en", Title: "The Library Murder"},
 		{Lang: "ro", Title: "Crima din bibliotecă"},
 	}); err != nil {
@@ -343,11 +345,11 @@ func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
 	c := f.ownedContest(t, contests.StatusDraft)
 	// The contest has to offer the language, not merely have text in it, or a
 	// Romanian title could sit over an English story.
-	if err := f.service.SetLanguages(t.Context(), f.actor.ID, c.ID,
+	if err := f.service.SetLanguages(t.Context(), f.actor.ID, c.ID, nil,
 		[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}}); err != nil {
 		t.Fatalf("SetLanguages() returned error: %v", err)
 	}
-	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, []contests.Translation{
+	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, nil, []contests.Translation{
 		{Lang: "en", Title: "The Library Murder"},
 		{Lang: "ro", Title: "Crima din bibliotecă"},
 	}); err != nil {
@@ -372,7 +374,7 @@ func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
 func TestListingFallsBackWhenTheRequestedLanguageIsMissing(t *testing.T) {
 	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
-	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, []contests.Translation{
+	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, nil, []contests.Translation{
 		{Lang: "en", Title: "The Library Murder"},
 	}); err != nil {
 		t.Fatalf("SetTranslations() returned error: %v", err)
@@ -569,46 +571,199 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
-// versionGuardedSaves are the saves that take expected_version. Each runs on
-// a contest in status, theirs is a colleague's save that moves the version,
-// and ours is the fields of the save under test, which ourLanded and
-// theirsKept read back from the stored row.
-var versionGuardedSaves = []struct {
-	name       string
-	method     string
-	path       string
-	status     string
-	theirs     string
-	ours       string
-	ourLanded  func(contests.Contest) bool
-	theirsKept func(contests.Contest) bool
-}{
+// versionGuardedSave is a save that takes expected_version, on a contest in
+// status. request readies the contest for it (a question to edit, say) and
+// returns the save: its method, its path past the contest's and its own
+// fields, which landed reads back from the stores. inQuery says the version
+// travels in the query string, as on a delete, whose body a proxy may drop.
+type versionGuardedSave struct {
+	name    string
+	status  string
+	inQuery bool
+	request func(t *testing.T, f *contestFixture, c contests.Contest) (method, path, ours string)
+	landed  func(t *testing.T, f *contestFixture, c contests.Contest) bool
+}
+
+// send makes the save carrying version, the raw JSON value, or none when "".
+func (save versionGuardedSave) send(f *contestFixture, c contests.Contest, method, path, ours, version string) *httptest.ResponseRecorder {
+	path = "/contests/" + c.ID.String() + path
+	if !save.inQuery {
+		return f.do(method, path, bodyOf(version, ours))
+	}
+	if version != "" {
+		path += "?expected_version=" + url.QueryEscape(version)
+	}
+	return f.do(method, path, bodyOf("", ours))
+}
+
+// fixed is the request of a save that needs nothing readied.
+func fixed(method, path, ours string) func(*testing.T, *contestFixture, contests.Contest) (string, string, string) {
+	return func(*testing.T, *contestFixture, contests.Contest) (string, string, string) {
+		return method, path, ours
+	}
+}
+
+func storedContest(t *testing.T, f *contestFixture, c contests.Contest) contests.Contest {
+	t.Helper()
+	stored, err := f.stores.Contests.ByID(t.Context(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	return stored
+}
+
+func storedQuestions(t *testing.T, f *contestFixture, c contests.Contest) []contests.Question {
+	t.Helper()
+	questions, err := f.stores.Questions.List(t.Context(), c.ID)
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	return questions
+}
+
+// versionGuardedSaves are every save of the contests handler that takes
+// expected_version: the three of the contest row, and every edit of its
+// content. The game's two typed saves are gameTypedSaves, on the game
+// handler; a guarded route on another handler needs a table of its own.
+var versionGuardedSaves = []versionGuardedSave{
 	{
-		name: "settings", method: http.MethodPatch, path: "", status: contests.StatusDraft,
-		theirs: `{"scoring": "winner"}`, ours: `"question_mode": "single"`,
-		ourLanded: func(c contests.Contest) bool { return c.QuestionMode == contests.QuestionModeSingle },
-		theirsKept: func(c contests.Contest) bool {
-			return c.QuestionMode == contests.QuestionModeMulti && c.Scoring == contests.ScoringWinner
+		name: "settings", status: contests.StatusDraft,
+		request: fixed(http.MethodPatch, "", `"question_mode": "single"`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return storedContest(t, f, c).QuestionMode == contests.QuestionModeSingle
 		},
 	},
 	{
-		name: "prize places", method: http.MethodPut, path: "/prize-places", status: contests.StatusFinished,
-		theirs: `{"first": 2}`, ours: `"first": 1, "second": 2, "third": 3`,
-		ourLanded: func(c contests.Contest) bool {
-			return c.PrizePlaces == contests.PrizePlaces{First: 1, Second: 2, Third: 3}
+		name: "prize places", status: contests.StatusFinished,
+		request: fixed(http.MethodPut, "/prize-places", `"first": 1, "second": 2, "third": 3`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return storedContest(t, f, c).PrizePlaces == contests.PrizePlaces{First: 1, Second: 2, Third: 3}
 		},
-		theirsKept: func(c contests.Contest) bool { return c.PrizePlaces == contests.PrizePlaces{First: 2} },
 	},
 	{
-		name: "archive settings", method: http.MethodPut, path: "/archive-settings", status: contests.StatusFinished,
-		theirs: `{"visibility": "open", "archive_tasks": true}`, ours: `"visibility": "closed", "archive_tasks": false`,
-		ourLanded: func(c contests.Contest) bool {
-			return c.Visibility == contests.VisibilityClosed && !c.ArchiveTasks
-		},
-		theirsKept: func(c contests.Contest) bool {
-			return c.Visibility == contests.VisibilityOpen && c.ArchiveTasks
+		name: "archive settings", status: contests.StatusFinished,
+		request: fixed(http.MethodPut, "/archive-settings", `"visibility": "open", "archive_tasks": true`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			stored := storedContest(t, f, c)
+			return stored.Visibility == contests.VisibilityOpen && stored.ArchiveTasks
 		},
 	},
+	{
+		name: "title", status: contests.StatusDraft,
+		request: fixed(http.MethodPut, "/translations", `"translations": {"en": {"title": "The Second Case"}}`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return storedContest(t, f, c).Translations["en"].Title == "The Second Case"
+		},
+	},
+	{
+		name: "languages", status: contests.StatusDraft,
+		request: fixed(http.MethodPut, "/languages",
+			`"languages": [{"code": "en", "is_default": true}, {"code": "ro", "is_default": false}]`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return len(storedContest(t, f, c).Languages) == 2
+		},
+	},
+	{
+		name: "story", status: contests.StatusDraft,
+		request: fixed(http.MethodPut, "/story", `"translations": {"en": "A body in the stacks."}`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			story, err := f.stores.Stories.ByContest(t.Context(), c.ID)
+			return err == nil && story.Bodies["en"] == "A body in the stacks."
+		},
+	},
+	{
+		name: "schema notes", status: contests.StatusDraft,
+		request: fixed(http.MethodPut, "/schema-notes", `"translations": {"en": "One row per suspect."}`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			notes, err := f.stores.SchemaNotes.ByContest(t.Context(), c.ID)
+			return err == nil && notes.Bodies["en"] == "One row per suspect."
+		},
+	},
+	{
+		name: "sql policy", status: contests.StatusDraft,
+		request: fixed(http.MethodPut, "/sql-policy", `"mode": "read_write", "writable_tables": ["notes"], "disk_quota_ratio": 2`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			policy, err := f.stores.Policies.ByContest(t.Context(), c.ID)
+			return err == nil && policy.Mode == contests.ModeReadWrite
+		},
+	},
+	{
+		name: "question added", status: contests.StatusDraft,
+		request: fixed(http.MethodPost, "/questions", `"kind": "text", "points": 5`),
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return len(storedQuestions(t, f, c)) == 1
+		},
+	},
+	{
+		name: "question saved", status: contests.StatusDraft,
+		request: func(t *testing.T, f *contestFixture, c contests.Contest) (string, string, string) {
+			return http.MethodPut, "/questions/" + f.addQuestion(t, c.ID), `"kind": "text", "points": 9`
+		},
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return storedQuestions(t, f, c)[0].Points == 9
+		},
+	},
+	{
+		name: "question deleted", status: contests.StatusDraft, inQuery: true,
+		request: func(t *testing.T, f *contestFixture, c contests.Contest) (string, string, string) {
+			return http.MethodDelete, "/questions/" + f.addQuestion(t, c.ID), ""
+		},
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return len(storedQuestions(t, f, c)) == 0
+		},
+	},
+	{
+		name: "questions reordered", status: contests.StatusDraft,
+		request: func(t *testing.T, f *contestFixture, c contests.Contest) (string, string, string) {
+			first, second := f.addQuestionWorth(t, c.ID, 1), f.addQuestionWorth(t, c.ID, 2)
+			return http.MethodPut, "/questions/order", `"order": ["` + second + `", "` + first + `"]`
+		},
+		landed: func(t *testing.T, f *contestFixture, c contests.Contest) bool {
+			return storedQuestions(t, f, c)[0].Points == 2
+		},
+	},
+}
+
+// bodyOf is a save's body: its own fields, with expected_version unless
+// version is "".
+func bodyOf(version, ours string) string {
+	var fields []string
+	if version != "" {
+		fields = append(fields, `"expected_version": `+version)
+	}
+	if ours != "" {
+		fields = append(fields, ours)
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	return "{" + strings.Join(fields, ", ") + "}"
+}
+
+// loadedVersion is the version a screen reading the contest is handed.
+func (f *contestFixture) loadedVersion(t *testing.T, c contests.Contest) string {
+	t.Helper()
+	loaded := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+	if loaded.Code != http.StatusOK {
+		t.Fatalf("GET status = %d (%s)", loaded.Code, loaded.Body.String())
+	}
+	version, present := decode(t, loaded)["version"].(float64)
+	if !present {
+		t.Fatalf("the contest carries no version: %s", loaded.Body.String())
+	}
+	return strconv.FormatFloat(version, 'f', -1, 64)
+}
+
+// colleagueSaved moves the contest's version, as a colleague's save does.
+func (f *contestFixture) colleagueSaved(t *testing.T, c contests.Contest) {
+	t.Helper()
+	stored := storedContest(t, f, c)
+	stored.Version++
+	f.stores.Contests.Put(stored)
+}
+
+func succeeded(rec *httptest.ResponseRecorder) bool {
+	return rec.Code >= 200 && rec.Code < 300
 }
 
 // A form sends back the version it was loaded at, so a save made after
@@ -618,49 +773,48 @@ func TestASaveDecidedAgainstAnOlderVersionIsAConflict(t *testing.T) {
 		t.Run(save.name, func(t *testing.T) {
 			f := newContestFixture(t)
 			c := f.ownedContest(t, save.status)
-			loaded := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
-			if loaded.Code != http.StatusOK {
-				t.Fatalf("GET status = %d (%s)", loaded.Code, loaded.Body.String())
-			}
-			version, present := decode(t, loaded)["version"]
-			if !present {
-				t.Fatalf("the contest carries no version: %s", loaded.Body.String())
-			}
-			if other := f.do(save.method, "/contests/"+c.ID.String()+save.path, save.theirs); other.Code != http.StatusOK {
-				t.Fatalf("the other save = %d (%s)", other.Code, other.Body.String())
-			}
+			method, path, ours := save.request(t, f, c)
+			version := f.loadedVersion(t, c)
+			f.colleagueSaved(t, c)
 
-			rec := f.do(save.method, "/contests/"+c.ID.String()+save.path,
-				fmt.Sprintf(`{"expected_version": %v, %s}`, version, save.ours))
+			rec := save.send(f, c, method, path, ours, version)
 
 			if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_changed" {
 				t.Fatalf("status = %d (%s), want 409 contest_changed", rec.Code, rec.Body.String())
 			}
-			if stored, _ := f.stores.Contests.ByID(t.Context(), c.ID); !save.theirsKept(stored) {
-				t.Errorf("stored %+v, want the other save's values kept", stored)
+			if answered := rec.Header().Get(api.ContestVersionHeader); answered != "" {
+				t.Errorf("Contest-Version = %q on a refusal, want none: nothing was stored", answered)
+			}
+			if save.landed(t, f, c) {
+				t.Error("the stale save landed")
 			}
 		})
 	}
 }
 
+// The answer names the version the save left the contest at (ContestVersionHeader).
 func TestASaveCarryingTheCurrentVersionIsApplied(t *testing.T) {
 	for _, save := range versionGuardedSaves {
 		t.Run(save.name, func(t *testing.T) {
 			f := newContestFixture(t)
 			c := f.ownedContest(t, save.status)
-			version := decode(t, f.do(http.MethodGet, "/contests/"+c.ID.String(), ""))["version"]
+			method, path, ours := save.request(t, f, c)
+			version := f.loadedVersion(t, c)
 
-			rec := f.do(save.method, "/contests/"+c.ID.String()+save.path,
-				fmt.Sprintf(`{"expected_version": %v, %s}`, version, save.ours))
+			rec := save.send(f, c, method, path, ours, version)
 
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+			if !succeeded(rec) {
+				t.Fatalf("status = %d (%s), want it saved", rec.Code, rec.Body.String())
 			}
-			if moved := decode(t, rec)["version"]; moved == version {
-				t.Errorf("version = %v, want one past %v", moved, version)
+			moved := f.loadedVersion(t, c)
+			if moved == version {
+				t.Errorf("version = %s, want one past %s", moved, version)
 			}
-			if stored, _ := f.stores.Contests.ByID(t.Context(), c.ID); !save.ourLanded(stored) {
-				t.Errorf("stored %+v, want the save landed", stored)
+			if answered := rec.Header().Get(api.ContestVersionHeader); answered != moved {
+				t.Errorf("Contest-Version = %q, want the stored %s", answered, moved)
+			}
+			if !save.landed(t, f, c) {
+				t.Error("the save did not land")
 			}
 		})
 	}
@@ -669,7 +823,7 @@ func TestASaveCarryingTheCurrentVersionIsApplied(t *testing.T) {
 // A malformed expected version is refused as malformed, never read as absent,
 // which would save over whatever is stored. Zero and negative numbers are
 // compared like any version: zero is a never-written row's (the column
-// default), so each case writes once first and both are then stale. A
+// default), so each case moves the version first and both are then stale. A
 // version ahead of the stored one is refused as well: only the stored one
 // saves.
 func TestTheExpectedVersionOfASaveIsReadStrictly(t *testing.T) {
@@ -690,22 +844,56 @@ func TestTheExpectedVersionOfASaveIsReadStrictly(t *testing.T) {
 			t.Run(save.name+" "+raw, func(t *testing.T) {
 				f := newContestFixture(t)
 				c := f.ownedContest(t, save.status)
-				if moved := f.do(save.method, "/contests/"+c.ID.String()+save.path, save.theirs); moved.Code != http.StatusOK {
-					t.Fatalf("moving the version = %d (%s)", moved.Code, moved.Body.String())
-				}
+				method, path, ours := save.request(t, f, c)
+				f.colleagueSaved(t, c)
 				if raw == ahead {
-					stored, _ := f.stores.Contests.ByID(t.Context(), c.ID)
-					raw = strconv.FormatInt(stored.Version+1, 10)
+					raw = strconv.FormatInt(storedContest(t, f, c).Version+1, 10)
 				}
 
-				rec := f.do(save.method, "/contests/"+c.ID.String()+save.path,
-					`{"expected_version": `+raw+`, `+save.ours+`}`)
+				rec := save.send(f, c, method, path, ours, raw)
 
 				if rec.Code != want.status || errorCode(t, rec) != want.code {
 					t.Errorf("status = %d (%s), want %d %s", rec.Code, rec.Body.String(), want.status, want.code)
 				}
-				if stored, _ := f.stores.Contests.ByID(t.Context(), c.ID); !save.theirsKept(stored) {
-					t.Errorf("stored %+v: a refused save landed", stored)
+				if save.landed(t, f, c) {
+					t.Error("a refused save landed")
+				}
+			})
+		}
+	}
+}
+
+// A query string has malformations a JSON body cannot: an escape that does not
+// decode, a stray separator, a plus read as a space, a misspelt or differently
+// cased name, a parameter the route does not take. Each is refused, never read
+// as no version at all, which would delete over whatever is stored.
+func TestTheQueryOfAGuardedSaveIsReadStrictly(t *testing.T) {
+	for _, save := range versionGuardedSaves {
+		if !save.inQuery {
+			continue
+		}
+		for _, query := range []string{
+			"expected_version=%zz",
+			"expected_version=1;x",
+			"expected_version=+7",
+			"expected_version=%207",
+			"Expected_Version=1",
+			"expected_versoin=1",
+			"expected_version=1&confirm=yes",
+		} {
+			t.Run(save.name+" "+query, func(t *testing.T) {
+				f := newContestFixture(t)
+				c := f.ownedContest(t, save.status)
+				method, path, ours := save.request(t, f, c)
+				f.colleagueSaved(t, c)
+
+				rec := f.do(method, "/contests/"+c.ID.String()+path+"?"+query, bodyOf("", ours))
+
+				if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+					t.Errorf("status = %d (%s), want 400 invalid_request", rec.Code, rec.Body.String())
+				}
+				if save.landed(t, f, c) {
+					t.Error("a refused save landed")
 				}
 			})
 		}
@@ -715,24 +903,23 @@ func TestTheExpectedVersionOfASaveIsReadStrictly(t *testing.T) {
 // Null is the field left out: the guard is the client's to opt into.
 func TestASaveWithANullExpectedVersionSavesOverWhateverIsStored(t *testing.T) {
 	for _, save := range versionGuardedSaves {
-		t.Run(save.name, func(t *testing.T) {
-			f := newContestFixture(t)
-			c := f.ownedContest(t, save.status)
-			if moved := f.do(save.method, "/contests/"+c.ID.String()+save.path, save.theirs); moved.Code != http.StatusOK {
-				t.Fatalf("the other save = %d (%s)", moved.Code, moved.Body.String())
-			}
+		for _, version := range []string{"null", ""} {
+			t.Run(save.name+" "+cmp.Or(version, "absent"), func(t *testing.T) {
+				f := newContestFixture(t)
+				c := f.ownedContest(t, save.status)
+				method, path, ours := save.request(t, f, c)
+				f.colleagueSaved(t, c)
 
-			for _, body := range []string{`{"expected_version": null, ` + save.ours + `}`, `{` + save.ours + `}`} {
-				rec := f.do(save.method, "/contests/"+c.ID.String()+save.path, body)
+				rec := save.send(f, c, method, path, ours, version)
 
-				if rec.Code != http.StatusOK {
-					t.Errorf("body %s: status = %d (%s), want 200", body, rec.Code, rec.Body.String())
+				if !succeeded(rec) {
+					t.Fatalf("status = %d (%s), want it saved", rec.Code, rec.Body.String())
 				}
-			}
-			if stored, _ := f.stores.Contests.ByID(t.Context(), c.ID); !save.ourLanded(stored) {
-				t.Errorf("stored %+v, want the save landed", stored)
-			}
-		})
+				if !save.landed(t, f, c) {
+					t.Error("the save did not land")
+				}
+			})
+		}
 	}
 }
 

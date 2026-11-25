@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/auth"
+	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/gamefile"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/httpx"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
@@ -25,7 +26,7 @@ type Games interface {
 	// StatusOf is Of without the script or definition: a console polls it every
 	// two seconds during a build and needs only the script's length.
 	StatusOf(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
-	SetScript(ctx context.Context, actorID, contestID uuid.UUID, script string) (provisioning.Template, error)
+	SetScript(ctx context.Context, actorID, contestID uuid.UUID, guard *contests.VersionGuard, script string) (provisioning.Template, error)
 	// RequestBuild rebuilds the game from what is stored, for table data typed
 	// in after the last build or for a running contest whose template is gone.
 	RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) (provisioning.Template, error)
@@ -38,7 +39,7 @@ type Games interface {
 
 	// The table builder: tables described structurally instead of SQL, with
 	// each table's data uploaded as CSV.
-	SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, definition provisioning.Definition) (provisioning.Template, error)
+	SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, guard *contests.VersionGuard, definition provisioning.Definition) (provisioning.Template, error)
 
 	// CurrentTableData finds a table's chunked upload still in progress, for a
 	// reloaded page.
@@ -395,6 +396,7 @@ type gameScriptResponse struct {
 
 type setGameScriptRequest struct {
 	Script string `json:"script"`
+	versionGuard
 }
 
 func (h *GameHandler) status(w http.ResponseWriter, r *http.Request) {
@@ -451,11 +453,13 @@ func (h *GameHandler) setScript(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	template, err := h.games.SetScript(r.Context(), identity.UserID, contestID, req.Script)
+	guard := contests.Expect(req.ExpectedVersion)
+	template, err := h.games.SetScript(r.Context(), identity.UserID, contestID, guard, req.Script)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 
 	// 202, not 204: the script is stored and the build has not happened. The
 	// status this returns is `pending`, and the interface watches it.
@@ -949,6 +953,7 @@ type tableDefinitionView struct {
 // provisioning.MaxDefinitionBytes, it is read as one ordinary JSON document.
 type definitionRequest struct {
 	Tables []tableDefinitionView `json:"tables"`
+	versionGuard
 }
 
 // definitionResponse is the saved description plus the ceilings a client needs
@@ -1024,11 +1029,13 @@ func (h *GameHandler) setDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
-	template, err := h.games.SetDefinition(r.Context(), identity.UserID, contestID, toDefinition(req))
+	guard := contests.Expect(req.ExpectedVersion)
+	template, err := h.games.SetDefinition(r.Context(), identity.UserID, contestID, guard, toDefinition(req))
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	sayContestVersion(w, guard.Stored)
 	httpx.JSON(w, r, http.StatusAccepted, h.gameView(r.Context(), template))
 }
 
@@ -1385,6 +1392,9 @@ func (h *GameHandler) failUpload(w http.ResponseWriter, r *http.Request, answers
 // fail names every refusal, so the interface can say which one happened
 // rather than "internal error" (CLAUDE.md rule 1).
 func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if (errorTable{contestChangedRow}).answer(w, r, h.log, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, provisioning.ErrScriptEmpty):
 		httpx.Error(w, r, http.StatusBadRequest, codeGameScriptEmpty, "The game script is empty")

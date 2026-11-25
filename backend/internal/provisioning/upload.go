@@ -193,7 +193,7 @@ func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID
 	database := templateName(contestID)
 	storedSummary := UploadSummary{Bytes: summary.Bytes, SHA256: summary.SHA256, Lines: summary.Lines}
 
-	return g.replaceGame(ctx, contestID, previous,
+	return g.replaceGame(ctx, contestID, nil, previous,
 		func(ctx context.Context) (Template, error) {
 			return g.repo.CompleteUpload(ctx, contestID, uploadID, database, storedSummary, previous)
 		},
