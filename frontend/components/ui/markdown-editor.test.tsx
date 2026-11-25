@@ -3,14 +3,20 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 // The listener the component hands the editor, so a test can make an edit happen.
-const { editing } = vi.hoisted(() => {
+const { editing, arm } = vi.hoisted(() => {
   const editing: {
-    listening: boolean;
+    /** Settles once the component has asked the editor for its edits; the next test's is new. */
+    listening: Promise<void>;
+    listen: () => void;
     emit: (markdown: string) => void;
     /** The document the editor holds once edited, by `emit` or by a test typing ahead of it. */
     typed?: string;
-  } = { listening: false, emit: () => {} };
-  return { editing };
+  } = { listening: Promise.resolve(), listen: () => {}, emit: () => {} };
+  const arm = () => {
+    editing.listening = new Promise<void>((resolve) => (editing.listen = resolve));
+  };
+  arm();
+  return { editing, arm };
 });
 
 // ProseMirror does not survive jsdom; this tests the shell around it.
@@ -35,7 +41,7 @@ vi.mock("@milkdown/crepe", () => ({
     on(listen: (api: { markdownUpdated: (callback: (ctx: unknown, markdown: string) => void) => void }) => void) {
       listen({
         markdownUpdated: (callback) => {
-          editing.listening = true;
+          editing.listen();
           // The report is of a document the editor now holds, unless a test
           // typed a different one ahead of it.
           editing.emit = (markdown) => {
@@ -62,9 +68,23 @@ vi.mock("./paste-as-markdown", () => import("./markdown-editor-test-support"));
 
 import { MarkdownEditor } from "./markdown-editor";
 
+// The component imports both stand-ins when it mounts, and the first import in a
+// file can outlast the wait for the editor on a busy machine, so they load before any test runs.
+await Promise.all([import("@milkdown/crepe"), import("./paste-as-markdown")]);
+
 const labels = { expand: "Open full screen", collapse: "Close full screen", unavailable: "нет" };
 
+/** Settles once the editor is asked for its edits; names the fault if it never is, inside the test's own timeout. */
+function editorListening(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout>;
+  const never = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("the editor was never asked for its edits")), 3000);
+  });
+  return Promise.race([editing.listening, never]).finally(() => clearTimeout(timer));
+}
+
 afterEach(() => {
+  arm();
   editing.typed = undefined;
   document.body.style.overflow = "";
 });
@@ -98,7 +118,7 @@ describe("MarkdownEditor, a submit inside the editor's report delay", () => {
         <button type="submit">Save</button>
       </form>,
     );
-    await waitFor(() => expect(editing.listening).toBe(true));
+    await editorListening();
     await act(async () => {});
 
     editing.typed = "Morning text. Typed just now.";
@@ -126,7 +146,7 @@ test("MarkdownEditor, an untouched editor submits its original text and reports 
       <button type="submit">Save</button>
     </form>,
   );
-  await waitFor(() => expect(editing.listening).toBe(true));
+  await editorListening();
   await act(async () => {});
 
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -139,7 +159,7 @@ test("MarkdownEditor, an untouched editor submits its original text and reports 
 test("MarkdownEditor, an edit is reported as the editor's document, not the delayed report's text", async () => {
   const onChange = vi.fn();
   render(<MarkdownEditor name="body.en" defaultValue="1. one" labels={labels} onChange={onChange} />);
-  await waitFor(() => expect(editing.listening).toBe(true));
+  await editorListening();
   await act(async () => {});
 
   editing.typed = "1. one\n2. two\n";
@@ -168,7 +188,7 @@ describe("MarkdownEditor, telling the caller", () => {
     const { container } = render(
       <MarkdownEditor name="body.en" defaultValue="one" labels={labels} onChange={onChange} />,
     );
-    await waitFor(() => expect(editing.listening).toBe(true));
+    await editorListening();
 
     act(() => editing.emit("one two"));
 
