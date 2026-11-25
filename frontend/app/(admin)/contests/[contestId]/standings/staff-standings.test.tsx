@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -23,7 +23,7 @@ vi.mock("./requests", () => ({ fetchStaffStandings }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { STAFF_REFRESH_MS, StaffStandingsView } from "./staff-standings";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
 beforeAll(async () => {
@@ -157,30 +157,30 @@ describe("the staff table", () => {
     expect(revealStandingsAction).not.toHaveBeenCalled();
   });
 
-  test("reveals once the question is answered", async () => {
-    const user = userEvent.setup();
-    show(board(), "finished");
+  test("reveals once the question is answered", () =>
+    onFakeClock(async () => {
+      show(board(), "finished");
 
-    await user.click(screen.getByRole("button", { name: t().reveal }));
-    await answerYes(t().revealConfirm);
+      fireEvent.click(screen.getByRole("button", { name: t().reveal }));
+      await answerYesOnFakeClock(t().revealConfirm);
 
-    await vi.waitFor(() => expect(revealStandingsAction).toHaveBeenCalledOnce());
-  });
+      expect(revealStandingsAction).toHaveBeenCalledOnce();
+    }));
 
-  test("offers to reload when the reveal is refused for a contest that moved since", async () => {
-    revealStandingsAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
-    routerRefresh.mockReset();
-    const user = userEvent.setup();
-    show(board(), "finished");
+  test("offers to reload when the reveal is refused for a contest that moved since", () =>
+    onFakeClock(async () => {
+      revealStandingsAction.mockResolvedValueOnce({ code: "contest_changed" } as never);
+      routerRefresh.mockReset();
+      show(board(), "finished");
 
-    await user.click(screen.getByRole("button", { name: t().reveal }));
-    await answerYes(t().revealConfirm);
-    expect(await screen.findByText(dict.errors.contest_changed)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: dict.workspace.reload }));
+      fireEvent.click(screen.getByRole("button", { name: t().reveal }));
+      await answerYesOnFakeClock(t().revealConfirm);
+      expect(screen.getByText(dict.errors.contest_changed)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
 
-    expect(routerRefresh).toHaveBeenCalled();
-    expect(screen.queryByText(dict.errors.contest_changed)).not.toBeInTheDocument();
-  });
+      expect(routerRefresh).toHaveBeenCalled();
+      expect(screen.queryByText(dict.errors.contest_changed)).not.toBeInTheDocument();
+    }));
 
   test("uses a fixed table layout so a long name truncates rather than growing the table", () => {
     show(board(), "running");

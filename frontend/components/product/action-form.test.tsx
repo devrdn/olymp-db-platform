@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYes, answerYesOnFakeClock, flushFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 import type { ActionState } from "@/lib/api/server";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill } from "@/lib/i18n/fill";
@@ -78,6 +78,7 @@ function Destructive({ action }: { action: (previous: ActionState, form: FormDat
 
 // The first describe, since a dialog chunk that loaded once stays loaded.
 describe("ActionForm whose question cannot be shown yet", () => {
+  // On the real clock: the retry loads the dialog's module through the module loader, whose I/O a fake clock cannot advance.
   test("sends nothing while the dialog loads, refuses with a sentence when it fails, and asks on a retry", async () => {
     const { action } = recording();
     render(<Destructive action={action} />);
@@ -141,17 +142,18 @@ describe("ActionForm that asks first", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
-  test("sends its hidden fields once on the answer", async () => {
-    const { action, sent } = recording();
-    render(<Destructive action={action} />);
+  test("sends its hidden fields once on the answer", () =>
+    onFakeClock(async () => {
+      const { action, sent } = recording();
+      render(<Destructive action={action} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await answerYes(ro.workspace.settings.deleteDraft.action);
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action, asked().title);
 
-    await vi.waitFor(() => expect(sent).toEqual([{ contestId: ["c1"] }]));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(action).toHaveBeenCalledOnce();
-  });
+      expect(sent).toEqual([{ contestId: ["c1"] }]);
+      await act(() => vi.advanceTimersByTimeAsync(50));
+      expect(action).toHaveBeenCalledOnce();
+    }));
 
   test("shows a name with line breaks as text inside the question", async () => {
     render(
@@ -208,125 +210,138 @@ describe("ActionForm that asks first", () => {
 });
 
 describe("ActionForm's yes", () => {
-  test("is spent when the browser's validation stops the submission it was given for", async () => {
-    const { action } = recording();
-    render(
-      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
-        <input aria-label="reason" name="reason" required defaultValue="typo" />
-        <ActionButton>Delete</ActionButton>
-      </ActionForm>,
-    );
-    const reason = screen.getByRole("textbox", { name: "reason" });
+  test("is spent when the browser's validation stops the submission it was given for", () =>
+    onFakeClock(async () => {
+      const { action } = recording();
+      render(
+        <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+          <input aria-label="reason" name="reason" required defaultValue="typo" />
+          <ActionButton>Delete</ActionButton>
+        </ActionForm>,
+      );
+      const reason = screen.getByRole("textbox", { name: "reason" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await screen.findByRole("dialog");
-    fireEvent.change(reason, { target: { value: "" } });
-    await answerYes(ro.workspace.settings.deleteDraft.action);
-    expect(action).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await flushFakeClock();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      fireEvent.change(reason, { target: { value: "" } });
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
+      expect(action).not.toHaveBeenCalled();
 
-    fireEvent.change(reason, { target: { value: "typo" } });
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      fireEvent.change(reason, { target: { value: "typo" } });
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await flushFakeClock();
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(action).not.toHaveBeenCalled();
-  });
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(action).not.toHaveBeenCalled();
+    }));
 
-  test("is spent when the screen's own check stops the submission it was given for", async () => {
-    const { action } = recording();
-    let refuse = false;
-    render(
-      <ActionForm
-        action={action}
-        confirm={asked()}
-        errors={ro.errors}
-        onSubmit={(event) => {
-          if (refuse) event.preventDefault();
-        }}
-      >
-        <ActionButton>Delete</ActionButton>
-      </ActionForm>,
-    );
+  test("is spent when the screen's own check stops the submission it was given for", () =>
+    onFakeClock(async () => {
+      const { action } = recording();
+      let refuse = false;
+      render(
+        <ActionForm
+          action={action}
+          confirm={asked()}
+          errors={ro.errors}
+          onSubmit={(event) => {
+            if (refuse) event.preventDefault();
+          }}
+        >
+          <ActionButton>Delete</ActionButton>
+        </ActionForm>,
+      );
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await screen.findByRole("dialog");
-    refuse = true;
-    await answerYes(ro.workspace.settings.deleteDraft.action);
-    expect(action).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await flushFakeClock();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      refuse = true;
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
+      expect(action).not.toHaveBeenCalled();
 
-    refuse = false;
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      refuse = false;
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await flushFakeClock();
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(action).not.toHaveBeenCalled();
-  });
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(action).not.toHaveBeenCalled();
+    }));
 
-  test("covers only the data it was asked about: a form changed meanwhile asks again", async () => {
-    const { action, sent } = recording();
-    render(
-      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
-        <input aria-label="who" name="who" defaultValue="Ana" />
-        <ActionButton>Delete</ActionButton>
-      </ActionForm>,
-    );
-    const who = screen.getByRole("textbox", { name: "who" });
+  test("covers only the data it was asked about: a form changed meanwhile asks again", () =>
+    onFakeClock(async () => {
+      const { action, sent } = recording();
+      render(
+        <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+          <input aria-label="who" name="who" defaultValue="Ana" />
+          <ActionButton>Delete</ActionButton>
+        </ActionForm>,
+      );
+      const who = screen.getByRole("textbox", { name: "who" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await screen.findByRole("dialog");
-    fireEvent.change(who, { target: { value: "Ion" } });
-    await answerYes(ro.workspace.settings.deleteDraft.action);
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await flushFakeClock();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      fireEvent.change(who, { target: { value: "Ion" } });
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(action).not.toHaveBeenCalled();
-    await answerYes(ro.workspace.settings.deleteDraft.action);
-    await vi.waitFor(() => expect(sent).toEqual([{ who: ["Ion"] }]));
-  });
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(action).not.toHaveBeenCalled();
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
+      expect(sent).toEqual([{ who: ["Ion"] }]);
+    }));
 
-  test("sends the button that was pressed", async () => {
-    const { action, sent } = recording();
-    render(
-      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
-        <ActionButton name="status" value="finished">
-          Finish
-        </ActionButton>
-        <ActionButton name="status" value="archived">
-          Archive
-        </ActionButton>
-      </ActionForm>,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
-    await answerYes(ro.workspace.settings.deleteDraft.action);
-
-    await vi.waitFor(() => expect(sent).toEqual([{ status: ["archived"] }]));
-  });
-
-  test("sends nothing when the pressed button went away while asking, and asks the next time", async () => {
-    const { action } = recording();
-    const form = (archive: boolean) => (
-      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
-        {archive ? (
+  test("sends the button that was pressed", () =>
+    onFakeClock(async () => {
+      const { action, sent } = recording();
+      render(
+        <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+          <ActionButton name="status" value="finished">
+            Finish
+          </ActionButton>
           <ActionButton name="status" value="archived">
             Archive
           </ActionButton>
-        ) : null}
-        <ActionButton>Other</ActionButton>
-      </ActionForm>
-    );
-    const { rerender } = render(form(true));
+        </ActionForm>,
+      );
 
-    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
-    await screen.findByRole("dialog");
-    rerender(form(false));
-    await answerYes(ro.workspace.settings.deleteDraft.action);
-    expect(action).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
 
-    rerender(form(true));
-    await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+      expect(sent).toEqual([{ status: ["archived"] }]);
+    }));
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(action).not.toHaveBeenCalled();
-  });
+  test("sends nothing when the pressed button went away while asking, and asks the next time", () =>
+    onFakeClock(async () => {
+      const { action } = recording();
+      const form = (archive: boolean) => (
+        <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+          {archive ? (
+            <ActionButton name="status" value="archived">
+              Archive
+            </ActionButton>
+          ) : null}
+          <ActionButton>Other</ActionButton>
+        </ActionForm>
+      );
+      const { rerender } = render(form(true));
+
+      fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+      await flushFakeClock();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      rerender(form(false));
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
+      expect(action).not.toHaveBeenCalled();
+
+      rerender(form(true));
+      await flushFakeClock();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+      await flushFakeClock();
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(action).not.toHaveBeenCalled();
+    }));
 });
 
 /**
@@ -558,24 +573,25 @@ describe("ActionForm refused", () => {
     expect(screen.getByLabelText("Rate")).toHaveValue(37);
   });
 
-  test("keeps what was typed when the question was answered yes and the save then refused", async () => {
-    const { action, sent } = recording({ code: "game_in_use" });
-    render(
-      <ActionForm action={action} confirm={asked()} errors={ro.errors}>
-        <input aria-label="Reason" name="reason" defaultValue="" />
-        <ActionButton>Delete</ActionButton>
-        <ActionOutcome />
-      </ActionForm>,
-    );
+  test("keeps what was typed when the question was answered yes and the save then refused", () =>
+    onFakeClock(async () => {
+      const { action, sent } = recording({ code: "game_in_use" });
+      render(
+        <ActionForm action={action} confirm={asked()} errors={ro.errors}>
+          <input aria-label="Reason" name="reason" defaultValue="" />
+          <ActionButton>Delete</ActionButton>
+          <ActionOutcome />
+        </ActionForm>,
+      );
 
-    await userEvent.type(screen.getByLabelText("Reason"), "spam");
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await answerYes(ro.workspace.settings.deleteDraft.action);
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "spam" } });
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await answerYesOnFakeClock(ro.workspace.settings.deleteDraft.action);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(ro.errors.game_in_use);
-    expect(sent).toEqual([{ reason: ["spam"] }]);
-    expect(screen.getByLabelText("Reason")).toHaveValue("spam");
-  });
+      expect(screen.getByRole("alert")).toHaveTextContent(ro.errors.game_in_use);
+      expect(sent).toEqual([{ reason: ["spam"] }]);
+      expect(screen.getByLabelText("Reason")).toHaveValue("spam");
+    }));
 
   test("clears its password fields, and only those", async () => {
     render(

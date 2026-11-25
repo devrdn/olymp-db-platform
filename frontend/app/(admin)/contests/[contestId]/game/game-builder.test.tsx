@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 import en from "@/lib/i18n/dictionaries/en";
 import { fill, isolate } from "@/lib/i18n/fill";
@@ -186,14 +186,15 @@ describe("the table builder's own structure editor", () => {
     expect(screen.getByDisplayValue("suspects")).toBeInTheDocument();
   });
 
-  test("removes the table once the question is answered", async () => {
-    show({ rowCounts: { suspects: 0 } });
+  test("removes the table once the question is answered", () =>
+    onFakeClock(async () => {
+      show({ rowCounts: { suspects: 0 } });
 
-    await userEvent.click(screen.getByRole("button", { name: tb.removeTable }));
-    await answerYes(tb.removeTable);
+      fireEvent.click(screen.getByRole("button", { name: tb.removeTable }));
+      await answerYesOnFakeClock(tb.removeTable);
 
-    await waitFor(() => expect(screen.queryByDisplayValue("suspects")).not.toBeInTheDocument());
-  });
+      expect(screen.queryByDisplayValue("suspects")).not.toBeInTheDocument();
+    }));
 
   test("saves the structure in the server's own wire shape, name/type/nullable and a primary key by column name", async () => {
     const user = userEvent.setup();

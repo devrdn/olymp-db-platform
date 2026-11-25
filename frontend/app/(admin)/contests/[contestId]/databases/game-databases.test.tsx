@@ -1,8 +1,8 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill, isolate } from "@/lib/i18n/fill";
@@ -138,28 +138,30 @@ describe("the contest's databases", () => {
     expect(dropGameInstanceAction).not.toHaveBeenCalled();
   });
 
-  test("sends the database name when the question is answered yes", async () => {
-    show();
+  test("sends the database name when the question is answered yes", () =>
+    onFakeClock(async () => {
+      show();
 
-    await userEvent.click(screen.getByRole("button", { name: t.drop }));
-    await answerYes(t.drop);
+      fireEvent.click(screen.getByRole("button", { name: t.drop }));
+      await answerYesOnFakeClock(t.drop);
 
-    await vi.waitFor(() => expect(dropGameInstanceAction).toHaveBeenCalled());
-    const form = dropGameInstanceAction.mock.calls[0][1];
-    expect(form.get("database")).toBe("game_c1_u1");
-    expect(form.get("contestId")).toBe(contestId);
-  });
+      expect(dropGameInstanceAction).toHaveBeenCalled();
+      const form = dropGameInstanceAction.mock.calls[0][1];
+      expect(form.get("database")).toBe("game_c1_u1");
+      expect(form.get("contestId")).toBe(contestId);
+    }));
 
-  test("shows the server's refusal on the row it happened to", async () => {
-    dropped.current = { code: "game_instance_already_dropped" };
-    show();
+  test("shows the server's refusal on the row it happened to", () =>
+    onFakeClock(async () => {
+      dropped.current = { code: "game_instance_already_dropped" };
+      show();
 
-    await userEvent.click(screen.getByRole("button", { name: t.drop }));
-    await answerYes(t.drop);
+      fireEvent.click(screen.getByRole("button", { name: t.drop }));
+      await answerYesOnFakeClock(t.drop);
 
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(en.errors.game_instance_already_dropped)).toBeInTheDocument();
-  });
+      const alert = screen.getByRole("alert");
+      expect(within(alert).getByText(en.errors.game_instance_already_dropped)).toBeInTheDocument();
+    }));
 
   test("says the contest has no databases rather than drawing an empty table", () => {
     show({ instances: [] });

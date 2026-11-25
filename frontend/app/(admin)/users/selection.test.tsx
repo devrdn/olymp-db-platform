@@ -1,8 +1,8 @@
 import { Profiler } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
@@ -430,11 +430,13 @@ describe("bulk actions: an empty roles submit asks first", () => {
     const roles: Role[] = [{ code: "admin", name: "Administrator" }];
     await renderBar({ selected: ["a"], roles });
 
-    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
-    await userEvent.click(screen.getByRole("button", { name: empty().submit }));
-    await answerYes(empty().confirmEmptySubmit);
+    await onFakeClock(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
+      fireEvent.click(screen.getByRole("button", { name: empty().submit }));
+      await answerYesOnFakeClock(empty().confirmEmptySubmit);
 
-    await waitFor(() => expect(bulkReplaceRolesAction).toHaveBeenCalledOnce());
+      expect(bulkReplaceRolesAction).toHaveBeenCalledOnce();
+    });
     const form = bulkReplaceRolesAction.mock.calls[0]![1] as FormData;
     expect(form.getAll("roles")).toEqual([]);
     expect(form.getAll("ids")).toEqual(["a"]);

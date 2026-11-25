@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
@@ -25,7 +25,7 @@ vi.mock("next/navigation", async (importOriginal) => ({
 }));
 
 import { QuestionList } from "./question-list";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock, flushFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 let dict: Dictionary;
 
@@ -199,15 +199,16 @@ describe("QuestionList, deleting a question", () => {
     expect(deleteQuestionAction).not.toHaveBeenCalled();
   });
 
-  test("says why a refused delete did not happen", async () => {
-    deleteQuestionAction.mockResolvedValueOnce({ code: "question_not_found" });
-    render(list());
+  test("says why a refused delete did not happen", () =>
+    onFakeClock(async () => {
+      deleteQuestionAction.mockResolvedValueOnce({ code: "question_not_found" });
+      render(list());
 
-    await userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
-    await answerYes(dict.workspace.questions.remove);
+      fireEvent.click(screen.getByRole("button", { name: dict.workspace.questions.remove }));
+      await answerYesOnFakeClock(dict.workspace.questions.remove);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.question_not_found);
-  });
+      expect(screen.getByRole("alert")).toHaveTextContent(dict.errors.question_not_found);
+    }));
 });
 
 describe("QuestionList, moving a question", () => {
@@ -225,49 +226,61 @@ const two = () => [question(), question({ id: "6a2b9d33-2c5f-4b88-8e1e-3d6c9f02b
 
 // Each control is its own form, and each sends the version the list was rendered at.
 describe.each([
-  ["adding", addQuestionAction, async () => userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.add }))],
+  [
+    "adding",
+    addQuestionAction,
+    async () => {
+      fireEvent.click(screen.getByRole("button", { name: dict.workspace.questions.add }));
+      await flushFakeClock();
+    },
+  ],
   [
     "moving",
     reorderQuestionsAction,
-    async () => userEvent.click(screen.getByRole("button", { name: dict.workspace.questions.moveDown })),
+    async () => {
+      fireEvent.click(screen.getByRole("button", { name: dict.workspace.questions.moveDown }));
+      await flushFakeClock();
+    },
   ],
   [
     "deleting",
     deleteQuestionAction,
     async () => {
-      await userEvent.click(screen.getAllByRole("button", { name: dict.workspace.questions.remove })[0]);
-      await answerYes(dict.workspace.questions.remove);
+      fireEvent.click(screen.getAllByRole("button", { name: dict.workspace.questions.remove })[0]);
+      await answerYesOnFakeClock(dict.workspace.questions.remove);
     },
   ],
 ] as const)("QuestionList, %s at the version the list was rendered at", (_name, action, press) => {
-  test("a refusal because the contest moved since says so, and the reload starts the form over", async () => {
-    action.mockReset();
-    action.mockResolvedValueOnce({ code: "contest_changed" });
-    refresh.mockReset();
-    render(list(two()));
+  test("a refusal because the contest moved since says so, and the reload starts the form over", () =>
+    onFakeClock(async () => {
+      action.mockReset();
+      action.mockResolvedValueOnce({ code: "contest_changed" });
+      refresh.mockReset();
+      render(list(two()));
 
-    await press();
-    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
-    await userEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
+      await press();
+      expect(screen.getByRole("alert")).toHaveTextContent(dict.errors.contest_changed);
+      fireEvent.click(screen.getByRole("button", { name: dict.workspace.reload }));
 
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    }));
 
   // The write re-reads the page, whose contest now carries the moved version.
-  test("sends the version it was rendered at, and the next one the version the page re-read", async () => {
-    action.mockReset();
-    action.mockResolvedValue({ ok: true });
-    const view = render(list(two()));
+  test("sends the version it was rendered at, and the next one the version the page re-read", () =>
+    onFakeClock(async () => {
+      action.mockReset();
+      action.mockResolvedValue({ ok: true });
+      const view = render(list(two()));
 
-    await press();
-    await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(1));
-    view.rerender(list(two(), 4));
-    await press();
+      await press();
+      expect(action).toHaveBeenCalledTimes(1);
+      view.rerender(list(two(), 4));
+      await press();
 
-    await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(2));
-    expect(action.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
-  });
+      expect(action).toHaveBeenCalledTimes(2);
+      expect(action.mock.calls.map(([, form]) => form.get("expectedVersion"))).toEqual(["3", "4"]);
+    }));
 });
 
 // The list's controls hold no draft, so a list or a version that changed under

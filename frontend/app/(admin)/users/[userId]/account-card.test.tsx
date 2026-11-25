@@ -18,7 +18,7 @@ import { fill, isolate } from "@/lib/i18n/fill";
 
 import type { MailOffer } from "../email-delivery";
 import { AccountCard } from "./account-card";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 let en: Dictionary;
 
@@ -195,17 +195,18 @@ describe("AccountCard, clearing a sign-in lockout", () => {
     expect(unlockSignInAction).not.toHaveBeenCalled();
   });
 
-  test("clears the lockout for this account once confirmed, and says so", async () => {
-    renderCard();
+  test("clears the lockout for this account once confirmed, and says so", () =>
+    onFakeClock(async () => {
+      renderCard();
 
-    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
-    await answerYes(en.accounts.card.unlockSignInConfirm);
+      fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
+      await answerYesOnFakeClock(en.accounts.card.unlockSignInConfirm);
 
-    await waitFor(() => expect(unlockSignInAction).toHaveBeenCalledTimes(1));
-    const submitted = unlockSignInAction.mock.calls[0][1] as FormData;
-    expect(submitted.get("userId")).toBe(account().id);
-    expect(await screen.findByText(en.accounts.card.unlocked)).toBeInTheDocument();
-  });
+      expect(unlockSignInAction).toHaveBeenCalledTimes(1);
+      const submitted = unlockSignInAction.mock.calls[0][1] as FormData;
+      expect(submitted.get("userId")).toBe(account().id);
+      expect(screen.getByText(en.accounts.card.unlocked)).toBeInTheDocument();
+    }));
 });
 
 describe("AccountCard, a password reset with the sign-in details by email", () => {

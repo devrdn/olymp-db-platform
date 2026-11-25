@@ -1,11 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill, isolate } from "@/lib/i18n/fill";
-import { answerYes } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", async (importOriginal) => ({
@@ -53,28 +53,28 @@ describe("DeleteDraftPanel", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("Q$&A 50$' off");
   });
 
-  test("shows a refusal as a sentence", async () => {
-    serverRequest.mockRejectedValueOnce(new ApiError("game_in_use", 409, "in use"));
-    const user = userEvent.setup();
-    render(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
+  test("shows a refusal as a sentence", () =>
+    onFakeClock(async () => {
+      serverRequest.mockRejectedValueOnce(new ApiError("game_in_use", 409, "in use"));
+      render(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
 
-    await user.click(screen.getByRole("button", { name: t().action }));
-    await answerYes(t().action);
+      fireEvent.click(screen.getByRole("button", { name: t().action }));
+      await answerYesOnFakeClock(t().action);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(dict.errors.game_in_use);
-  });
+      expect(screen.getByRole("alert")).toHaveTextContent(dict.errors.game_in_use);
+    }));
 
-  test("the button stays disabled while the delete is in flight", async () => {
-    serverRequest.mockReturnValueOnce(new Promise(() => {}));
-    const user = userEvent.setup();
-    render(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
+  test("the button stays disabled while the delete is in flight", () =>
+    onFakeClock(async () => {
+      serverRequest.mockReturnValueOnce(new Promise(() => {}));
+      render(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
 
-    await user.click(screen.getByRole("button", { name: t().action }));
-    await answerYes(t().action);
+      fireEvent.click(screen.getByRole("button", { name: t().action }));
+      await answerYesOnFakeClock(t().action);
 
-    await vi.waitFor(() => expect(serverRequest).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(screen.getByRole("button", { name: t().action })).toBeDisabled());
-  });
+      expect(serverRequest).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: t().action })).toBeDisabled();
+    }));
 
   test("the button is the danger variant", () => {
     render(<DeleteDraftPanel contestId={contestId} title="Spring round" dict={dict} />);
