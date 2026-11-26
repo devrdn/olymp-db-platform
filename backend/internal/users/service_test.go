@@ -332,9 +332,9 @@ func TestCreateExternalMakesAStudentWithoutAPasswordLinkedToTheIdentity(t *testi
 	if !slices.Equal(stored.Roles, []string{users.RoleStudent}) {
 		t.Errorf("roles = %v, want only %s", stored.Roles, users.RoleStudent)
 	}
-	linked := f.repo.Identities(created.ID)
-	if len(linked) != 1 || linked[0].Subject != "sub-ana" || linked[0].UserID != created.ID {
-		t.Errorf("identities = %+v, want sub-ana linked to the new account", linked)
+	linked, err := f.repo.IdentitiesOf(t.Context(), created.ID)
+	if err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" || linked[0].UserID != created.ID {
+		t.Errorf("identities = %+v, %v; want sub-ana linked to the new account", linked, err)
 	}
 	if f.uow.Calls != 1 {
 		t.Errorf("units of work = %d, want the account and its link in one", f.uow.Calls)
@@ -366,8 +366,8 @@ func TestCreateExternalWithoutAnEmailLeavesTheAccountWithout(t *testing.T) {
 	if stored.Email != "" || stored.EmailVerifiedAt != nil {
 		t.Errorf("email %q verified at %v, want none", stored.Email, stored.EmailVerifiedAt)
 	}
-	if linked := f.repo.Identities(created.ID); len(linked) != 1 || linked[0].Email != "ana@example.edu" {
-		t.Errorf("identities = %+v, want the claimed address kept on the identity", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), created.ID); err != nil || len(linked) != 1 || linked[0].Email != "ana@example.edu" {
+		t.Errorf("identities = %+v, %v; want the claimed address kept on the identity", linked, err)
 	}
 	if len(f.sink.entries) != 1 || f.sink.entries[0].Payload["email_trusted"] != false {
 		t.Errorf("audit = %+v, want one entry saying the email was not trusted", f.sink.entries)
@@ -434,8 +434,8 @@ func TestLinkExternalTiesTheIdentityAndVerifiesTheEmail(t *testing.T) {
 	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(at) {
 		t.Errorf("email verified at %v, want %v", stored.EmailVerifiedAt, at)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-ana" {
-		t.Errorf("identities = %+v, want sub-ana", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" {
+		t.Errorf("identities = %+v, %v; want sub-ana", linked, err)
 	}
 	if f.uow.Calls != 1 {
 		t.Errorf("units of work = %d, want the link, the verification and the entry in one", f.uow.Calls)
@@ -544,8 +544,8 @@ func TestLinkExternalRefusesAnUnverifiedAccountNotOnAOneTimePassword(t *testing.
 			if !errors.Is(err, users.ErrUnverifiedNotLinkable) {
 				t.Errorf("LinkExternal() = %v, want ErrUnverifiedNotLinkable", err)
 			}
-			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-				t.Errorf("identities = %+v, want none", linked)
+			if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+				t.Errorf("identities = %+v, %v; want none", linked, err)
 			}
 			stored, _ := f.repo.Get(ana.ID)
 			if stored.EmailVerifiedAt != nil {
@@ -571,8 +571,8 @@ func TestLinkExternalLinksAnUnverifiedAccountStillOnItsOneTimePassword(t *testin
 		t.Fatalf("LinkExternal() = %v", err)
 	}
 
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want one", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want one", linked, err)
 	}
 	stored, _ := f.repo.Get(ana.ID)
 	if stored.PasswordHash != "" || stored.MustChangePassword {
@@ -599,8 +599,8 @@ func TestLinkExternalLinksAnUnverifiedStaffAccountThroughTheHomeDirectory(t *tes
 	if err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want one", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want one", linked, err)
 	}
 }
 
@@ -620,8 +620,8 @@ func TestLinkExternalRefusesAnUnverifiedStudentEvenFromTheHomeDirectory(t *testi
 	if !errors.Is(err, users.ErrUnverifiedNotLinkable) {
 		t.Errorf("LinkExternal() = %v, want ErrUnverifiedNotLinkable", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 }
 
@@ -661,8 +661,8 @@ func TestLinkExternalRefusesAnAccountThatChangedSinceItWasRead(t *testing.T) {
 			if locked != 1 {
 				t.Errorf("locks taken = %d, want the account locked before it is read", locked)
 			}
-			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-				t.Errorf("identities = %+v, want none", linked)
+			if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+				t.Errorf("identities = %+v, %v; want none", linked, err)
 			}
 			if stored, _ := f.repo.Get(ana.ID); stored.EmailVerifiedAt != nil {
 				t.Error("the email was marked verified")
@@ -689,8 +689,8 @@ func TestLinkExternalRefusesAnAddressThatOnlyFoldsToTheIdentitys(t *testing.T) {
 	if !errors.Is(err, users.ErrNotFound) {
 		t.Errorf("LinkExternal() = %v, want ErrNotFound", err)
 	}
-	if linked := f.repo.Identities(kelvin.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), kelvin.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 }
 
@@ -712,8 +712,8 @@ func TestLinkExternalAdmitsStaffFromTheHomeDirectory(t *testing.T) {
 	if locked != 1 {
 		t.Errorf("locks taken = %d, want one", locked)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want one", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want one", linked, err)
 	}
 	var found bool
 	for _, e := range f.sink.entries {
@@ -742,8 +742,8 @@ func TestLinkExternalRefusesStaffOutsideTheHomeDirectory(t *testing.T) {
 	if !errors.Is(err, users.ErrStaffNotLinkable) {
 		t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 	if stored, _ := f.repo.Get(ana.ID); stored.EmailVerifiedAt != nil {
 		t.Error("the email was marked verified")
@@ -774,8 +774,8 @@ func TestLinkExternalStillRefusesABlockedOrDeletedAccountFromTheHomeDirectory(t 
 			if !errors.Is(err, tc.want) {
 				t.Errorf("LinkExternal() = %v, want %v", err, tc.want)
 			}
-			if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-				t.Errorf("identities = %+v, want none", linked)
+			if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+				t.Errorf("identities = %+v, %v; want none", linked, err)
 			}
 		})
 	}
@@ -794,8 +794,8 @@ func TestLinkExternalAdmitsAContestManagerFromTheHomeDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want one", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want one", linked, err)
 	}
 }
 
@@ -812,8 +812,8 @@ func TestLinkExternalRefusesAContestManager(t *testing.T) {
 	if !errors.Is(err, users.ErrStaffNotLinkable) {
 		t.Errorf("LinkExternal() = %v, want ErrStaffNotLinkable", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 }
 
@@ -834,8 +834,8 @@ func TestLinkExternalRefusesASecondIdentityOfTheSameIssuer(t *testing.T) {
 	if !errors.Is(err, users.ErrIssuerAlreadyLinked) {
 		t.Errorf("LinkExternal() = %v, want ErrIssuerAlreadyLinked", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-before" {
-		t.Errorf("identities = %+v, want only the first", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-before" {
+		t.Errorf("identities = %+v, %v; want only the first", linked, err)
 	}
 	if stored, _ := f.repo.Get(ana.ID); stored.EmailVerifiedAt != nil {
 		t.Error("the email was marked verified")
@@ -859,8 +859,8 @@ func TestLinkExternalLinksAnIdentityOfAnotherIssuer(t *testing.T) {
 	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: microsoftIdentity("sub-ana"), VerifiedAt: time.Now()}); err != nil {
 		t.Fatalf("LinkExternal() = %v", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 2 {
-		t.Errorf("identities = %+v, want both", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 2 {
+		t.Errorf("identities = %+v, %v; want both", linked, err)
 	}
 }
 

@@ -430,6 +430,11 @@ var Providers = []string{ProviderMicrosoft, ProviderGoogle, ProviderGitHub}
 // (CLAUDE.md rule 2).
 const MaxIdentityFieldLength = 255
 
+// MaxIdentitiesListed bounds the identities one listing of an account returns
+// (CLAUDE.md rule 2). An account holds at most one per issuer, so a real one
+// stays far below it.
+const MaxIdentitiesListed = 50
+
 // ExternalIdentity ties an account to a person's identity at a provider.
 // Issuer and Subject together name that person there, so the provider's own
 // account can change its email without cutting the link.
@@ -455,8 +460,20 @@ func (i ExternalIdentity) Validate() error {
 	return nil
 }
 
+// LinkedIdentity is an identity as the account holds it: the row that names
+// it, when it was linked and when it last signed in.
+type LinkedIdentity struct {
+	ID uuid.UUID
+	ExternalIdentity
+	LinkedAt, LastUsedAt time.Time
+}
+
 // ExternalIdentities is the storage of provider identities.
 type ExternalIdentities interface {
+	// IdentitiesOf lists the identities linked to the account, oldest link
+	// first and then by ID, at most MaxIdentitiesListed; none for an unknown
+	// account.
+	IdentitiesOf(ctx context.Context, userID uuid.UUID) ([]LinkedIdentity, error)
 	// ByExternalIdentity resolves the account an identity is linked to;
 	// ErrNotFound when none is.
 	ByExternalIdentity(ctx context.Context, provider, issuer, subject string) (User, error)

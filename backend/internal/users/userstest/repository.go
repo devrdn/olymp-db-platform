@@ -4,6 +4,8 @@
 package userstest
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -24,7 +26,7 @@ type Repository struct {
 	// transaction committed while Lock waited for the row.
 	OnLock                   func(id uuid.UUID)
 	CountActiveWithRoleCalls int
-	identities               map[identityKey]users.ExternalIdentity
+	identities               map[identityKey]users.LinkedIdentity
 	lastUsed                 map[identityKey]time.Time
 	// contestStaff are the accounts that manage or own a contest that is not
 	// archived.
@@ -37,7 +39,7 @@ func New() *Repository {
 	return &Repository{
 		byID:         map[uuid.UUID]users.User{},
 		permissions:  map[string][]string{},
-		identities:   map[identityKey]users.ExternalIdentity{},
+		identities:   map[identityKey]users.LinkedIdentity{},
 		lastUsed:     map[identityKey]time.Time{},
 		contestStaff: map[uuid.UUID]bool{},
 	}
@@ -543,8 +545,8 @@ func (r *Repository) ByExternalIdentity(_ context.Context, provider, issuer, sub
 	return r.withPermissions(u), nil
 }
 
-// LinkExternalIdentity mirrors the unique (provider, issuer, subject) and the
-// foreign key to the account.
+// LinkExternalIdentity mirrors the unique (provider, issuer, subject), the
+// foreign key to the account and the row's defaults.
 func (r *Repository) LinkExternalIdentity(_ context.Context, id users.ExternalIdentity) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -559,7 +561,7 @@ func (r *Repository) LinkExternalIdentity(_ context.Context, id users.ExternalId
 	if _, ok := r.byID[id.UserID]; !ok {
 		return users.ErrNotFound
 	}
-	r.identities[key] = id
+	r.identities[key] = users.LinkedIdentity{ID: uuid.New(), ExternalIdentity: id, LinkedAt: time.Now().UTC()}
 	return nil
 }
 
@@ -593,7 +595,9 @@ func (r *Repository) TouchExternalIdentity(_ context.Context, provider, issuer, 
 	return nil
 }
 
-// LastUsed is the time TouchExternalIdentity last stamped; zero if never.
+// LastUsed is the time TouchExternalIdentity last stamped, and zero if it
+// never did, which LinkedIdentity.LastUsedAt cannot say: like the column, it
+// starts at the link.
 func (r *Repository) LastUsed(provider, issuer, subject string) time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -616,18 +620,29 @@ func (r *Repository) DeleteExternalIdentities(_ context.Context, userID uuid.UUI
 	return nil
 }
 
-// Identities lists the identities linked to the account, in no order.
-func (r *Repository) Identities(userID uuid.UUID) []users.ExternalIdentity {
+// IdentitiesOf mirrors last_used_at, which starts at the link.
+func (r *Repository) IdentitiesOf(_ context.Context, userID uuid.UUID) ([]users.LinkedIdentity, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var found []users.ExternalIdentity
-	for _, id := range r.identities {
-		if id.UserID == userID {
-			found = append(found, id)
-		}
+	if r.Err != nil {
+		return nil, r.Err
 	}
-	return found
+	var found []users.LinkedIdentity
+	for key, id := range r.identities {
+		if id.UserID != userID {
+			continue
+		}
+		id.LastUsedAt = id.LinkedAt
+		if at, ok := r.lastUsed[key]; ok {
+			id.LastUsedAt = at
+		}
+		found = append(found, id)
+	}
+	slices.SortFunc(found, func(a, b users.LinkedIdentity) int {
+		return cmp.Or(a.LinkedAt.Compare(b.LinkedAt), bytes.Compare(a.ID[:], b.ID[:]))
+	})
+	return found[:min(len(found), users.MaxIdentitiesListed)], nil
 }
 
 func containsFold(haystack, needle string) bool {

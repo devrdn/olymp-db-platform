@@ -169,8 +169,8 @@ func TestATrustedEmailLinksToTheExistingStudent(t *testing.T) {
 	if err != nil || got.ID != ana.ID {
 		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-ana" || linked[0].Email != "ana@example.edu" {
-		t.Errorf("identities = %+v, want sub-ana with the address lowercased", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" || linked[0].Email != "ana@example.edu" {
+		t.Errorf("identities = %+v, %v; want sub-ana with the address lowercased", linked, err)
 	}
 	stored, _ := f.repo.Get(ana.ID)
 	if stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(now) {
@@ -269,8 +269,8 @@ func assertUnverifiedAccountNotLinked(t *testing.T, c federation.Claims) {
 	if !errors.Is(err, federation.ErrUnverifiedAccount) {
 		t.Errorf("Resolve() = %v, want ErrUnverifiedAccount", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 	if n := f.accountCount(); n != accounts {
 		t.Errorf("accounts = %d, want %d: no fresh account", n, accounts)
@@ -296,8 +296,8 @@ func TestAnAccountUnverifiedBeforeTheLinkIsNotLinked(t *testing.T) {
 	if !errors.Is(err, federation.ErrUnverifiedAccount) {
 		t.Errorf("Resolve() = %v, want ErrUnverifiedAccount", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 }
 
@@ -316,8 +316,8 @@ func TestATrustedEmailWithNoAccountCreatesAVerifiedOne(t *testing.T) {
 	if stored.Email != "ana@example.edu" || stored.EmailVerifiedAt == nil || !stored.EmailVerifiedAt.Equal(now) {
 		t.Errorf("email %q verified at %v, want ana@example.edu at %v", stored.Email, stored.EmailVerifiedAt, now)
 	}
-	if linked := f.repo.Identities(got.ID); len(linked) != 1 || linked[0].Subject != "sub-ana" {
-		t.Errorf("identities = %+v, want sub-ana", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), got.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" {
+		t.Errorf("identities = %+v, %v; want sub-ana", linked, err)
 	}
 }
 
@@ -330,7 +330,7 @@ func TestAnUntrustedEmailGetsAnAccountWithoutEmail(t *testing.T) {
 		t.Fatalf("Resolve() = %v", err)
 	}
 
-	if got.ID == owner.ID || len(f.repo.Identities(owner.ID)) != 0 {
+	if linked, err := f.repo.IdentitiesOf(t.Context(), owner.ID); got.ID == owner.ID || err != nil || len(linked) != 0 {
 		t.Fatal("an untrusted email reached the account that holds the address")
 	}
 	if f.store.byEmail != 0 {
@@ -340,8 +340,8 @@ func TestAnUntrustedEmailGetsAnAccountWithoutEmail(t *testing.T) {
 	if stored.Email != "" || stored.EmailVerifiedAt != nil {
 		t.Errorf("new account's email %q verified at %v, want none", stored.Email, stored.EmailVerifiedAt)
 	}
-	if linked := f.repo.Identities(got.ID); len(linked) != 1 || linked[0].Email != "ana@example.edu" {
-		t.Errorf("identities = %+v, want the claimed address kept on the identity only", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), got.ID); err != nil || len(linked) != 1 || linked[0].Email != "ana@example.edu" {
+		t.Errorf("identities = %+v, %v; want the claimed address kept on the identity only", linked, err)
 	}
 }
 
@@ -354,7 +354,7 @@ func TestNeverLinksAStaffAccount(t *testing.T) {
 	if !errors.Is(err, federation.ErrStaffAccount) {
 		t.Fatalf("Resolve() = %v, want ErrStaffAccount", err)
 	}
-	if len(f.repo.Identities(staff.ID)) != 0 {
+	if linked, err := f.repo.IdentitiesOf(t.Context(), staff.ID); err != nil || len(linked) != 0 {
 		t.Error("the staff account was linked")
 	}
 	if n := f.accountCount(); n != 1 {
@@ -373,7 +373,7 @@ func TestNeverLinksAContestManager(t *testing.T) {
 	if !errors.Is(err, federation.ErrStaffAccount) {
 		t.Fatalf("Resolve() = %v, want ErrStaffAccount", err)
 	}
-	if len(f.repo.Identities(ana.ID)) != 0 {
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
 		t.Error("the contest manager's account was linked")
 	}
 }
@@ -430,7 +430,7 @@ func TestCannotEnterABlockedAccount(t *testing.T) {
 		if _, err := f.service().Resolve(t.Context(), trusted("sub-ana")); !errors.Is(err, users.ErrAccountBlocked) {
 			t.Errorf("Resolve() = %v, want ErrAccountBlocked", err)
 		}
-		if len(f.repo.Identities(ana.ID)) != 0 {
+		if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
 			t.Error("the blocked account was linked")
 		}
 		if n := f.accountCount(); n != 1 {
@@ -704,8 +704,8 @@ func TestAnUntrustedInvalidEmailIsDropped(t *testing.T) {
 			if stored, _ := f.repo.Get(got.ID); stored.Email != "" {
 				t.Errorf("new account's email = %q, want none", stored.Email)
 			}
-			if linked := f.repo.Identities(got.ID); len(linked) != 1 || linked[0].Email != "" {
-				t.Errorf("identities = %+v, want one without the invalid address", linked)
+			if linked, err := f.repo.IdentitiesOf(t.Context(), got.ID); err != nil || len(linked) != 1 || linked[0].Email != "" {
+				t.Errorf("identities = %+v, %v; want one without the invalid address", linked, err)
 			}
 		})
 	}
@@ -734,8 +734,8 @@ func TestANonASCIIEmailNeitherFindsNorLandsOnAnAccount(t *testing.T) {
 			if stored, _ := f.repo.Get(got.ID); stored.Email != "" {
 				t.Errorf("new account's email = %q, want none", stored.Email)
 			}
-			if linked := f.repo.Identities(got.ID); len(linked) != 1 || linked[0].Email != "" {
-				t.Errorf("identities = %+v, want one without the address", linked)
+			if linked, err := f.repo.IdentitiesOf(t.Context(), got.ID); err != nil || len(linked) != 1 || linked[0].Email != "" {
+				t.Errorf("identities = %+v, %v; want one without the address", linked, err)
 			}
 		})
 	}
@@ -811,8 +811,8 @@ func TestAnAccountMadeStaffBeforeTheLinkIsRefused(t *testing.T) {
 	if !errors.Is(err, federation.ErrStaffAccount) {
 		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 }
 
@@ -831,8 +831,8 @@ func TestAHomeDirectoryMemberLinksAStaffAccount(t *testing.T) {
 	if err != nil || got.ID != org.ID {
 		t.Fatalf("Resolve() = %v, %v; want the organizer's account", got.ID, err)
 	}
-	if linked := f.repo.Identities(org.ID); len(linked) != 1 || linked[0].Subject != "sub-ana" {
-		t.Errorf("identities = %+v, want sub-ana", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), org.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" {
+		t.Errorf("identities = %+v, %v; want sub-ana", linked, err)
 	}
 	if n := f.accountCount(); n != 1 {
 		t.Errorf("accounts = %d, want only the organizer's", n)
@@ -849,8 +849,8 @@ func TestAHomeDirectoryMemberLinksAContestManager(t *testing.T) {
 	if err != nil || got.ID != ana.ID {
 		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want one", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want one", linked, err)
 	}
 }
 
@@ -938,7 +938,7 @@ func TestTheHomeDirectoryNeverOpensABlockedOrDeletedAccount(t *testing.T) {
 		if _, err := f.service().Resolve(t.Context(), homeDirectory("sub-ana")); !errors.Is(err, users.ErrAccountBlocked) {
 			t.Errorf("Resolve() = %v, want ErrAccountBlocked", err)
 		}
-		if len(f.repo.Identities(org.ID)) != 0 {
+		if linked, err := f.repo.IdentitiesOf(t.Context(), org.ID); err != nil || len(linked) != 0 {
 			t.Error("the blocked account was linked")
 		}
 	})
@@ -974,8 +974,8 @@ func TestAnAccountMadeStaffBeforeAHomeDirectoryLinkIsLinked(t *testing.T) {
 	if err != nil || got.ID != ana.ID {
 		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want one", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want one", linked, err)
 	}
 }
 
@@ -1014,8 +1014,8 @@ func TestAnAccountThatTakesTheEmailDuringCreationIsLinkedInstead(t *testing.T) {
 	if err != nil || got.ID != ana.ID {
 		t.Fatalf("Resolve() = %v, %v; want the account that took the address", got.ID, err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 {
-		t.Errorf("identities = %+v, want sub-ana linked to it", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 {
+		t.Errorf("identities = %+v, %v; want sub-ana linked to it", linked, err)
 	}
 	if n := f.accountCount(); n != 1 {
 		t.Errorf("accounts = %d, want only the one that took the address", n)
@@ -1030,8 +1030,8 @@ func TestAStaffAccountThatTakesTheEmailDuringCreationIsRefused(t *testing.T) {
 	if _, err := f.service().Resolve(t.Context(), trusted("sub-ana")); !errors.Is(err, federation.ErrStaffAccount) {
 		t.Errorf("Resolve() = %v, want ErrStaffAccount", err)
 	}
-	if linked := f.repo.Identities(staff.ID); len(linked) != 0 {
-		t.Errorf("identities = %+v, want none", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), staff.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
 	}
 }
 
@@ -1075,7 +1075,7 @@ func TestAnAccountReaddressedBeforeTheLinkIsNotLinked(t *testing.T) {
 		t.Fatalf("Resolve() = %v", err)
 	}
 
-	if got.ID == ana.ID || len(f.repo.Identities(ana.ID)) != 0 {
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); got.ID == ana.ID || err != nil || len(linked) != 0 {
 		t.Error("the identity was linked to an account no longer holding the address")
 	}
 	if stored, _ := f.repo.Get(got.ID); stored.Email != "ana@example.edu" || stored.EmailVerifiedAt == nil {
@@ -1093,8 +1093,8 @@ func TestASecondIdentityOfTheSameIssuerIsNotLinkedByEmail(t *testing.T) {
 	if !errors.Is(err, federation.ErrIdentityConflict) {
 		t.Errorf("Resolve() = %v, want ErrIdentityConflict", err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 1 || linked[0].Subject != "sub-previous-holder" {
-		t.Errorf("identities = %+v, want only the previous holder's", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-previous-holder" {
+		t.Errorf("identities = %+v, %v; want only the previous holder's", linked, err)
 	}
 	if n := f.accountCount(); n != 1 {
 		t.Errorf("accounts = %d, want no new one", n)
@@ -1113,7 +1113,7 @@ func TestAnIdentityOfAnotherIssuerIsLinkedByEmail(t *testing.T) {
 	if err != nil || got.ID != ana.ID {
 		t.Fatalf("Resolve() = %v, %v; want ana's account", got.ID, err)
 	}
-	if linked := f.repo.Identities(ana.ID); len(linked) != 2 {
-		t.Errorf("identities = %+v, want both issuers linked", linked)
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 2 {
+		t.Errorf("identities = %+v, %v; want both issuers linked", linked, err)
 	}
 }

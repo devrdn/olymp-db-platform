@@ -61,7 +61,7 @@ the real one:
 | Package | Provides |
 |---|---|
 | `internal/contests/conteststest` | in-memory implementations of every contests repository (`stores.go`), `NewFixture()` (the real `contests.Service` over them, with a fixed clock), and a contract per repository (`*_contract.go`) |
-| `internal/users/userstest` | an in-memory `users.Repository` |
+| `internal/users/userstest` | an in-memory `users.Repository` and `users.ExternalIdentities`, and the contract both it and `postgres.Users` hold for the identities (`identities_contract.go`) |
 | `internal/workspace/workspacetest` | an in-memory `workspace.Repository` |
 | `internal/platform/password/passwordtest` | digests for fixtures, including weak ones for the rehash path |
 | `internal/platform/storage/storagetest` | the one way a test connects to the core test database |
@@ -70,8 +70,9 @@ the real one:
 
 A **repository contract** (such as `conteststest.StoryRepositoryContract`)
 runs the same cases against the fake and against PostgreSQL, so a service test
-on the fake can be trusted. Contracts exist for `contests` today; the pattern
-is in [04-backend.md](04-backend.md#2-anatomy-of-a-domain-package).
+on the fake can be trusted. Contracts exist for `contests` and for the
+external identities of `users`; the pattern is in
+[04-backend.md](04-backend.md#2-anatomy-of-a-domain-package).
 
 ### Repository tests on PostgreSQL
 

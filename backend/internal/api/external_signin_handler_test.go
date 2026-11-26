@@ -342,9 +342,9 @@ func TestTheCallbackSignsInAVerifiedToken(t *testing.T) {
 	if !ok || account.Email != "ana@example.edu" || account.EmailVerifiedAt == nil {
 		t.Errorf("signed into %+v, want a new account with the home tenant's verified address", account)
 	}
-	if ids := f.repo.Identities(principal.UserID); len(ids) != 1 || ids[0].Subject != msObjectID ||
+	if ids, err := f.repo.IdentitiesOf(t.Context(), principal.UserID); err != nil || len(ids) != 1 || ids[0].Subject != msObjectID ||
 		ids[0].Issuer != f.provider.Issuer(msHomeTenant) {
-		t.Errorf("identities %+v, want the token's issuer and object ID", ids)
+		t.Errorf("identities %+v, %v; want the token's issuer and object ID", ids, err)
 	}
 	if f.provider.LastTokenRequest().Get("code_verifier") == "" {
 		t.Error("the exchange sent no PKCE verifier")
@@ -368,8 +368,8 @@ func TestAForeignTenantClaimingAnAccountsAddressNeverEntersIt(t *testing.T) {
 	if principal.UserID == ana.ID {
 		t.Fatal("a foreign tenant asserting ana's address entered ana's account")
 	}
-	if ids := f.repo.Identities(ana.ID); len(ids) != 0 {
-		t.Errorf("ana's account was linked: %+v", ids)
+	if ids, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(ids) != 0 {
+		t.Errorf("ana's account was linked: %+v, %v", ids, err)
 	}
 	if account, _ := f.repo.Get(principal.UserID); account.Email != "" {
 		t.Errorf("the new account holds the untrusted address %q", account.Email)
@@ -404,8 +404,8 @@ func TestAHomeTenantTokenWithoutAnAccountTypeNeverEntersAStaffAccount(t *testing
 	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
 
 	assertLandsOnSignIn(t, rec, "external_signin_staff_account")
-	if ids := f.repo.Identities(org.ID); len(ids) != 0 {
-		t.Errorf("the organizer's account was linked: %+v", ids)
+	if ids, err := f.repo.IdentitiesOf(t.Context(), org.ID); err != nil || len(ids) != 0 {
+		t.Errorf("the organizer's account was linked: %+v, %v", ids, err)
 	}
 }
 
@@ -513,8 +513,8 @@ func TestAnUnverifiedAccountWithAChosenPasswordLandsOnTheUnverifiedCode(t *testi
 
 	assertLandsOnSignIn(t, rec, "external_signin_unverified")
 	assertNoSessionCookie(t, rec)
-	if ids := f.repo.Identities(ana.ID); len(ids) != 0 {
-		t.Errorf("ana's account was linked: %+v", ids)
+	if ids, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(ids) != 0 {
+		t.Errorf("ana's account was linked: %+v, %v", ids, err)
 	}
 	if f.repo.Len() != 1 {
 		t.Errorf("%d accounts exist, want only ana's", f.repo.Len())
@@ -876,8 +876,8 @@ func TestLinksSurviveASwitchOffAndOn(t *testing.T) {
 	if err != nil || back.UserID != principal.UserID {
 		t.Fatalf("signed into %v (%v), want the linked account %v", back.UserID, err, principal.UserID)
 	}
-	if ids := f.repo.Identities(principal.UserID); len(ids) != 1 {
-		t.Errorf("%d identities, want 1", len(ids))
+	if ids, err := f.repo.IdentitiesOf(t.Context(), principal.UserID); err != nil || len(ids) != 1 {
+		t.Errorf("%d identities, %v; want 1", len(ids), err)
 	}
 }
 
