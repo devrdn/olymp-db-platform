@@ -238,6 +238,76 @@ func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (prov
 	}
 }
 
+// quotaWatchTimeout bounds one tick of the quota monitor. Its statements run
+// on the maintenance pool, whose timeout is minutes, so without it a hung game
+// cluster would hold the tick and leave the monitor silent; half the
+// one-minute interval leaves the next tick its turn.
+const quotaWatchTimeout = 30 * time.Second
+
+// watchQuotas runs the quota monitor (provisioning.Service.WatchQuotas): a
+// warning per database that reached its disk quota and when the game cluster
+// crosses its warning threshold, and an info line when either recovers. It
+// reports only; the Query Runner refuses the write itself.
+//
+// timeout bounds one tick (quotaWatchTimeout in production).
+func watchQuotas(
+	log *slog.Logger, watch func(context.Context) (provisioning.QuotaSweep, error),
+	m *metrics.GameQuotaMetrics, timeout time.Duration,
+) task {
+	// near is the cluster's state at the last measured tick, so the warning is
+	// logged on the crossing, not every minute. Unlocked: runPeriodically never
+	// runs two ticks of a task at once.
+	near := false
+
+	return task{
+		name: "game-quota-watch",
+		// Not at startup: nothing waits on a report, and a boot-time sweep
+		// would stat every participant's database during the restart.
+		every: time.Minute,
+		run: func(ctx context.Context) error {
+			tick, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			sweep, err := watch(tick)
+			if err != nil {
+				m.AddFailedTick()
+			}
+			if sweep.Complete {
+				m.SetOverQuota(sweep.OverQuota)
+			}
+			m.AddTransitions(len(sweep.Exceeded), len(sweep.Restored))
+			for _, t := range sweep.Exceeded {
+				log.WarnContext(ctx, "a game instance reached its disk quota; writes that grow it are refused until space is freed",
+					transitionAttrs(t)...)
+			}
+			for _, t := range sweep.Restored {
+				log.InfoContext(ctx, "a game instance is back within its disk quota", transitionAttrs(t)...)
+			}
+
+			if cluster := sweep.Cluster; cluster.Known {
+				now := cluster.NearBudget()
+				m.SetCluster(cluster.Bytes, now)
+				switch {
+				case now && !near:
+					log.WarnContext(ctx, "the game cluster is near its disk budget", clusterAttrs(cluster)...)
+				case !now && near:
+					log.InfoContext(ctx, "the game cluster is back below its disk warning", clusterAttrs(cluster)...)
+				}
+				near = now
+			}
+			return err
+		},
+	}
+}
+
+func transitionAttrs(t provisioning.QuotaTransition) []any {
+	return []any{"database", t.Database, "contest", t.ContestID, "registration", t.Registration,
+		"size_bytes", t.SizeBytes, "quota_bytes", t.QuotaBytes}
+}
+
+func clusterAttrs(c provisioning.ClusterUsage) []any {
+	return []any{"cluster_bytes", c.Bytes, "budget_bytes", c.Budget, "warn_percent", provisioning.ClusterWarningPercent}
+}
+
 // buildGamesEvery is short because an organiser is watching the build
 // status; an idle tick is one indexed row read.
 const buildGamesEvery = 5 * time.Second

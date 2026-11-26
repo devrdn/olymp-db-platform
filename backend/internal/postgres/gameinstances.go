@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
@@ -71,7 +72,8 @@ func (r *GameInstances) AddSpare(ctx context.Context, contest uuid.UUID, databas
 }
 
 // Assign records a database created directly for one participant, when the
-// pool was empty.
+// pool was empty, or remade by a reset or a rebuild. A remade database is a
+// fresh copy, so the quota monitor's flag is lifted with it.
 func (r *GameInstances) Assign(ctx context.Context, contest, registration uuid.UUID, database string, version int) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		INSERT INTO game_instances (contest_id, registration_id, db_name, template_version, status)
@@ -80,6 +82,7 @@ func (r *GameInstances) Assign(ctx context.Context, contest, registration uuid.U
 		SET db_name = EXCLUDED.db_name,
 		    template_version = EXCLUDED.template_version,
 		    status = 'ready',
+		    over_quota_since = NULL,
 		    updated_at = now()`,
 		contest, registration, database, version)
 	if err != nil {
@@ -326,10 +329,12 @@ func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin, l
 }
 
 // MarkDropped moves one instance to the terminal 'dropped' status. It updates
-// rather than deletes so the audit trail can still point at the row.
+// rather than deletes so the audit trail can still point at the row. A
+// database that is gone is over no quota, so the flag is lifted too.
 func (r *GameInstances) MarkDropped(ctx context.Context, database string) error {
 	if _, err := r.querier(ctx).Exec(ctx,
-		`UPDATE game_instances SET status = 'dropped', updated_at = now() WHERE db_name = $1`, database); err != nil {
+		`UPDATE game_instances SET status = 'dropped', over_quota_since = NULL, updated_at = now()
+		 WHERE db_name = $1`, database); err != nil {
 		return fmt.Errorf("mark %s dropped: %w", database, err)
 	}
 	return nil
@@ -378,21 +383,23 @@ func (r *GameInstances) ReclaimableTemplates(ctx context.Context, installationGr
 	return out, nil
 }
 
-// instanceColumns is the query Instances and InstanceNamed share. The joins
-// are LEFT because a spare copy has no registration and a registration's
-// account may have been deleted; coalesce turns both into empty strings.
+// instanceColumns is the query Instances and InstanceNamed share. The
+// registration and account joins are LEFT because a spare copy has no
+// registration and a registration's account may have been deleted; coalesce
+// turns both into empty strings. The contest join reads one row by its key.
 const instanceColumns = `
 	SELECT i.db_name, i.registration_id, i.template_version, i.status,
-	       i.created_at, i.updated_at,
+	       i.created_at, i.updated_at, i.over_quota_since, c.status = 'running',
 	       coalesce(u.login, ''), coalesce(u.full_name, '')
 	FROM game_instances i
+	JOIN contests c ON c.id = i.contest_id
 	LEFT JOIN registrations r ON r.id = i.registration_id
 	LEFT JOIN users u ON u.id = r.user_id`
 
 func scanInstance(row pgx.Row) (provisioning.InstanceRecord, error) {
 	var r provisioning.InstanceRecord
 	err := row.Scan(&r.Database, &r.Registration, &r.TemplateVersion, &r.Status,
-		&r.CreatedAt, &r.UpdatedAt, &r.ParticipantLogin, &r.ParticipantName)
+		&r.CreatedAt, &r.UpdatedAt, &r.OverQuotaSince, &r.ContestRunning, &r.ParticipantLogin, &r.ParticipantName)
 	return r, err
 }
 
@@ -439,6 +446,73 @@ func (r *GameInstances) InstanceNamed(ctx context.Context, contest uuid.UUID, da
 		return provisioning.InstanceRecord{}, fmt.Errorf("read the database row: %w", err)
 	}
 	return record, nil
+}
+
+// QuotaCandidates lists up to limit claimed, ready copies of running
+// read_write contests whose template is ready, by db_name after after. The
+// policy join is inner: a contest without a policy row is read-only.
+func (r *GameInstances) QuotaCandidates(ctx context.Context, after string, limit int) ([]provisioning.QuotaCandidate, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT i.db_name, i.registration_id, i.updated_at, i.over_quota_since,
+		       c.id, t.template_db, t.version,
+		       `+policyProjectionColumns+`
+		FROM game_instances i
+		JOIN contests c ON c.id = i.contest_id
+		JOIN game_templates t ON t.contest_id = c.id
+		JOIN contest_sql_policies p ON p.contest_id = c.id
+		WHERE c.status = 'running' AND t.status = 'ready' AND p.mode = $1
+		  AND i.status = 'ready' AND i.registration_id IS NOT NULL
+		  AND i.db_name > $2
+		ORDER BY i.db_name
+		LIMIT $3`, sqlpolicy.ModeReadWrite, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list the databases the quota monitor measures: %w", err)
+	}
+	defer rows.Close()
+
+	var out []provisioning.QuotaCandidate
+	for rows.Next() {
+		var c provisioning.QuotaCandidate
+		var mode string
+		if err := rows.Scan(append([]any{&c.Database, &c.Registration, &c.UpdatedAt, &c.OverQuotaSince,
+			&c.Contest.ID, &c.Contest.Template, &c.Contest.Version},
+			policyScanTargets(&c.Contest.Policy, &mode)...)...); err != nil {
+			return nil, fmt.Errorf("scan a database the quota monitor measures: %w", err)
+		}
+		c.Contest.Policy.Mode = sqlpolicy.Mode(mode)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list the databases the quota monitor measures: %w", err)
+	}
+	return out, nil
+}
+
+// MarkOverQuota sets over_quota_since to the database clock's now. The
+// conditions make it a transition: a concurrent sweep's update waits on the
+// row lock, then re-reads it flagged and changes nothing. A replica sweeping
+// on a measurement taken before another lifted the flag can set it once more;
+// the next tick measures again and lifts it. updated_at is left alone, since
+// the flag is a report about the database, not a change to it.
+func (r *GameInstances) MarkOverQuota(ctx context.Context, database string, read time.Time) (bool, error) {
+	tag, err := r.querier(ctx).Exec(ctx, `
+		UPDATE game_instances SET over_quota_since = now()
+		WHERE db_name = $1 AND updated_at = $2 AND over_quota_since IS NULL`, database, read)
+	if err != nil {
+		return false, fmt.Errorf("flag %s over its quota: %w", database, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ClearOverQuota is MarkOverQuota's reverse, under the same conditions.
+func (r *GameInstances) ClearOverQuota(ctx context.Context, database string, read time.Time) (bool, error) {
+	tag, err := r.querier(ctx).Exec(ctx, `
+		UPDATE game_instances SET over_quota_since = NULL
+		WHERE db_name = $1 AND updated_at = $2 AND over_quota_since IS NOT NULL`, database, read)
+	if err != nil {
+		return false, fmt.Errorf("clear the quota flag of %s: %w", database, err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // RecordedDatabases lists every instance and template row with its status,

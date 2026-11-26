@@ -17,6 +17,8 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/queryrunner"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy/checker"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -177,6 +179,126 @@ func TestAScriptSavedInTheCoreDatabaseIsDescribedAsBuiltWhateverTheFirstParticip
 		strings.Join(got["suspects"], ",") != "id,name" {
 		t.Fatalf("the panel describes %v, want the game as built: %v", got, want)
 	}
+}
+
+// The monitor and the Query Runner must agree on the real cluster (CLAUDE.md
+// rule 10): a copy the participant filled past its quota is flagged, the
+// runner refuses it a growing write as game_writer, TRUNCATE still passes, and
+// the next sweep lifts the flag. Nothing the monitor does stands in the way.
+func TestAScriptSavedInTheCoreDatabaseWhoseCopyOutgrowsItsQuotaIsFlaggedAndClearedAgain(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if !gamedbtest.Configured() {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, people := contestFor(t, t.Context(), 1)
+	// A ratio of one puts the quota at the 16 MiB floor, which a few
+	// megabytes of rows cross.
+	if _, err := testPool.Exec(t.Context(), `
+		INSERT INTO contest_sql_policies (contest_id, mode, writable_tables, disk_quota_ratio)
+		VALUES ($1, 'read_write', '{evidence}', 1)`, contest.ID); err != nil {
+		t.Fatalf("make the contest read_write: %v", err)
+	}
+	repo := ownBuilds(contest.ID)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+	games := provisioning.NewGames(onPostgres(repo), cluster, editableContest{}, noContest{}, directly{})
+	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, nil,
+		`CREATE TABLE evidence (id int PRIMARY KEY, note text);`)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+	if built, err := games.Build(t.Context(), time.Minute); err != nil || built.Status != provisioning.TemplateReady {
+		t.Fatalf("build: %v, finished as %q: %s", err, built.Status, built.BuildError)
+	}
+
+	databases := newService(cluster)
+	game, err := repo.Game(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the built game: %v", err)
+	}
+	copied, err := databases.Ensure(t.Context(), game, people[0])
+	if err != nil {
+		t.Fatalf("make the participant's copy: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(copied) })
+	if _, err := testPool.Exec(t.Context(), `UPDATE contests SET status = 'running' WHERE id = $1`, contest.ID); err != nil {
+		t.Fatalf("start the contest: %v", err)
+	}
+	quota, err := databases.Quota(t.Context(), game)
+	if err != nil {
+		t.Fatalf("the quota: %v", err)
+	}
+
+	// One statement overshooting the quota, as the runner's check before it
+	// cannot stop: what the monitor exists to notice.
+	writer := gamedbtest.Connect(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), copied)
+	if _, err := writer.Exec(t.Context(),
+		`INSERT INTO evidence SELECT g, repeat('x', 1000) FROM generate_series(1, 20000) g`); err != nil {
+		t.Fatalf("fill the copy as the participant: %v", err)
+	}
+	_ = writer.Close(t.Context())
+
+	flagged := func() *time.Time {
+		t.Helper()
+		record, err := postgres.NewGameInstances(testPool).InstanceNamed(t.Context(), contest.ID, copied)
+		if err != nil {
+			t.Fatalf("read the row: %v", err)
+		}
+		return record.OverQuotaSince
+	}
+	if _, err := databases.WatchQuotas(t.Context()); err != nil {
+		t.Fatalf("the first sweep: %v", err)
+	}
+	if flagged() == nil {
+		t.Fatalf("a copy filled past its %d byte quota was not flagged", quota)
+	}
+
+	runner := queryrunner.New(writerCluster(t, copied), checker.NewChecker(), queryrunner.DefaultLimits())
+	t.Cleanup(runner.Close)
+	run := func(sql string) error {
+		_, err := runner.Run(t.Context(), queryrunner.Request{
+			Registration: people[0], Database: copied, SQL: sql, Policy: game.Policy, DiskQuotaBytes: quota,
+		})
+		return err
+	}
+	if err := run(`INSERT INTO evidence VALUES (0, 'one more')`); !errors.Is(err, queryrunner.ErrDiskFull) {
+		t.Fatalf("a growing write to a flagged copy = %v, want ErrDiskFull", err)
+	}
+	if err := run(`TRUNCATE evidence`); err != nil {
+		t.Fatalf("TRUNCATE on a flagged copy was refused: %v", err)
+	}
+
+	if _, err := databases.WatchQuotas(t.Context()); err != nil {
+		t.Fatalf("the second sweep: %v", err)
+	}
+	if since := flagged(); since != nil {
+		t.Fatalf("the copy is emptied and still flagged since %v", since)
+	}
+	if err := run(`INSERT INTO evidence VALUES (0, 'one more')`); err != nil {
+		t.Fatalf("a write after freeing space: %v", err)
+	}
+}
+
+// writerCluster connects the Query Runner to database as both participant
+// roles, as the deployment's runner does.
+func writerCluster(t *testing.T, database string) *queryrunner.Cluster {
+	t.Helper()
+	cluster, err := queryrunner.NewCluster(
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword(t), database),
+		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), database))
+	if err != nil {
+		t.Fatalf("connect the runner: %v", err)
+	}
+	return cluster
 }
 
 // A restore brings the row back as 'ready' without its database; the check

@@ -2110,6 +2110,8 @@ const ro = {
       "contest.instance_dropped": "A șters baza unui participant la cererea unui organizator",
       "contest.instance_reset": "Și-a readus propria bază la starea de început a olimpiadei",
       "contest.instance_reset_failed": "A cerut readucerea propriei baze, dar copierea a eșuat; următoarea sa acțiune creează una nouă",
+      "contest.instance_over_quota": "Baza de date a unui participant a atins cota de disc; scrierile care o măresc sunt refuzate până se eliberează spațiu",
+      "contest.instance_within_quota": "Baza de date a unui participant se încadrează din nou în cota de disc",
       "event_registration.check_in": "A marcat sau a anulat sosirea unei persoane înregistrate",
       "settings.change": "A schimbat setările instalării",
       "settings.mail_test": "Și-a trimis un e-mail de test",

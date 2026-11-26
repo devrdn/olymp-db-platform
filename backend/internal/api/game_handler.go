@@ -486,10 +486,14 @@ type gameInstanceResponse struct {
 	// SizeBytes and SizeKnown travel together: the sizes come from the game
 	// cluster, and a size nobody could read must not reach the screen as a
 	// database of zero bytes.
-	SizeBytes int64     `json:"size_bytes"`
-	SizeKnown bool      `json:"size_known"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	SizeBytes int64 `json:"size_bytes"`
+	SizeKnown bool  `json:"size_known"`
+	// OverQuotaSince is when the quota monitor flagged the copy at its disk
+	// quota; null while it is within, and for every copy of a contest that is
+	// not running (provisioning.Service.Instances).
+	OverQuotaSince *time.Time `json:"over_quota_since"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type gameInstancesResponse struct {
@@ -525,7 +529,7 @@ func gameInstanceView(instance provisioning.InstanceRecord) gameInstanceResponse
 		Participant: instance.ParticipantLogin, ParticipantName: instance.ParticipantName,
 		TemplateVersion: instance.TemplateVersion, Status: instance.Status,
 		SizeBytes: instance.SizeBytes, SizeKnown: instance.SizeKnown,
-		CreatedAt: instance.CreatedAt, UpdatedAt: instance.UpdatedAt,
+		CreatedAt: instance.CreatedAt, UpdatedAt: instance.UpdatedAt, OverQuotaSince: instance.OverQuotaSince,
 	}
 	if instance.Registration != nil {
 		view.RegistrationID = instance.Registration.String()

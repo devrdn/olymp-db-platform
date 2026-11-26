@@ -41,6 +41,11 @@ const MaxQueryBytes = 64 << 10
 // database may grow to when nobody chose a number.
 const DefaultDiskQuotaRatio = 5
 
+// AtQuota reports whether a database of used bytes has reached its quota.
+// The Query Runner refuses a growing write and the Core API's monitor flags
+// the database on this one rule, so the two cannot disagree at the boundary.
+func AtQuota(used, quota int64) bool { return used >= quota }
+
 // Policy is one olympiad's answer to "what may a participant's SQL do".
 // The zero value is invalid rather than read-only: it becomes GRANTs, so a
 // struct nobody filled in must fail loudly instead of picking a default.

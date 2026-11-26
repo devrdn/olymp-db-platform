@@ -31,8 +31,10 @@ const MaxInstancesListed = 500
 // database name this package takes from a URL.
 const MaxDatabaseNameBytes = 63
 
-// InstanceRecord is one row of game_instances as an organizer sees it: which
-// database, whose it is, what it was made from and whether it is still there.
+// InstanceRecord is one row of game_instances: which database, whose it is,
+// what it was made from and whether it is still there, with the stored quota
+// flag and the contest's state that forOrganiser derives the organiser's view
+// from.
 type InstanceRecord struct {
 	Database string
 	// Registration is nil for an unclaimed spare copy.
@@ -49,6 +51,27 @@ type InstanceRecord struct {
 	// cluster could not be asked, so zero never means both "empty" and "unknown".
 	SizeBytes int64
 	SizeKnown bool
+	// OverQuotaSince is when the quota monitor first saw the database at or
+	// past its quota, nil while it is within (WatchQuotas). A reset, a drop or
+	// a reclaim clears it without a within-quota entry; their own entries
+	// record it. An organiser is shown it only while ContestRunning
+	// (forOrganiser).
+	OverQuotaSince *time.Time
+	// ContestRunning is whether the row's contest was running when it was read.
+	ContestRunning bool
+}
+
+// forOrganiser is the record as an organiser may see it; every record this
+// service hands out passes through it. The flag shows only for a live copy in
+// a running contest: a dropped database is over no quota, and the monitor
+// measures only a running read_write contest, so once the contest finishes
+// (or its policy leaves read_write) the stored flag is what it last saw, not
+// a fact about the copy.
+func (r InstanceRecord) forOrganiser() InstanceRecord {
+	if !r.ContestRunning || r.Dropped() {
+		r.OverQuotaSince = nil
+	}
+	return r
 }
 
 // Spare reports whether the copy is still in the pool, waiting for whoever
@@ -81,6 +104,9 @@ func (s *Service) Instances(ctx context.Context, contestID uuid.UUID) (InstanceL
 	list := InstanceList{Instances: rows}
 	if len(rows) > MaxInstancesListed {
 		list.Instances, list.Truncated = rows[:MaxInstancesListed], true
+	}
+	for i := range list.Instances {
+		list.Instances[i] = list.Instances[i].forOrganiser()
 	}
 
 	s.fillSizes(ctx, list.Instances)
@@ -169,7 +195,7 @@ func (s *Service) DropInstance(ctx context.Context, actorID, contestID uuid.UUID
 	}
 
 	record.Status = InstanceStatusDropped
-	return record, nil
+	return record.forOrganiser(), nil
 }
 
 // markDropped writes the row and its audit entry in one core-database
