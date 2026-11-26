@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import { readSeed } from "./api";
 import {
@@ -12,6 +12,7 @@ import {
   runQuery,
   scrollWithin,
   signIn,
+  test,
 } from "./support";
 
 /**

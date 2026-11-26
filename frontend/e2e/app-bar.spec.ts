@@ -1,7 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
 import { readSeed } from "./api";
-import { signIn } from "./support";
+import { signIn, test } from "./support";
 
 /**
  * The folded app bar in a real browser: a staff bar holds more destinations

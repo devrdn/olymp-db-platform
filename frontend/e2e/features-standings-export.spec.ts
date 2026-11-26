@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import { Api, readSeed } from "./api";
-import { capture, signIn } from "./support";
+import { capture, signIn, test } from "./support";
 
 /**
  * The results export on the features contest once it is over. An organiser

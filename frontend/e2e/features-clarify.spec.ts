@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, type Browser, type Page } from "@playwright/test";
 
 import { readSeed, type Account } from "./api";
-import { capture, openPlay, openSideTab, signIn } from "./support";
+import { capture, newContext, openPlay, openSideTab, signIn, test } from "./support";
 
 /**
  * Questions to the organisers, end to end across three browsers: Alice asks,
@@ -18,7 +18,7 @@ async function open(browser: Browser, account: Account, path: string): Promise<P
   // The project's connection settings, so a second browser cannot drift from
   // the first; the width is this check's own, the side column's default case.
   const { baseURL, ignoreHTTPSErrors, locale } = test.info().project.use;
-  const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, viewport: { width: 1600, height: 900 } });
+  const context = await newContext(browser, { baseURL, ignoreHTTPSErrors, locale, viewport: { width: 1600, height: 900 } });
   const page = await context.newPage();
   await signIn(page, account);
   await page.goto(path);

@@ -1065,7 +1065,8 @@ These add to "Things worth knowing before changing them" in
   `/_global-error`: if Next ever serves it, it shows and its Reload button
   does nothing. Every route is
   dynamic because the root layout reads cookies; `npm run build` fails when a
-  page stops being (`scripts/no-prerender.mjs`).
+  page stops being (`scripts/no-prerender.mjs`), and the browser suite fails
+  any test that logs a policy violation (`e2e/support.ts`).
 - **Every prop of a Client Component is serialised into the payload.** Pass a
   dictionary slice, not the whole `Dictionary`, where the payload matters (the
   play screen).

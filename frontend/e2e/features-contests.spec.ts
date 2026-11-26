@@ -1,8 +1,8 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import { Api, readSeed, type Account } from "./api";
 import { SECRET } from "./seed-features";
-import { capture, cellUnder, chooseTheme, openPlay, openSideTab, runQuery, scrollWithin, signIn } from "./support";
+import { capture, cellUnder, chooseTheme, openPlay, openSideTab, runQuery, scrollWithin, signIn, test } from "./support";
 
 /**
  * The contest-wide post-beta behaviour: what a sequential contest withholds,

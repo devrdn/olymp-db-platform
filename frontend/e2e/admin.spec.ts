@@ -1,7 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
 import { readSeed } from "./api";
-import { signIn } from "./support";
+import { signIn, test } from "./support";
 
 test("an administrator signs in and sees the contest list", async ({ page }) => {
   const seed = readSeed();
