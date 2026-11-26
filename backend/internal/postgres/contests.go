@@ -10,6 +10,7 @@ import (
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/contests"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,7 +23,7 @@ var _ contests.Repository = (*Contests)(nil)
 // its order must match contestScanTargets. Languages and translations arrive as JSON from
 // correlated subqueries, which avoids an N+1 and reads them in the same
 // snapshot as the contest.
-const contestColumns = contestColumnsBefore + `,
+var contestColumns = contestColumnsBefore + `,
 	COALESCE((
 		SELECT json_agg(json_build_object('lang', ct.lang, 'title', ct.title,
 		                                  'description', COALESCE(ct.description, ''))
@@ -34,7 +35,7 @@ const contestColumns = contestColumnsBefore + `,
 // participant lookups behind every play read and console run: nothing there
 // shows a title or description, and each can be a long text per language. The
 // empty array keeps the shape contestScanTargets and hydrate expect.
-const participantContestColumns = contestColumnsBefore + `,
+var participantContestColumns = contestColumnsBefore + `,
 	'[]'::json,` + contestColumnsAfter
 
 const contestColumnsBefore = `
@@ -50,10 +51,10 @@ const contestColumnsBefore = `
 		FROM contest_languages cl WHERE cl.contest_id = c.id
 	), '[]'::json)`
 
-const contestColumnsAfter = `
+var contestColumnsAfter = fmt.Sprintf(`
 	COALESCE((SELECT cc.hash FROM contest_covers cc WHERE cc.contest_id = c.id), ''),
 	COALESCE((SELECT cc.attribution FROM contest_covers cc WHERE cc.contest_id = c.id), ''),
-	COALESCE((SELECT p.mode FROM contest_sql_policies p WHERE p.contest_id = c.id), 'read_only')`
+	COALESCE((SELECT p.mode FROM contest_sql_policies p WHERE p.contest_id = c.id), '%s')`, sqlpolicy.ReadOnly().Mode)
 
 // Contests stores contests in PostgreSQL.
 type Contests struct {

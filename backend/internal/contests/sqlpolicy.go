@@ -57,12 +57,16 @@ type SQLPolicy struct {
 
 // DefaultSQLPolicy is what a new contest gets: read-only, catalogs open.
 func DefaultSQLPolicy(contestID uuid.UUID) SQLPolicy {
+	d := sqlpolicy.ReadOnly()
 	return SQLPolicy{
-		ContestID:      contestID,
-		Mode:           ModeReadOnly,
-		WritableTables: []string{},
-		AllowCatalog:   true,
-		DiskQuotaRatio: 5,
+		ContestID:       contestID,
+		Mode:            string(d.Mode),
+		WritableTables:  []string{},
+		AllowCreateView: d.AllowCreateView,
+		AllowOwnTables:  d.AllowOwnTables,
+		AllowTempTables: d.AllowTempTables,
+		AllowCatalog:    d.AllowCatalog,
+		DiskQuotaRatio:  d.DiskQuotaRatio,
 	}
 }
 

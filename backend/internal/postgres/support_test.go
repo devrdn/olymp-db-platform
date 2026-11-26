@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
+	"github.com/devrdn/olymp-db-platform/backend/internal/sqlpolicy"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -267,4 +268,12 @@ func raceOnTwoConnections(t *testing.T, hold, wait func(context.Context) error, 
 		t.Fatalf("commit the operation holding the row: %v", err)
 	}
 	return <-waitDone
+}
+
+// normalised makes an empty and a nil table list equal.
+func normalised(p sqlpolicy.Policy) sqlpolicy.Policy {
+	if len(p.WritableTables) == 0 {
+		p.WritableTables = nil
+	}
+	return p
 }

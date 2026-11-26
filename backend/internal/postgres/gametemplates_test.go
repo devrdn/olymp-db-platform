@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -591,9 +592,8 @@ func TestThePolicyIsReadableBeforeTheGameIsEverBuilt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read the policy of an unbuilt game: %v", err)
 		}
-		// With no policy row: read-only, catalogues open.
-		if policy.Mode != sqlpolicy.ModeReadOnly || !policy.AllowCatalog {
-			t.Fatalf("defaults came back as %+v", policy)
+		if want := sqlpolicy.ReadOnly(); !reflect.DeepEqual(normalised(policy), normalised(want)) {
+			t.Fatalf("a contest with no policy row read as %+v, want the default %+v", policy, want)
 		}
 	})
 }

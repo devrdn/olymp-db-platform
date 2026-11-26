@@ -84,13 +84,7 @@ func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.
 
 			got := load(t, ctx, target, contest)
 
-			sameAs(t, got, contests.SQLPolicy{
-				ContestID:      contest,
-				Mode:           contests.ModeReadOnly,
-				WritableTables: []string{},
-				AllowCatalog:   true,
-				DiskQuotaRatio: 5,
-			}, time.Time{}, "default")
+			sameAs(t, got, contests.DefaultSQLPolicy(contest), time.Time{}, "default")
 		})
 	})
 
