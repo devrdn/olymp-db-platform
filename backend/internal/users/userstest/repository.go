@@ -29,6 +29,7 @@ type Repository struct {
 	CountActiveWithRoleCalls int
 	identities               map[identityKey]users.LinkedIdentity
 	lastUsed                 map[identityKey]time.Time
+	unlinked                 map[unlinkedKey]users.UnlinkedIdentity
 	// contestStaff are the accounts that manage or own a contest that is not
 	// archived.
 	contestStaff map[uuid.UUID]bool
@@ -36,12 +37,19 @@ type Repository struct {
 
 type identityKey struct{ provider, issuer, subject string }
 
+// unlinkedKey mirrors unlinked_identities' unique key.
+type unlinkedKey struct {
+	userID uuid.UUID
+	identityKey
+}
+
 func New() *Repository {
 	return &Repository{
 		byID:         map[uuid.UUID]users.User{},
 		permissions:  map[string][]string{},
 		identities:   map[identityKey]users.LinkedIdentity{},
 		lastUsed:     map[identityKey]time.Time{},
+		unlinked:     map[unlinkedKey]users.UnlinkedIdentity{},
 		contestStaff: map[uuid.UUID]bool{},
 	}
 }
@@ -657,6 +665,71 @@ func (r *Repository) IdentitiesOf(_ context.Context, userID uuid.UUID) ([]users.
 		return cmp.Or(a.LinkedAt.Compare(b.LinkedAt), bytes.Compare(a.ID[:], b.ID[:]))
 	})
 	return found[:min(len(found), users.MaxIdentitiesListed)], nil
+}
+
+// RecordUnlinked mirrors the upsert on the unique key, which keeps the row's
+// id.
+func (r *Repository) RecordUnlinked(_ context.Context, id users.ExternalIdentity) (users.UnlinkedIdentity, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return users.UnlinkedIdentity{}, r.Err
+	}
+	key := unlinkedKey{id.UserID, identityKey{id.Provider, id.Issuer, id.Subject}}
+	record, ok := r.unlinked[key]
+	if !ok {
+		record.ID = uuid.New()
+	}
+	record.ExternalIdentity, record.UnlinkedAt = id, time.Now().UTC()
+	r.unlinked[key] = record
+	return record, nil
+}
+
+func (r *Repository) UnlinkedIdentitiesOf(_ context.Context, userID uuid.UUID) ([]users.UnlinkedIdentity, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return nil, r.Err
+	}
+	var found []users.UnlinkedIdentity
+	for key, record := range r.unlinked {
+		if key.userID == userID {
+			found = append(found, record)
+		}
+	}
+	slices.SortFunc(found, func(a, b users.UnlinkedIdentity) int {
+		return cmp.Or(b.UnlinkedAt.Compare(a.UnlinkedAt), bytes.Compare(b.ID[:], a.ID[:]))
+	})
+	return found[:min(len(found), users.MaxIdentitiesListed)], nil
+}
+
+func (r *Repository) IsUnlinked(_ context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return false, r.Err
+	}
+	_, ok := r.unlinked[unlinkedKey{userID, identityKey{provider, issuer, subject}}]
+	return ok, nil
+}
+
+func (r *Repository) AllowUnlinked(_ context.Context, userID, unlinkedID uuid.UUID) (users.UnlinkedIdentity, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return users.UnlinkedIdentity{}, r.Err
+	}
+	for key, record := range r.unlinked {
+		if record.ID == unlinkedID && key.userID == userID {
+			delete(r.unlinked, key)
+			return record, nil
+		}
+	}
+	return users.UnlinkedIdentity{}, users.ErrUnlinkedIdentityNotFound
 }
 
 // Link links the identity as LinkExternalIdentity does, failing t when that

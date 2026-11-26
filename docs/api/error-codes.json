@@ -186,6 +186,10 @@
       "meaning": "Signing in through this external provider is switched off on this installation. Sign in another way: an account entered only through it can set a password by password recovery, and staff ask an administrator."
     },
     {
+      "code": "external_signin_unlinked",
+      "meaning": "An administrator disconnected this external account from the account its address belongs to, and has not allowed it again, so it is not linked by that address. Nothing was stored. Ask an administrator."
+    },
+    {
       "code": "external_signin_unverified",
       "meaning": "The address the provider vouches for belongs to an account here that never proved it owns that address and is not on a one-time password, so the sign-in is not linked to it. The account's holder confirms the address with a password reset link and then signs in through the provider, or an administrator resolves it."
     },
@@ -848,6 +852,10 @@
     {
       "code": "unknown_role",
       "meaning": "A role code is not one of the installation's roles. The message names the code."
+    },
+    {
+      "code": "unlinked_identity_not_found",
+      "meaning": "The account holds no unlinked sign-in through an external service with that identifier: none was unlinked from this account, or it has been allowed again since."
     },
     {
       "code": "user_not_found",

@@ -2,8 +2,10 @@ package userstest
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -155,6 +157,144 @@ func ExternalIdentitiesContract(t *testing.T, each func(t *testing.T, run func(c
 
 			if found, err := target.Store.ByExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject); err != nil || found.ID != ana {
 				t.Errorf("ByExternalIdentity() = %v, %v; want the account linked again", found.ID, err)
+			}
+		})
+	})
+
+	unlinkedOf := func(t *testing.T, ctx context.Context, target IdentityTarget, userID uuid.UUID) []users.UnlinkedIdentity {
+		t.Helper()
+		unlinked, err := target.Store.UnlinkedIdentitiesOf(ctx, userID)
+		if err != nil {
+			t.Fatalf("UnlinkedIdentitiesOf() = %v", err)
+		}
+		return unlinked
+	}
+	record := func(t *testing.T, ctx context.Context, target IdentityTarget, id users.ExternalIdentity) users.UnlinkedIdentity {
+		t.Helper()
+		recorded, err := target.Store.RecordUnlinked(ctx, id)
+		if err != nil {
+			t.Fatalf("RecordUnlinked(%s) = %v", id.Subject, err)
+		}
+		return recorded
+	}
+	isUnlinked := func(t *testing.T, ctx context.Context, target IdentityTarget, id users.ExternalIdentity) bool {
+		t.Helper()
+		unlinked, err := target.Store.IsUnlinked(ctx, id.UserID, id.Provider, id.Issuer, id.Subject)
+		if err != nil {
+			t.Fatalf("IsUnlinked() = %v", err)
+		}
+		return unlinked
+	}
+
+	t.Run("RecordUnlinked keeps that external account from that account only", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana, other := target.NewUser(), target.NewUser()
+			gone := users.ExternalIdentity{UserID: ana, Provider: users.ProviderMicrosoft, Issuer: "https://login.example/a/v2.0", Subject: "sub-gone", Email: "ana@example.edu"}
+			recorded := record(t, ctx, target, gone)
+
+			unlinked := unlinkedOf(t, ctx, target, ana)
+
+			if len(unlinked) != 1 || unlinked[0].ExternalIdentity != gone || unlinked[0].ID == uuid.Nil || unlinked[0].UnlinkedAt.IsZero() {
+				t.Fatalf("unlinked = %+v, want %+v with an id and a time", unlinked, gone)
+			}
+			if recorded.ID != unlinked[0].ID || recorded.ExternalIdentity != gone || !recorded.UnlinkedAt.Equal(unlinked[0].UnlinkedAt) {
+				t.Errorf("RecordUnlinked() returned %+v, want %+v", recorded, unlinked[0])
+			}
+			if !isUnlinked(t, ctx, target, gone) {
+				t.Error("IsUnlinked() = false for the recorded identity")
+			}
+			rightful := gone
+			rightful.Subject = "sub-rightful"
+			elsewhere := gone
+			elsewhere.UserID = other
+			for name, id := range map[string]users.ExternalIdentity{"another subject": rightful, "another account": elsewhere} {
+				if isUnlinked(t, ctx, target, id) {
+					t.Errorf("IsUnlinked(%s) = true, want only the recorded identity unlinked from that account", name)
+				}
+			}
+			if unlinked := unlinkedOf(t, ctx, target, other); len(unlinked) != 0 {
+				t.Errorf("the other account's unlinked = %+v, want none", unlinked)
+			}
+		})
+	})
+
+	t.Run("RecordUnlinked takes an identity of every provider", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana := target.NewUser()
+			for _, provider := range users.Providers {
+				id := users.ExternalIdentity{UserID: ana, Provider: provider, Issuer: "https://" + provider + ".example", Subject: "sub-" + provider}
+				record(t, ctx, target, id)
+				if !isUnlinked(t, ctx, target, id) {
+					t.Errorf("IsUnlinked(%s) = false after RecordUnlinked", provider)
+				}
+			}
+		})
+	})
+
+	t.Run("RecordUnlinked of an identity already recorded keeps one record", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana := target.NewUser()
+			gone := users.ExternalIdentity{UserID: ana, Provider: users.ProviderGitHub, Issuer: "https://github.example", Subject: "4242"}
+			record(t, ctx, target, gone)
+			first := unlinkedOf(t, ctx, target, ana)[0]
+
+			if again := record(t, ctx, target, gone); again.ID != first.ID {
+				t.Errorf("the second RecordUnlinked() returned %s, want the record's id %s", again.ID, first.ID)
+			}
+			if unlinked := unlinkedOf(t, ctx, target, ana); len(unlinked) != 1 || unlinked[0].ID != first.ID || unlinked[0].UnlinkedAt.Before(first.UnlinkedAt) {
+				t.Errorf("unlinked = %+v, want the one record %s, no older", unlinked, first.ID)
+			}
+		})
+	})
+
+	t.Run("UnlinkedIdentitiesOf lists at most MaxIdentitiesListed, newest first", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana := target.NewUser()
+			for range users.MaxIdentitiesListed + 1 {
+				record(t, ctx, target, users.ExternalIdentity{
+					UserID: ana, Provider: users.ProviderMicrosoft, Issuer: "https://login.example/" + uuid.NewString() + "/v2.0", Subject: "sub-ana",
+				})
+			}
+
+			unlinked := unlinkedOf(t, ctx, target, ana)
+
+			if len(unlinked) != users.MaxIdentitiesListed {
+				t.Errorf("%d unlinked identities listed, want %d", len(unlinked), users.MaxIdentitiesListed)
+			}
+			// PostgreSQL stamps every record with the transaction's start, so
+			// there the identifier decides.
+			newestFirst := slices.IsSortedFunc(unlinked, func(a, b users.UnlinkedIdentity) int {
+				return cmp.Or(b.UnlinkedAt.Compare(a.UnlinkedAt), bytes.Compare(b.ID[:], a.ID[:]))
+			})
+			if !newestFirst {
+				t.Errorf("unlinked = %+v, want the newest first, then by id descending", unlinked)
+			}
+		})
+	})
+
+	t.Run("AllowUnlinked lifts the record it names, of its own account only", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana, other := target.NewUser(), target.NewUser()
+			gone := users.ExternalIdentity{UserID: ana, Provider: users.ProviderGoogle, Issuer: "https://accounts.example", Subject: "sub-gone"}
+			record(t, ctx, target, gone)
+			unlinked := unlinkedOf(t, ctx, target, ana)[0]
+
+			if _, err := target.Store.AllowUnlinked(ctx, other, unlinked.ID); !errors.Is(err, users.ErrUnlinkedIdentityNotFound) {
+				t.Errorf("AllowUnlinked(another account's) = %v, want ErrUnlinkedIdentityNotFound", err)
+			}
+			lifted, err := target.Store.AllowUnlinked(ctx, ana, unlinked.ID)
+			if err != nil {
+				t.Fatalf("AllowUnlinked() = %v", err)
+			}
+
+			if lifted.ID != unlinked.ID || lifted.ExternalIdentity != gone {
+				t.Errorf("AllowUnlinked() returned %+v, want %+v", lifted, unlinked)
+			}
+			if isUnlinked(t, ctx, target, gone) {
+				t.Error("IsUnlinked() = true after the record was lifted")
+			}
+			if _, err := target.Store.AllowUnlinked(ctx, ana, unlinked.ID); !errors.Is(err, users.ErrUnlinkedIdentityNotFound) {
+				t.Errorf("a second AllowUnlinked() = %v, want ErrUnlinkedIdentityNotFound", err)
 			}
 		})
 	})

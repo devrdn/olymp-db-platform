@@ -94,6 +94,12 @@ var (
 	// ErrIdentityNotFound names an identity the account does not hold: never
 	// linked to it, or unlinked since.
 	ErrIdentityNotFound = errors.New("the account holds no such external identity")
+	// ErrIdentityUnlinked refuses linking by email an external account an
+	// administrator unlinked from this account, until they allow it again.
+	ErrIdentityUnlinked = errors.New("an administrator unlinked this external identity from the account")
+	// ErrUnlinkedIdentityNotFound names an unlinked identity the account does
+	// not hold: never unlinked from it, or allowed again since.
+	ErrUnlinkedIdentityNotFound = errors.New("the account holds no such unlinked identity")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
@@ -106,7 +112,7 @@ func Errors() []error {
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
 		ErrExternalIdentityTaken, ErrStaffNotLinkable, ErrUnverifiedNotLinkable, ErrIssuerAlreadyLinked,
-		ErrIdentityNotFound,
+		ErrIdentityNotFound, ErrIdentityUnlinked, ErrUnlinkedIdentityNotFound,
 	}
 }
 
@@ -418,8 +424,9 @@ type Repository interface {
 	ContestManagers
 }
 
-// Providers an account can sign in through. The CHECK constraint on
-// external_identities.provider holds the same list.
+// Providers an account can sign in through. The CHECK constraints on
+// external_identities.provider and unlinked_identities.provider hold the same
+// list.
 const (
 	ProviderMicrosoft = "microsoft"
 	ProviderGoogle    = "google"
@@ -472,6 +479,15 @@ type LinkedIdentity struct {
 	LinkedAt, LastUsedAt time.Time
 }
 
+// UnlinkedIdentity is an external account an administrator unlinked from the
+// account: until it is allowed again, it does not link to the account by
+// email.
+type UnlinkedIdentity struct {
+	ID uuid.UUID
+	ExternalIdentity
+	UnlinkedAt time.Time
+}
+
 // ExternalIdentities is the storage of provider identities.
 type ExternalIdentities interface {
 	// IdentitiesOf lists the identities linked to the account, oldest link
@@ -495,6 +511,20 @@ type ExternalIdentities interface {
 	UnlinkExternalIdentity(ctx context.Context, userID, identityID uuid.UUID) (LinkedIdentity, error)
 	// DeleteExternalIdentities forgets every identity of the account.
 	DeleteExternalIdentities(ctx context.Context, userID uuid.UUID) error
+	// RecordUnlinked records the identity as unlinked from id.UserID and
+	// returns the record; a second record of it moves its time and keeps its
+	// ID.
+	RecordUnlinked(ctx context.Context, id ExternalIdentity) (UnlinkedIdentity, error)
+	// UnlinkedIdentitiesOf lists the account's unlinked identities, newest
+	// first and then by ID descending, at most MaxIdentitiesListed, so a cut
+	// drops the oldest.
+	UnlinkedIdentitiesOf(ctx context.Context, userID uuid.UUID) ([]UnlinkedIdentity, error)
+	// IsUnlinked reports whether the identity is recorded as unlinked from
+	// the account.
+	IsUnlinked(ctx context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error)
+	// AllowUnlinked removes the record and returns it;
+	// ErrUnlinkedIdentityNotFound when the account holds none by that ID.
+	AllowUnlinked(ctx context.Context, userID, unlinkedID uuid.UUID) (UnlinkedIdentity, error)
 }
 
 type Credential struct {

@@ -21,6 +21,7 @@ import (
 const (
 	userIDParam     = "userID"
 	identityIDParam = "identityID"
+	unlinkedIDParam = "unlinkedID"
 )
 
 // RoleCatalog lists the roles an account may hold.
@@ -102,6 +103,7 @@ func (h *UsersHandler) Mount(r chi.Router) {
 			r.Put("/roles", h.replaceRoles)
 			r.Get("/identities", h.identities)
 			r.Delete("/identities/{"+identityIDParam+"}", h.unlinkIdentity)
+			r.Delete("/unlinked-identities/{"+unlinkedIDParam+"}", h.allowIdentity)
 		})
 	})
 }
@@ -588,9 +590,20 @@ type linkedIdentityResponse struct {
 	LastUsedAt string `json:"last_used_at"`
 }
 
+// unlinkedIdentityResponse is an external account an administrator unlinked
+// and has not allowed again; the subject is left out as for a linked one.
+type unlinkedIdentityResponse struct {
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	Issuer     string `json:"issuer"`
+	Email      string `json:"email"`
+	UnlinkedAt string `json:"unlinked_at"`
+}
+
 type linkedIdentitiesResponse struct {
-	HasPassword bool                     `json:"has_password"`
-	Items       []linkedIdentityResponse `json:"items"`
+	HasPassword bool                       `json:"has_password"`
+	Items       []linkedIdentityResponse   `json:"items"`
+	Unlinked    []unlinkedIdentityResponse `json:"unlinked"`
 }
 
 func (h *UsersHandler) identities(w http.ResponseWriter, r *http.Request) {
@@ -612,22 +625,40 @@ func (h *UsersHandler) identities(w http.ResponseWriter, r *http.Request) {
 			LastUsedAt: l.LastUsedAt.UTC().Format(timeLayout),
 		})
 	}
-	httpx.JSON(w, r, http.StatusOK, linkedIdentitiesResponse{HasPassword: list.HasPassword, Items: items})
+	unlinked := make([]unlinkedIdentityResponse, 0, len(list.Unlinked))
+	for _, u := range list.Unlinked {
+		unlinked = append(unlinked, unlinkedIdentityResponse{
+			ID: u.ID.String(), Provider: u.Provider, Issuer: u.Issuer, Email: u.Email,
+			UnlinkedAt: u.UnlinkedAt.UTC().Format(timeLayout),
+		})
+	}
+	httpx.JSON(w, r, http.StatusOK, linkedIdentitiesResponse{HasPassword: list.HasPassword, Items: items, Unlinked: unlinked})
 }
 
 func (h *UsersHandler) unlinkIdentity(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.accountID(w, r)
+	h.onIdentity(w, r, identityIDParam, "The identity identifier is not a UUID", h.service.UnlinkExternal)
+}
+
+func (h *UsersHandler) allowIdentity(w http.ResponseWriter, r *http.Request) {
+	h.onIdentity(w, r, unlinkedIDParam, "The unlinked identity identifier is not a UUID", h.service.AllowExternal)
+}
+
+// onIdentity runs a change the administrator makes to one of the account's
+// identities, linked or unlinked, whose id is the path parameter param, and
+// answers 204; malformed is the message for an id that is not a UUID.
+func (h *UsersHandler) onIdentity(w http.ResponseWriter, r *http.Request, param, malformed string, change func(ctx context.Context, actorID, userID, id uuid.UUID) error) {
+	account, ok := h.accountID(w, r)
 	if !ok {
 		return
 	}
-	identityID, err := uuid.Parse(chi.URLParam(r, identityIDParam))
+	id, err := uuid.Parse(chi.URLParam(r, param))
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The identity identifier is not a UUID")
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, malformed)
 		return
 	}
 
 	actor, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.UnlinkExternal(r.Context(), actor.UserID, id, identityID); err != nil {
+	if err := change(r.Context(), actor.UserID, account, id); err != nil {
 		h.fail(w, r, err)
 		return
 	}

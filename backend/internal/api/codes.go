@@ -304,6 +304,8 @@ var (
 		"The operation assumes the account can still be reached — a profile edit, a password reset, a role change — and this one is deleted.")
 	codeIdentityNotFound = httpx.NewCode("identity_not_found",
 		"The account holds no sign-in through an external service with that identifier: it was never linked to this account, or it has been unlinked since.")
+	codeUnlinkedIdentityNotFound = httpx.NewCode("unlinked_identity_not_found",
+		"The account holds no unlinked sign-in through an external service with that identifier: none was unlinked from this account, or it has been allowed again since.")
 
 	// --- Contest lifecycle --------------------------------------------------
 
@@ -551,6 +553,8 @@ var (
 		"The address the provider vouches for belongs to an account here that never proved it owns that address and is not on a one-time password, so the sign-in is not linked to it. The account's holder confirms the address with a password reset link and then signs in through the provider, or an administrator resolves it.")
 	codeExternalSignInClosed = httpx.NewCode("external_signin_closed",
 		"The provider's account is not linked to any account here, and this installation does not create accounts (SELF_SIGNUP_ENABLED is off). Nothing was stored.")
+	codeExternalSignInUnlinked = httpx.NewCode("external_signin_unlinked",
+		"An administrator disconnected this external account from the account its address belongs to, and has not allowed it again, so it is not linked by that address. Nothing was stored. Ask an administrator.")
 	codeExternalSignInUnavailable = httpx.NewCode("external_signin_unavailable",
 		"Signing in through this external provider is switched off on this installation. Sign in another way: an account entered only through it can set a password by password recovery, and staff ask an administrator.")
 )

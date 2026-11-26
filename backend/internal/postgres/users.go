@@ -292,6 +292,81 @@ func (r *Users) UnlinkExternalIdentity(ctx context.Context, userID, identityID u
 	return l, nil
 }
 
+// unlinkedColumns is the projection scanUnlinked reads.
+const unlinkedColumns = `id, user_id, provider, issuer, subject, COALESCE(email, ''), unlinked_at`
+
+func scanUnlinked(row pgx.Row) (users.UnlinkedIdentity, error) {
+	var u users.UnlinkedIdentity
+	err := row.Scan(&u.ID, &u.UserID, &u.Provider, &u.Issuer, &u.Subject, &u.Email, &u.UnlinkedAt)
+	return u, err
+}
+
+// RecordUnlinked records the identity as unlinked from its account. A second
+// record of it moves its time and keeps its id.
+func (r *Users) RecordUnlinked(ctx context.Context, id users.ExternalIdentity) (users.UnlinkedIdentity, error) {
+	recorded, err := scanUnlinked(r.querier(ctx).QueryRow(ctx, `
+		INSERT INTO unlinked_identities (user_id, provider, issuer, subject, email)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (user_id, provider, issuer, subject)
+		DO UPDATE SET email = EXCLUDED.email, unlinked_at = now()
+		RETURNING `+unlinkedColumns,
+		id.UserID, id.Provider, id.Issuer, id.Subject, nullIfEmpty(id.Email)))
+	if err != nil {
+		return users.UnlinkedIdentity{}, fmt.Errorf("record the unlinked identity: %w", err)
+	}
+	return recorded, nil
+}
+
+// UnlinkedIdentitiesOf lists the account's unlinked identities, newest first.
+func (r *Users) UnlinkedIdentitiesOf(ctx context.Context, userID uuid.UUID) ([]users.UnlinkedIdentity, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT `+unlinkedColumns+` FROM unlinked_identities WHERE user_id = $1
+		ORDER BY unlinked_at DESC, id DESC
+		LIMIT $2`, userID, users.MaxIdentitiesListed)
+	if err != nil {
+		return nil, fmt.Errorf("read the account's unlinked identities: %w", err)
+	}
+	unlinked, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (users.UnlinkedIdentity, error) {
+		return scanUnlinked(row)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the account's unlinked identities: %w", err)
+	}
+	return unlinked, nil
+}
+
+// IsUnlinked reports whether the identity is recorded as unlinked from the
+// account.
+func (r *Users) IsUnlinked(ctx context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error) {
+	if !storableText(issuer) || !storableText(subject) {
+		return false, nil
+	}
+	var unlinked bool
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM unlinked_identities
+		               WHERE user_id = $1 AND provider = $2 AND issuer = $3 AND subject = $4)`,
+		userID, provider, issuer, subject).Scan(&unlinked)
+	if err != nil {
+		return false, fmt.Errorf("check the account's unlinked identities: %w", err)
+	}
+	return unlinked, nil
+}
+
+// AllowUnlinked removes the record and returns it. The owner is in the WHERE,
+// so another account's record is not found rather than gone.
+func (r *Users) AllowUnlinked(ctx context.Context, userID, unlinkedID uuid.UUID) (users.UnlinkedIdentity, error) {
+	lifted, err := scanUnlinked(r.querier(ctx).QueryRow(ctx, `
+		DELETE FROM unlinked_identities WHERE id = $2 AND user_id = $1
+		RETURNING `+unlinkedColumns, userID, unlinkedID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return users.UnlinkedIdentity{}, users.ErrUnlinkedIdentityNotFound
+	}
+	if err != nil {
+		return users.UnlinkedIdentity{}, fmt.Errorf("allow the unlinked identity: %w", err)
+	}
+	return lifted, nil
+}
+
 // DeleteExternalIdentities forgets every identity of the account.
 func (r *Users) DeleteExternalIdentities(ctx context.Context, userID uuid.UUID) error {
 	if _, err := r.querier(ctx).Exec(ctx, `DELETE FROM external_identities WHERE user_id = $1`, userID); err != nil {

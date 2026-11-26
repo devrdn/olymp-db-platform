@@ -330,6 +330,12 @@ var usersErrors = errorTable{
 		logAs:   "a second identity's refusal to link reached a handler"},
 	{err: users.ErrIdentityNotFound, status: http.StatusNotFound, code: codeIdentityNotFound,
 		message: "This sign-in service is no longer linked to the account"},
+	// Answered only by the external sign-in's redirect.
+	{err: users.ErrIdentityUnlinked, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
+		message: "Internal server error",
+		logAs:   "an unlinked identity's refusal to link reached a handler"},
+	{err: users.ErrUnlinkedIdentityNotFound, status: http.StatusNotFound, code: codeUnlinkedIdentityNotFound,
+		message: "This sign-in service is already allowed again"},
 }
 
 // monitorErrors answers every error in monitor.Errors() (walked by
@@ -474,6 +480,8 @@ var externalSignInRedirects = []struct {
 	{err: federation.ErrIdentityConflict, code: codeExternalSignInConflict},
 	// The holder can lift this one: a password reset link proves the address.
 	{err: federation.ErrUnverifiedAccount, code: codeExternalSignInUnverified},
+	// Only an administrator lifts this one.
+	{err: users.ErrIdentityUnlinked, code: codeExternalSignInUnlinked},
 	{err: connector.ErrSignInRefused, code: codeExternalSignInFailed},
 	{err: connector.ErrExchangeFailed, code: codeExternalSignInFailed},
 	{err: connector.ErrKeysUnavailable, code: codeExternalSignInFailed, outage: true},

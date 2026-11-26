@@ -435,15 +435,16 @@ type LinkExternalCommand struct {
 // is locked and read again first, so a change committed since the caller's
 // read is seen: it refuses ErrAccountDeleted, ErrAccountBlocked,
 // ErrStaffNotLinkable, ErrNotFound when the account no longer holds the
-// identity's email, which is what vouched for linking it,
-// ErrUnverifiedNotLinkable when an account that does not act as staff is not
-// User.LinkableByEmail, and ErrIssuerAlreadyLinked when the account already
-// holds another identity at the same issuer: a provider may reassign a
-// mailbox, and the address must not carry its new holder into the previous
-// one's account. An account still on its one-time password loses it, as
-// retireOneTimePassword says. It returns the account as it then stands. As
-// for CreateExternal, the owner made the change, so the audit entries have no
-// actor.
+// identity's email, which is what vouched for linking it, ErrIdentityUnlinked
+// when an administrator unlinked this identity from the account and has not
+// allowed it again, ErrUnverifiedNotLinkable when an account that does not
+// act as staff is not User.LinkableByEmail, and ErrIssuerAlreadyLinked when
+// the account already holds another identity at the same issuer: a provider
+// may reassign a mailbox, and the address must not carry its new holder into
+// the previous one's account. An account still on its one-time password
+// loses it, as retireOneTimePassword says. It returns the account as it then
+// stands. As for CreateExternal, the owner made the change, so the audit
+// entries have no actor.
 func (s *Service) LinkExternal(ctx context.Context, cmd LinkExternalCommand) (User, error) {
 	if s.identities == nil {
 		return User{}, errNoIdentityStore
@@ -471,6 +472,13 @@ func (s *Service) LinkExternal(ctx context.Context, cmd LinkExternalCommand) (Us
 		}
 		if !sameASCIIAddress(u.Email, identity.Email) {
 			return fmt.Errorf("%w: the account no longer holds the address", ErrNotFound)
+		}
+		unlinked, err := s.identities.IsUnlinked(ctx, userID, identity.Provider, identity.Issuer, identity.Subject)
+		if err != nil {
+			return err
+		}
+		if unlinked {
+			return ErrIdentityUnlinked
 		}
 		if !staff && !u.LinkableByEmail() {
 			return ErrUnverifiedNotLinkable
@@ -548,15 +556,16 @@ func (s *Service) refuseExternalEntry(ctx context.Context, u User, homeDirectory
 	return staff, nil
 }
 
-// IdentityList is how an account signs in: the identities linked to it, and
-// whether it has a password too.
+// IdentityList is how an account signs in: the identities linked to it,
+// whether it has a password too, and the identities unlinked from it.
 type IdentityList struct {
 	Items       []LinkedIdentity
 	HasPassword bool
+	Unlinked    []UnlinkedIdentity
 }
 
-// Identities lists the identities linked to the account; ErrNotFound for an
-// unknown account.
+// Identities lists the identities linked to the account and those unlinked
+// from it; ErrNotFound for an unknown account.
 func (s *Service) Identities(ctx context.Context, userID uuid.UUID) (IdentityList, error) {
 	if s.identities == nil {
 		return IdentityList{}, errNoIdentityStore
@@ -569,19 +578,24 @@ func (s *Service) Identities(ctx context.Context, userID uuid.UUID) (IdentityLis
 	if err != nil {
 		return IdentityList{}, err
 	}
-	return IdentityList{Items: items, HasPassword: u.HasPassword()}, nil
+	unlinked, err := s.identities.UnlinkedIdentitiesOf(ctx, userID)
+	if err != nil {
+		return IdentityList{}, err
+	}
+	return IdentityList{Items: items, HasPassword: u.HasPassword(), Unlinked: unlinked}, nil
 }
 
 // UnlinkExternal removes one identity from the account, so signing in through
-// it no longer enters the account, and ends every session: a session records
-// no sign-in method, and a sign-in that read the identity before the delete
-// still opens one, which only the generation bump retires. The account is
-// locked and read again first, so a LinkExternal in flight, which adds an
-// identity and may drop a one-time password, commits before the audit entry
-// says whether the account still signs in. It refuses ErrCannotActOnSelf,
-// ErrAccountDeleted and ErrIdentityNotFound, and unlinks a blocked account.
-// Removing the last way to sign in is allowed: the administrator can issue a
-// password next.
+// it no longer enters the account, and records it as unlinked, so it does not
+// link back by the address LinkExternal verified either, until AllowExternal.
+// It ends every session: a session records no sign-in method, and a sign-in
+// that read the identity before the delete still opens one, which only the
+// generation bump retires. The account is locked and read again first, so a
+// LinkExternal in flight, which adds an identity and may drop a one-time
+// password, commits before the audit entry says whether the account still
+// signs in. It refuses ErrCannotActOnSelf, ErrAccountDeleted and
+// ErrIdentityNotFound, and unlinks a blocked account. Removing the last way
+// to sign in is allowed: the administrator can issue a password next.
 func (s *Service) UnlinkExternal(ctx context.Context, actorID, userID, identityID uuid.UUID) error {
 	if s.identities == nil {
 		return errNoIdentityStore
@@ -604,6 +618,10 @@ func (s *Service) UnlinkExternal(ctx context.Context, actorID, userID, identityI
 		if err != nil {
 			return err
 		}
+		unlinked, err := s.identities.RecordUnlinked(ctx, gone.ExternalIdentity)
+		if err != nil {
+			return err
+		}
 		left, err := s.identities.IdentitiesOf(ctx, userID)
 		if err != nil {
 			return err
@@ -613,6 +631,7 @@ func (s *Service) UnlinkExternal(ctx context.Context, actorID, userID, identityI
 		}
 		return s.record(ctx, actorID, audit.ActionUserExternalIdentityUnlink, userID, map[string]any{
 			"identity_id":        gone.ID.String(),
+			"unlinked_id":        unlinked.ID.String(),
 			"provider":           gone.Provider,
 			"issuer":             gone.Issuer,
 			"signs_in_otherwise": u.HasPassword() || len(left) > 0,
@@ -623,6 +642,36 @@ func (s *Service) UnlinkExternal(ctx context.Context, actorID, userID, identityI
 	}
 	s.forget(ctx, userID)
 	return nil
+}
+
+// AllowExternal lifts the record an unlink left, so the identity links to the
+// account by email again. It takes the account's lock, as UnlinkExternal and
+// LinkExternal do, so it is ordered with a link deciding at the same time. It
+// refuses ErrCannotActOnSelf and ErrUnlinkedIdentityNotFound. A deleted
+// account is allowed: LinkExternal refuses a deleted account and ByEmail
+// finds only live ones, so its lifted record matters only once it is
+// restored.
+func (s *Service) AllowExternal(ctx context.Context, actorID, userID, unlinkedID uuid.UUID) error {
+	if s.identities == nil {
+		return errNoIdentityStore
+	}
+	if actorID == userID {
+		return ErrCannotActOnSelf
+	}
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, userID); err != nil {
+			return err
+		}
+		lifted, err := s.identities.AllowUnlinked(ctx, userID, unlinkedID)
+		if err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserExternalIdentityAllow, userID, map[string]any{
+			"unlinked_id": lifted.ID.String(),
+			"provider":    lifted.Provider,
+			"issuer":      lifted.Issuer,
+		})
+	})
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {

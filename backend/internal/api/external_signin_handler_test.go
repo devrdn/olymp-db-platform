@@ -524,6 +524,32 @@ func TestAnUnverifiedAccountWithAChosenPasswordLandsOnTheUnverifiedCode(t *testi
 	}
 }
 
+func TestAnIdentityAnAdministratorUnlinkedLandsOnTheUnlinkedCode(t *testing.T) {
+	f := newExternalFixture(t, externalOptions{createAccounts: true})
+	proved := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
+	if _, err := f.repo.RecordUnlinked(t.Context(), users.ExternalIdentity{
+		UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: f.provider.Issuer(msHomeTenant), Subject: msObjectID,
+	}); err != nil {
+		t.Fatalf("RecordUnlinked() = %v", err)
+	}
+	s := f.start(t, "192.0.2.1", "/")
+
+	rec := f.signIn(t, "192.0.2.1", s, f.claims(msHomeTenant))
+
+	assertLandsOnSignIn(t, rec, "external_signin_unlinked")
+	assertNoSessionCookie(t, rec)
+	if ids, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(ids) != 0 {
+		t.Errorf("ana's account was linked: %+v, %v", ids, err)
+	}
+	if f.repo.Len() != 1 {
+		t.Errorf("%d accounts exist, want only ana's", f.repo.Len())
+	}
+	if f.logs.loggedError("") {
+		t.Error("the refusal was logged as an error, as an outage would be")
+	}
+}
+
 func TestARefusedTokenLandsOnTheSignInPage(t *testing.T) {
 	f := newExternalFixture(t, externalOptions{createAccounts: true})
 	s := f.start(t, "192.0.2.1", "/")

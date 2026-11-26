@@ -2087,21 +2087,42 @@ it, with the number of questions waiting beside it while the contest runs.
     the row, raises the session generation, since a session records no
     sign-in method and a sign-in that read the identity before the delete
     still opens one, and records `user.external_identity_unlink` with the
-    identity's id, provider and issuer and whether the account still signs
-    in another way. Removing the last way in is allowed, and the
-    administrator can issue a password next. Nothing bars the identity
-    afterwards: a later sign-in through it no longer finds the account by
-    the identity, but a trusted email still links it again by the address,
-    as at a first sign-in. A known risk, accepted by the owner: a provider's
-    verified mark is what it checked once, so if the installation gives an
-    address to another person, a previous holder whose address is still
-    verified at GitHub or in a personal Microsoft or Google account is
-    linked into the new holder's account at a first sign-in through that
-    provider. The issuer guard above protects only the other direction. A
-    sign-in through the installation's own directory is not affected. The
-    mitigation is not reusing addresses; an administrator can block an
-    account so linked, or unlink the identity and change the account's
-    address, since unlinking alone leaves the address that links it again.
+    identity's id, provider and issuer, the id of the record described
+    below (`unlinked_id`, the key the later `user.external_identity_allow`
+    names too) and whether the account still signs in another way. Removing
+    the last way in is allowed, and the administrator can issue a password
+    next. Linking marked the account's address verified, so without more the
+    identity would link back by that address at its very next sign-in, with
+    or without a password reset. The unlink therefore also records the
+    external account (provider, issuer, subject) in `unlinked_identities`
+    for that account, in the same transaction, and `LinkExternal` refuses it
+    under the same lock (`users.ErrIdentityUnlinked`, answered
+    `external_signin_unlinked` on the sign-in page, with nothing stored). It
+    is that record, not a password reset or an address change, that keeps an
+    unlinked identity out. Another external account, such as the rightful
+    holder's own at the same issuer, still links by the address as before.
+    The record never stands beside a linked identity: the unlink removed it,
+    and a link is what it stops. `GET /users/{id}/identities` lists the
+    records under `unlinked`, and `DELETE
+    /users/{id}/unlinked-identities/{unlinkedID}`
+    (`users.Service.AllowExternal`, never on oneself, under the account's
+    lock) lifts one, recorded as `user.external_identity_allow`; the
+    identity links by email again after that; a deleted account's record can
+    be lifted too, which matters only once it is restored. Deleting an
+    account, which keeps its row, forgets its identities but keeps its
+    records, so a restored account still keeps the identity out; removing
+    the row removes them (`ON DELETE CASCADE`). A known risk, accepted by
+    the owner: a provider's verified mark is what it checked once, so if the
+    installation gives an address to another person, a previous holder whose
+    address is still verified at GitHub or in a personal Microsoft or Google
+    account is linked into the new holder's account at a first sign-in
+    through that provider. The issuer guard above protects only the other
+    direction. A sign-in through the installation's own directory is not
+    affected. The mitigation is not reusing addresses; an administrator can
+    block an account so linked, or unlink the identity, which then stays
+    out. Unlinking keeps out only that external account, not whoever holds
+    the account's mailbox: password recovery by email still reaches it.
+    Blocking the account keeps everybody out.
     Another provider is another adapter, with no change to federation.
 
     **Staff and the home directory.** A staff account is entered or linked
