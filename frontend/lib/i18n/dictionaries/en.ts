@@ -2341,6 +2341,8 @@ const en = {
       "contest.instance_dropped": "Removed a participant's database at an organiser's request",
       "contest.instance_reset": "Reset their own database to the contest's starting state",
       "contest.instance_reset_failed": "Asked to reset their own database, but the copy failed; their next action makes a fresh one",
+      "contest.instance_over_quota": "A participant's database reached its disk quota; writes that grow it are refused until space is freed",
+      "contest.instance_within_quota": "A participant's database is back within its disk quota",
       "event_registration.check_in": "Marked or cleared a registered guest's arrival",
       "settings.change": "Changed the installation's settings",
       "settings.mail_test": "Sent themselves a test email",

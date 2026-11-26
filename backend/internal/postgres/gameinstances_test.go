@@ -925,3 +925,300 @@ func TestTheContestInstancesIndexLeadsWithTheContest(t *testing.T) {
 		t.Fatalf("contest_id does not lead the index: %s", definition)
 	}
 }
+
+// quotaContest stores a contest at status whose policy has mode (and a disk
+// quota ratio of 3) and whose template is in templateStatus, with claimed
+// copies named prefix_1 … prefix_n, through ctx's transaction. mode "" stores
+// no policy row, which reads as the read-only default.
+func quotaContest(t *testing.T, ctx context.Context, status, mode, templateStatus, prefix string, n int) (uuid.UUID, []string) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	q := storage.QuerierFrom(ctx, testPool)
+	author := makeUser(t, ctx, "quota-"+uuid.NewString()[:8])
+
+	var contest uuid.UUID
+	if err := q.QueryRow(ctx,
+		`INSERT INTO contests (created_by, status) VALUES ($1, $2) RETURNING id`, author.ID, status).
+		Scan(&contest); err != nil {
+		t.Fatalf("create contest: %v", err)
+	}
+	if mode != "" {
+		tables := "{}"
+		if mode == string(sqlpolicy.ModeReadWrite) {
+			tables = "{evidence}"
+		}
+		if _, err := q.Exec(ctx,
+			`INSERT INTO contest_sql_policies (contest_id, mode, writable_tables, disk_quota_ratio)
+			 VALUES ($1, $2, $3::plain_table_name[], 3)`, contest, mode, tables); err != nil {
+			t.Fatalf("create policy: %v", err)
+		}
+	}
+	if _, err := q.Exec(ctx,
+		`INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
+		 VALUES ($1, $2, 'SELECT 1', $3, 4)`, contest, prefix+"_tpl", templateStatus); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	repo := NewGameInstances(testPool)
+	var databases []string
+	for i := range n {
+		user := makeUser(t, ctx, "quota-p-"+uuid.NewString()[:8])
+		database := fmt.Sprintf("%s_%d", prefix, i+1)
+		if err := repo.Assign(ctx, contest, makeRegistration(t, ctx, contest, user.ID), database, 4); err != nil {
+			t.Fatalf("assign %s: %v", database, err)
+		}
+		databases = append(databases, database)
+	}
+	return contest, databases
+}
+
+// quotaPrefix is a database-name prefix no other test shares, so a page that
+// starts at it holds only this test's rows.
+func quotaPrefix() string { return "quota_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12] }
+
+// everyQuotaCandidate pages through the whole list, keyed by database name.
+func everyQuotaCandidate(t *testing.T, ctx context.Context) map[string]provisioning.QuotaCandidate {
+	t.Helper()
+	repo := NewGameInstances(testPool)
+	found := map[string]provisioning.QuotaCandidate{}
+	after := ""
+	for {
+		page, err := repo.QuotaCandidates(ctx, after, 100)
+		if err != nil {
+			t.Fatalf("QuotaCandidates: %v", err)
+		}
+		for _, c := range page {
+			found[c.Database] = c
+		}
+		if len(page) < 100 {
+			return found
+		}
+		after = page[len(page)-1].Database
+	}
+}
+
+// Only a claimed, ready copy of a running read_write contest with a built
+// template can grow: the runner checks the quota for nothing else.
+func TestQuotaCandidatesAreTheClaimedCopiesOfRunningReadWriteContests(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		watched, watchedDatabases := quotaContest(t, ctx, "running", "read_write", "ready", quotaPrefix(), 2)
+		repo := NewGameInstances(testPool)
+		spare := quotaPrefix()
+		if err := repo.AddSpare(ctx, watched, spare, 4); err != nil {
+			t.Fatalf("add a spare: %v", err)
+		}
+		if err := repo.MarkDropped(ctx, watchedDatabases[1]); err != nil {
+			t.Fatalf("drop one copy: %v", err)
+		}
+
+		var unwatched []string
+		for _, s := range []struct{ status, mode, template string }{
+			{"published", "read_write", "ready"},
+			{"finished", "read_write", "ready"},
+			{"running", "read_only", "ready"},
+			{"running", "", "ready"},
+			{"running", "read_write", "building"},
+		} {
+			_, databases := quotaContest(t, ctx, s.status, s.mode, s.template, quotaPrefix(), 1)
+			unwatched = append(unwatched, databases...)
+		}
+
+		found := everyQuotaCandidate(t, ctx)
+		got, ok := found[watchedDatabases[0]]
+		if !ok {
+			t.Fatalf("the claimed copy of a running read_write contest is not a candidate")
+		}
+		if got.Contest.ID != watched || got.Contest.Template == "" || got.Contest.Version != 4 {
+			t.Fatalf("the candidate's game came back %+v", got.Contest)
+		}
+		if got.Contest.Policy.Mode != sqlpolicy.ModeReadWrite || got.Contest.Policy.DiskQuotaRatio != 3 {
+			t.Fatalf("the candidate's policy came back %+v; its quota would be computed from the wrong ratio", got.Contest.Policy)
+		}
+		if got.Registration == uuid.Nil || got.UpdatedAt.IsZero() || got.OverQuotaSince != nil {
+			t.Fatalf("the candidate came back %+v", got)
+		}
+		for _, name := range append([]string{spare, watchedDatabases[1]}, unwatched...) {
+			if _, listed := found[name]; listed {
+				t.Errorf("%s is a candidate, but its owner cannot write to it", name)
+			}
+		}
+	})
+}
+
+func TestQuotaCandidatesPageByDatabaseName(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		prefix := quotaPrefix()
+		_, databases := quotaContest(t, ctx, "running", "read_write", "ready", prefix, 3)
+		repo := NewGameInstances(testPool)
+
+		first, err := repo.QuotaCandidates(ctx, prefix, 2)
+		if err != nil {
+			t.Fatalf("QuotaCandidates: %v", err)
+		}
+		if len(first) != 2 || first[0].Database != databases[0] || first[1].Database != databases[1] {
+			t.Fatalf("the first page is %+v, want %v in order", first, databases[:2])
+		}
+		second, err := repo.QuotaCandidates(ctx, first[1].Database, 2)
+		if err != nil {
+			t.Fatalf("QuotaCandidates: %v", err)
+		}
+		if len(second) == 0 || second[0].Database != databases[2] {
+			t.Fatalf("the second page starts with %+v, want %s", second, databases[2])
+		}
+	})
+}
+
+// overQuotaSince reads the flag as the organiser's list shows it.
+func overQuotaSince(t *testing.T, ctx context.Context, contest uuid.UUID, database string) *time.Time {
+	t.Helper()
+	record, err := NewGameInstances(testPool).InstanceNamed(ctx, contest, database)
+	if err != nil {
+		t.Fatalf("read %s: %v", database, err)
+	}
+	return record.OverQuotaSince
+}
+
+// Each transition is written once: the update that finds the flag already in
+// the state it would set changes nothing, so an unchanged tick writes nothing.
+func TestTheOverQuotaFlagMovesOnlyWhenItChanges(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest, databases := quotaContest(t, ctx, "running", "read_write", "ready", quotaPrefix(), 1)
+		database := databases[0]
+		repo := NewGameInstances(testPool)
+		read := everyQuotaCandidate(t, ctx)[database].UpdatedAt
+
+		if marked, err := repo.MarkOverQuota(ctx, database, read); err != nil || !marked {
+			t.Fatalf("the first mark = %v, %v; want it recorded", marked, err)
+		}
+		since := overQuotaSince(t, ctx, contest, database)
+		if since == nil {
+			t.Fatal("the organiser's list does not show the flag")
+		}
+		if marked, err := repo.MarkOverQuota(ctx, database, read); err != nil || marked {
+			t.Fatalf("a second mark = %v, %v; want nothing written", marked, err)
+		}
+		if again := overQuotaSince(t, ctx, contest, database); again == nil || !again.Equal(*since) {
+			t.Fatalf("a second mark moved the flag from %v to %v", since, again)
+		}
+
+		if cleared, err := repo.ClearOverQuota(ctx, database, read); err != nil || !cleared {
+			t.Fatalf("the first clear = %v, %v; want it recorded", cleared, err)
+		}
+		if overQuotaSince(t, ctx, contest, database) != nil {
+			t.Fatal("the flag is still set after it was cleared")
+		}
+		if cleared, err := repo.ClearOverQuota(ctx, database, read); err != nil || cleared {
+			t.Fatalf("a second clear = %v, %v; want nothing written", cleared, err)
+		}
+	})
+}
+
+// A size measured before a reset belongs to the database the reset replaced,
+// so it must not flag the fresh one.
+func TestTheOverQuotaFlagIsNotSetOnARowChangedSinceItWasRead(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest, databases := quotaContest(t, ctx, "running", "read_write", "ready", quotaPrefix(), 1)
+		repo := NewGameInstances(testPool)
+		stale := everyQuotaCandidate(t, ctx)[databases[0]].UpdatedAt.Add(-time.Second)
+
+		if marked, err := repo.MarkOverQuota(ctx, databases[0], stale); err != nil || marked {
+			t.Fatalf("a mark on a row changed since it was read = %v, %v; want nothing written", marked, err)
+		}
+		if overQuotaSince(t, ctx, contest, databases[0]) != nil {
+			t.Fatal("a stale measurement flagged the row")
+		}
+	})
+}
+
+// Two replicas sweeping at once: the second update waits for the first and
+// then finds nothing to change, so the transition is recorded once.
+func TestTwoSweepsRacingRecordOneTransition(t *testing.T) {
+	contest, people := contestWithSpares(t, 0, 1)
+	repo := NewGameInstances(testPool)
+	database := quotaPrefix()
+	if err := repo.Assign(t.Context(), contest, people[0], database, 1); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	record, err := repo.InstanceNamed(t.Context(), contest, database)
+	if err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+
+	for _, step := range []struct {
+		name string
+		move func(context.Context, string, time.Time) (bool, error)
+	}{
+		{"over", repo.MarkOverQuota},
+		{"within", repo.ClearOverQuota},
+	} {
+		var first, second bool
+		err := raceOnTwoConnections(t,
+			func(ctx context.Context) (err error) {
+				first, err = step.move(ctx, database, record.UpdatedAt)
+				return err
+			},
+			func(ctx context.Context) (err error) {
+				second, err = step.move(ctx, database, record.UpdatedAt)
+				return err
+			},
+			"over_quota_since")
+		if err != nil {
+			t.Fatalf("%s: the waiting sweep = %v", step.name, err)
+		}
+		if !first || second {
+			t.Fatalf("%s: the sweeps recorded %v and %v, want exactly the first", step.name, first, second)
+		}
+	}
+}
+
+// A reset gives the participant a fresh copy and a drop removes the database,
+// so neither may keep a flag measured on what was there before.
+func TestAResetAndADropClearTheOverQuotaFlag(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest, databases := quotaContest(t, ctx, "running", "read_write", "ready", quotaPrefix(), 2)
+		repo := NewGameInstances(testPool)
+		candidates := everyQuotaCandidate(t, ctx)
+		for _, database := range databases {
+			if marked, err := repo.MarkOverQuota(ctx, database, candidates[database].UpdatedAt); err != nil || !marked {
+				t.Fatalf("mark %s: %v, %v", database, marked, err)
+			}
+		}
+
+		reset := candidates[databases[0]]
+		if err := repo.Assign(ctx, contest, reset.Registration, reset.Database, 4); err != nil {
+			t.Fatalf("reassign: %v", err)
+		}
+		if err := repo.MarkDropped(ctx, databases[1]); err != nil {
+			t.Fatalf("mark dropped: %v", err)
+		}
+
+		for _, database := range databases {
+			if since := overQuotaSince(t, ctx, contest, database); since != nil {
+				t.Errorf("%s still reads over quota since %v", database, since)
+			}
+		}
+	})
+}
+
+// The organiser's list decides from this whether a flag still means anything.
+func TestInstancesSayWhetherTheirContestIsRunning(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
+		for status, want := range map[string]bool{"running": true, "finished": false, "published": false} {
+			contest, databases := quotaContest(t, ctx, status, "read_write", "ready", quotaPrefix(), 1)
+			list, err := repo.Instances(ctx, contest, 10)
+			if err != nil || len(list) != 1 {
+				t.Fatalf("%s: Instances = %v (%d rows)", status, err, len(list))
+			}
+			if list[0].ContestRunning != want {
+				t.Errorf("%s: ContestRunning = %v, want %v", status, list[0].ContestRunning, want)
+			}
+			named, err := repo.InstanceNamed(ctx, contest, databases[0])
+			if err != nil || named.ContestRunning != want {
+				t.Errorf("%s: InstanceNamed = %v, ContestRunning %v, want %v", status, err, named.ContestRunning, want)
+			}
+		}
+	})
+}

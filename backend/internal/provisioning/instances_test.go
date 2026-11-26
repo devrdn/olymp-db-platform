@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/audit"
+	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/postgres"
 	"github.com/devrdn/olymp-db-platform/backend/internal/provisioning"
 	"github.com/google/uuid"
@@ -582,4 +583,61 @@ func TestAPoolThatGotWhatItAskedForReportsNothing(t *testing.T) {
 	if want != 13 || reported != 0 {
 		t.Fatalf("granted %d and reported %d times; nothing bound", want, reported)
 	}
+}
+
+// A flag means something only while the contest runs: once it finishes the
+// monitor stops measuring its copies, so the organiser's list must not keep
+// showing what it last saw.
+func TestTheListShowsAFlagOnlyWhileTheContestRuns(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		w := watchedContest(t, ctx, 1, 0)
+		database := w.databases[0]
+		w.cluster.setSize(database, 30<<20)
+		w.sweep(t, ctx)
+
+		listed := func() *time.Time {
+			t.Helper()
+			list, err := w.service.Instances(ctx, w.contest.ID)
+			if err != nil || len(list.Instances) != 1 {
+				t.Fatalf("Instances = %v (%+v)", err, list)
+			}
+			return list.Instances[0].OverQuotaSince
+		}
+		if listed() == nil {
+			t.Fatal("a running contest's flagged copy is listed without its flag")
+		}
+
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE contests SET status = 'finished' WHERE id = $1`, w.contest.ID); err != nil {
+			t.Fatalf("finish the contest: %v", err)
+		}
+		if w.flag(t, ctx, database) == nil {
+			t.Fatal("setup: the row's flag is gone; this test is about a row still flagged")
+		}
+		if since := listed(); since != nil {
+			t.Fatalf("a finished contest's copy is listed over quota since %v", since)
+		}
+	})
+}
+
+// The drop answers the row the organiser's screen replaces its own with, so it
+// must carry no flag: the database is gone, and MarkDropped cleared it.
+func TestADropAnswersWithoutTheFlag(t *testing.T) {
+	withRollback(t, func(ctx context.Context) {
+		w := watchedContest(t, ctx, 1, 0)
+		database := w.databases[0]
+		w.cluster.setSize(database, 30<<20)
+		w.sweep(t, ctx)
+		if w.flag(t, ctx, database) == nil {
+			t.Fatal("setup: the copy was not flagged")
+		}
+
+		dropped, err := w.service.DropInstance(ctx, uuid.New(), w.contest.ID, database)
+		if err != nil {
+			t.Fatalf("drop: %v", err)
+		}
+		if dropped.OverQuotaSince != nil {
+			t.Fatalf("the drop answered a dropped copy over quota since %v", dropped.OverQuotaSince)
+		}
+	})
 }

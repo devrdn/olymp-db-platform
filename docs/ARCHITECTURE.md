@@ -565,15 +565,49 @@ How it holds together:
   Runner reads the instance's size with `pg_database_size()` inside the
   statement's own transaction, and refuses the statement when the quota —
   five times the template's size by default, configurable in the policy — is
-  reached. (2) No background monitor reads an instance's size to enforce its quota: the check
-  runs only when the participant writes, so an instance that one statement
-  pushed past its quota stays as it is until its owner writes again.
+  reached. (2) A background monitor in the Core API, the `game-quota-watch`
+  task, measures every claimed copy of a running `read_write` contest once a
+  minute (`provisioning.Service.WatchQuotas`): one `DatabaseSizes` round trip
+  per `QuotaBatchLimit` copies, against the same `Service.Quota` the runner is
+  given. A copy at or past its quota gets `game_instances.over_quota_since`,
+  which the organiser's list of databases shows as `over_quota_since`, a
+  warning in the log and `contest.instance_over_quota` on the contest's trail;
+  back within, the flag is lifted and `contest.instance_within_quota` recorded.
+  Each transition is one conditional `UPDATE`, so a tick that finds a row as
+  it left it writes nothing and two replicas record it once; a reset, a
+  drop or the reclaim sweep lifts the flag with the row it rewrites, recorded
+  by its own entry (`contest.instance_reset`, `contest.instance_dropped`,
+  `contest.instance_reclaimed`) rather than a within-quota one. The monitor
+  measures only a running `read_write` contest, so once the contest finishes,
+  or its policy leaves `read_write`, a stored flag is what it last saw and
+  stays until the copy is reset or reclaimed; the list answers
+  `over_quota_since: null` for every copy of a contest that is not running
+  (`provisioning.Service.Instances`). The monitor detects and
+  reports, and never resets, blocks or drops: enforcement stays the runner's
+  check before each write, which a freeing statement still passes, so the
+  flag cannot close the way back. Setting `default_transaction_read_only` on
+  the database would not do instead: it reaches only new sessions, any
+  session may override it, and it refuses the `TRUNCATE` that frees space.
   The race inside a **single** statement — an `INSERT … SELECT` that crosses
   the quota before the next check — cannot be removed entirely, but the
   overshoot is bounded by what can be written within `statement_timeout`,
-  five seconds. (3) The cluster's disk
+  five seconds; the monitor is what notices it. (3) The cluster's disk
   is planned with room for that worst case multiplied by the number of
-  concurrent DML statements, which the semaphore bounds.
+  concurrent DML statements, which the semaphore bounds. Unless
+  `GAME_CLUSTER_MAX_BYTES` is set to 0 (no budget; the default is 64 GiB),
+  the same tick reads the whole cluster's size against it, as the budget check sees it (the last `ClusterBytes`
+  measurement, held for `clusterBytesTTL`, plus the copies made since): the
+  gauges `game_cluster_bytes`, `game_cluster_max_bytes` and
+  `game_cluster_near_budget`, which are not exported with a budget of 0, a
+  warning in the log when the cluster crosses 80% of the budget
+  (`provisioning.ClusterWarningPercent`) and an info line when it falls back
+  below, never on every tick. With a budget of 0 nothing compares the
+  total, so the scan of every database's files is skipped. It, too, only
+  reports; the budget itself is enforced where copies are made. Each tick has
+  its own deadline (`quotaWatchTimeout`, half its interval), so a game
+  cluster that stops answering is a counted failed tick rather than a silent
+  monitor, also when the tick waits behind the pool tender's measurement of
+  the cluster, which it shares.
 
   `temp_file_limit` bounds temporary files separately. The size check applies
   only to writing that can grow the database: a statement that can only shrink

@@ -61,6 +61,8 @@
     "contest.instance_dropped",
     "contest.instance_reset",
     "contest.instance_reset_failed",
+    "contest.instance_over_quota",
+    "contest.instance_within_quota",
     "contest.upload_complete",
     "contest.upload_abort",
     "contest.table_data_upload",

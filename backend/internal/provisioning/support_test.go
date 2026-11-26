@@ -159,10 +159,15 @@ type cluster struct {
 	failIdleDrop map[string]error
 	idleDropped  []string
 
-	// sized and sizeCalls record DatabaseSizes calls; sizesFail makes it fail.
+	// sized and sizeCalls record DatabaseSizes calls, batches the length of
+	// each; sizesFail makes it fail. sizeOf overrides the 1 MiB it reports
+	// for a name, and gone leaves a name out, as a database dropped meanwhile.
 	sized     []string
 	sizeCalls int
+	batches   []int
 	sizesFail error
+	sizeOf    map[string]int64
+	gone      map[string]bool
 
 	// dropFail makes the forcing Drop refuse.
 	dropFail error
@@ -179,8 +184,17 @@ type cluster struct {
 	clusterBytesFail error
 	clusterReads     int
 	// templateReads counts DatabaseSize calls, which are expensive on a real
-	// cluster, so tests assert how often they happen.
-	templateReads int
+	// cluster, so tests assert how often they happen; templatesAsked names
+	// them, and templateFail makes each fail.
+	templateReads  int
+	templatesAsked []string
+	templateFail   error
+	// hangSizes and hangCluster make DatabaseSizes and ClusterBytes wait for
+	// their context to end, as a hung cluster does; clusterWaiting counts the
+	// ClusterBytes calls doing so.
+	hangSizes      bool
+	hangCluster    bool
+	clusterWaiting int
 }
 
 type idleCall struct {
@@ -252,20 +266,43 @@ func (c *cluster) highWater() int {
 	return c.peak
 }
 
-func (c *cluster) DatabaseSize(context.Context, string) (int64, error) {
+func (c *cluster) DatabaseSize(_ context.Context, name string) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.templateReads++
+	c.templatesAsked = append(c.templatesAsked, name)
+	if c.templateFail != nil {
+		return 0, c.templateFail
+	}
 	if c.templateBytes > 0 {
 		return c.templateBytes, nil
 	}
 	return 1 << 20, nil
 }
 
+// templateReadsOf counts the DatabaseSize calls about name.
+func (c *cluster) templateReadsOf(name string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, asked := range c.templatesAsked {
+		if asked == name {
+			n++
+		}
+	}
+	return n
+}
+
 func (c *cluster) templateSizeReads() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.templateReads
+}
+
+func (c *cluster) clusterReadsWaiting() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.clusterWaiting
 }
 
 func (c *cluster) clusterByteReads() int {
@@ -286,30 +323,81 @@ func (c *cluster) fillTo(used int64) {
 	c.clusterBytes = used
 }
 
-func (c *cluster) ClusterBytes(context.Context) (int64, error) {
+func (c *cluster) ClusterBytes(ctx context.Context) (int64, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.clusterReads++
+	if c.hangCluster {
+		c.clusterWaiting++
+		c.mu.Unlock()
+		<-ctx.Done()
+		c.mu.Lock()
+		c.clusterWaiting--
+		c.mu.Unlock()
+		return 0, ctx.Err()
+	}
+	defer c.mu.Unlock()
 	if c.clusterBytesFail != nil {
 		return 0, c.clusterBytesFail
 	}
 	return c.clusterBytes, nil
 }
 
-func (c *cluster) DatabaseSizes(_ context.Context, names []string) (map[string]int64, error) {
+func (c *cluster) DatabaseSizes(ctx context.Context, names []string) (map[string]int64, error) {
+	c.mu.Lock()
+	hang := c.hangSizes
+	c.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.sized = append(c.sized, names...)
 	c.sizeCalls++
+	c.batches = append(c.batches, len(names))
 	if c.sizesFail != nil {
 		return nil, c.sizesFail
 	}
 	sizes := make(map[string]int64, len(names))
 	for _, name := range names {
-		sizes[name] = 1 << 20
+		switch size, set := c.sizeOf[name]; {
+		case c.gone[name]:
+		case set:
+			sizes[name] = size
+		default:
+			sizes[name] = 1 << 20
+		}
 	}
 	return sizes, nil
+}
+
+// setSize makes DatabaseSizes report size for name, and present again.
+func (c *cluster) setSize(name string, size int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sizeOf == nil {
+		c.sizeOf = map[string]int64{}
+	}
+	c.sizeOf[name] = size
+	delete(c.gone, name)
+}
+
+// vanish makes DatabaseSizes leave name out.
+func (c *cluster) vanish(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gone == nil {
+		c.gone = map[string]bool{}
+	}
+	c.gone[name] = true
+}
+
+func (c *cluster) sizeBatches() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int(nil), c.batches...)
 }
 
 func (c *cluster) sizeReads() (names []string, calls int) {

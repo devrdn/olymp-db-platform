@@ -137,6 +137,12 @@ const (
 	// ActionGameInstanceResetFailed records a participant's reset whose copy
 	// failed: their database is gone and the next action makes a fresh one.
 	ActionGameInstanceResetFailed = "contest.instance_reset_failed"
+	// ActionGameInstanceOverQuota records the quota monitor seeing a
+	// participant's database at or past its disk quota, and
+	// ActionGameInstanceWithinQuota seeing it back within (nil actor). Each is
+	// written once per transition, not per tick.
+	ActionGameInstanceOverQuota   = "contest.instance_over_quota"
+	ActionGameInstanceWithinQuota = "contest.instance_within_quota"
 	// ActionGameTemplateReclaim records a contest's template database dropped
 	// by the sweep once every instance copied from it is gone.
 	ActionGameTemplateReclaim = "contest.template_reclaimed"
@@ -203,6 +209,7 @@ var actions = []string{
 	ActionContestAccessDenied, ActionContestStartBlocked,
 	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
 	ActionGameInstanceReset, ActionGameInstanceResetFailed,
+	ActionGameInstanceOverQuota, ActionGameInstanceWithinQuota,
 	ActionGameUploadComplete, ActionGameUploadAbort,
 	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,
 	ActionGameTableDataRowAdd, ActionGameTableDataRowDelete,

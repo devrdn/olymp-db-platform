@@ -93,10 +93,12 @@ const clusterBytesTTL = 10 * time.Second
 // the copies that were made in the meantime. Replicas do not see each
 // other's copies; the TTL bounds that error.
 type clusterUsage struct {
-	// mu is held across the measurement on purpose: concurrent callers wait
-	// for the one scan in flight rather than each starting their own, which
-	// is the burst this cache exists for.
-	mu         sync.Mutex
+	// lock is a one-slot channel held across the measurement on purpose:
+	// concurrent callers wait for the one scan in flight rather than each
+	// starting their own, which is the burst this cache exists for. A channel
+	// rather than a mutex, so a caller with a deadline (WatchQuotas) gives up
+	// waiting behind a scan that hangs, where the tender has none of its own.
+	lock       chan struct{}
 	measured   int64
 	measuredAt time.Time
 	// added is the bytes of copies made since measuredAt.
@@ -108,8 +110,12 @@ type clusterUsage struct {
 // most once per clusterBytesTTL, plus the copies made since. Callers in this
 // package use it instead of Cluster.ClusterBytes.
 func (s *Service) clusterBytes(ctx context.Context) (int64, error) {
-	s.usage.mu.Lock()
-	defer s.usage.mu.Unlock()
+	select {
+	case s.usage.lock <- struct{}{}:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	defer func() { <-s.usage.lock }()
 	now := s.now()
 	if s.usage.valid && now.Sub(s.usage.measuredAt) < clusterBytesTTL {
 		return s.usage.measured + s.usage.added, nil
@@ -128,8 +134,8 @@ func (s *Service) clusterBytes(ctx context.Context) (int64, error) {
 // hand the measurement is discarded instead, so the next reader measures
 // again rather than undercount.
 func (s *Service) noteCopyMade(contest Contest) {
-	s.usage.mu.Lock()
-	defer s.usage.mu.Unlock()
+	s.usage.lock <- struct{}{}
+	defer func() { <-s.usage.lock }()
 	if !s.usage.valid {
 		return
 	}
@@ -149,7 +155,7 @@ func (s *Service) noteCopyMade(contest Contest) {
 // Rebuilds (rebuildExisting, Reset) skip it: the old copy is dropped first, so
 // the cluster does not grow. A zero budget refuses nothing.
 func (s *Service) roomForOneCopy(ctx context.Context, contest Contest) error {
-	if s.maxClusterBytes <= 0 {
+	if !hasClusterBudget(s.maxClusterBytes) {
 		return nil
 	}
 	size, err := s.templateBytes(ctx, contest)

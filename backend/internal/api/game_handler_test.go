@@ -820,6 +820,33 @@ func TestGameEndpointsRefuseAContestIdentifierThatIsNotAUUID(t *testing.T) {
 
 func registrationID(id uuid.UUID) *uuid.UUID { return &id }
 
+// The organiser's roster shows when the quota monitor flagged a copy, and a
+// copy within its quota carries null rather than no key, so the screen never
+// has to guess between "within" and "an old server".
+func TestTheInstanceListSaysSinceWhenACopyIsOverItsQuota(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	since := time.Date(2026, 11, 26, 10, 30, 0, 0, time.UTC)
+	f.databases.list = provisioning.InstanceList{
+		Instances: []provisioning.InstanceRecord{
+			{Database: "game_c1_u1", Registration: registrationID(uuid.New()), Status: "ready", OverQuotaSince: &since},
+			{Database: "game_c1_u2", Registration: registrationID(uuid.New()), Status: "ready"},
+		},
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/instances", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	rows := decode(t, rec)["instances"].([]any)
+	over, within := rows[0].(map[string]any), rows[1].(map[string]any)
+	if over["over_quota_since"] != "2026-11-26T10:30:00Z" {
+		t.Fatalf("over_quota_since came back %v for a flagged copy", over["over_quota_since"])
+	}
+	if value, present := within["over_quota_since"]; !present || value != nil {
+		t.Fatalf("over_quota_since came back %v (present %v) for a copy within its quota, want null", value, present)
+	}
+}
+
 func TestTheInstanceListNamesTheHolderOfEveryCopy(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	held := uuid.New()

@@ -773,7 +773,9 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
   Check before the day that (roster + `GAME_POOL_DEPTH`) × the template's
   size fits the budget: the default 64 GiB holds 310 copies of a 210 MiB
   template, and a 1 GB dump leaves most of a three-hundred roster refused on
-  their first query.
+  their first query. From 80% of the budget the API logs `the game cluster is
+  near its disk budget` once, and `game_cluster_near_budget` reads 1 until
+  it falls back below.
 - **One game's build.** `GAME_TEMPLATE_MAX_BYTES` (8 GiB by default) caps
   how large a template may grow while it is built, and how much temporary
   space the build may use. Past it the build stops, its database is dropped
@@ -782,7 +784,10 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
   than its file, so build a large game well before the day.
 - **One participant's copy.** The disk quota factor caps each copy; at it,
   that participant's writes answer `query_disk_full`, and they free space or
-  reset.
+  reset. Within a minute the API logs `a game instance reached its disk
+  quota` with the copy's name and both figures, and records
+  `contest.instance_over_quota` on the contest's audit trail; the flag lifts by
+  itself once the copy is back within.
 
 #### Calling a staff route from the command line
 

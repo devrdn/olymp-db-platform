@@ -1405,6 +1405,11 @@ the labels in `deploy/docker-compose.yml`, where a test also holds it.
 |---|---|---|
 | `provisioning_queue_depth` | gauge | database copies this process has been asked for and has not started: the backlog of a pool top-up plus every caller waiting for one of the `GAME_PROVISION_WORKERS` slots, read at scrape time. Per process, so read it with `sum()` |
 | `contest_active_participants` | gauge | active registrations of running contests whose own time, grace included, has not run out, counted every 30 s. Exported only when Prometheus is the metrics backend. A count of the shared database, so read it with `max()` |
+| `game_instances_over_quota` | gauge | participants' databases at or past their disk quota at the quota monitor's last complete tick (`game-quota-watch`, every minute). A measurement of the shared cluster, so read it with `max()` |
+| `game_instances_quota_exceeded_total`, `game_instances_quota_restored_total` | counter | databases the monitor flagged as having reached their quota, and flagged ones it saw back within. Each transition is counted by the one replica that recorded it |
+| `game_quota_watch_failed_total` | counter | monitor ticks that could not measure or record everything, a tick cut at its own deadline (`quotaWatchTimeout`) included |
+| `game_cluster_bytes`, `game_cluster_max_bytes` | gauge | the game cluster's total size as the provisioning budget sees it, an estimate: the last measurement, held for `clusterBytesTTL`, plus the copies this process has made since; and `GAME_CLUSTER_MAX_BYTES`. Not exported with `GAME_CLUSTER_MAX_BYTES=0` (no budget; the default is 64 GiB), since the monitor does not measure the cluster then. Read with `max()` |
+| `game_cluster_near_budget` | gauge | not exported with `GAME_CLUSTER_MAX_BYTES=0`: 1 while the cluster holds 80% of `GAME_CLUSTER_MAX_BYTES` or more (`provisioning.ClusterWarningPercent`), 0 otherwise; the log warns once on the way up and notes the way back down |
 
 `DBContestProvisioningQueueBacklog` warns when the queue has not been empty
 once in 30 minutes. The gauge is read at scrape time, so an empty moment

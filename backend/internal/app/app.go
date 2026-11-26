@@ -421,6 +421,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// has passed, never before.
 		a.tasks = append(a.tasks, reclaimInstances(
 			log, databases.Reclaim, cfg.GameInstanceGraceMin, metrics.NewGameReclaimCounters(recorder)))
+		// Over-quota instances and a nearly full cluster are reported, never
+		// acted on: the Query Runner refuses a growing write on its own check.
+		a.tasks = append(a.tasks, watchQuotas(log, databases.WatchQuotas,
+			metrics.NewGameQuotaMetrics(recorder, cfg.ClusterMaxBytes), quotaWatchTimeout))
 
 		// Without a Query Runner, pools are still stocked but the console is
 		// not mounted.

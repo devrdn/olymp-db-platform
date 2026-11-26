@@ -68,6 +68,8 @@ func registeredSeries(t *testing.T) map[string]exportedSeries {
 	api.ObserveRequest("GET", "/api/v1/contests", 200, time.Millisecond, false)
 	api.ObserveRequest("GET", "/api/v1/contests/{contestID}/events", 200, time.Minute, true)
 	metrics.NewGameReclaimCounters(api)
+	// With a budget, so the cluster gauges are among the series.
+	metrics.NewGameQuotaMetrics(api, 64<<30)
 	metrics.NewMailCounters(api, mailing.KindNames(), mailing.Outcomes())
 	metrics.NewRetentionCounters(api, retention.TableNames())
 	metrics.WatchProvisioningQueue(api, func() int { return 0 })

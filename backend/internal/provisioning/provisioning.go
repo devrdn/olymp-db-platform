@@ -4,7 +4,9 @@
 // dump, or a structural definition with CSV rows).
 //
 // It does not run participants' SQL (internal/queryrunner, internal/sqlpolicy)
-// or connect to the game cluster itself (internal/gamedb, behind Cluster).
+// or connect to the game cluster itself (internal/gamedb, behind Cluster). It
+// decides each copy's disk quota and reports a copy that reached it
+// (WatchQuotas), but the Query Runner is what refuses the write.
 //
 // A game is part of its contest's content, so a game edit begins as every
 // content edit does, with contests.BeginContentEdit; internal/contests must
@@ -106,6 +108,16 @@ type Repository interface {
 	// ErrInstanceNotFound. Scoped to the contest because db_name is unique
 	// across the installation, so a name alone would reach another contest.
 	InstanceNamed(ctx context.Context, contest uuid.UUID, database string) (InstanceRecord, error)
+	// QuotaCandidates lists up to limit rows WatchQuotas measures, ordered
+	// by database name and starting after after ("" for the first page).
+	QuotaCandidates(ctx context.Context, after string, limit int) ([]QuotaCandidate, error)
+	// MarkOverQuota flags database as over its quota, and ClearOverQuota
+	// lifts the flag. Each writes only when the flag is not already in that
+	// state and the row's updated_at is still read, as QuotaCandidates gave
+	// it, and reports whether it wrote, so racing sweeps record one
+	// transition.
+	MarkOverQuota(ctx context.Context, database string, read time.Time) (bool, error)
+	ClearOverQuota(ctx context.Context, database string, read time.Time) (bool, error)
 }
 
 // Cluster is the part of the game cluster this service drives. It is kept
@@ -151,8 +163,8 @@ type Service struct {
 	// provided, closed when that is done.
 	providingMu sync.Mutex
 	providing   map[uuid.UUID]chan struct{}
-	// audit records resets, drops and reclaims in uow's transaction with the
-	// row they change.
+	// audit records what this service changes on a row (resets, drops,
+	// reclaims, quota transitions) in uow's transaction with that row.
 	audit *audit.Recorder
 	uow   storage.UnitOfWork
 	// maxClusterBytes is a copy of PoolLimits.MaxClusterBytes, so the budget
@@ -189,6 +201,7 @@ func New(repo Repository, cluster Cluster, rec *audit.Recorder, uow storage.Unit
 		repo: repo, cluster: cluster, audit: rec, uow: uow,
 		workers: DefaultWorkers, copies: semaphore.NewWeighted(DefaultWorkers),
 		providing: map[uuid.UUID]chan struct{}{},
+		usage:     clusterUsage{lock: make(chan struct{}, 1)},
 		now:       time.Now,
 	}
 }
@@ -218,6 +231,10 @@ func (s *Service) WithClusterBudget(maxBytes int64) *Service {
 	s.maxClusterBytes = maxBytes
 	return s
 }
+
+// hasClusterBudget is the one reading of GAME_CLUSTER_MAX_BYTES: zero (or
+// less) means no budget, so nothing is refused, sized down or warned about.
+func hasClusterBudget(maxBytes int64) bool { return maxBytes > 0 }
 
 // Ensure returns the database this registration works in, making one if there
 // is none. Cheapest first: an existing current copy, then a spare, and only
@@ -705,7 +722,7 @@ func (s *Service) RosterDepth(limits PoolLimits, constrained Constrained) Depth 
 
 		// Measured only when a byte budget is set, and even under the count
 		// cap, because the count is not what fills a disk.
-		if limits.MaxClusterBytes > 0 {
+		if hasClusterBudget(limits.MaxClusterBytes) {
 			fits, err := s.copiesThatFit(ctx, contest, limits.MaxClusterBytes, &sizing)
 			if err != nil {
 				return 0, err

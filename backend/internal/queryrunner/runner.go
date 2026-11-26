@@ -331,7 +331,7 @@ func withinQuota(ctx context.Context, tx pgx.Tx, allowed int64) error {
 	if err := tx.QueryRow(ctx, `SELECT pg_database_size(current_database())`).Scan(&used); err != nil {
 		return fmt.Errorf("read the database size: %w", err)
 	}
-	if used >= allowed {
+	if sqlpolicy.AtQuota(used, allowed) {
 		return fmt.Errorf("%w: %d bytes of %d", ErrDiskFull, used, allowed)
 	}
 	return nil

@@ -578,6 +578,14 @@ sequenceDiagram
 - Quota: for a `read_write` contest, `Service.Quota` allows the template's size
   times the policy's `DiskQuotaRatio` (default 5), at least 16 MiB; the value
   travels to the Query Runner in the request.
+- Over quota: the `game-quota-watch` task measures every claimed copy of a
+  running `read_write` contest each minute against the same `Service.Quota`
+  (`Service.WatchQuotas` in
+  [quotawatch.go](../../backend/internal/provisioning/quotawatch.go)). A copy
+  at its quota gets `over_quota_since` on its row, a warning in the log and
+  `contest.instance_over_quota` on the trail; back within, the flag goes and
+  `contest.instance_within_quota` is recorded. It only reports: the runner's
+  check refuses the write.
 
 When a copy is dropped:
 
@@ -956,6 +964,7 @@ an advisory lock, and a game build is claimed by one worker through its row.
 | `game-pool` | 1 min, and on a `Tender` wake | yes | `provisioning.Service.Tend`: drop stale copies, top pools up to `RosterDepth`. | `GAME_PROVISIONER_DSN` set |
 | `game-build` | 5 s | yes | `provisioning.Games.Build`: build one pending template; take back a build left in `building` longer than `GAME_BUILD_TIMEOUT` plus a margin. | `GAME_PROVISIONER_DSN` set |
 | `game-reclaim` | 10 min | no | `provisioning.Service.Reclaim`: drop idle participant databases past their contest's grace period, then templates with no copies left. | `GAME_PROVISIONER_DSN` set |
+| `game-quota-watch` | 1 min | no | `provisioning.Service.WatchQuotas`: flag claimed copies of running `read_write` contests at their disk quota and lift the flag once back within, one audit entry and log line per transition; unless `GAME_CLUSTER_MAX_BYTES` is 0 (the default is 64 GiB), read the cluster's size against it and warn on crossing 80%. Each tick is bounded by `quotaWatchTimeout`. Reports only. | `GAME_PROVISIONER_DSN` set |
 | `game-upload-sweep` | 10 min | no | `provisioning.Games.SweepUploads`: abort uploads idle past `GAME_UPLOAD_ABANDONED_AFTER` (default 24 h), remove files no row names. | `GAME_UPLOAD_DIR` set too |
 | `cover-orphan-sweep` | 10 min | no | `covers.OrphanSweeper`: remove cover files no contest names once they are an hour old (`covers.OrphanGrace`); a tick that cannot read the rows removes nothing. | always |
 

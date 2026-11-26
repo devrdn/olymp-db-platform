@@ -26,7 +26,7 @@ priority" (`docs/ARCHITECTURE.md:4031`).
 |---|---|---|---|---|
 | N1 | Query log: what is missing beyond per-contest monitoring (a view across contests, text search across all of a contest's participants, NDJSON/XLSX, async export) | Partial | Backend + UI | `docs/ARCHITECTURE.md:2265-2296` |
 | N2 | Reports: results export and per-question breakdown (the standings screen exists) | Not implemented | Backend + UI | `docs/ARCHITECTURE.md:3386-3402` |
-| N3 | Background disk monitor that makes an over-quota instance read-only | Not implemented | Provisioning | `docs/ARCHITECTURE.md:493-496` |
+| N3 | Background disk monitor that makes an over-quota instance read-only | Closed | Provisioning | `docs/ARCHITECTURE.md:493-496` |
 | N4 | Audit entries for the start and finish of a participation | Not implemented | Audit | `docs/ARCHITECTURE.md:2254` |
 | N5 | Query-log archival after a contest's lifetime | Not implemented | Data retention | `docs/ARCHITECTURE.md:2255` |
 | N6 | ER diagram and "show me the data" in the schema browser | Not implemented | Participant UI | `docs/ARCHITECTURE.md:162-170` |
@@ -143,6 +143,14 @@ checks instance sizes. Level 1, the pre-DML check, exists
 
 Impact: the bound on a single statement's overshoot is the only one; nothing
 catches an instance that crosses the quota by other means.
+
+Closed: the `game-quota-watch` task (`provisioning.Service.WatchQuotas`)
+measures every writable copy each minute, flags one at its quota on its row
+and on the contest's trail, and warns when the cluster nears
+`GAME_CLUSTER_MAX_BYTES`. It reports rather than switching the database to
+read-only, which would also refuse the `TRUNCATE` that frees space; the Query
+Runner's check before each write stays the enforcement (`docs/ARCHITECTURE.md`,
+"Disk quotas").
 
 ### N4. Audit entries for a participation's start and finish
 

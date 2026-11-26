@@ -442,6 +442,7 @@ flowchart LR
         uc6(["Sweep abandoned uploads"])
         uc7(["Close abandoned query log rows"])
         uc8(["Sweep orphaned cover files"])
+        uc9(["Flag databases at their disk quota"])
     end
     clock --> uc1
     clock --> uc2
@@ -451,6 +452,7 @@ flowchart LR
     clock --> uc6
     clock --> uc7
     clock --> uc8
+    clock --> uc9
 ```
 
 | Use case | Task name | Every | Package | Condition |
@@ -459,6 +461,7 @@ flowchart LR
 | Build a game that is waiting, recover a build a dead process left | `game-build` | 5 s | `provisioning` | `GAME_PROVISIONER_DSN` set |
 | Keep each live contest's pool of participant databases stocked and fresh | `game-pool` | 1 min, and early when a contest starts or a roster grows | `provisioning` | `GAME_PROVISIONER_DSN` set; stays within the cluster's disk budget |
 | Drop participant databases once a finished contest's grace has passed | `game-reclaim` | 10 min | `provisioning` | `GAME_PROVISIONER_DSN` set; grace from the contest or `GAME_INSTANCE_GRACE_MIN` |
+| Flag participant databases at their disk quota, and warn when the game cluster nears its budget | `game-quota-watch` | 1 min | `provisioning` | `GAME_PROVISIONER_DSN` set; reports only, the Query Runner refuses the write |
 | Abort uploads idle too long, remove files no row names | `game-upload-sweep` | 10 min | `provisioning`, `gamefile` | `GAME_UPLOAD_DIR` set |
 | Remove cover files no contest names | `cover-orphan-sweep` | 10 min | `covers` (`OrphanSweeper`) | Always; only files more than an hour old |
 | Close query log rows a crashed process left at `running` | `query-log-sweep` | 1 min | `postgres` (query log) | Always |

@@ -171,7 +171,7 @@ func TestReclaimInstancesPassesTheConfiguredGraceAndReportsFailure(t *testing.T)
 		t.Fatalf("grace passed to Reclaim = %d, want 90", gotGrace)
 	}
 	// The tick failed, but what it dropped first must still be counted.
-	totals := reclaimCounterTotals(t, recorder)
+	totals := seriesValues(t, recorder)
 	for name, want := range map[string]float64{
 		"game_instances_reclaimed_total":      2,
 		"game_instances_reclaim_failed_total": 1,
@@ -219,29 +219,32 @@ func TestReclaimInstancesReportsSkippedAndStuckWithoutError(t *testing.T) {
 	if !strings.Contains(logged, "game_c1_u1") || stuckWarningLines(&buf) != 1 {
 		t.Fatalf("the stuck database was not named in its own warning: %q", logged)
 	}
-	if totals := reclaimCounterTotals(t, recorder); totals["game_instances_reclaim_skipped_total"] != 3 {
+	if totals := seriesValues(t, recorder); totals["game_instances_reclaim_skipped_total"] != 3 {
 		t.Fatalf("game_instances_reclaim_skipped_total = %v, want 3",
 			totals["game_instances_reclaim_skipped_total"])
 	}
 }
 
-// reclaimCounterTotals reads the reclaim counters through Gather, as a
-// scrape would, keyed by metric name.
-func reclaimCounterTotals(t *testing.T, p *metrics.Prometheus) map[string]float64 {
+// seriesValues reads every counter and gauge p exports through Gather, as a
+// scrape would, keyed by series name.
+func seriesValues(t *testing.T, p *metrics.Prometheus) map[string]float64 {
 	t.Helper()
 	families, err := p.Registry().Gather()
 	if err != nil {
 		t.Fatalf("gather the metrics: %v", err)
 	}
-	totals := map[string]float64{}
+	values := map[string]float64{}
 	for _, family := range families {
 		for _, m := range family.GetMetric() {
-			if c := m.GetCounter(); c != nil {
-				totals[family.GetName()] = c.GetValue()
+			switch {
+			case m.GetCounter() != nil:
+				values[family.GetName()] = m.GetCounter().GetValue()
+			case m.GetGauge() != nil:
+				values[family.GetName()] = m.GetGauge().GetValue()
 			}
 		}
 	}
-	return totals
+	return values
 }
 
 func stuckWarningLines(buf *bytes.Buffer) int {
@@ -433,6 +436,13 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 			}, 60, counters),
 			atStart: false,
 			why:     "it drops databases, nothing waits on it, and a grace period bounds what it can find",
+		},
+		{
+			job: watchQuotas(quiet(), func(context.Context) (provisioning.QuotaSweep, error) {
+				return provisioning.QuotaSweep{}, nil
+			}, metrics.NewGameQuotaMetrics(metrics.Noop{}, 0), quotaWatchTimeout),
+			atStart: false,
+			why:     "it only reports, the Query Runner enforces the quota on its own, and a boot-time sweep would stat every database during the restart",
 		},
 		{
 			job: countActiveParticipants(func(context.Context, time.Time) (int, error) { return 0, nil },
@@ -836,21 +846,6 @@ func TestTheRetentionSweepReleasesTheLockWhenItsPassFails(t *testing.T) {
 	}
 }
 
-func participantGaugeValue(t *testing.T, rec *metrics.Prometheus) float64 {
-	t.Helper()
-	families, err := rec.Registry().Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range families {
-		if f.GetName() == "contest_active_participants" {
-			return f.GetMetric()[0].GetGauge().GetValue()
-		}
-	}
-	t.Fatal("contest_active_participants is not exported")
-	return 0
-}
-
 func TestCountActiveParticipantsSetsTheGauge(t *testing.T) {
 	rec := metrics.NewPrometheus()
 	job := countActiveParticipants(
@@ -860,7 +855,7 @@ func TestCountActiveParticipantsSetsTheGauge(t *testing.T) {
 	if err := job.run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := participantGaugeValue(t, rec); got != 7 {
+	if got := seriesValues(t, rec)["contest_active_participants"]; got != 7 {
 		t.Errorf("gauge = %v, want 7", got)
 	}
 }
@@ -882,7 +877,7 @@ func TestCountActiveParticipantsKeepsTheLastValueWhenTheCountFails(t *testing.T)
 	if err := job.run(t.Context()); !errors.Is(err, errAway) {
 		t.Fatalf("run() = %v, want the count's failure", err)
 	}
-	if got := participantGaugeValue(t, rec); got != 7 {
+	if got := seriesValues(t, rec)["contest_active_participants"]; got != 7 {
 		t.Errorf("gauge = %v after a failed count, want the last value 7", got)
 	}
 }
@@ -905,5 +900,218 @@ func TestNoCountTaskIsScheduledWhereNobodyReadsTheGauge(t *testing.T) {
 	jobs := participantJobs(count, metrics.NewParticipantGauge(metrics.NewPrometheus()))
 	if len(jobs) != 1 || jobs[0].name != "active-participants" {
 		t.Errorf("a Prometheus recorder got %v, want the one count task", jobs)
+	}
+}
+
+func TestWatchQuotasTicksEveryMinute(t *testing.T) {
+	job := watchQuotas(quiet(), nil, metrics.NewGameQuotaMetrics(metrics.Noop{}, 0), quotaWatchTimeout)
+
+	if job.every != time.Minute {
+		t.Fatalf("watchQuotas interval = %s, want 1 minute", job.every)
+	}
+}
+
+// Well under the interval, so a hung tick is over before the next is due.
+func TestAQuotaTicksDeadlineIsWithinHalfItsInterval(t *testing.T) {
+	job := watchQuotas(quiet(), nil, metrics.NewGameQuotaMetrics(metrics.Noop{}, 0), quotaWatchTimeout)
+
+	if quotaWatchTimeout <= 0 || quotaWatchTimeout > job.every/2 {
+		t.Fatalf("quotaWatchTimeout = %s, want a deadline within half the %s interval", quotaWatchTimeout, job.every)
+	}
+}
+
+// A game cluster that stops answering would otherwise hold the tick for the
+// maintenance pool's ten-minute statement timeout, the monitor silent; the
+// tick's own deadline turns it into a counted failure.
+func TestAHungQuotaTickIsCutAtItsDeadlineAndCounted(t *testing.T) {
+	recorder := metrics.NewPrometheus()
+	quota := metrics.NewGameQuotaMetrics(recorder, 0)
+	job := watchQuotas(quiet(), func(ctx context.Context) (provisioning.QuotaSweep, error) {
+		<-ctx.Done()
+		return provisioning.QuotaSweep{}, ctx.Err()
+	}, quota, 50*time.Millisecond)
+
+	started := time.Now()
+	if err := job.run(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("run() = %v, want the tick's deadline", err)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("the tick ran %s past a 50 ms deadline", took)
+	}
+	if got := seriesValues(t, recorder)["game_quota_watch_failed_total"]; got != 1 {
+		t.Fatalf("game_quota_watch_failed_total = %v after a hung tick, want 1", got)
+	}
+}
+
+// quotaWatch runs watchQuotas over whatever sweep the test stages, logging to
+// a buffer and recording on a Prometheus registry.
+type quotaWatch struct {
+	job      task
+	log      bytes.Buffer
+	recorder *metrics.Prometheus
+	sweep    provisioning.QuotaSweep
+	err      error
+}
+
+// The budget is 100 bytes, which the cluster tests measure against.
+func newQuotaWatch() *quotaWatch {
+	w := &quotaWatch{recorder: metrics.NewPrometheus()}
+	w.job = watchQuotas(slog.New(slog.NewTextHandler(&w.log, nil)),
+		func(context.Context) (provisioning.QuotaSweep, error) { return w.sweep, w.err },
+		metrics.NewGameQuotaMetrics(w.recorder, 100), quotaWatchTimeout)
+	return w
+}
+
+func TestWatchQuotasWarnsAndCountsOncePerTransition(t *testing.T) {
+	w := newQuotaWatch()
+	contest := uuid.New()
+	w.sweep = provisioning.QuotaSweep{
+		OverQuota: 2, Complete: true,
+		Exceeded: []provisioning.QuotaTransition{{Database: "game_c1_u1", ContestID: contest, SizeBytes: 30 << 20, QuotaBytes: 20 << 20}},
+		Restored: []provisioning.QuotaTransition{{Database: "game_c1_u2", ContestID: contest, SizeBytes: 6 << 20, QuotaBytes: 20 << 20}},
+	}
+
+	if err := w.job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+
+	logged := w.log.String()
+	if strings.Count(logged, "reached its disk quota") != 1 || !strings.Contains(logged, "game_c1_u1") ||
+		!strings.Contains(logged, "size_bytes=31457280") || !strings.Contains(logged, "quota_bytes=20971520") {
+		t.Fatalf("the copy over its quota was not warned about once, with its measurements: %q", logged)
+	}
+	if strings.Count(logged, "back within its disk quota") != 1 || !strings.Contains(logged, "game_c1_u2") {
+		t.Fatalf("the copy back within its quota was not reported once: %q", logged)
+	}
+	// A crossing needs a look, a recovery does not.
+	if levelOf(logged, "reached its disk quota") != "WARN" || levelOf(logged, "back within its disk quota") != "INFO" {
+		t.Fatalf("the crossing must log at WARN and the recovery at INFO: %q", logged)
+	}
+	for name, want := range map[string]float64{
+		"game_instances_over_quota":           2,
+		"game_instances_quota_exceeded_total": 1,
+		"game_instances_quota_restored_total": 1,
+		"game_quota_watch_failed_total":       0,
+	} {
+		if got := seriesValues(t, w.recorder)[name]; got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+
+	// The next tick changed nothing: no new line, the counters stay.
+	w.log.Reset()
+	w.sweep.Exceeded, w.sweep.Restored = nil, nil
+	if err := w.job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if w.log.Len() != 0 {
+		t.Fatalf("an unchanged tick logged %q", w.log.String())
+	}
+	if got := seriesValues(t, w.recorder)["game_instances_quota_exceeded_total"]; got != 1 {
+		t.Fatalf("game_instances_quota_exceeded_total = %v after an unchanged tick, want 1", got)
+	}
+}
+
+// An incomplete tick counted only what it reached, so the gauge keeps the
+// last complete count; what it did record is still counted.
+func TestAFailedQuotaTickIsCountedAndKeepsTheLastCount(t *testing.T) {
+	w := newQuotaWatch()
+	w.sweep = provisioning.QuotaSweep{OverQuota: 3, Complete: true}
+	if err := w.job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+
+	failure := errors.New("the game cluster is away")
+	w.sweep = provisioning.QuotaSweep{
+		OverQuota: 1, Complete: false,
+		Exceeded: []provisioning.QuotaTransition{{Database: "game_c1_u1"}},
+	}
+	w.err = failure
+	if err := w.job.run(t.Context()); !errors.Is(err, failure) {
+		t.Fatalf("run() = %v, want %v", err, failure)
+	}
+
+	values := seriesValues(t, w.recorder)
+	if values["game_instances_over_quota"] != 3 {
+		t.Errorf("game_instances_over_quota = %v after an incomplete tick, want the last complete 3", values["game_instances_over_quota"])
+	}
+	if values["game_quota_watch_failed_total"] != 1 || values["game_instances_quota_exceeded_total"] != 1 {
+		t.Errorf("a failed tick counted %v failures and %v transitions, want 1 and 1",
+			values["game_quota_watch_failed_total"], values["game_instances_quota_exceeded_total"])
+	}
+}
+
+// levelOf is the level of the first line of logged that carries message.
+func levelOf(logged, message string) string {
+	for _, line := range strings.Split(logged, "\n") {
+		if strings.Contains(line, message) {
+			for _, field := range strings.Fields(line) {
+				if level, ok := strings.CutPrefix(field, "level="); ok {
+					return level
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func clusterWarnings(buf *bytes.Buffer) (into, out int) {
+	return strings.Count(buf.String(), "the game cluster is near its disk budget"),
+		strings.Count(buf.String(), "the game cluster is back below its disk warning")
+}
+
+// The cluster's size is a gauge every tick; the warning is a line when the
+// threshold is crossed, either way, and silence in between.
+func TestTheClusterWarningIsLoggedOnTheCrossingOnly(t *testing.T) {
+	w := newQuotaWatch()
+	tick := func(used int64) {
+		t.Helper()
+		w.sweep = provisioning.QuotaSweep{Complete: true,
+			Cluster: provisioning.ClusterUsage{Bytes: used, Budget: 100, Known: true}}
+		if err := w.job.run(t.Context()); err != nil {
+			t.Fatalf("run() = %v", err)
+		}
+	}
+
+	tick(50)
+	if into, out := clusterWarnings(&w.log); into != 0 || out != 0 {
+		t.Fatalf("a cluster at half its budget logged %q", w.log.String())
+	}
+	if got := seriesValues(t, w.recorder)["game_cluster_bytes"]; got != 50 {
+		t.Fatalf("game_cluster_bytes = %v, want 50", got)
+	}
+
+	tick(85)
+	tick(90)
+	if into, _ := clusterWarnings(&w.log); into != 1 {
+		t.Fatalf("two ticks past the threshold logged %d warnings, want 1: %q", into, w.log.String())
+	}
+	values := seriesValues(t, w.recorder)
+	if values["game_cluster_bytes"] != 90 || values["game_cluster_max_bytes"] != 100 || values["game_cluster_near_budget"] != 1 {
+		t.Fatalf("the cluster series came back %v", values)
+	}
+
+	tick(60)
+	tick(55)
+	if _, out := clusterWarnings(&w.log); out != 1 {
+		t.Fatalf("two ticks back below logged %d lines, want 1: %q", out, w.log.String())
+	}
+	if levelOf(w.log.String(), "near its disk budget") != "WARN" || levelOf(w.log.String(), "back below its disk warning") != "INFO" {
+		t.Fatalf("the crossing must log at WARN and the recovery at INFO: %q", w.log.String())
+	}
+	if got := seriesValues(t, w.recorder)["game_cluster_near_budget"]; got != 0 {
+		t.Fatalf("game_cluster_near_budget = %v below the threshold, want 0", got)
+	}
+
+	// An unmeasured tick claims nothing either way and leaves the gauges.
+	w.sweep = provisioning.QuotaSweep{Complete: true, Cluster: provisioning.ClusterUsage{Budget: 100}}
+	if err := w.job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if into, out := clusterWarnings(&w.log); into != 1 || out != 1 {
+		t.Fatalf("an unmeasured tick logged a crossing: %q", w.log.String())
+	}
+	if got := seriesValues(t, w.recorder)["game_cluster_bytes"]; got != 55 {
+		t.Fatalf("game_cluster_bytes = %v after an unmeasured tick, want the last 55", got)
 	}
 }

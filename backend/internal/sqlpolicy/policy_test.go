@@ -128,3 +128,20 @@ func TestTheReasonIsNamed(t *testing.T) {
 		t.Fatalf("the message does not name the offending table: %v", err)
 	}
 }
+
+// At the quota a database is full: the runner refuses a growing write there,
+// and the monitor flags it there, not one byte later.
+func TestADatabaseAtItsQuotaIsFull(t *testing.T) {
+	for _, tc := range []struct {
+		used, quota int64
+		full        bool
+	}{
+		{used: 99, quota: 100, full: false},
+		{used: 100, quota: 100, full: true},
+		{used: 101, quota: 100, full: true},
+	} {
+		if got := sqlpolicy.AtQuota(tc.used, tc.quota); got != tc.full {
+			t.Errorf("AtQuota(%d, %d) = %v, want %v", tc.used, tc.quota, got, tc.full)
+		}
+	}
+}
