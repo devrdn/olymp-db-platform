@@ -2,20 +2,23 @@ import type { NextConfig } from "next";
 
 import { apiOrigin } from "./lib/api/config";
 import { API_PREFIX } from "./lib/api/client";
+import { STATIC_CONTENT_SECURITY_POLICY, UNPROXIED_PATHS } from "./lib/csp";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
 /**
  * Security headers on every document. One origin behind the reverse proxy
  * makes a `SameSite=Lax` cookie enough against CSRF; these cover framing,
- * sniffing, referrer leakage and script origins. Set here, not in the reverse
- * proxy, so they travel with the app whatever proxy is in front.
+ * sniffing and referrer leakage. Set here, not in the reverse proxy, so they
+ * travel with the app whatever proxy is in front. The content security policy
+ * is not among them: proxy.ts sends a screen's around a nonce minted per
+ * request, and only the paths it skips get a static one here.
  */
 const securityHeaders = [
   /**
    * Nothing is meant to be framed; a framed login enables clickjacking.
-   * `frame-ancestors` is the modern form, X-Frame-Options covers older
-   * browsers.
+   * The policy's `frame-ancestors` is the modern form, X-Frame-Options
+   * covers older browsers and the development server, which sends no policy.
    */
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -29,35 +32,10 @@ const securityHeaders = [
 ];
 
 /**
- * Production only: React's dev stack traces use `eval` and hot reload uses a
- * WebSocket, and loosening the real policy for them is how `unsafe-eval` gets
- * shipped.
- */
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  /**
-   * `unsafe-inline` covers Next's inlined bootstrap. The stricter nonce plus
-   * `strict-dynamic` approach is described in frontend/README.md.
-   */
-  "script-src 'self' 'unsafe-inline'",
-  // React renders style attributes (global-error, the pane widths).
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  // Same-origin only: the API is reached through this origin's /api prefix.
-  "connect-src 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  "base-uri 'none'",
-  "object-src 'none'",
-].join("; ");
-
-/**
- * Production only, beside the policy: the development server is plain http
- * and must never ask a browser to pin localhost to https. A plain-http
- * `make front-start` sends it too, harmlessly, since a browser honours the
- * header only on a TLS response. One year, including subdomains, is the floor
- * the preload list accepts.
+ * Production only: the development server is plain http and must never ask a
+ * browser to pin localhost to https. A plain-http `make front-start` sends it
+ * too, harmlessly, since a browser honours the header only on a TLS response.
+ * One year, including subdomains, is the floor the preload list accepts.
  */
 const strictTransportSecurity = "max-age=31536000; includeSubDomains";
 
@@ -89,14 +67,25 @@ const nextConfig: NextConfig = {
   async headers() {
     const headers = isDevelopment
       ? securityHeaders
+      : [...securityHeaders, { key: "Strict-Transport-Security", value: strictTransportSecurity }];
+    /**
+     * Production only, as the proxy's is. This rule matches in any letter
+     * case and the proxy's matcher in one, so `/Brand/x` meets both; Next
+     * applies the proxy's response headers last, so the nonce policy wins.
+     */
+    const unproxied = isDevelopment
+      ? []
       : [
-          ...securityHeaders,
-          { key: "Content-Security-Policy", value: contentSecurityPolicy },
-          { key: "Strict-Transport-Security", value: strictTransportSecurity },
+          {
+            // Unnamed groups: a named one would have Next compile the value against it.
+            source: `/(${UNPROXIED_PATHS.join("|")})(.*)`,
+            headers: [{ key: "content-security-policy", value: STATIC_CONTENT_SECURITY_POLICY }],
+          },
         ];
 
     return [
       { source: "/:path*", headers },
+      ...unproxied,
       /**
        * A reset link carries its token in the address, so nothing the page
        * requests may repeat it. Last, because a later rule's header wins.

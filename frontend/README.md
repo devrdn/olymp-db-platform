@@ -57,7 +57,7 @@ first so the API address is set.
 | `npm run contrast` | every token pair against its WCAG threshold, in both themes |
 | `npm run type-scale` | every `text-*` class names a step or colour that exists |
 | `npm run error-codes` | every API error code has a message in every dictionary |
-| `npm run build` | production build |
+| `npm run build` | production build; fails if a page was rendered ahead of a request, since its scripts would carry no nonce (`scripts/no-prerender.mjs`) |
 | `npm run start` | serves the standalone build (`scripts/serve.mjs`) |
 | `npm run smoke` | serves the build and asks it for `/login` |
 | `npx playwright test` | the browser smoke test (`e2e/`) against the stack in `E2E_BASE_URL`; from the root, `make e2e-smoke` |
@@ -131,7 +131,7 @@ lib/
 scripts/               the checks CI runs
 e2e/                   the browser smoke test (Playwright), its seed and its throwaway stack
 styles/tokens.css      the single source of every colour, size, duration and radius
-proxy.ts               route protection (Next 16 calls this middleware "proxy")
+proxy.ts               route protection and the content policy (Next 16 calls this middleware "proxy")
 ```
 
 **A parenthesised folder is a group, not a segment.** `(public)` and `(admin)`
@@ -249,11 +249,6 @@ why the provider sits in the root layout.
 
 ## Known next steps
 
-- **A nonce-based CSP.** The production policy currently allows
-  `script-src 'unsafe-inline'` for Next's bootstrap. The stricter shape mints a
-  nonce per request in `proxy.ts` and pairs it with `strict-dynamic`. Worth doing
-  once the interface is actually deployed and the policy can be verified against
-  a real page.
 - **The `/design` showcase.** Specified in section 12 of the design spec and
   deliberately absent: it needs contests to show, and invented data does not
   belong in the repository. It returns with the constructor.
