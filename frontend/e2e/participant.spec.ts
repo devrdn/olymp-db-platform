@@ -47,7 +47,7 @@ test("a participant runs a query, resets their database and answers", async ({ p
     await dialog.getByRole("button", { name: "Close" }).last().click();
     await expect(dialog).toBeHidden();
 
-    await expect(page.getByText("Run a query to see its result here.")).toBeVisible();
+    await expect(page.getByRole("main").getByText("Run a query to see its result here.")).toBeVisible();
     await expect(changed).toHaveCount(0);
   });
 
@@ -63,7 +63,7 @@ test("a participant runs a query, resets their database and answers", async ({ p
     // A titled question folds its wording under the title.
     await expect(page.getByRole("heading", { name: "The alibi" })).toBeVisible();
     await page.getByRole("button", { name: "Details" }).click();
-    await expect(page.getByText("Which suspect has no alibi?")).toBeVisible();
+    await expect(page.getByRole("main").getByText("Which suspect has no alibi?")).toBeVisible();
     const answer = page.getByRole("textbox", { name: "Your answer" });
     const submit = page.getByRole("button", { name: "Submit", exact: true });
 
