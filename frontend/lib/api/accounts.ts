@@ -83,10 +83,40 @@ const linkedIdentitySchema = z
 
 export type LinkedIdentity = z.infer<typeof linkedIdentitySchema>;
 
-/** How an account signs in: its identities, oldest link first, and whether it has a password. */
+/**
+ * An external account an administrator unlinked: it can neither sign in to
+ * nor link with the account until one allows it again. `id` names the record,
+ * not the identity it replaced.
+ */
+const unlinkedIdentitySchema = z
+  .object({
+    id: z.string(),
+    provider: z.string(),
+    issuer: z.string(),
+    email: z.string(),
+    unlinked_at: z.string(),
+  })
+  .transform((raw) => ({
+    id: raw.id,
+    provider: raw.provider,
+    issuer: raw.issuer,
+    email: raw.email,
+    unlinkedAt: raw.unlinked_at,
+  }));
+
+export type UnlinkedIdentity = z.infer<typeof unlinkedIdentitySchema>;
+
+/**
+ * How an account signs in: its identities, oldest link first, whether it has
+ * a password, and the external accounts unlinked from it.
+ */
 export const identityListSchema = z
-  .object({ has_password: z.boolean(), items: z.array(linkedIdentitySchema) })
-  .transform((raw) => ({ hasPassword: raw.has_password, items: raw.items }));
+  .object({
+    has_password: z.boolean(),
+    items: z.array(linkedIdentitySchema),
+    unlinked: z.array(unlinkedIdentitySchema),
+  })
+  .transform((raw) => ({ hasPassword: raw.has_password, items: raw.items, unlinked: raw.unlinked }));
 
 export type IdentityList = z.infer<typeof identityListSchema>;
 

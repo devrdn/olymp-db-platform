@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { Fragment, useId } from "react";
 
 import {
   ActionButton,
@@ -21,6 +21,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill, isolate } from "@/lib/i18n/fill";
 
 import {
+  allowIdentityAction,
   blockAction,
   deleteAction,
   replaceRolesAction,
@@ -104,10 +105,62 @@ function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary })
   );
 }
 
+/** The brand name, or the id of a provider newer than this build. */
+function serviceName(provider: string): string {
+  return isProviderId(provider) ? PROVIDER_NAMES[provider] : provider;
+}
+
+/** A question naming the service and the email it gave, or the service alone when it gave none. */
+function naming(
+  titles: { withEmail: string; withoutEmail: string },
+  { provider, email }: { provider: string; email: string },
+): string {
+  const name = serviceName(provider);
+  return email
+    ? fill(titles.withEmail, { provider: name, email: isolate(email) })
+    : fill(titles.withoutEmail, { provider: name });
+}
+
+/** One service: its mark and name, its issuer and what is known of it, beside its one form. */
+function ServiceRow({
+  provider,
+  issuer,
+  facts,
+  children,
+}: {
+  provider: string;
+  issuer: string;
+  facts: [label: string, value: string][];
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="flex items-start justify-between gap-4 border-t border-line py-4 first:border-t-0 first:pt-0 max-narrow:flex-col">
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <span className="flex items-center gap-2 text-control text-ink">
+          {/* A provider newer than this build has no mark. */}
+          {isProviderId(provider) ? <ProviderLogo provider={provider} /> : null}
+          {serviceName(provider)}
+        </span>
+        <span className="font-mono text-data break-all text-ink-3">{issuer}</span>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-small">
+          {facts.map(([label, value]) => (
+            <Fragment key={label}>
+              <dt className="text-ink-3">{label}</dt>
+              <dd className="break-all text-ink">{value}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      </div>
+      {children}
+    </li>
+  );
+}
+
 /**
  * The account's sign-ins through external services, each unlinked after a
- * question naming it. Unlinking the only one of an account with no password
- * leaves it no way in, and the question says so.
+ * question naming it, and the ones unlinked from it, each allowed again the
+ * same way. Unlinking the only one of an account with no password leaves it
+ * no way in, and the question says so.
  */
 function SignInServices({
   account,
@@ -121,71 +174,107 @@ function SignInServices({
   locale: Locale;
 }) {
   const t = dict.accounts.card;
-
-  if (identities.items.length === 0) {
-    return <p className="max-w-body text-small text-ink-3">{t.identitiesEmpty}</p>;
-  }
+  const unlinkedHeadingId = useId();
 
   const lastWayIn = !identities.hasPassword && identities.items.length === 1;
-  const detail = lastWayIn
-    ? `${t.unlinkIdentityConfirmBody} ${fill(t.unlinkIdentityLastWay, { action: t.resetPassword })}`
-    : t.unlinkIdentityConfirmBody;
+  const unlinkDetail = (provider: string) => {
+    const body = fill(t.unlinkIdentityConfirmBody, { provider: serviceName(provider) });
+    return lastWayIn ? `${body} ${fill(t.unlinkIdentityLastWay, { action: t.resetPassword })}` : body;
+  };
 
   return (
-    <ul className="flex flex-col">
-      {identities.items.map((identity) => {
-        // A provider newer than this build is shown by its id, with no mark.
-        const provider = isProviderId(identity.provider) ? identity.provider : null;
-        const name = provider ? PROVIDER_NAMES[provider] : identity.provider;
-
-        return (
-          <li
-            key={identity.id}
-            className="flex items-start justify-between gap-4 border-t border-line py-4 first:border-t-0 first:pt-0 max-narrow:flex-col"
-          >
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <span className="flex items-center gap-2 text-control text-ink">
-                {provider ? <ProviderLogo provider={provider} /> : null}
-                {name}
-              </span>
-              <span className="font-mono text-data break-all text-ink-3">{identity.issuer}</span>
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-small">
-                <dt className="text-ink-3">{t.identityEmail}</dt>
-                <dd className="break-all text-ink">{identity.email || t.identityNoEmail}</dd>
-                <dt className="text-ink-3">{t.identityLinked}</dt>
-                <dd className="text-ink">{formatMoment(identity.linkedAt, { locale })}</dd>
-                <dt className="text-ink-3">{t.identityLastUsed}</dt>
-                <dd className="text-ink">{formatMoment(identity.lastUsedAt, { locale })}</dd>
-              </dl>
-            </div>
-
-            <ActionForm
-              action={unlinkIdentityAction}
-              fields={{ userId: account.id, identityId: identity.id }}
-              confirm={{
-                title: identity.email
-                  ? fill(t.unlinkIdentityConfirmTitle, { provider: name, email: isolate(identity.email) })
-                  : fill(t.unlinkIdentityConfirmTitleNoEmail, { provider: name }),
-                detail,
-                answer: t.unlinkIdentityConfirm,
-                cancel: t.unlinkIdentityCancel,
-                danger: true,
-              }}
-              errors={dict.errors}
-              className="flex flex-col items-start gap-2.5"
+    <div className="flex flex-col gap-6">
+      {identities.items.length === 0 ? (
+        <p className="max-w-body text-small text-ink-3">{t.identitiesEmpty}</p>
+      ) : (
+        <ul className="flex flex-col">
+          {identities.items.map((identity) => (
+            <ServiceRow
+              key={identity.id}
+              provider={identity.provider}
+              issuer={identity.issuer}
+              facts={[
+                [t.identityEmail, identity.email || t.identityNoEmail],
+                [t.identityLinked, formatMoment(identity.linkedAt, { locale })],
+                [t.identityLastUsed, formatMoment(identity.lastUsedAt, { locale })],
+              ]}
             >
-              <ActionButton variant="danger" pendingLabel={t.saving}>
-                {t.unlinkIdentity}
-              </ActionButton>
-              {/* No "saved": the row is gone once the page re-reads. */}
-              <ActionOutcome>
-                <ActionReload code="identity_not_found" label={t.identitiesReload} />
-              </ActionOutcome>
-            </ActionForm>
-          </li>
-        );
-      })}
-    </ul>
+              <ActionForm
+                action={unlinkIdentityAction}
+                fields={{ userId: account.id, identityId: identity.id }}
+                confirm={{
+                  title: naming(
+                    { withEmail: t.unlinkIdentityConfirmTitle, withoutEmail: t.unlinkIdentityConfirmTitleNoEmail },
+                    identity,
+                  ),
+                  detail: unlinkDetail(identity.provider),
+                  answer: t.unlinkIdentityConfirm,
+                  cancel: t.unlinkIdentityCancel,
+                  danger: true,
+                }}
+                errors={dict.errors}
+                className="flex flex-col items-start gap-2.5"
+              >
+                <ActionButton variant="danger" pendingLabel={t.saving}>
+                  {t.unlinkIdentity}
+                </ActionButton>
+                {/* No "saved": the row is gone once the page re-reads. */}
+                <ActionOutcome>
+                  <ActionReload code="identity_not_found" label={t.identitiesReload} />
+                </ActionOutcome>
+              </ActionForm>
+            </ServiceRow>
+          ))}
+        </ul>
+      )}
+
+      {identities.unlinked.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <h4 id={unlinkedHeadingId} className="text-control text-ink">
+              {t.unlinkedHeading}
+            </h4>
+            <p className="max-w-body text-small text-ink-2">{t.unlinkedHint}</p>
+          </div>
+          <ul aria-labelledby={unlinkedHeadingId} className="flex flex-col">
+            {identities.unlinked.map((unlinked) => (
+              <ServiceRow
+                key={unlinked.id}
+                provider={unlinked.provider}
+                issuer={unlinked.issuer}
+                facts={[
+                  [t.identityEmail, unlinked.email || t.identityNoEmail],
+                  [t.identityUnlinked, formatMoment(unlinked.unlinkedAt, { locale })],
+                ]}
+              >
+                <ActionForm
+                  action={allowIdentityAction}
+                  fields={{ userId: account.id, unlinkedId: unlinked.id }}
+                  confirm={{
+                    title: naming(
+                      { withEmail: t.allowIdentityConfirmTitle, withoutEmail: t.allowIdentityConfirmTitleNoEmail },
+                      unlinked,
+                    ),
+                    detail: t.allowIdentityConfirmBody,
+                    answer: t.allowIdentityConfirm,
+                    cancel: t.allowIdentityCancel,
+                  }}
+                  errors={dict.errors}
+                  className="flex flex-col items-start gap-2.5"
+                >
+                  <ActionButton variant="secondary" pendingLabel={t.saving}>
+                    {t.allowIdentity}
+                  </ActionButton>
+                  <ActionOutcome>
+                    <ActionReload code="unlinked_identity_not_found" label={t.identitiesReload} />
+                  </ActionOutcome>
+                </ActionForm>
+              </ServiceRow>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

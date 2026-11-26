@@ -1,29 +1,31 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Only the unlock, the reset and the unlink are mocked: they are the actions submitted here.
-const { unlockSignInAction, resetPasswordAction, unlinkIdentityAction } = vi.hoisted(() => ({
+// Only the actions submitted here are mocked.
+const { unlockSignInAction, resetPasswordAction, unlinkIdentityAction, allowIdentityAction } = vi.hoisted(() => ({
   unlockSignInAction: vi.fn(),
   resetPasswordAction: vi.fn(),
   unlinkIdentityAction: vi.fn(),
+  allowIdentityAction: vi.fn(),
 }));
 vi.mock("./actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./actions")>()),
   unlockSignInAction,
   resetPasswordAction,
   unlinkIdentityAction,
+  allowIdentityAction,
 }));
 // The reload under a refusal re-reads the page through the router.
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
-import type { Account, IdentityList, LinkedIdentity, Role } from "@/lib/api/accounts";
+import type { Account, IdentityList, LinkedIdentity, Role, UnlinkedIdentity } from "@/lib/api/accounts";
 import { formatMoment } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill, isolate } from "@/lib/i18n/fill";
 
 import type { MailOffer } from "../email-delivery";
 import { AccountCard } from "./account-card";
-import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
+import { answerYesOnFakeClock, flushFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 
 let en: Dictionary;
 
@@ -56,7 +58,7 @@ const roles: Role[] = [
 // A different viewer, since a self-block form is not offered.
 const viewerId = "viewer-0000-0000-0000-000000000000";
 
-const noIdentities: IdentityList = { hasPassword: true, items: [] };
+const noIdentities: IdentityList = { hasPassword: true, items: [], unlinked: [] };
 
 describe("AccountCard, the block form's reason requirement", () => {
   test("refuses a block submitted with an empty reason, and never disables the button on it", () => {
@@ -373,7 +375,7 @@ describe("AccountCard, the sign-in services panel", () => {
   const row = (text: string) => within(panel()).getByText(text).closest("li") as HTMLElement;
 
   test("lists each service with its issuer, the email it gave, and when it was linked and last used", () => {
-    renderCard({ hasPassword: true, items: [microsoft, github] });
+    renderCard({ hasPassword: true, items: [microsoft, github], unlinked: [] });
 
     const first = row("Microsoft");
     expect(first).toHaveTextContent(microsoft.issuer);
@@ -386,14 +388,14 @@ describe("AccountCard, the sign-in services panel", () => {
   });
 
   test("says the account signs in through no service when it has none", () => {
-    renderCard({ hasPassword: true, items: [] });
+    renderCard({ hasPassword: true, items: [], unlinked: [] });
 
     expect(within(panel()).getByText(en.accounts.card.identitiesEmpty)).toBeInTheDocument();
     expect(within(panel()).queryByRole("button")).not.toBeInTheDocument();
   });
 
   test("asks first, naming the service and its email, says every session ends, and sends nothing on cancel", async () => {
-    renderCard({ hasPassword: true, items: [microsoft, github] });
+    renderCard({ hasPassword: true, items: [microsoft, github], unlinked: [] });
 
     fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
 
@@ -403,7 +405,11 @@ describe("AccountCard, the sign-in services panel", () => {
         email: isolate("s.popescu@example.edu"),
       }),
     });
-    expect(dialog).toHaveTextContent(en.accounts.card.unlinkIdentityConfirmBody);
+    expect(dialog).toHaveTextContent(fill(en.accounts.card.unlinkIdentityConfirmBody, { provider: "Microsoft" }));
+    // The record holds that one external account, not every account at the service.
+    expect(dialog).toHaveTextContent(
+      /this Microsoft account cannot sign in to or link with this account again until an administrator allows it/,
+    );
     expect(dialog).not.toHaveTextContent(en.accounts.card.unlinkIdentityLastWay);
     fireEvent.click(within(dialog).getAllByRole("button", { name: en.accounts.card.unlinkIdentityCancel })[0]);
 
@@ -412,7 +418,7 @@ describe("AccountCard, the sign-in services panel", () => {
   });
 
   test("names the service alone when it gave no email", async () => {
-    renderCard({ hasPassword: true, items: [github] });
+    renderCard({ hasPassword: true, items: [github], unlinked: [] });
 
     fireEvent.click(within(row("GitHub")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
 
@@ -425,7 +431,7 @@ describe("AccountCard, the sign-in services panel", () => {
 
   test("unlinks that identity of this account once confirmed", () =>
     onFakeClock(async () => {
-      renderCard({ hasPassword: true, items: [microsoft, github] });
+      renderCard({ hasPassword: true, items: [microsoft, github], unlinked: [] });
 
       fireEvent.click(within(row("GitHub")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
       await answerYesOnFakeClock(en.accounts.card.unlinkIdentityConfirm);
@@ -437,22 +443,26 @@ describe("AccountCard, the sign-in services panel", () => {
     }));
 
   test("warns that no other way in is linked, and that a password reset still lets the person in", async () => {
-    renderCard({ hasPassword: false, items: [microsoft] });
+    renderCard({ hasPassword: false, items: [microsoft], unlinked: [] });
 
     fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent(en.accounts.card.unlinkIdentityConfirmBody);
-    expect(dialog).toHaveTextContent(fill(en.accounts.card.unlinkIdentityLastWay, { action: en.accounts.card.resetPassword }));
+    expect(dialog).toHaveTextContent(fill(en.accounts.card.unlinkIdentityConfirmBody, { provider: "Microsoft" }));
+    expect(dialog).toHaveTextContent(
+      fill(en.accounts.card.unlinkIdentityLastWay, { action: en.accounts.card.resetPassword }),
+    );
+    expect(dialog).toHaveTextContent(/no password and no other sign-in service/);
+    expect(dialog).toHaveTextContent(/The account has no password and no other sign-in service linked\. The person can still get back in through a password reset — their own by email, or “Reset password”\./);
   });
 
   test("gives no last-way warning while a password or another service remains", async () => {
-    const { unmount } = renderCard({ hasPassword: true, items: [microsoft] });
+    const { unmount } = renderCard({ hasPassword: true, items: [microsoft], unlinked: [] });
     fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
     expect(await screen.findByRole("dialog")).not.toHaveTextContent(en.accounts.card.unlinkIdentityLastWay);
     unmount();
 
-    renderCard({ hasPassword: false, items: [microsoft, github] });
+    renderCard({ hasPassword: false, items: [microsoft, github], unlinked: [] });
     fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
     expect(await screen.findByRole("dialog")).not.toHaveTextContent(en.accounts.card.unlinkIdentityLastWay);
   });
@@ -460,7 +470,7 @@ describe("AccountCard, the sign-in services panel", () => {
   test("names an identity unlinked since the page loaded and offers a fresh copy", () =>
     onFakeClock(async () => {
       unlinkIdentityAction.mockResolvedValue({ code: "identity_not_found" });
-      renderCard({ hasPassword: true, items: [microsoft] });
+      renderCard({ hasPassword: true, items: [microsoft], unlinked: [] });
 
       fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
       await answerYesOnFakeClock(en.accounts.card.unlinkIdentityConfirm);
@@ -469,8 +479,78 @@ describe("AccountCard, the sign-in services panel", () => {
       expect(screen.getByRole("button", { name: en.accounts.card.identitiesReload })).toBeInTheDocument();
     }));
 
+  const google: UnlinkedIdentity = {
+    id: "3b0c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4",
+    provider: "google",
+    issuer: "https://accounts.google.com",
+    email: "ana@example.edu",
+    unlinkedAt: "2026-11-26T22:01:25Z",
+  };
+
+  const unlinkedSection = () => within(panel()).getByRole("list", { name: en.accounts.card.unlinkedHeading });
+
+  test("lists the services unlinked from the account under their own heading, with when", () => {
+    renderCard({ hasPassword: true, items: [microsoft], unlinked: [google] });
+
+    const unlinked = within(unlinkedSection()).getByText("Google").closest("li") as HTMLElement;
+    expect(unlinked).toHaveTextContent(google.issuer);
+    expect(unlinked).toHaveTextContent("ana@example.edu");
+    expect(unlinked).toHaveTextContent(formatMoment(google.unlinkedAt, { locale: "en" }));
+    // The linked service is not among them.
+    expect(within(unlinkedSection()).queryByText("Microsoft")).not.toBeInTheDocument();
+  });
+
+  test("lists unlinked services even when no service is linked", () => {
+    renderCard({ hasPassword: true, items: [], unlinked: [google] });
+
+    expect(within(panel()).getByText(en.accounts.card.identitiesEmpty)).toBeInTheDocument();
+    expect(within(unlinkedSection()).getByText("Google")).toBeInTheDocument();
+  });
+
+  test("has no unlinked heading when nothing was unlinked", () => {
+    renderCard({ hasPassword: true, items: [microsoft], unlinked: [] });
+
+    expect(within(panel()).queryByRole("heading", { name: en.accounts.card.unlinkedHeading })).not.toBeInTheDocument();
+  });
+
+  test("allows an unlinked service again once confirmed, naming it", () =>
+    onFakeClock(async () => {
+      allowIdentityAction.mockReset();
+      allowIdentityAction.mockResolvedValue({ ok: true });
+      renderCard({ hasPassword: true, items: [], unlinked: [google] });
+
+      fireEvent.click(within(unlinkedSection()).getByRole("button", { name: en.accounts.card.allowIdentity }));
+      await flushFakeClock();
+      expect(screen.getByRole("dialog")).toHaveTextContent(en.accounts.card.allowIdentityConfirmBody);
+      await answerYesOnFakeClock(
+        en.accounts.card.allowIdentityConfirm,
+        fill(en.accounts.card.allowIdentityConfirmTitle, { provider: "Google", email: isolate("ana@example.edu") }),
+      );
+
+      expect(allowIdentityAction).toHaveBeenCalledTimes(1);
+      const submitted = allowIdentityAction.mock.calls[0][1] as FormData;
+      expect(submitted.get("userId")).toBe(account().id);
+      expect(submitted.get("unlinkedId")).toBe(google.id);
+    }));
+
+  test("names a record lifted since the page loaded and offers a fresh copy", () =>
+    onFakeClock(async () => {
+      allowIdentityAction.mockReset();
+      allowIdentityAction.mockResolvedValue({ code: "unlinked_identity_not_found" });
+      renderCard({ hasPassword: true, items: [], unlinked: [{ ...google, email: "" }] });
+
+      fireEvent.click(within(unlinkedSection()).getByRole("button", { name: en.accounts.card.allowIdentity }));
+      await answerYesOnFakeClock(
+        en.accounts.card.allowIdentityConfirm,
+        fill(en.accounts.card.allowIdentityConfirmTitleNoEmail, { provider: "Google" }),
+      );
+
+      expect(screen.getByRole("alert")).toHaveTextContent(en.errors.unlinked_identity_not_found);
+      expect(screen.getByRole("button", { name: en.accounts.card.identitiesReload })).toBeInTheDocument();
+    }));
+
   test("is not shown on your own account, where the service refuses an unlink", () => {
-    renderCard({ hasPassword: true, items: [microsoft] }, account(), account().id);
+    renderCard({ hasPassword: true, items: [microsoft], unlinked: [] }, account(), account().id);
 
     expect(screen.queryByRole("region", { name: en.accounts.card.identities })).not.toBeInTheDocument();
   });
@@ -483,7 +563,7 @@ describe("AccountCard, the sign-in services panel", () => {
   });
 
   test("is not shown on a deleted account", () => {
-    renderCard({ hasPassword: true, items: [microsoft] }, account({ status: "deleted" }));
+    renderCard({ hasPassword: true, items: [microsoft], unlinked: [] }, account({ status: "deleted" }));
 
     expect(screen.queryByRole("region", { name: en.accounts.card.identities })).not.toBeInTheDocument();
   });
