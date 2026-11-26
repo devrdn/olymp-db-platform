@@ -787,7 +787,8 @@ du -ch deploy/backups/*-<stamp>.*       # the size of that set
   reset. Within a minute the API logs `a game instance reached its disk
   quota` with the copy's name and both figures, and records
   `contest.instance_over_quota` on the contest's audit trail; the flag lifts by
-  itself once the copy is back within.
+  itself once the copy is back within. **Databases** marks the copy with the
+  moment it was flagged while the contest runs.
 
 #### Calling a staff route from the command line
 

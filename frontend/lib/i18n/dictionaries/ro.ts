@@ -818,6 +818,8 @@ const ro = {
       confirm:
         "Ștergeți baza participantului „{who}”? Interogarea care rulează chiar acum se pierde, iar o copie nouă apare la următoarea lor acțiune. Răspunsurile, punctajul și ceasul nu sunt atinse.",
       sizeUnknown: "necunoscut",
+      overQuota: "peste limita de dimensiune",
+      overQuotaSince: "din {time}",
       truncated: "Există mai multe baze decât arată această listă.",
       columns: {
         database: "Bază",

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { answerYesOnFakeClock, onFakeClock } from "@/components/ui/confirm-dialog-test-support";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
+import { formatMoment } from "@/lib/format/datetime";
 import en from "@/lib/i18n/dictionaries/en";
 import { fill, isolate } from "@/lib/i18n/fill";
 
@@ -35,6 +36,7 @@ function instance(overrides: Partial<GameInstance> = {}): GameInstance {
     status: "ready",
     sizeBytes: 4 * 1024 * 1024,
     sizeKnown: true,
+    overQuotaSince: null,
     createdAt: "2026-03-01T09:00:00Z",
     updatedAt: "2026-03-01T09:00:00Z",
     ...overrides,
@@ -177,5 +179,24 @@ describe("GameDatabases on a phone", () => {
     show();
 
     expect(screen.getByRole("table").parentElement).toHaveClass("relative", "overflow-x-auto");
+  });
+});
+
+describe("a copy over its size limit", () => {
+  const flagged = instance({ overQuotaSince: "2026-03-01T12:05:00Z" });
+  const since = fill(t.overQuotaSince, {
+    time: formatMoment(flagged.overQuotaSince!, { locale: "en" }),
+  });
+
+  test("is marked with the moment it was flagged", () => {
+    show({ instances: [flagged] });
+    expect(screen.getByText(t.overQuota)).toBeInTheDocument();
+    expect(screen.getByText(since)).toBeInTheDocument();
+  });
+
+  test("carries no mark when the field is null", () => {
+    show({ instances: [instance({ overQuotaSince: null })] });
+    expect(screen.queryByText(t.overQuota)).not.toBeInTheDocument();
+    expect(screen.queryByText(since)).not.toBeInTheDocument();
   });
 });
