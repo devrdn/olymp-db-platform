@@ -195,15 +195,20 @@ func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, versi
 // policyProjectionColumns reads a contest's SQL policy from a LEFT JOIN on
 // contest_sql_policies p. coalesce gives a contest with no policy row the
 // read-only default rather than no restrictions. Every query that reads a
-// contest's game shares it so the default cannot drift.
-const policyProjectionColumns = `
-	coalesce(p.mode, 'read_only'),
+// contest's game shares it so the default cannot drift; the fallbacks are
+// sqlpolicy.ReadOnly(), constants of the program, so they are written into the text.
+var policyProjectionColumns = func() string {
+	d := sqlpolicy.ReadOnly()
+	return fmt.Sprintf(`
+	coalesce(p.mode, '%s'),
 	coalesce(p.writable_tables, '{}')::text[],
-	coalesce(p.allow_create_view, false),
-	coalesce(p.allow_own_tables, false),
-	coalesce(p.allow_temp_tables, false),
-	coalesce(p.allow_catalog, true),
-	coalesce(p.disk_quota_ratio, 5)`
+	coalesce(p.allow_create_view, %t),
+	coalesce(p.allow_own_tables, %t),
+	coalesce(p.allow_temp_tables, %t),
+	coalesce(p.allow_catalog, %t),
+	coalesce(p.disk_quota_ratio, %d)`,
+		d.Mode, d.AllowCreateView, d.AllowOwnTables, d.AllowTempTables, d.AllowCatalog, d.DiskQuotaRatio)
+}()
 
 // policyScanTargets matches policyProjectionColumns in order. The mode lands
 // as text in mode for the caller to convert.
