@@ -17,6 +17,8 @@ export type Offered = {
   unlockSignIn: boolean;
   roles: boolean;
   profile: boolean;
+  /** Lists the account's sign-in services, each with its unlink. */
+  signInServices: boolean;
 };
 
 export function offeredActions(
@@ -49,5 +51,8 @@ export function offeredActions(
     roles: !deleted,
     // The server refuses editing a deleted account (ErrAccountDeleted).
     profile: !deleted,
+    // The service refuses unlinking on oneself (no self-service unlink) and on a
+    // deleted account, whose identities went with it.
+    signInServices: known && !isSelf && !deleted,
   };
 }

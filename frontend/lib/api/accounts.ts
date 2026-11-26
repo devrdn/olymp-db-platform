@@ -59,6 +59,38 @@ export const roleListSchema = z.object({ items: z.array(roleSchema) });
 export type Role = z.infer<typeof roleSchema>;
 
 /**
+ * One sign-in through an external service an account holds. `provider` is a
+ * bare string, so a provider newer than this build still shows by its id;
+ * `email` is what the provider gave at link time, empty when it gave none.
+ */
+const linkedIdentitySchema = z
+  .object({
+    id: z.string(),
+    provider: z.string(),
+    issuer: z.string(),
+    email: z.string(),
+    linked_at: z.string(),
+    last_used_at: z.string(),
+  })
+  .transform((raw) => ({
+    id: raw.id,
+    provider: raw.provider,
+    issuer: raw.issuer,
+    email: raw.email,
+    linkedAt: raw.linked_at,
+    lastUsedAt: raw.last_used_at,
+  }));
+
+export type LinkedIdentity = z.infer<typeof linkedIdentitySchema>;
+
+/** How an account signs in: its identities, oldest link first, and whether it has a password. */
+export const identityListSchema = z
+  .object({ has_password: z.boolean(), items: z.array(linkedIdentitySchema) })
+  .transform((raw) => ({ hasPassword: raw.has_password, items: raw.items }));
+
+export type IdentityList = z.infer<typeof identityListSchema>;
+
+/**
  * Whether the accounts screens may offer to email sign-in details, and how
  * many messages the outbox sends a minute (0 while mail is off). Read under
  * users.manage, the permission those screens already need.

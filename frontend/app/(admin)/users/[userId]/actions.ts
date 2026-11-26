@@ -162,3 +162,22 @@ export async function unlockSignInAction(
     revalidate: CHANGED,
   });
 }
+
+/**
+ * Unlinks one sign-in through an external service from the account; the
+ * server ends every session the account holds. Both ids reach the path.
+ */
+export async function unlinkIdentityAction(
+  _previous: AccountState,
+  form: FormData,
+): Promise<AccountState> {
+  const userId = subject(form);
+  if (!userId) return { code: "invalid_user_id" };
+  const identityId = form.get("identityId");
+  if (!isId(identityId)) return { code: "invalid_request" };
+
+  return serverAction(
+    () => serverRequest(`/users/${userId}/identities/${identityId}`, { method: "DELETE" }),
+    { revalidate: CHANGED },
+  );
+}

@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
 import { Tag } from "@/components/ui/tag";
-import { accountSchema, roleListSchema } from "@/lib/api/accounts";
+import { accountSchema, identityListSchema, roleListSchema } from "@/lib/api/accounts";
 import { isId } from "@/lib/api/ids";
 import { readPage } from "@/lib/api/page-read";
 import { fetchIdentity } from "@/lib/auth/session";
@@ -37,11 +37,18 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
   const { userId } = await props.params;
   if (!isId(userId)) notFound();
 
-  const [dict, locale, account, { items: roles }, identity, mail] = await Promise.all([
+  const [dict, locale, account, { items: roles }, identities, identity, mail] = await Promise.all([
     activeDictionary(),
     activeLocale(),
     loadAccount(userId),
     readPage("/roles", (payload) => roleListSchema.parse(payload), { here: `/users/${userId}` }),
+    // Read even for one's own or a deleted account, where the panel is not
+    // offered: the page learns whether it is either only from the account and
+    // viewer reads beside it, and waiting for them would delay this one.
+    readPage(`/users/${userId}/identities`, (payload) => identityListSchema.parse(payload), {
+      here: `/users/${userId}`,
+      bestEffort: true,
+    }),
     fetchIdentity(),
     readMailOffer(),
   ]);
@@ -84,6 +91,7 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
       <AccountCard
         account={account}
         roles={roles}
+        identities={identities}
         viewerId={identity?.id ?? ""}
         dict={dict}
         statusChangedAtLabel={statusChangedAtLabel}

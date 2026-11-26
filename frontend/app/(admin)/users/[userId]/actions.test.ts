@@ -18,6 +18,7 @@ import {
   deleteAction,
   resetPasswordAction,
   restoreAction,
+  unlinkIdentityAction,
   unlockSignInAction,
 } from "./actions";
 
@@ -189,5 +190,42 @@ describe("resetPasswordAction", () => {
 
     expect(state).toEqual({ code: "invalid_user_id" });
     expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("unlinkIdentityAction", () => {
+  const identityId = "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e";
+
+  test("deletes the identity from the account and revalidates", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    const state = await unlinkIdentityAction({}, form({ userId, identityId }));
+
+    expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/identities/${identityId}`, { method: "DELETE" });
+    expect(state).toEqual({ ok: true });
+    expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
+  });
+
+  test("refuses an account identifier that is not one without calling the server", async () => {
+    const state = await unlinkIdentityAction({}, form({ userId: "../roles", identityId }));
+
+    expect(state).toEqual({ code: "invalid_user_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("refuses an identity identifier that is not one without calling the server", async () => {
+    const state = await unlinkIdentityAction({}, form({ userId, identityId: "../../roles" }));
+
+    expect(state).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("reports an identity unlinked since the page loaded by its code", async () => {
+    serverRequest.mockRejectedValueOnce(
+      new ApiError("identity_not_found", 404, "This sign-in service is no longer linked to the account"),
+    );
+
+    expect(await unlinkIdentityAction({}, form({ userId, identityId }))).toEqual({ code: "identity_not_found" });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

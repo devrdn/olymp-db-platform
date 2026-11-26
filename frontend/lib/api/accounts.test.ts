@@ -6,6 +6,7 @@ import {
   bulkPasswordResetResultSchema,
   bulkResultSchema,
   createdAccountSchema,
+  identityListSchema,
   importResultSchema,
   importSkippedRowSchema,
   mailStatusSchema,
@@ -283,5 +284,71 @@ describe("mailStatusSchema", () => {
       enabled: false,
       perMinute: 0,
     });
+  });
+});
+
+describe("identityListSchema", () => {
+  test("reads how the account signs in, and leaves an email the provider never gave empty", () => {
+    const parsed = identityListSchema.parse({
+      has_password: false,
+      items: [
+        {
+          id: "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e",
+          provider: "microsoft",
+          issuer: "https://login.microsoftonline.com/tenant/v2.0",
+          email: "ana@example.edu",
+          linked_at: "2026-11-26T09:30:00Z",
+          last_used_at: "2026-11-26T10:02:11Z",
+        },
+        {
+          id: "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+          provider: "github",
+          issuer: "https://github.com",
+          email: "",
+          linked_at: "2026-11-26T11:00:00Z",
+          last_used_at: "2026-11-26T11:00:00Z",
+        },
+      ],
+    });
+
+    expect(parsed).toEqual({
+      hasPassword: false,
+      items: [
+        {
+          id: "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e",
+          provider: "microsoft",
+          issuer: "https://login.microsoftonline.com/tenant/v2.0",
+          email: "ana@example.edu",
+          linkedAt: "2026-11-26T09:30:00Z",
+          lastUsedAt: "2026-11-26T10:02:11Z",
+        },
+        {
+          id: "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+          provider: "github",
+          issuer: "https://github.com",
+          email: "",
+          linkedAt: "2026-11-26T11:00:00Z",
+          lastUsedAt: "2026-11-26T11:00:00Z",
+        },
+      ],
+    });
+  });
+
+  test("keeps a provider newer than this build rather than refusing the list", () => {
+    const parsed = identityListSchema.parse({
+      has_password: true,
+      items: [
+        {
+          id: "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e",
+          provider: "gitlab",
+          issuer: "https://gitlab.com",
+          email: "",
+          linked_at: "2026-11-26T09:30:00Z",
+          last_used_at: "2026-11-26T09:30:00Z",
+        },
+      ],
+    });
+
+    expect(parsed.items[0].provider).toBe("gitlab");
   });
 });

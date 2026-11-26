@@ -7,6 +7,10 @@ export const PROVIDER_IDS = ["microsoft", "google", "github"] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
+export function isProviderId(value: string): value is ProviderId {
+  return (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
 /** Brand names: shown as they are in every locale. */
 export const PROVIDER_NAMES: Record<ProviderId, string> = {
   microsoft: "Microsoft",

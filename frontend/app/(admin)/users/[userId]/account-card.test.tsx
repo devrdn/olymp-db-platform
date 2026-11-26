@@ -1,18 +1,23 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Only the unlock and the reset are mocked: they are the actions submitted here.
-const { unlockSignInAction, resetPasswordAction } = vi.hoisted(() => ({
+// Only the unlock, the reset and the unlink are mocked: they are the actions submitted here.
+const { unlockSignInAction, resetPasswordAction, unlinkIdentityAction } = vi.hoisted(() => ({
   unlockSignInAction: vi.fn(),
   resetPasswordAction: vi.fn(),
+  unlinkIdentityAction: vi.fn(),
 }));
 vi.mock("./actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./actions")>()),
   unlockSignInAction,
   resetPasswordAction,
+  unlinkIdentityAction,
 }));
+// The reload under a refusal re-reads the page through the router.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
-import type { Account, Role } from "@/lib/api/accounts";
+import type { Account, IdentityList, LinkedIdentity, Role } from "@/lib/api/accounts";
+import { formatMoment } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { fill, isolate } from "@/lib/i18n/fill";
 
@@ -51,6 +56,8 @@ const roles: Role[] = [
 // A different viewer, since a self-block form is not offered.
 const viewerId = "viewer-0000-0000-0000-000000000000";
 
+const noIdentities: IdentityList = { hasPassword: true, items: [] };
+
 describe("AccountCard, the block form's reason requirement", () => {
   test("refuses a block submitted with an empty reason, and never disables the button on it", () => {
     render(
@@ -61,6 +68,7 @@ describe("AccountCard, the block form's reason requirement", () => {
         dict={en}
         statusChangedAtLabel={null}
         locale="en"
+        identities={noIdentities}
         mail={{ status: "off" }}
       />,
     );
@@ -84,6 +92,7 @@ describe("AccountCard, the status-explanation panel", () => {
         dict={en}
         statusChangedAtLabel={null}
         locale="en"
+        identities={noIdentities}
         mail={{ status: "off" }}
       />,
     );
@@ -107,6 +116,7 @@ describe("AccountCard, the status-explanation panel", () => {
         dict={en}
         statusChangedAtLabel="2 Mar 2026"
         locale="en"
+        identities={noIdentities}
         mail={{ status: "off" }}
       />,
     );
@@ -134,6 +144,7 @@ describe("AccountCard, the status-explanation panel", () => {
         dict={en}
         statusChangedAtLabel={null}
         locale="en"
+        identities={noIdentities}
         mail={{ status: "off" }}
       />,
     );
@@ -155,6 +166,7 @@ describe("AccountCard, the roles panel", () => {
         dict={en}
         statusChangedAtLabel={null}
         locale="en"
+        identities={noIdentities}
         mail={{ status: "off" }}
       />,
     );
@@ -175,9 +187,16 @@ describe("AccountCard, clearing a sign-in lockout", () => {
 
   const renderCard = () =>
     render(
-      <AccountCard account={account()} roles={roles} viewerId={viewerId} dict={en} statusChangedAtLabel={null}
+      <AccountCard
+        account={account()}
+        roles={roles}
+        identities={noIdentities}
+        viewerId={viewerId}
+        dict={en}
+        statusChangedAtLabel={null}
         locale="en"
-        mail={{ status: "off" }} />,
+        mail={{ status: "off" }}
+      />,
     );
 
   test("asks first, naming the login, and sends nothing when the question is cancelled", async () => {
@@ -226,6 +245,7 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
         dict={dict}
         statusChangedAtLabel={null}
         locale={dict === en ? "en" : "ro"}
+        identities={noIdentities}
         mail={mail}
       />,
     );
@@ -309,5 +329,162 @@ describe("AccountCard, a password reset with the sign-in details by email", () =
     fireEvent.click(screen.getByRole("button", { name: ro.accounts.card.resetPassword }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(ro.errors.mail_off);
+  });
+});
+
+describe("AccountCard, the sign-in services panel", () => {
+  beforeEach(() => {
+    unlinkIdentityAction.mockReset();
+    unlinkIdentityAction.mockResolvedValue({ ok: true });
+  });
+
+  const microsoft: LinkedIdentity = {
+    id: "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e",
+    provider: "microsoft",
+    issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
+    email: "s.popescu@example.edu",
+    linkedAt: "2026-11-20T09:30:00Z",
+    lastUsedAt: "2026-11-25T14:05:00Z",
+  };
+  const github: LinkedIdentity = {
+    id: "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    provider: "github",
+    issuer: "https://github.com",
+    email: "",
+    linkedAt: "2026-11-21T08:00:00Z",
+    lastUsedAt: "2026-11-21T08:00:00Z",
+  };
+
+  const renderCard = (identities: IdentityList | null, subject: Account = account(), viewer: string = viewerId) =>
+    render(
+      <AccountCard
+        account={subject}
+        roles={roles}
+        identities={identities}
+        viewerId={viewer}
+        dict={en}
+        statusChangedAtLabel={null}
+        locale="en"
+        mail={{ status: "off" }}
+      />,
+    );
+
+  const panel = () => screen.getByRole("region", { name: en.accounts.card.identities });
+  const row = (text: string) => within(panel()).getByText(text).closest("li") as HTMLElement;
+
+  test("lists each service with its issuer, the email it gave, and when it was linked and last used", () => {
+    renderCard({ hasPassword: true, items: [microsoft, github] });
+
+    const first = row("Microsoft");
+    expect(first).toHaveTextContent(microsoft.issuer);
+    expect(first).toHaveTextContent("s.popescu@example.edu");
+    expect(first).toHaveTextContent(formatMoment(microsoft.linkedAt, { locale: "en" }));
+    expect(first).toHaveTextContent(formatMoment(microsoft.lastUsedAt, { locale: "en" }));
+
+    // The provider gave no email: the row says so rather than leaving a gap.
+    expect(row("GitHub")).toHaveTextContent(en.accounts.card.identityNoEmail);
+  });
+
+  test("says the account signs in through no service when it has none", () => {
+    renderCard({ hasPassword: true, items: [] });
+
+    expect(within(panel()).getByText(en.accounts.card.identitiesEmpty)).toBeInTheDocument();
+    expect(within(panel()).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  test("asks first, naming the service and its email, says every session ends, and sends nothing on cancel", async () => {
+    renderCard({ hasPassword: true, items: [microsoft, github] });
+
+    fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: fill(en.accounts.card.unlinkIdentityConfirmTitle, {
+        provider: "Microsoft",
+        email: isolate("s.popescu@example.edu"),
+      }),
+    });
+    expect(dialog).toHaveTextContent(en.accounts.card.unlinkIdentityConfirmBody);
+    expect(dialog).not.toHaveTextContent(en.accounts.card.unlinkIdentityLastWay);
+    fireEvent.click(within(dialog).getAllByRole("button", { name: en.accounts.card.unlinkIdentityCancel })[0]);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(unlinkIdentityAction).not.toHaveBeenCalled();
+  });
+
+  test("names the service alone when it gave no email", async () => {
+    renderCard({ hasPassword: true, items: [github] });
+
+    fireEvent.click(within(row("GitHub")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+
+    expect(
+      await screen.findByRole("dialog", {
+        name: fill(en.accounts.card.unlinkIdentityConfirmTitleNoEmail, { provider: "GitHub" }),
+      }),
+    ).toBeInTheDocument();
+  });
+
+  test("unlinks that identity of this account once confirmed", () =>
+    onFakeClock(async () => {
+      renderCard({ hasPassword: true, items: [microsoft, github] });
+
+      fireEvent.click(within(row("GitHub")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+      await answerYesOnFakeClock(en.accounts.card.unlinkIdentityConfirm);
+
+      expect(unlinkIdentityAction).toHaveBeenCalledTimes(1);
+      const submitted = unlinkIdentityAction.mock.calls[0][1] as FormData;
+      expect(submitted.get("userId")).toBe(account().id);
+      expect(submitted.get("identityId")).toBe(github.id);
+    }));
+
+  test("warns that no other way in is linked, and that a password reset still lets the person in", async () => {
+    renderCard({ hasPassword: false, items: [microsoft] });
+
+    fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(en.accounts.card.unlinkIdentityConfirmBody);
+    expect(dialog).toHaveTextContent(fill(en.accounts.card.unlinkIdentityLastWay, { action: en.accounts.card.resetPassword }));
+  });
+
+  test("gives no last-way warning while a password or another service remains", async () => {
+    const { unmount } = renderCard({ hasPassword: true, items: [microsoft] });
+    fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+    expect(await screen.findByRole("dialog")).not.toHaveTextContent(en.accounts.card.unlinkIdentityLastWay);
+    unmount();
+
+    renderCard({ hasPassword: false, items: [microsoft, github] });
+    fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+    expect(await screen.findByRole("dialog")).not.toHaveTextContent(en.accounts.card.unlinkIdentityLastWay);
+  });
+
+  test("names an identity unlinked since the page loaded and offers a fresh copy", () =>
+    onFakeClock(async () => {
+      unlinkIdentityAction.mockResolvedValue({ code: "identity_not_found" });
+      renderCard({ hasPassword: true, items: [microsoft] });
+
+      fireEvent.click(within(row("Microsoft")).getByRole("button", { name: en.accounts.card.unlinkIdentity }));
+      await answerYesOnFakeClock(en.accounts.card.unlinkIdentityConfirm);
+
+      expect(screen.getByRole("alert")).toHaveTextContent(en.errors.identity_not_found);
+      expect(screen.getByRole("button", { name: en.accounts.card.identitiesReload })).toBeInTheDocument();
+    }));
+
+  test("is not shown on your own account, where the service refuses an unlink", () => {
+    renderCard({ hasPassword: true, items: [microsoft] }, account(), account().id);
+
+    expect(screen.queryByRole("region", { name: en.accounts.card.identities })).not.toBeInTheDocument();
+  });
+
+  test("is not shown when the services could not be read, while the rest of the card is", () => {
+    renderCard(null);
+
+    expect(screen.queryByRole("region", { name: en.accounts.card.identities })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: en.accounts.card.danger })).toBeInTheDocument();
+  });
+
+  test("is not shown on a deleted account", () => {
+    renderCard({ hasPassword: true, items: [microsoft] }, account({ status: "deleted" }));
+
+    expect(screen.queryByRole("region", { name: en.accounts.card.identities })).not.toBeInTheDocument();
   });
 });

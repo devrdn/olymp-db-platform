@@ -1,7 +1,7 @@
 "use server";
 
 import { serverAction, serverRequest, type ActionState } from "@/lib/api/server";
-import { PROVIDER_IDS } from "@/lib/auth/external";
+import { isProviderId } from "@/lib/auth/external";
 
 export type SwitchState = ActionState;
 
@@ -9,7 +9,7 @@ export type SwitchState = ActionState;
 export async function switchProviderAction(_previous: SwitchState, form: FormData): Promise<SwitchState> {
   const provider = String(form.get("provider") ?? "");
   const enabled = String(form.get("enabled") ?? "");
-  if (!(PROVIDER_IDS as readonly string[]).includes(provider)) return { code: "invalid_request" };
+  if (!isProviderId(provider)) return { code: "invalid_request" };
   if (enabled !== "true" && enabled !== "false") return { code: "invalid_request" };
 
   return serverAction(
