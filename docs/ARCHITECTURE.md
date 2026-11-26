@@ -4852,8 +4852,14 @@ section 7. In addition:
   and — for the stories — a renderer that builds React elements and never an
   HTML string, so there is no sanitiser in the path to walk around
   (section 6.3); plus a CSP and the usual headers (HSTS,
-  `X-Content-Type-Options`, `frame-ancestors`). The CSP allows inline scripts
-  (`script-src 'self' 'unsafe-inline'`) to cover Next's inlined bootstrap.
+  `X-Content-Type-Options`, `frame-ancestors`). The CSP runs a script only by
+  a nonce minted per request and what that script loads
+  (`script-src 'self' 'nonce-…' 'strict-dynamic'`, no `'unsafe-inline'`):
+  `frontend/proxy.ts` puts it on the request, where Next reads the nonce and
+  stamps its own scripts, and on the response; `/api/*` and the assets and
+  icons the proxy skips get the same policy with scripts from `'self'` only.
+  Styles still allow `'unsafe-inline'`, for the editor's injected styles and
+  React's `style` attributes.
 - **Staff input:** an uploaded game script runs only on the game cluster,
   under a separate builder role, when a template is created — never against
   the core database; with validation and a size limit.

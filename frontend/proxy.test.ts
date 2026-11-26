@@ -1,8 +1,10 @@
+import { getScriptNonceFromHeader } from "next/dist/server/app-render/get-script-nonce-from-header";
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { INGRESS_HEADER } from "@/lib/api/forwarded";
 import { sessionCookie } from "@/lib/auth/session";
+import { contentSecurityPolicy, STATIC_CONTENT_SECURITY_POLICY } from "@/lib/csp";
 
 import { config, proxy } from "./proxy";
 
@@ -168,6 +170,104 @@ describe("proxy's forwarded headers", () => {
 
     expect(out.value("x-forwarded-for")).toBe("203.0.113.7");
     expect(out.value(INGRESS_HEADER)).toBe(SECRET);
+  });
+});
+
+describe("proxy's content security policy", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function served(path: string, headers: Record<string, string> = {}, session = true) {
+    const req = new NextRequest(new URL(path, "http://localhost:3000"), { headers });
+    if (session) req.cookies.set(sessionCookie().name, "opaque");
+    const response = proxy(req);
+    const overridden = (response.headers.get("x-middleware-override-headers") ?? "").split(",");
+    const forwarded = (name: string) =>
+      overridden.includes(name) ? response.headers.get(`x-middleware-request-${name}`) : null;
+    return {
+      redirect: response.headers.get("location"),
+      sent: response.headers.get("content-security-policy"),
+      forwarded: forwarded("content-security-policy"),
+      forwardedReportOnly: forwarded("content-security-policy-report-only"),
+    };
+  }
+
+  const forged = {
+    "content-security-policy": "script-src 'nonce-chosenByTheBrowser'",
+    "content-security-policy-report-only": "script-src 'nonce-chosenByTheBrowser'",
+  };
+
+  test("sends a screen the very policy it hands Next, around a nonce", () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const out = served("/contests");
+    const nonce = getScriptNonceFromHeader(out.sent ?? "");
+
+    expect(nonce).toBeDefined();
+    expect(out.sent).toBe(contentSecurityPolicy(nonce!));
+    expect(out.forwarded).toBe(out.sent);
+  });
+
+  test("mints a new nonce for every request", () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const nonceOf = () => getScriptNonceFromHeader(served("/contests").sent ?? "");
+
+    expect(nonceOf()).not.toBe(nonceOf());
+  });
+
+  test("replaces a policy the browser sent with its own", () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const out = served("/contests", forged);
+
+    expect(out.forwarded).toBe(out.sent);
+    expect(out.forwarded).not.toContain("chosenByTheBrowser");
+    expect(out.forwardedReportOnly).toBeNull();
+  });
+
+  // With no API to rewrite to, Next answers such a path with its not-found page.
+  test.each(["/api/v1/settings", "/API/v1/settings", "/api/no-such"])(
+    "sends the static policy towards the API on %s, and drops the browser's",
+    (path) => {
+      vi.stubEnv("NODE_ENV", "production");
+
+      const out = served(path, forged);
+
+      expect(out.sent).toBe(STATIC_CONTENT_SECURITY_POLICY);
+      expect(out.forwarded).toBeNull();
+      expect(out.forwardedReportOnly).toBeNull();
+    },
+  );
+
+  test("sends no policy towards the API in development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+
+    const out = served("/api/no-such", forged);
+
+    expect(out.sent).toBeNull();
+    expect(out.forwarded).toBeNull();
+    expect(out.forwardedReportOnly).toBeNull();
+  });
+
+  test("sends no policy with a redirect", () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const out = served("/contests", {}, false);
+
+    expect(out.redirect).not.toBeNull();
+    expect(out.sent).toBeNull();
+  });
+
+  test("sends no policy in development, and still drops the browser's", () => {
+    vi.stubEnv("NODE_ENV", "development");
+
+    const out = served("/contests", forged);
+
+    expect(out.sent).toBeNull();
+    expect(out.forwarded).toBeNull();
+    expect(out.forwardedReportOnly).toBeNull();
   });
 });
 

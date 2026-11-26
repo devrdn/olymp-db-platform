@@ -1,4 +1,10 @@
+import * as pageStaticInfo from "next/dist/build/analysis/get-page-static-info";
+import { getPathMatch } from "next/dist/shared/lib/router/utils/path-match";
+import { compileNonPath } from "next/dist/shared/lib/router/utils/prepare-destination";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { STATIC_CONTENT_SECURITY_POLICY, UNPROXIED_PATHS } from "./lib/csp";
+import { config as proxyConfig } from "./proxy";
 
 /**
  * Without a proxy, browser requests to `/api/*` (the settings images) reach
@@ -89,9 +95,93 @@ describe("headers", () => {
     }
   });
 
-  it("keeps the content policy beside it, and only there", async () => {
-    expect(await headersFor("production")).toHaveProperty("Content-Security-Policy");
-    expect(await headersFor("development")).not.toHaveProperty("Content-Security-Policy");
+  it("sends no content policy in development", async () => {
+    const sent = Object.keys(await headersFor("development")).map((key) => key.toLowerCase());
+
+    expect(sent).not.toContain("content-security-policy");
+  });
+});
+
+/**
+ * A second policy beside the proxy's would be enforced too and block the
+ * nonced scripts, and a path the proxy skips must still get one. Both sides
+ * are compiled the way Next compiles them.
+ */
+describe("the content policy's two sources", () => {
+  // Not in Next's published typings.
+  const { getMiddlewareMatchers } = pageStaticInfo as unknown as {
+    getMiddlewareMatchers: (matchers: string[], nextConfig: object) => { regexp: string }[];
+  };
+  const proxyRuns = (path: string) =>
+    getMiddlewareMatchers(proxyConfig.matcher, {}).some(({ regexp }) => new RegExp(regexp).test(path));
+
+  /**
+   * As Next's router applies a header rule: matched case-insensitively, and
+   * each value compiled against the parameters the match captured.
+   */
+  async function rulesAt(path: string, nodeEnv = "production") {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", nodeEnv);
+    const { default: config } = await import("./next.config");
+    const rules = config.headers ? await config.headers() : [];
+    return rules.flatMap((rule) => {
+      const params = getPathMatch(rule.source, { strict: true, removeUnnamedParams: true, sensitive: false })(path);
+      if (!params) return [];
+      const compile = (value: string) => (Object.keys(params).length > 0 ? compileNonPath(value, params) : value);
+      return [{ params, headers: rule.headers.map((header) => ({ key: header.key, value: compile(header.value) })) }];
+    });
+  }
+
+  async function policiesAt(path: string, nodeEnv = "production") {
+    return (await rulesAt(path, nodeEnv))
+      .flatMap((rule) => rule.headers)
+      .filter((header) => header.key.toLowerCase() === "content-security-policy")
+      .map((header) => header.value);
+  }
+
+  it("captures no parameter, so Next sends the static policy as written", async () => {
+    const [rule] = (await rulesAt("/robots.txt")).filter((matched) =>
+      matched.headers.some((header) => header.key === "content-security-policy"),
+    );
+
+    expect(rule.params).toEqual({});
+    expect(rule.headers).toEqual([{ key: "content-security-policy", value: STATIC_CONTENT_SECURITY_POLICY }]);
+  });
+
+  it("holds the proxy's matcher to the list the static policy is sent on", () => {
+    expect(proxyConfig.matcher).toEqual([`/((?!${UNPROXIED_PATHS.join("|")}).*)`]);
+  });
+
+  it.each([
+    "/robots.txt",
+    "/sitemap.xml",
+    "/favicon.ico",
+    "/icon.svg",
+    "/apple-icon.png",
+    "/brand/google-g.png",
+    "/brand/no-such-mark",
+    "/_next/static/chunks/main.js",
+  ])("sends the static policy on %s, where the proxy does not run", async (path) => {
+    expect(proxyRuns(path)).toBe(false);
+    expect(await policiesAt(path)).toEqual([STATIC_CONTENT_SECURITY_POLICY]);
+  });
+
+  it.each(["/", "/login", "/contests/1/play", "/brands", "/brand", "/users/8f3a.tar.gz", "/api/v1/settings"])(
+    "sends no policy of its own on %s, where the proxy runs and sends one",
+    async (path) => {
+      expect(proxyRuns(path)).toBe(true);
+      expect(await policiesAt(path)).toEqual([]);
+    },
+  );
+
+  // The overlap next.config.ts describes, where the proxy's policy is applied last.
+  it.each(["/Brand/x", "/ROBOTS.TXT"])("meets both on %s, a spelling the proxy still runs on", async (path) => {
+    expect(proxyRuns(path)).toBe(true);
+    expect(await policiesAt(path)).toEqual([STATIC_CONTENT_SECURITY_POLICY]);
+  });
+
+  it("sends no static policy in development, where the proxy sends none either", async () => {
+    expect(await policiesAt("/robots.txt", "development")).toEqual([]);
   });
 });
 

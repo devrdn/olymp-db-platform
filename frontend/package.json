@@ -8,7 +8,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/no-prerender.mjs",
     "start": "node scripts/serve.mjs",
     "lint": "eslint",
     "test": "vitest run",

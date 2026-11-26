@@ -117,8 +117,18 @@ Three layers, from the edge inward:
 1. **`proxy.ts`** ([`frontend/proxy.ts`](../../frontend/proxy.ts)) runs on
    every request except static assets. Next 16 runs proxy on Node. It first
    removes forwarded-address headers the reverse proxy did not vouch for
-   (section 2 explains why). Then, for any path not under `/api/`, it calls
-   `guardRedirect` from [`lib/auth/guard.ts`](../../frontend/lib/auth/guard.ts).
+   (section 2 explains why), and any content security policy the browser
+   sent, since Next would stamp the page's scripts with that policy's nonce.
+   Then, for any path not under `/api/`, it calls `guardRedirect` from
+   [`lib/auth/guard.ts`](../../frontend/lib/auth/guard.ts). A screen it lets
+   through is served, in production, under the policy in
+   [`lib/csp.ts`](../../frontend/lib/csp.ts) around a nonce minted for that
+   request; the same value goes on the request, where Next reads the nonce,
+   and on the response, which the browser enforces. A static policy with no
+   inline script covers the rest: the proxy sends it on `/api/*`, and
+   `next.config.ts` on the paths its matcher skips (framework assets, the
+   icons, `robots.txt`, `sitemap.xml`, `/brand/`), so a not-found page
+   there shows but does not hydrate.
 2. **`guardRedirect`** decides from the path and whether the session cookie
    exists, under the name `sessionCookie()` in
    [`lib/auth/session.ts`](../../frontend/lib/auth/session.ts) gives it:
@@ -1049,6 +1059,13 @@ These add to "Things worth knowing before changing them" in
   `npm run smoke` catches it on `/login` only. Open any other page you touched
   in `make front` (or `make front-start`) to see it. `make front-check` does
   not run smoke.
+- **A page rendered at build time never hydrates in production.** Its
+  scripts carry no nonce, and the content policy blocks them. The same holds for
+  `.next/server/pages/500.html`, the static fallback copied from
+  `/_global-error`: if Next ever serves it, it shows and its Reload button
+  does nothing. Every route is
+  dynamic because the root layout reads cookies; `npm run build` fails when a
+  page stops being (`scripts/no-prerender.mjs`).
 - **Every prop of a Client Component is serialised into the payload.** Pass a
   dictionary slice, not the whole `Dictionary`, where the payload matters (the
   play screen).

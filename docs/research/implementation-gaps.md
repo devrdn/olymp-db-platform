@@ -13,6 +13,8 @@ Statuses:
   branch can never be reached.
 - **Operational**: a gap in running, backing up or watching the installation.
 - **Stale**: the code is ahead of, or different from, what the document says.
+- **Closed**: served by the code since the snapshot. The entry is kept as
+  found, with where it was closed; its other cites are as of the snapshot.
 
 Where a document states an order or a priority, it is reported. The
 architecture's section 15 says of its own list: "The order is numeric, not by
@@ -30,7 +32,7 @@ priority" (`docs/ARCHITECTURE.md:4031`).
 | N6 | ER diagram and "show me the data" in the schema browser | Not implemented | Participant UI | `docs/ARCHITECTURE.md:162-170` |
 | N7 | `Esc` aborts a running query | Not implemented | Participant UI + API | `docs/design/SPEC.md:982` |
 | N8 | Readiness event when a participant's database is ready | Not implemented | Events | `docs/ARCHITECTURE.md:566-570` |
-| N9 | Nonce-based CSP | Not implemented | Security | `frontend/README.md:215-219` |
+| N9 | Nonce-based CSP | Closed | Security | `frontend/README.md:215-219` |
 | N10 | `/design` showcase | Not implemented (deferred, trigger passed) | Frontend | `docs/design/SPEC.md:938-944` |
 | N11 | End-to-end tests | Not implemented | Testing | `docs/design/SPEC.md:929-931` |
 | N12 | Accent colour: rule and code reconciled | Not implemented | Design | `docs/ARCHITECTURE.md:4088-4095` (§15 item 11) |
@@ -213,6 +215,16 @@ strict CSP" (`docs/ARCHITECTURE.md:3522`).
 
 Evidence: production CSP allows `script-src 'self' 'unsafe-inline'`
 (`frontend/next.config.ts:39-44`).
+
+Closed: the policy is `script-src 'self' 'nonce-…' 'strict-dynamic'`
+(`frontend/lib/csp.ts:59`). `frontend/proxy.ts` mints a nonce for every
+screen in production and sends the policy on the request, where Next reads
+it, and on the response (`frontend/proxy.ts:67-75`), after removing any
+policy the browser sent (`frontend/proxy.ts:27`). A static one with no inline script goes on
+`/api/*` from the proxy, and on the paths the proxy skips from
+`next.config.ts`.
+A page rendered at build time would carry no nonce, so `npm run build` fails
+on one (`frontend/package.json:11`, `frontend/scripts/no-prerender.mjs`).
 
 ### N10. The `/design` showcase
 
