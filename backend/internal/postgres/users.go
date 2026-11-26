@@ -220,6 +220,28 @@ func (r *Users) LinkExternalIdentity(ctx context.Context, id users.ExternalIdent
 	return nil
 }
 
+// IdentitiesOf lists the account's identities; external_identities_user_idx
+// serves it.
+func (r *Users) IdentitiesOf(ctx context.Context, userID uuid.UUID) ([]users.LinkedIdentity, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT id, user_id, provider, issuer, subject, COALESCE(email, ''), created_at, last_used_at
+		FROM external_identities WHERE user_id = $1
+		ORDER BY created_at, id
+		LIMIT $2`, userID, users.MaxIdentitiesListed)
+	if err != nil {
+		return nil, fmt.Errorf("read the account's identities: %w", err)
+	}
+	linked, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (users.LinkedIdentity, error) {
+		var l users.LinkedIdentity
+		err := row.Scan(&l.ID, &l.UserID, &l.Provider, &l.Issuer, &l.Subject, &l.Email, &l.LinkedAt, &l.LastUsedAt)
+		return l, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the account's identities: %w", err)
+	}
+	return linked, nil
+}
+
 // HoldsOtherIdentityAt reports whether the account is linked to another
 // subject at the issuer; external_identities_user_idx serves it.
 func (r *Users) HoldsOtherIdentityAt(ctx context.Context, userID uuid.UUID, provider, issuer, subject string) (bool, error) {

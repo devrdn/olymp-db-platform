@@ -18,6 +18,7 @@ import (
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage"
 	"github.com/devrdn/olymp-db-platform/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
+	"github.com/devrdn/olymp-db-platform/backend/internal/users/userstest"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -1732,6 +1733,17 @@ func TestLockDoesNotHoldUpRowsReferencingTheAccount(t *testing.T) {
 	if err := <-held; err != nil {
 		t.Errorf("the lock's transaction = %v", err)
 	}
+}
+
+func TestUsersHonoursTheExternalIdentitiesContract(t *testing.T) {
+	userstest.ExternalIdentitiesContract(t, func(t *testing.T, run func(context.Context, userstest.IdentityTarget)) {
+		withTx(t, func(ctx context.Context) {
+			run(ctx, userstest.IdentityTarget{
+				Store:   NewUsers(testPool),
+				NewUser: func() uuid.UUID { return makeUser(t, ctx, "linked-"+uuid.NewString()[:8]).ID },
+			})
+		})
+	})
 }
 
 func TestHoldsOtherIdentityAtNamesOnlyAnotherSubjectOfTheIssuer(t *testing.T) {

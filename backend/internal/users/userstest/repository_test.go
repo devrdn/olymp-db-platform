@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
+	"github.com/google/uuid"
 )
 
 // Runs many fresh repositories, since map order decides which row is seen
@@ -38,4 +39,14 @@ func TestByLoginStillFindsADeletedAccountWithNoLiveRecreation(t *testing.T) {
 	if got.ID != gone.ID {
 		t.Fatalf("ByLogin() = %v, want the deleted account %v", got.ID, gone.ID)
 	}
+}
+
+func TestRepositoryHonoursTheExternalIdentitiesContract(t *testing.T) {
+	ExternalIdentitiesContract(t, func(t *testing.T, run func(context.Context, IdentityTarget)) {
+		repo := New()
+		run(context.Background(), IdentityTarget{
+			Store:   repo,
+			NewUser: func() uuid.UUID { return repo.Add(users.User{Login: "u-" + uuid.NewString()[:8], FullName: "U"}).ID },
+		})
+	})
 }
