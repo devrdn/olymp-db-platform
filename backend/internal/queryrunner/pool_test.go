@@ -159,15 +159,26 @@ func TestAConnectionWhoseQueryDidNotFinishCleanlyIsNotReused(t *testing.T) {
 }
 
 // A kept connection must not stop the reclaim sweep's plain DROP DATABASE.
+//
+// The test runs the timeout out itself, so the kept connection is counted
+// while nothing can expire it; 45 s differs from the default so the armed
+// length proves the limit is passed through.
 func TestAnIdleConnectionIsClosedAfterItsIdleTimeout(t *testing.T) {
 	limits := unlimited()
-	limits.IdleTimeout = 300 * time.Millisecond
+	limits.IdleTimeout = 45 * time.Second
 	runner, database := setupWith(t, limits, anything{})
+	armed := queryrunner.HoldIdleTimeouts(runner)
 
 	backend(t, runner, database)
 	if n := participantBackends(t, database); n != 1 {
-		t.Fatalf("right after a read the runner holds %d connections, want the one it kept", n)
+		t.Fatalf("after a read the runner holds %d connections, want the one it kept", n)
 	}
+	timeouts := armed()
+	if len(timeouts) != 1 || timeouts[0].After != limits.IdleTimeout {
+		t.Fatalf("idle timeouts armed: %+v, want one of %v", timeouts, limits.IdleTimeout)
+	}
+
+	timeouts[0].RunOut()
 	if n := eventually(t, 0, database); n != 0 {
 		t.Fatalf("after the idle timeout the runner still holds %d connections", n)
 	}

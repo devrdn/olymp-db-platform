@@ -62,6 +62,9 @@ type pool struct {
 	lent   int
 	idle   map[string]*idleConn
 	closed bool
+	// afterFunc arms an idle timeout: time.AfterFunc, unless a test holds
+	// the timeouts to run them out itself.
+	afterFunc func(time.Duration, func()) *time.Timer
 }
 
 type idleConn struct {
@@ -85,6 +88,7 @@ func newPool(dial dialer, capacity, maxIdle int, idleTimeout time.Duration) *poo
 		capacity:    capacity,
 		maxIdle:     maxIdle,
 		idleTimeout: idleTimeout,
+		afterFunc:   time.AfterFunc,
 		idle:        make(map[string]*idleConn),
 	}
 }
@@ -171,7 +175,7 @@ func (p *pool) release(ctx context.Context, s *session, clean bool) {
 			evicted = p.oldestIdleLocked()
 		}
 		kept := &idleConn{session: s, since: time.Now()}
-		kept.timer = time.AfterFunc(p.idleTimeout, func() { p.expire(kept) })
+		kept.timer = p.afterFunc(p.idleTimeout, func() { p.expire(kept) })
 		p.idle[s.database] = kept
 		p.mu.Unlock()
 		// The caller's answer need not wait on another participant's close.
