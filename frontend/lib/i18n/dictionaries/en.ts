@@ -925,6 +925,8 @@ const en = {
       confirm:
         "Drop the database of “{who}”? Any query they are running right now is lost, and a fresh copy is made the next time they act. Their answers, their score and their clock are not touched.",
       sizeUnknown: "unknown",
+      overQuota: "over size limit",
+      overQuotaSince: "since {time}",
       truncated: "There are more databases than this list shows.",
       columns: {
         database: "Database",

@@ -204,6 +204,8 @@ const gameInstanceSchema = z
     size_bytes: z.number().default(0),
     // A size the game cluster could not report must not show as zero bytes.
     size_known: z.boolean().default(false),
+    // When the quota monitor found the copy at its size limit; null while within it.
+    over_quota_since: z.string().nullable().default(null),
     created_at: z.string().default(""),
     updated_at: z.string().default(""),
   })
@@ -217,6 +219,7 @@ const gameInstanceSchema = z
     status: raw.status,
     sizeBytes: raw.size_bytes,
     sizeKnown: raw.size_known,
+    overQuotaSince: raw.over_quota_since,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
   }));

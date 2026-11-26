@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { gameSchema, uploadLimitsSchema, uploadSchema, uploadWindowSchema } from "./game";
+import { gameInstancesSchema, gameSchema, uploadLimitsSchema, uploadSchema, uploadWindowSchema } from "./game";
 
 const limits = { enabled: true, chunk_bytes: 8 * 1024 * 1024, max_file_bytes: 4 * 1024 * 1024 * 1024 };
 
@@ -172,5 +172,24 @@ describe("uploadWindowSchema", () => {
     expect(() =>
       uploadWindowSchema.parse({ from_line: 1, lines: null, total_lines: 0, truncated: false }),
     ).toThrow();
+  });
+});
+
+describe("gameInstancesSchema", () => {
+  const row = { database: "game_c1_u1", status: "ready" };
+
+  test("reads the moment a copy was flagged as over its size limit", () => {
+    const { instances } = gameInstancesSchema.parse({
+      instances: [{ ...row, over_quota_since: "2026-03-01T12:05:00Z" }],
+    });
+
+    expect(instances[0]?.overQuotaSince).toBe("2026-03-01T12:05:00Z");
+  });
+
+  test.each([
+    ["null", { ...row, over_quota_since: null }],
+    ["absent", row],
+  ])("reads a copy within its limit when the flag is %s", (_, instance) => {
+    expect(gameInstancesSchema.parse({ instances: [instance] }).instances[0]?.overQuotaSince).toBeNull();
   });
 });

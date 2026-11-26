@@ -90,7 +90,19 @@ export function GameDatabases({
                     {instance.templateVersion}
                   </td>
                   <td className={CELL}>
-                    <Tag tone={STATUS_TONE[instance.status]}>{t.status[instance.status]}</Tag>
+                    <div className="flex flex-col items-start gap-1">
+                      <Tag tone={STATUS_TONE[instance.status]}>{t.status[instance.status]}</Tag>
+                      {instance.overQuotaSince !== null ? (
+                        <span className="flex flex-wrap items-center gap-x-1.5">
+                          <Tag tone="warn">{t.overQuota}</Tag>
+                          <span className="text-small text-ink-2">
+                            {fill(t.overQuotaSince, {
+                              time: formatMoment(instance.overQuotaSince, { locale }),
+                            })}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className={cn(CELL, "font-mono text-data text-ink-2")}>
                     {instance.sizeKnown ? readableBytes(instance.sizeBytes) : t.sizeUnknown}
