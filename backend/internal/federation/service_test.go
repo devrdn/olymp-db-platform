@@ -335,21 +335,42 @@ func (f *fixture) unlink(t *testing.T, u users.User) {
 	}
 }
 
-// The owner ruled against barring the identity: an unlink cuts the link, and
-// the address the provider vouches for may tie it again.
-func TestAnUnlinkedIdentityWithATrustedEmailLinksAgainByIt(t *testing.T) {
+// An administrator's unlink keeps that external account out, though the
+// address it vouches for is still the account's and verified.
+func TestAnUnlinkedIdentityWithATrustedEmailIsRefusedAsUnlinked(t *testing.T) {
 	f := newFixture(t)
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
 	f.link(t, ana, "sub-ana")
+	f.unlink(t, ana)
+	before := f.accountCount()
+
+	_, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+
+	if !errors.Is(err, users.ErrIdentityUnlinked) {
+		t.Fatalf("Resolve() = %v, want ErrIdentityUnlinked", err)
+	}
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want ana's left unlinked", linked, err)
+	}
+	if f.accountCount() != before {
+		t.Errorf("%d accounts, want %d: no account is made in its place", f.accountCount(), before)
+	}
+}
+
+// The rightful holder's own account at the same provider is another subject.
+func TestAnotherIdentityOfTheIssuerStillLinksAfterAnUnlink(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
+	f.link(t, ana, "sub-previous-holder")
 	f.unlink(t, ana)
 
 	got, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
 
 	if err != nil || got.ID != ana.ID {
-		t.Fatalf("Resolve() = %v, %v; want ana's account, linked again by its address", got.ID, err)
+		t.Fatalf("Resolve() = %v, %v; want ana's account linked to the other identity", got.ID, err)
 	}
-	if f.store.byEmail != 1 || len(f.accounts.linked) != 1 {
-		t.Errorf("looked up by email %d times and linked %d times, want the identity no longer found and linked again", f.store.byEmail, len(f.accounts.linked))
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" {
+		t.Errorf("identities = %+v, %v; want sub-ana", linked, err)
 	}
 }
 

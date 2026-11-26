@@ -1746,6 +1746,27 @@ func TestUsersHonoursTheExternalIdentitiesContract(t *testing.T) {
 	})
 }
 
+// The fake has no row to remove an account by, so the cascade is held here.
+func TestRemovingAnAccountsRowRemovesItsUnlinkedIdentities(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		gone := makeUser(t, ctx, "unlinked-cascade")
+		if _, err := repo.RecordUnlinked(ctx, microsoftIdentity(gone.ID, "sub-unlinked")); err != nil {
+			t.Fatalf("RecordUnlinked() = %v", err)
+		}
+
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `DELETE FROM users WHERE id = $1`, gone.ID); err != nil {
+			t.Fatalf("remove the account's row: %v", err)
+		}
+
+		var left int
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT count(*) FROM unlinked_identities WHERE user_id = $1`, gone.ID).Scan(&left); err != nil || left != 0 {
+			t.Errorf("unlinked identities left = %d, %v; want none", left, err)
+		}
+	})
+}
+
 func TestHoldsOtherIdentityAtNamesOnlyAnotherSubjectOfTheIssuer(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -1860,6 +1881,46 @@ func TestUnlinkExternalWaitsForALinkInFlight(t *testing.T) {
 	}
 	if !signsInOtherwise {
 		t.Error("the entry says the account no longer signs in, though the link committed first")
+	}
+}
+
+// A sign-in that links by the address while the unlink holds the account
+// waits for it, and then meets the record the unlink left: it cannot slip in
+// between the delete and the record.
+func TestALinkRacingAnUnlinkMeetsTheUnlinkedRecord(t *testing.T) {
+	tag := "ext-relink-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	repo := NewUsers(testPool)
+	ctx := context.Background()
+	if err := repo.MarkEmailVerified(ctx, ana.ID, time.Now()); err != nil {
+		t.Fatalf("verify the address: %v", err)
+	}
+	identity := externalLink(tag)
+	identity.UserID = ana.ID
+	if err := repo.LinkExternalIdentity(ctx, identity); err != nil {
+		t.Fatalf("LinkExternalIdentity() = %v", err)
+	}
+	linked, err := repo.IdentitiesOf(ctx, ana.ID)
+	if err != nil || len(linked) != 1 {
+		t.Fatalf("IdentitiesOf() = %+v, %v", linked, err)
+	}
+
+	err = raceOnTwoConnections(t,
+		func(ctx context.Context) error {
+			return service.UnlinkExternal(ctx, uuid.Nil, ana.ID, linked[0].ID)
+		},
+		func(ctx context.Context) error {
+			_, err := service.LinkExternal(ctx, users.LinkExternalCommand{UserID: ana.ID, Identity: externalLink(tag), VerifiedAt: time.Now()})
+			return err
+		},
+		"FOR NO KEY UPDATE")
+
+	if !errors.Is(err, users.ErrIdentityUnlinked) {
+		t.Errorf("LinkExternal() = %v, want ErrIdentityUnlinked", err)
+	}
+	if n := countIdentities(t, ana.ID); n != 0 {
+		t.Errorf("identities = %d, want none", n)
 	}
 }
 

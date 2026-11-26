@@ -29,8 +29,9 @@ type Store interface {
 // leaving nothing behind. LinkExternal re-reads the account under a lock and
 // refuses users.ErrStaffNotLinkable, users.ErrUnverifiedNotLinkable, the
 // blocked and deleted sentinels, users.ErrNotFound when the account no longer
-// holds the identity's email, and users.ErrIssuerAlreadyLinked when it holds
-// another identity at the issuer.
+// holds the identity's email, users.ErrIdentityUnlinked when an administrator
+// unlinked this identity from it, and users.ErrIssuerAlreadyLinked when it
+// holds another identity at the issuer.
 // LinkExternal drops a one-time password and returns the account as it then
 // stands, whose session generation a sign-in must use.
 type Accounts interface {

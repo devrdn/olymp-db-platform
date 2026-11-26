@@ -330,15 +330,19 @@ password. Each other way in is the installation's choice:
   installation's own directory is not affected, and a staff account is
   never linked this way. Do not give an address to somebody new. If it has
   happened, an administrator blocks the account, or unlinks the identity
-  (`DELETE /users/{id}/identities/{identityID}`) and changes the account's
-  address: unlinked, the identity no longer enters the account, but the old
-  address would link it again.
+  (`DELETE /users/{id}/identities/{identityID}`): unlinked, it neither
+  enters the account nor links to it again by the address, until an
+  administrator allows it again
+  (`DELETE /users/{id}/unlinked-identities/{unlinkedID}`). Unlinking does
+  not keep out whoever holds the account's mailbox, since password recovery
+  by email still reaches it; blocking the account does.
 - **What the audit trail records.** A password sign-up is `user.create` with
   no actor; a first provider sign-in that made an account is
   `user.external_sign_up`, one linked to an existing account
   `user.external_identity_link`, and a one-time password it dropped
   `user.one_time_password_retire`; an administrator unlinking an identity is
-  `user.external_identity_unlink`; a password set through a mailed link is
+  `user.external_identity_unlink`, and allowing it to link again
+  `user.external_identity_allow`; a password set through a mailed link is
   `user.password_reset_by_link`. The sign-in that follows a confirmed
   sign-up, and a sign-in through a provider, are `auth.login` with `method`
   `signup`, `microsoft`, `google` or `github`; a password sign-in carries
@@ -595,6 +599,7 @@ signing keys that could not be fetched.
 | `external_signin_staff_account` | "This is an organiser's or administrator's account. Sign in with its password or through your organisation's own account, or ask an administrator to reset its password." | the address, or the account the identity is linked to, holds a staff role or manages or owns a contest that is not archived, and the provider did not say at this sign-in that the person belongs to the installation's own directory: for Microsoft, a member of `MICROSOFT_HOME_TENANT_ID` whose token carries `acct` = 0 (a guest, a token without `acct`, another tenant's member or a personal account does not); for Google, an account of `GOOGLE_HOME_DOMAIN` with a verified email; GitHub never does |
 | `external_signin_conflict` | "You cannot sign in here with that account: your account on this site is linked to another one at the same service, or your organisation is not admitted. Ask an administrator." | the account the address belongs to is already linked to another identity of the same issuer (for Microsoft, the same tenant), as when an organisation re-creates its users; or `MICROSOFT_TENANT` does not admit their tenant. Trying again changes nothing |
 | `external_signin_unverified` | "An account here already uses this email address but has never confirmed it. If the account is yours, sign in with its password if it has one, or reset the password by email: that confirms the address, and signing in this way will then work. If it is not yours, or the password cannot be reset by email, ask an administrator." | the address belongs to an account that does not act as staff, has never verified the address and is not on a one-time password (somebody chose its password, or it has none). Such an account could have been made with somebody else's address, as event registration with mail off does. No account is created in its place. A password reset link verifies the address, and an administrator's reset puts the account on a one-time password; after either, the sign-in links |
+| `external_signin_unlinked` | "An administrator disconnected this sign-in service from your account here, so you cannot sign in with it. Contact an administrator." | an administrator unlinked this external account from the account its address belongs to and has not allowed it again. Nothing is stored and no account is created in its place. Another external account of the same person still links |
 | `external_signin_closed` | "That account is not linked to an account here, and new accounts cannot be created. Ask the organisers for one." | nothing to sign in to, and `SELF_SIGNUP_ENABLED` is off |
 | `external_signin_unavailable` | "Signing in this way is switched off here. Sign in another way, or ask an administrator." | an administrator switched the provider off ([Switching a provider off](#switching-a-provider-off)) |
 | `account_blocked` | "This account is blocked. Contact an administrator." | the account is blocked or deleted |

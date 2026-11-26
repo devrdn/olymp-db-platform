@@ -49,9 +49,14 @@ const (
 	ActionUserExternalIdentityLink = "user.external_identity_link"
 	// ActionUserExternalIdentityUnlink records an administrator unlinking an
 	// identity from an account. It carries the identity's id, provider and
-	// issuer, never its subject, and whether the account still signs in
-	// another way.
+	// issuer, never its subject, the id of the record that keeps it out
+	// (unlinked_id, as ActionUserExternalIdentityAllow names it), and whether
+	// the account still signs in another way.
 	ActionUserExternalIdentityUnlink = "user.external_identity_unlink"
+	// ActionUserExternalIdentityAllow records an administrator allowing an
+	// unlinked identity to link to the account again. It carries the record's
+	// id, the provider and the issuer, never the subject.
+	ActionUserExternalIdentityAllow = "user.external_identity_allow"
 	// ActionUserOneTimePasswordRetire records an external sign-in dropping the
 	// one-time password of the account it entered; it carries the provider.
 	ActionUserOneTimePasswordRetire = "user.one_time_password_retire" // #nosec G101 -- an audit action name, not a credential.
@@ -195,7 +200,7 @@ var actions = []string{
 	ActionUserPasswordReset, ActionPasswordChange, ActionUserPasswordResetByLink,
 	ActionUserSignInUnlock, ActionUserSignInDetailsEmailed,
 	ActionUserExternalSignUp, ActionUserExternalIdentityLink, ActionUserExternalIdentityUnlink,
-	ActionUserOneTimePasswordRetire,
+	ActionUserExternalIdentityAllow, ActionUserOneTimePasswordRetire,
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,

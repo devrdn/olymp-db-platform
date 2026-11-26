@@ -69,6 +69,9 @@ func PassedThrough() []error {
 		users.ErrNotFound, users.ErrEmailTaken, users.ErrLoginTaken,
 		// The claims passed here but not the account's own rules.
 		users.ErrInvalidAccount,
+		// An administrator unlinked this identity from the account its
+		// address finds.
+		users.ErrIdentityUnlinked,
 	}
 }
 

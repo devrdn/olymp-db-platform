@@ -301,6 +301,10 @@ func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 			message: "Internal server error", logged: true},
 		users.ErrIdentityNotFound: {status: http.StatusNotFound, code: "identity_not_found",
 			message: "This sign-in service is no longer linked to the account"},
+		users.ErrIdentityUnlinked: {status: http.StatusInternalServerError, code: "internal_error",
+			message: "Internal server error", logged: true},
+		users.ErrUnlinkedIdentityNotFound: {status: http.StatusNotFound, code: "unlinked_identity_not_found",
+			message: "This sign-in service is already allowed again"},
 	}
 
 	declared := map[string]bool{}
@@ -936,6 +940,7 @@ func TestEveryExternalSignInErrorHasItsRedirect(t *testing.T) {
 		users.ErrEmailTaken:             failed,
 		users.ErrLoginTaken:             failed,
 		users.ErrInvalidAccount:         failed,
+		users.ErrIdentityUnlinked:       {code: "external_signin_unlinked"},
 		auth.ErrAccountBlocked:          {code: "account_blocked"},
 		errSignInSwitchedOff:            {code: "external_signin_unavailable"},
 	}

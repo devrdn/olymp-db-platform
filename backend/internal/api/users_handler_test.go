@@ -787,8 +787,8 @@ func TestIdentitiesEndpointAnswersAnEmptyListAsOne(t *testing.T) {
 
 	rec := f.do(http.MethodGet, "/users/"+ana.ID.String()+"/identities", "")
 
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"has_password":false,"items":[]}` {
-		t.Errorf("answer = %d %s, want 200 with no password and an empty list", rec.Code, rec.Body)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"has_password":false,"items":[],"unlinked":[]}` {
+		t.Errorf("answer = %d %s, want 200 with no password and empty lists", rec.Code, rec.Body)
 	}
 }
 
@@ -837,10 +837,12 @@ func TestIdentityEndpointsNeedThePermission(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionAuditView)
 	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
 	linked := f.repo.Link(t, users.ExternalIdentity{UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/tenant/v2.0", Subject: "sub-secret", Email: ""})
+	unlinked := f.unlinked(t, ana.ID)
 
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/users/" + ana.ID.String() + "/identities"},
 		{http.MethodDelete, "/users/" + ana.ID.String() + "/identities/" + linked.ID.String()},
+		{http.MethodDelete, "/users/" + ana.ID.String() + "/unlinked-identities/" + unlinked.ID.String()},
 	} {
 		if rec := f.do(c.method, c.path, ""); rec.Code != http.StatusForbidden {
 			t.Errorf("%s %s = %d, want 403", c.method, c.path, rec.Code)
@@ -848,6 +850,103 @@ func TestIdentityEndpointsNeedThePermission(t *testing.T) {
 	}
 	if held, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(held) != 1 {
 		t.Errorf("identities = %+v, %v; want the identity kept", held, err)
+	}
+	if left, err := f.repo.UnlinkedIdentitiesOf(t.Context(), ana.ID); err != nil || len(left) != 1 {
+		t.Errorf("unlinked = %+v, %v; want the record kept", left, err)
+	}
+}
+
+// unlinked records an identity as unlinked from the account and returns the
+// record.
+func (f *apiFixture) unlinked(t *testing.T, userID uuid.UUID) users.UnlinkedIdentity {
+	t.Helper()
+	identity := users.ExternalIdentity{UserID: userID, Provider: users.ProviderGitHub, Issuer: "https://github.com", Subject: "sub-secret", Email: "ana@example.edu"}
+	unlinked, err := f.repo.RecordUnlinked(t.Context(), identity)
+	if err != nil {
+		t.Fatalf("RecordUnlinked() = %v", err)
+	}
+	return unlinked
+}
+
+func TestIdentitiesEndpointListsTheUnlinkedIdentities(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+	unlinked := f.unlinked(t, ana.ID)
+
+	rec := f.do(http.MethodGet, "/users/"+ana.ID.String()+"/identities", "")
+
+	var body struct {
+		Unlinked []map[string]any `json:"unlinked"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+		t.Fatalf("answer = %d %s, want 200 JSON", rec.Code, rec.Body)
+	}
+	want := map[string]any{
+		"id": unlinked.ID.String(), "provider": users.ProviderGitHub, "issuer": "https://github.com", "email": "ana@example.edu",
+		"unlinked_at": unlinked.UnlinkedAt.UTC().Format(time.RFC3339),
+	}
+	if len(body.Unlinked) != 1 || !maps.Equal(body.Unlinked[0], want) {
+		t.Errorf("unlinked = %v, want %v", body.Unlinked, want)
+	}
+	if strings.Contains(rec.Body.String(), "sub-secret") {
+		t.Errorf("the response publishes the identity's subject: %s", rec.Body)
+	}
+}
+
+func TestUnlinkingAnIdentityListsItAsUnlinked(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+	linked := f.repo.Link(t, users.ExternalIdentity{UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/tenant/v2.0", Subject: "sub-secret"})
+
+	if rec := f.do(http.MethodDelete, "/users/"+ana.ID.String()+"/identities/"+linked.ID.String(), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("unlink = %d %s, want 204", rec.Code, rec.Body)
+	}
+
+	if unlinked, err := f.repo.UnlinkedIdentitiesOf(t.Context(), ana.ID); err != nil || len(unlinked) != 1 || unlinked[0].Issuer != linked.Issuer {
+		t.Errorf("unlinked = %+v, %v; want the identity just unlinked", unlinked, err)
+	}
+}
+
+func TestAllowEndpointLiftsTheUnlinkedIdentityAs204(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+	unlinked := f.unlinked(t, ana.ID)
+
+	rec := f.do(http.MethodDelete, "/users/"+ana.ID.String()+"/unlinked-identities/"+unlinked.ID.String(), "")
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+	if left, err := f.repo.UnlinkedIdentitiesOf(t.Context(), ana.ID); err != nil || len(left) != 0 {
+		t.Errorf("unlinked = %+v, %v; want none", left, err)
+	}
+}
+
+func TestAllowEndpointAnswersWhatItCannotAllow(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+	own := f.unlinked(t, f.admin.ID)
+
+	for _, c := range []struct {
+		path   string
+		status int
+		code   string
+	}{
+		{"/users/" + ana.ID.String() + "/unlinked-identities/" + uuid.NewString(), http.StatusNotFound, "unlinked_identity_not_found"},
+		{"/users/" + ana.ID.String() + "/unlinked-identities/not-a-uuid", http.StatusBadRequest, "invalid_request"},
+		{"/users/not-a-uuid/unlinked-identities/" + uuid.NewString(), http.StatusBadRequest, "invalid_user_id"},
+		{"/users/" + f.admin.ID.String() + "/unlinked-identities/" + own.ID.String(), http.StatusBadRequest, "cannot_act_on_self"},
+	} {
+		if rec := f.do(http.MethodDelete, c.path, ""); rec.Code != c.status || errorCode(t, rec) != c.code {
+			t.Errorf("DELETE %s = %d %s, want %d %s", c.path, rec.Code, rec.Body, c.status, c.code)
+		}
+	}
+	if left, err := f.repo.UnlinkedIdentitiesOf(t.Context(), f.admin.ID); err != nil || len(left) != 1 {
+		t.Errorf("own unlinked = %+v, %v; want it kept", left, err)
+	}
+	rec := f.do(http.MethodDelete, "/users/"+ana.ID.String()+"/unlinked-identities/not-a-uuid", "")
+	if msg := errorMessage(t, rec); msg != "The unlinked identity identifier is not a UUID" {
+		t.Errorf("a malformed unlinked id is answered %q, want it named as an unlinked identity's", msg)
 	}
 }
 

@@ -135,6 +135,7 @@ describe("the sign-in page after an external sign-in came back refused", () => {
     "external_signin_conflict",
     "external_signin_unverified",
     "external_signin_unavailable",
+    "external_signin_unlinked",
     "account_blocked",
   ] as const)("says what %s means", async (code) => {
     methods(false, false, ["microsoft"]);

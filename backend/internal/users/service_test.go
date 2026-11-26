@@ -942,8 +942,13 @@ func TestUnlinkExternalRemovesTheIdentityEndsTheSessionsAndRecordsIt(t *testing.
 		entry.Entity != "user" || entry.EntityID != ana.ID.String() {
 		t.Errorf("entry = %+v, want the unlink of ana's identity by the administrator", entry)
 	}
+	unlinked, err := f.repo.UnlinkedIdentitiesOf(t.Context(), ana.ID)
+	if err != nil || len(unlinked) != 1 {
+		t.Fatalf("unlinked = %+v, %v; want the record the unlink left", unlinked, err)
+	}
 	want := map[string]any{
-		"identity_id": gone.ID.String(), "provider": users.ProviderMicrosoft, "issuer": gone.Issuer, "signs_in_otherwise": true,
+		"identity_id": gone.ID.String(), "unlinked_id": unlinked[0].ID.String(),
+		"provider": users.ProviderMicrosoft, "issuer": gone.Issuer, "signs_in_otherwise": true,
 	}
 	if !maps.Equal(entry.Payload, want) {
 		t.Errorf("payload = %v, want %v and never the subject", entry.Payload, want)
@@ -1045,6 +1050,199 @@ func TestUnlinkExternalRefusesWhatItCannotUnlink(t *testing.T) {
 				t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
 			}
 		})
+	}
+}
+
+// verifiedStudent is ana, whose address is proved, so a trusted sign-in links
+// to her by it.
+func (f *fixture) verifiedStudent(t *testing.T) users.User {
+	t.Helper()
+	proved := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	return f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{"student"}})
+}
+
+// linkByEmail links the identity to the account as a trusted sign-in does.
+func (f *fixture) linkByEmail(ctx context.Context, userID uuid.UUID, identity users.ExternalIdentity) error {
+	_, err := f.service.LinkExternal(ctx, users.LinkExternalCommand{UserID: userID, Identity: identity, VerifiedAt: time.Now()})
+	return err
+}
+
+// TestALinkRacingAnUnlinkMeetsTheUnlinkedRecord (internal/postgres) holds
+// the record to the unlink's transaction; the fake cannot roll one back.
+func TestUnlinkExternalRecordsTheIdentityAsUnlinkedInItsOneUnitOfWork(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.verifiedStudent(t)
+	gone := f.repo.Link(t, atTenant(ana.ID, "gone"))
+
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, gone.ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+
+	unlinked, err := f.repo.UnlinkedIdentitiesOf(t.Context(), ana.ID)
+	if err != nil || len(unlinked) != 1 || unlinked[0].ExternalIdentity != gone.ExternalIdentity {
+		t.Errorf("unlinked = %+v, %v; want %+v", unlinked, err, gone.ExternalIdentity)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("units of work = %d, want one", f.uow.Calls)
+	}
+}
+
+func TestLinkExternalRefusesAnIdentityAnAdministratorUnlinked(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.verifiedStudent(t)
+	identity := microsoftIdentity("sub-ana")
+	if err := f.linkByEmail(t.Context(), ana.ID, identity); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	linked, _ := f.repo.IdentitiesOf(t.Context(), ana.ID)
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, linked[0].ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+	f.sink.entries = nil
+
+	if err := f.linkByEmail(t.Context(), ana.ID, identity); !errors.Is(err, users.ErrIdentityUnlinked) {
+		t.Errorf("LinkExternal() after the unlink = %v, want ErrIdentityUnlinked", err)
+	}
+	if held, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(held) != 0 {
+		t.Errorf("identities = %+v, %v; want none", held, err)
+	}
+	if len(f.sink.entries) != 0 {
+		t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
+	}
+}
+
+// The rightful holder's own external account is another subject, and still
+// links by the address.
+func TestLinkExternalStillLinksAnotherSubjectAfterAnUnlink(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.verifiedStudent(t)
+	if err := f.linkByEmail(t.Context(), ana.ID, microsoftIdentity("sub-previous-holder")); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	linked, _ := f.repo.IdentitiesOf(t.Context(), ana.ID)
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, linked[0].ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+
+	if err := f.linkByEmail(t.Context(), ana.ID, microsoftIdentity("sub-ana")); err != nil {
+		t.Errorf("LinkExternal(another subject) = %v, want it linked", err)
+	}
+}
+
+func TestAllowExternalLetsTheUnlinkedIdentityLinkAgainAndRecordsIt(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.verifiedStudent(t)
+	identity := microsoftIdentity("sub-ana")
+	if err := f.linkByEmail(t.Context(), ana.ID, identity); err != nil {
+		t.Fatalf("LinkExternal() = %v", err)
+	}
+	linked, _ := f.repo.IdentitiesOf(t.Context(), ana.ID)
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, linked[0].ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+	unlinked, _ := f.repo.UnlinkedIdentitiesOf(t.Context(), ana.ID)
+	f.sink.entries = nil
+
+	if err := f.service.AllowExternal(t.Context(), f.actor, ana.ID, unlinked[0].ID); err != nil {
+		t.Fatalf("AllowExternal() = %v", err)
+	}
+
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("audit = %v, want the allow only", f.sink.actions())
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserExternalIdentityAllow || entry.ActorID == nil || *entry.ActorID != f.actor ||
+		entry.Entity != "user" || entry.EntityID != ana.ID.String() {
+		t.Errorf("entry = %+v, want the allow on ana's account by the administrator", entry)
+	}
+	want := map[string]any{"unlinked_id": unlinked[0].ID.String(), "provider": identity.Provider, "issuer": identity.Issuer}
+	if !maps.Equal(entry.Payload, want) {
+		t.Errorf("payload = %v, want %v and never the subject", entry.Payload, want)
+	}
+	if err := f.linkByEmail(t.Context(), ana.ID, identity); err != nil {
+		t.Errorf("LinkExternal() after the allow = %v, want it linked", err)
+	}
+}
+
+func TestAllowExternalLiftsTheRecordOfADeletedAccount(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	gone := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Status: users.StatusDeleted})
+	identity := atTenant(gone.ID, "gone")
+	unlinked, err := f.repo.RecordUnlinked(t.Context(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.service.AllowExternal(t.Context(), f.actor, gone.ID, unlinked.ID); err != nil {
+		t.Fatalf("AllowExternal() = %v, want the record lifted", err)
+	}
+	if still, err := f.repo.IsUnlinked(t.Context(), gone.ID, identity.Provider, identity.Issuer, identity.Subject); err != nil || still {
+		t.Errorf("IsUnlinked() = %v, %v; want the record gone", still, err)
+	}
+}
+
+func TestAllowExternalRefusesWhatItCannotAllow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		self            bool
+		account         bool
+		unknownUnlinked bool
+		want            error
+	}{
+		"one's own account":      {self: true, want: users.ErrCannotActOnSelf},
+		"an unknown account":     {account: true, want: users.ErrNotFound},
+		"an unknown unlinked id": {unknownUnlinked: true, want: users.ErrUnlinkedIdentityNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			ana := f.verifiedStudent(t)
+			identity := atTenant(ana.ID, "gone")
+			unlinked, err := f.repo.RecordUnlinked(t.Context(), identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor, account, unlinkedID := f.actor, ana.ID, unlinked.ID
+			if tc.self {
+				actor = ana.ID
+			}
+			if tc.account {
+				account = uuid.New()
+			}
+			if tc.unknownUnlinked {
+				unlinkedID = uuid.New()
+			}
+
+			if err := f.service.AllowExternal(t.Context(), actor, account, unlinkedID); !errors.Is(err, tc.want) {
+				t.Errorf("AllowExternal() = %v, want %v", err, tc.want)
+			}
+			if still, err := f.repo.IsUnlinked(t.Context(), ana.ID, identity.Provider, identity.Issuer, identity.Subject); err != nil || !still {
+				t.Errorf("IsUnlinked() = %v, %v; want the record kept", still, err)
+			}
+			if len(f.sink.entries) != 0 {
+				t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
+			}
+		})
+	}
+}
+
+func TestIdentitiesListsTheUnlinkedIdentitiesToo(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.verifiedStudent(t)
+	gone := f.repo.Link(t, atTenant(ana.ID, "gone"))
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, gone.ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+
+	got, err := f.service.Identities(t.Context(), ana.ID)
+
+	if err != nil || len(got.Items) != 0 || len(got.Unlinked) != 1 || got.Unlinked[0].ExternalIdentity != gone.ExternalIdentity {
+		t.Errorf("Identities() = %+v, %v; want no identity and the unlinked one", got, err)
 	}
 }
 
