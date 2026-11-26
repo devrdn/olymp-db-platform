@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -604,6 +605,24 @@ func (r *Repository) LastUsed(provider, issuer, subject string) time.Time {
 	return r.lastUsed[identityKey{provider, issuer, subject}]
 }
 
+func (r *Repository) UnlinkExternalIdentity(_ context.Context, userID, identityID uuid.UUID) (users.LinkedIdentity, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return users.LinkedIdentity{}, r.Err
+	}
+	for key, id := range r.identities {
+		if id.ID == identityID && id.UserID == userID {
+			gone := r.linked(key)
+			delete(r.identities, key)
+			delete(r.lastUsed, key)
+			return gone, nil
+		}
+	}
+	return users.LinkedIdentity{}, users.ErrIdentityNotFound
+}
+
 func (r *Repository) DeleteExternalIdentities(_ context.Context, userID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -630,19 +649,37 @@ func (r *Repository) IdentitiesOf(_ context.Context, userID uuid.UUID) ([]users.
 	}
 	var found []users.LinkedIdentity
 	for key, id := range r.identities {
-		if id.UserID != userID {
-			continue
+		if id.UserID == userID {
+			found = append(found, r.linked(key))
 		}
-		id.LastUsedAt = id.LinkedAt
-		if at, ok := r.lastUsed[key]; ok {
-			id.LastUsedAt = at
-		}
-		found = append(found, id)
 	}
 	slices.SortFunc(found, func(a, b users.LinkedIdentity) int {
 		return cmp.Or(a.LinkedAt.Compare(b.LinkedAt), bytes.Compare(a.ID[:], b.ID[:]))
 	})
 	return found[:min(len(found), users.MaxIdentitiesListed)], nil
+}
+
+// Link links the identity as LinkExternalIdentity does, failing t when that
+// refuses, and returns it as IdentitiesOf would.
+func (r *Repository) Link(t testing.TB, identity users.ExternalIdentity) users.LinkedIdentity {
+	t.Helper()
+	if err := r.LinkExternalIdentity(context.Background(), identity); err != nil {
+		t.Fatalf("link %s at %s: %v", identity.Subject, identity.Issuer, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.linked(identityKey{identity.Provider, identity.Issuer, identity.Subject})
+}
+
+// linked is the identity at key with its last use, which starts at the link.
+// Callers hold the lock.
+func (r *Repository) linked(key identityKey) users.LinkedIdentity {
+	id := r.identities[key]
+	id.LastUsedAt = id.LinkedAt
+	if at, ok := r.lastUsed[key]; ok {
+		id.LastUsedAt = at
+	}
+	return id
 }
 
 func containsFold(haystack, needle string) bool {

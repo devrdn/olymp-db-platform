@@ -410,6 +410,7 @@ flowchart LR
 | Block, unblock, delete, restore | `/users/{userID}` | `POST /users/{userID}/block`, `/unblock`, `/delete`, `/restore` | `users` | `users.manage`; blocking and deleting need a reason; never on oneself; never the last administrator |
 | Reset a password | `/users/{userID}` | `POST /users/{userID}/password-reset` | `users` | `users.manage`; the account must change it at next sign-in; `send_by_email` here and on `/bulk/password-reset` |
 | Lift a sign-in lockout | `/users/{userID}` | `POST /users/{userID}/sign-in/unlock` | `auth` | `users.manage` |
+| See and unlink an account's sign-ins through external services | `/users/{userID}` | `GET /users/{userID}/identities`, `DELETE /users/{userID}/identities/{identityID}` | `users` | `users.manage`; never on oneself, not on a deleted account; ends the account's sessions; allowed when it leaves no way to sign in (`has_password` says whether a password remains); a trusted email may link the identity again |
 | Change global roles | `/users/{userID}` | `PUT /users/{userID}/roles` | `users` | `users.manage`; never removes the last account able to manage accounts |
 | Read the audit trail | `/audit` | `GET /audit`, `GET /audit/actions` | `audit` | `audit.view` |
 | Brand the installation | `/settings` | `GET /settings/all`, `PUT /settings`, `PUT`, `DELETE /settings/images/{kind}` | `settings` | `settings.manage` |

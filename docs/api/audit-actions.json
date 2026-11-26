@@ -18,6 +18,7 @@
     "user.sign_in_details_emailed",
     "user.external_sign_up",
     "user.external_identity_link",
+    "user.external_identity_unlink",
     "user.one_time_password_retire",
     "contest.create",
     "contest.update",

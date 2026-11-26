@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -872,6 +873,178 @@ func TestLinkExternalRefusesAnInvalidIdentity(t *testing.T) {
 
 	if _, err := f.service.LinkExternal(t.Context(), users.LinkExternalCommand{UserID: ana.ID, Identity: identity, VerifiedAt: time.Now()}); !errors.Is(err, users.ErrInvalidAccount) {
 		t.Errorf("LinkExternal() = %v, want ErrInvalidAccount", err)
+	}
+}
+
+// atTenant is a Microsoft identity of the account at the tenant.
+func atTenant(userID uuid.UUID, tenant string) users.ExternalIdentity {
+	return users.ExternalIdentity{UserID: userID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/" + tenant + "/v2.0", Subject: "sub-" + tenant}
+}
+
+func TestIdentitiesListsTheLinkedIdentitiesAndWhetherTheAccountHasAPassword(t *testing.T) {
+	for name, hash := range map[string]string{"with a password": "a digest", "without one": ""} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", PasswordHash: hash})
+			linked := f.repo.Link(t, atTenant(ana.ID, "tenant"))
+
+			got, err := f.service.Identities(t.Context(), ana.ID)
+
+			if err != nil {
+				t.Fatalf("Identities() = %v", err)
+			}
+			if got.HasPassword != (hash != "") {
+				t.Errorf("HasPassword = %v, want %v", got.HasPassword, hash != "")
+			}
+			if len(got.Items) != 1 || got.Items[0] != linked {
+				t.Errorf("items = %+v, want %+v", got.Items, linked)
+			}
+		})
+	}
+}
+
+func TestIdentitiesOfAnUnknownAccountIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+
+	if _, err := f.service.Identities(t.Context(), uuid.New()); !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("Identities() = %v, want ErrNotFound", err)
+	}
+}
+
+func TestUnlinkExternalRemovesTheIdentityEndsTheSessionsAndRecordsIt(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", SessionGeneration: 3})
+	gone := f.repo.Link(t, atTenant(ana.ID, "gone"))
+	kept := f.repo.Link(t, atTenant(ana.ID, "kept"))
+
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, gone.ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 1 || linked[0].ID != kept.ID {
+		t.Errorf("identities = %+v, %v; want only the one kept", linked, err)
+	}
+	// Sessions record no sign-in method, so every one ends.
+	if stored, _ := f.repo.Get(ana.ID); stored.SessionGeneration != 4 {
+		t.Errorf("session generation = %d, want 4", stored.SessionGeneration)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("unit of work ran %d times, want once", f.uow.Calls)
+	}
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("audit = %v, want the unlink only", f.sink.actions())
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserExternalIdentityUnlink || entry.ActorID == nil || *entry.ActorID != f.actor ||
+		entry.Entity != "user" || entry.EntityID != ana.ID.String() {
+		t.Errorf("entry = %+v, want the unlink of ana's identity by the administrator", entry)
+	}
+	want := map[string]any{
+		"identity_id": gone.ID.String(), "provider": users.ProviderMicrosoft, "issuer": gone.Issuer, "signs_in_otherwise": true,
+	}
+	if !maps.Equal(entry.Payload, want) {
+		t.Errorf("payload = %v, want %v and never the subject", entry.Payload, want)
+	}
+}
+
+// The administrator who removes the last way in can issue a password next.
+func TestUnlinkExternalSaysWhetherTheAccountStillSignsIn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		hash  string
+		other bool
+		want  bool
+	}{
+		"a password":           {hash: "a digest", want: true},
+		"another identity":     {other: true, want: true},
+		"no other way to sign": {want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", PasswordHash: tc.hash})
+			gone := f.repo.Link(t, atTenant(ana.ID, "gone"))
+			if tc.other {
+				f.repo.Link(t, atTenant(ana.ID, "kept"))
+			}
+
+			if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, gone.ID); err != nil {
+				t.Fatalf("UnlinkExternal() = %v", err)
+			}
+
+			if len(f.sink.entries) != 1 || f.sink.entries[0].Payload["signs_in_otherwise"] != tc.want {
+				t.Errorf("audit = %+v, want signs_in_otherwise %v", f.sink.entries, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnlinkExternalUnlinksABlockedAccount(t *testing.T) {
+	f := newFixture(t)
+	f.service.WithExternalIdentities(f.repo)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Status: users.StatusBlocked})
+	gone := f.repo.Link(t, atTenant(ana.ID, "gone"))
+
+	if err := f.service.UnlinkExternal(t.Context(), f.actor, ana.ID, gone.ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(linked) != 0 {
+		t.Errorf("identities = %+v, %v; want none", linked, err)
+	}
+}
+
+func TestUnlinkExternalRefusesWhatItCannotUnlink(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status   string
+		self     bool
+		identity func(linked users.LinkedIdentity) uuid.UUID
+		account  func(ana users.User) uuid.UUID
+		want     error
+	}{
+		"one's own account": {self: true, want: users.ErrCannotActOnSelf},
+		"a deleted account": {status: users.StatusDeleted, want: users.ErrAccountDeleted},
+		"an unknown account": {
+			account: func(users.User) uuid.UUID { return uuid.New() }, want: users.ErrNotFound,
+		},
+		"an identity the account does not hold": {
+			identity: func(users.LinkedIdentity) uuid.UUID { return uuid.New() }, want: users.ErrIdentityNotFound,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.service.WithExternalIdentities(f.repo)
+			status := tc.status
+			if status == "" {
+				status = users.StatusActive
+			}
+			ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Status: status, SessionGeneration: 3})
+			linked := f.repo.Link(t, atTenant(ana.ID, "tenant"))
+			actor, account, identity := f.actor, ana.ID, linked.ID
+			if tc.self {
+				actor = ana.ID
+			}
+			if tc.account != nil {
+				account = tc.account(ana)
+			}
+			if tc.identity != nil {
+				identity = tc.identity(linked)
+			}
+
+			if err := f.service.UnlinkExternal(t.Context(), actor, account, identity); !errors.Is(err, tc.want) {
+				t.Errorf("UnlinkExternal() = %v, want %v", err, tc.want)
+			}
+			if held, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(held) != 1 {
+				t.Errorf("identities = %+v, %v; want the identity kept", held, err)
+			}
+			if stored, _ := f.repo.Get(ana.ID); stored.SessionGeneration != 3 {
+				t.Errorf("session generation = %d, want the sessions left alone", stored.SessionGeneration)
+			}
+			if len(f.sink.entries) != 0 {
+				t.Errorf("audit = %v, want nothing recorded", f.sink.actions())
+			}
+		})
 	}
 }
 
@@ -2101,7 +2274,8 @@ func newAccessFixture(t *testing.T) *accessFixture {
 	uow := &trackingUnitOfWork{}
 	access := &recordingAccessCache{uow: uow}
 	service := users.NewService(repo, audit.New(&collectingSink{}), uow, passwordtest.NewHasher()).
-		WithAccessCache(access)
+		WithAccessCache(access).
+		WithExternalIdentities(repo)
 	admin := repo.Add(users.User{Login: "admin", FullName: "Admin"})
 	return &accessFixture{service: service, repo: repo, access: access, uow: uow, admin: admin}
 }
@@ -2165,6 +2339,19 @@ func TestEveryChangeToAccessForgetsTheCachedAccount(t *testing.T) {
 		{name: "BulkResetPassword", both: true, run: func(f *accessFixture, target, other users.User) error {
 			_, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{target.ID, other.ID}, users.Delivery{})
 			return err
+		}},
+		{name: "UnlinkExternal", prepare: func(t *testing.T, f *accessFixture, target users.User) {
+			identity := microsoftIdentity("sub-ivanov")
+			identity.UserID = target.ID
+			if err := f.repo.LinkExternalIdentity(context.Background(), identity); err != nil {
+				t.Fatalf("LinkExternalIdentity() = %v", err)
+			}
+		}, run: func(f *accessFixture, target, _ users.User) error {
+			linked, err := f.repo.IdentitiesOf(context.Background(), target.ID)
+			if err != nil || len(linked) != 1 {
+				return fmt.Errorf("want one identity, have %+v (%v)", linked, err)
+			}
+			return f.service.UnlinkExternal(context.Background(), f.admin.ID, target.ID, linked[0].ID)
 		}},
 	}
 

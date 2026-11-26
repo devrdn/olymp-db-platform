@@ -273,6 +273,25 @@ func (r *Users) TouchExternalIdentity(ctx context.Context, provider, issuer, sub
 	return nil
 }
 
+// UnlinkExternalIdentity forgets one identity of the account and returns it.
+// The owner is in the WHERE, so an identity of another account is not found
+// rather than gone.
+func (r *Users) UnlinkExternalIdentity(ctx context.Context, userID, identityID uuid.UUID) (users.LinkedIdentity, error) {
+	var l users.LinkedIdentity
+	err := r.querier(ctx).QueryRow(ctx, `
+		DELETE FROM external_identities WHERE id = $2 AND user_id = $1
+		RETURNING id, user_id, provider, issuer, subject, COALESCE(email, ''), created_at, last_used_at`,
+		userID, identityID).
+		Scan(&l.ID, &l.UserID, &l.Provider, &l.Issuer, &l.Subject, &l.Email, &l.LinkedAt, &l.LastUsedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return users.LinkedIdentity{}, users.ErrIdentityNotFound
+	}
+	if err != nil {
+		return users.LinkedIdentity{}, fmt.Errorf("unlink external identity: %w", err)
+	}
+	return l, nil
+}
+
 // DeleteExternalIdentities forgets every identity of the account.
 func (r *Users) DeleteExternalIdentities(ctx context.Context, userID uuid.UUID) error {
 	if _, err := r.querier(ctx).Exec(ctx, `DELETE FROM external_identities WHERE user_id = $1`, userID); err != nil {

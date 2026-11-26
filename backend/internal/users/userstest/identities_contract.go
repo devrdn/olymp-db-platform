@@ -3,6 +3,7 @@ package userstest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/devrdn/olymp-db-platform/backend/internal/users"
@@ -91,6 +92,69 @@ func ExternalIdentitiesContract(t *testing.T, each func(t *testing.T, run func(c
 		each(t, func(ctx context.Context, target IdentityTarget) {
 			if linked := identitiesOf(t, ctx, target, target.NewUser()); len(linked) != 0 {
 				t.Errorf("identities = %+v, want none", linked)
+			}
+		})
+	})
+
+	t.Run("UnlinkExternalIdentity removes only the identity it names", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana := target.NewUser()
+			link(t, ctx, target, users.ExternalIdentity{UserID: ana, Provider: users.ProviderMicrosoft, Issuer: "https://login.example/a/v2.0", Subject: "sub-gone"})
+			link(t, ctx, target, users.ExternalIdentity{UserID: ana, Provider: users.ProviderGoogle, Issuer: "https://accounts.example", Subject: "sub-kept"})
+			before := identitiesOf(t, ctx, target, ana)
+			gone := before[0]
+
+			unlinked, err := target.Store.UnlinkExternalIdentity(ctx, ana, gone.ID)
+			if err != nil {
+				t.Fatalf("UnlinkExternalIdentity() = %v", err)
+			}
+
+			if unlinked.ID != gone.ID || unlinked.ExternalIdentity != gone.ExternalIdentity || !unlinked.LinkedAt.Equal(gone.LinkedAt) {
+				t.Errorf("UnlinkExternalIdentity() returned %+v, want %+v", unlinked, gone)
+			}
+			if after := identitiesOf(t, ctx, target, ana); len(after) != 1 || after[0].ID != before[1].ID {
+				t.Errorf("identities = %+v, want only %s", after, before[1].ID)
+			}
+			if _, err := target.Store.ByExternalIdentity(ctx, gone.Provider, gone.Issuer, gone.Subject); !errors.Is(err, users.ErrNotFound) {
+				t.Errorf("ByExternalIdentity(unlinked) = %v, want ErrNotFound", err)
+			}
+		})
+	})
+
+	t.Run("UnlinkExternalIdentity refuses an identity of another account and one already unlinked", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana, other := target.NewUser(), target.NewUser()
+			link(t, ctx, target, users.ExternalIdentity{UserID: ana, Provider: users.ProviderMicrosoft, Issuer: "https://login.example/a/v2.0", Subject: "sub-ana"})
+			held := identitiesOf(t, ctx, target, ana)[0]
+
+			if _, err := target.Store.UnlinkExternalIdentity(ctx, other, held.ID); !errors.Is(err, users.ErrIdentityNotFound) {
+				t.Errorf("UnlinkExternalIdentity(another account's) = %v, want ErrIdentityNotFound", err)
+			}
+			if linked := identitiesOf(t, ctx, target, ana); len(linked) != 1 {
+				t.Errorf("identities = %+v, want ana's still linked", linked)
+			}
+			if _, err := target.Store.UnlinkExternalIdentity(ctx, ana, held.ID); err != nil {
+				t.Fatalf("UnlinkExternalIdentity() = %v", err)
+			}
+			if _, err := target.Store.UnlinkExternalIdentity(ctx, ana, held.ID); !errors.Is(err, users.ErrIdentityNotFound) {
+				t.Errorf("a second UnlinkExternalIdentity() = %v, want ErrIdentityNotFound", err)
+			}
+		})
+	})
+
+	t.Run("an unlinked identity can be linked again", func(t *testing.T) {
+		each(t, func(ctx context.Context, target IdentityTarget) {
+			ana := target.NewUser()
+			identity := users.ExternalIdentity{UserID: ana, Provider: users.ProviderMicrosoft, Issuer: "https://login.example/a/v2.0", Subject: "sub-ana"}
+			link(t, ctx, target, identity)
+			if _, err := target.Store.UnlinkExternalIdentity(ctx, ana, identitiesOf(t, ctx, target, ana)[0].ID); err != nil {
+				t.Fatalf("UnlinkExternalIdentity() = %v", err)
+			}
+
+			link(t, ctx, target, identity)
+
+			if found, err := target.Store.ByExternalIdentity(ctx, identity.Provider, identity.Issuer, identity.Subject); err != nil || found.ID != ana {
+				t.Errorf("ByExternalIdentity() = %v, %v; want the account linked again", found.ID, err)
 			}
 		})
 	})

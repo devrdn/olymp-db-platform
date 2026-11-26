@@ -426,6 +426,10 @@
       "meaning": "The contest is running under ICPC scoring, whose penalty minutes are counted from the start date, so it cannot move while the contest runs. Every other setting may still be saved."
     },
     {
+      "code": "identity_not_found",
+      "meaning": "The account holds no sign-in through an external service with that identifier: it was never linked to this account, or it has been unlinked since."
+    },
+    {
       "code": "image_not_accepted",
       "meaning": "The file is not one of the picture formats this installation stores. The format is read from the bytes, not from the name."
     },

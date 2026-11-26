@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -70,7 +71,8 @@ func newAPIFixtureWithMail(t *testing.T, mail *users.Mail, status api.MailStatus
 		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
 	hasher := passwordtest.NewHasher()
-	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher)
+	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher).
+		WithExternalIdentities(repo)
 	if mail != nil {
 		service.WithMail(*mail)
 	}
@@ -743,6 +745,109 @@ func TestSignInUnlockEndpointNeedsThePermission(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden || f.unlocker.calls != 0 {
 		t.Errorf("status = %d, calls = %d, want 403 and no unlock", rec.Code, f.unlocker.calls)
+	}
+}
+
+func TestIdentitiesEndpointListsHowTheAccountSignsIn(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", PasswordHash: "a digest"})
+	linked := f.repo.Link(t, users.ExternalIdentity{UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/tenant/v2.0", Subject: "sub-secret", Email: "ana@example.edu"})
+
+	rec := f.do(http.MethodGet, "/users/"+ana.ID.String()+"/identities", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	var body struct {
+		HasPassword *bool            `json:"has_password"`
+		Items       []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body.HasPassword == nil || !*body.HasPassword {
+		t.Errorf("has_password = %v, want true", body.HasPassword)
+	}
+	want := map[string]any{
+		"id": linked.ID.String(), "provider": users.ProviderMicrosoft, "issuer": linked.Issuer, "email": "ana@example.edu",
+		"linked_at":    linked.LinkedAt.UTC().Format(time.RFC3339),
+		"last_used_at": linked.LastUsedAt.UTC().Format(time.RFC3339),
+	}
+	if len(body.Items) != 1 || !maps.Equal(body.Items[0], want) {
+		t.Errorf("items = %v, want %v", body.Items, want)
+	}
+	if strings.Contains(rec.Body.String(), "sub-secret") {
+		t.Errorf("the response publishes the identity's subject: %s", rec.Body)
+	}
+}
+
+func TestIdentitiesEndpointAnswersAnEmptyListAsOne(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+
+	rec := f.do(http.MethodGet, "/users/"+ana.ID.String()+"/identities", "")
+
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"has_password":false,"items":[]}` {
+		t.Errorf("answer = %d %s, want 200 with no password and an empty list", rec.Code, rec.Body)
+	}
+}
+
+func TestUnlinkIdentityEndpointUnlinksAs204(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+	linked := f.repo.Link(t, users.ExternalIdentity{UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/tenant/v2.0", Subject: "sub-secret", Email: ""})
+
+	rec := f.do(http.MethodDelete, "/users/"+ana.ID.String()+"/identities/"+linked.ID.String(), "")
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+	if held, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(held) != 0 {
+		t.Errorf("identities = %+v, %v; want none", held, err)
+	}
+}
+
+func TestUnlinkIdentityEndpointAnswersAnIdentityNoLongerLinkedWith404(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+
+	rec := f.do(http.MethodDelete, "/users/"+ana.ID.String()+"/identities/"+uuid.NewString(), "")
+
+	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "identity_not_found" {
+		t.Errorf("answer = %d %s, want 404 identity_not_found", rec.Code, rec.Body)
+	}
+}
+
+func TestIdentityEndpointsRefuseAMalformedID(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+
+	for _, c := range []struct{ method, path, code string }{
+		{http.MethodGet, "/users/not-a-uuid/identities", "invalid_user_id"},
+		{http.MethodDelete, "/users/not-a-uuid/identities/" + uuid.NewString(), "invalid_user_id"},
+		{http.MethodDelete, "/users/" + ana.ID.String() + "/identities/not-a-uuid", "invalid_request"},
+	} {
+		if rec := f.do(c.method, c.path, ""); rec.Code != http.StatusBadRequest || errorCode(t, rec) != c.code {
+			t.Errorf("%s %s = %d %s, want 400 %s", c.method, c.path, rec.Code, rec.Body, c.code)
+		}
+	}
+}
+
+func TestIdentityEndpointsNeedThePermission(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionAuditView)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana"})
+	linked := f.repo.Link(t, users.ExternalIdentity{UserID: ana.ID, Provider: users.ProviderMicrosoft, Issuer: "https://login.example.edu/tenant/v2.0", Subject: "sub-secret", Email: ""})
+
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/users/" + ana.ID.String() + "/identities"},
+		{http.MethodDelete, "/users/" + ana.ID.String() + "/identities/" + linked.ID.String()},
+	} {
+		if rec := f.do(c.method, c.path, ""); rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s = %d, want 403", c.method, c.path, rec.Code)
+		}
+	}
+	if held, err := f.repo.IdentitiesOf(t.Context(), ana.ID); err != nil || len(held) != 1 {
+		t.Errorf("identities = %+v, %v; want the identity kept", held, err)
 	}
 }
 

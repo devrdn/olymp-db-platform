@@ -91,6 +91,9 @@ var (
 	// ErrIssuerAlreadyLinked refuses linking an account to a second identity
 	// at an issuer it already holds one at.
 	ErrIssuerAlreadyLinked = errors.New("the account is already linked to another identity at this issuer")
+	// ErrIdentityNotFound names an identity the account does not hold: never
+	// linked to it, or unlinked since.
+	ErrIdentityNotFound = errors.New("the account holds no such external identity")
 )
 
 // Errors lists every sentinel this package declares (CLAUDE.md rule 1).
@@ -103,6 +106,7 @@ func Errors() []error {
 		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
 		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts, ErrUnknownRole, ErrMailOff,
 		ErrExternalIdentityTaken, ErrStaffNotLinkable, ErrUnverifiedNotLinkable, ErrIssuerAlreadyLinked,
+		ErrIdentityNotFound,
 	}
 }
 
@@ -486,6 +490,9 @@ type ExternalIdentities interface {
 	// TouchExternalIdentity stamps a sign-in; a missing identity is
 	// ErrNotFound.
 	TouchExternalIdentity(ctx context.Context, provider, issuer, subject string, at time.Time) error
+	// UnlinkExternalIdentity forgets one identity of the account and returns
+	// it; ErrIdentityNotFound when the account holds none by that ID.
+	UnlinkExternalIdentity(ctx context.Context, userID, identityID uuid.UUID) (LinkedIdentity, error)
 	// DeleteExternalIdentities forgets every identity of the account.
 	DeleteExternalIdentities(ctx context.Context, userID uuid.UUID) error
 }

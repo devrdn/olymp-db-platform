@@ -2080,15 +2080,28 @@ it, with the number of questions waiting beside it while the contest runs.
     sends them to `/password`. From then on the account signs in through the
     provider, or with a password its owner sets by a reset link, or, for a
     staff account, which never gets one, a password an administrator issues.
-    Deleting an account deletes its identities, and nothing else unlinks
-    one. A known risk, accepted by the owner: a provider's verified mark is
-    what it checked once, so if the installation gives an address to another
-    person, a previous holder whose address is still verified at GitHub or
-    in a personal Microsoft or Google account is linked into the new
-    holder's account at a first sign-in through that provider. The issuer
-    guard above protects only the other direction. A sign-in through the
-    installation's own directory is not affected; the mitigation is not
-    reusing addresses, and an administrator can block an account so linked.
+    Deleting an account deletes its identities. An administrator can also
+    unlink one identity (`DELETE /users/{id}/identities/{identityID}`,
+    `users.Service.UnlinkExternal`, the `users.manage` permission, never on
+    oneself, not on a deleted account): under the account's lock it deletes
+    the row, raises the session generation, since a session records no
+    sign-in method and a sign-in that read the identity before the delete
+    still opens one, and records `user.external_identity_unlink` with the
+    identity's id, provider and issuer and whether the account still signs
+    in another way. Removing the last way in is allowed, and the
+    administrator can issue a password next. Nothing bars the identity
+    afterwards: a later sign-in through it no longer finds the account by
+    the identity, but a trusted email still links it again by the address,
+    as at a first sign-in. A known risk, accepted by the owner: a provider's
+    verified mark is what it checked once, so if the installation gives an
+    address to another person, a previous holder whose address is still
+    verified at GitHub or in a personal Microsoft or Google account is
+    linked into the new holder's account at a first sign-in through that
+    provider. The issuer guard above protects only the other direction. A
+    sign-in through the installation's own directory is not affected. The
+    mitigation is not reusing addresses; an administrator can block an
+    account so linked, or unlink the identity and change the account's
+    address, since unlinking alone leaves the address that links it again.
     Another provider is another adapter, with no change to federation.
 
     **Staff and the home directory.** A staff account is entered or linked

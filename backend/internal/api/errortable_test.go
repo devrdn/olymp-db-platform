@@ -299,6 +299,8 @@ func TestEveryUsersErrorHasItsAnswer(t *testing.T) {
 			message: "Internal server error", logged: true},
 		users.ErrIssuerAlreadyLinked: {status: http.StatusInternalServerError, code: "internal_error",
 			message: "Internal server error", logged: true},
+		users.ErrIdentityNotFound: {status: http.StatusNotFound, code: "identity_not_found",
+			message: "This sign-in service is no longer linked to the account"},
 	}
 
 	declared := map[string]bool{}
