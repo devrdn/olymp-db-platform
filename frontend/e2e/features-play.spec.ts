@@ -235,7 +235,7 @@ test("a click on a table's name writes a query on it into the editor and runs no
     .toBe('SELECT * FROM suspects LIMIT 5;\nSELECT * FROM "CaseFiles" LIMIT 5;');
   await capture(page, "play-table-click");
   expect(runs).toBe(0);
-  await expect(page.getByText("Run a query to see its result here.")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Run a query to see its result here.")).toBeVisible();
   await closeSqlTab(page, tab);
 });
 
