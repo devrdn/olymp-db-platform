@@ -100,3 +100,17 @@ describe("offeredActions, clearing a sign-in lockout", () => {
     expect(offeredActions(other, "").unlockSignIn).toBe(true);
   });
 });
+
+describe("offeredActions, the sign-in services panel", () => {
+  test("is offered on somebody else's active or blocked account", () => {
+    expect(offeredActions(other, viewer).signInServices).toBe(true);
+    expect(offeredActions({ ...other, status: "blocked" }, viewer).signInServices).toBe(true);
+  });
+
+  test("is never offered on your own account, a deleted one, or for an unknown viewer", () => {
+    // The service refuses the first two (ErrCannotActOnSelf, ErrAccountDeleted).
+    expect(offeredActions(self, viewer).signInServices).toBe(false);
+    expect(offeredActions({ ...other, status: "deleted" }, viewer).signInServices).toBe(false);
+    expect(offeredActions(other, "").signInServices).toBe(false);
+  });
+});

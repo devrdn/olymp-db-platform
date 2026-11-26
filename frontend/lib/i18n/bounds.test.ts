@@ -26,10 +26,11 @@ const names = new Set(Object.keys(BOUNDS));
  * written without its entry, which the dictionary would show unfilled.
  */
 const FILLED_AT_RENDER = new Set([
-  "added", "address", "attempt", "chars", "column", "columns", "count", "date", "domain", "duration",
-  "email", "end", "filename", "fingerprint", "first", "from", "id", "ip", "keys", "letter", "login",
-  "m", "max", "minute", "minutes", "n", "name", "percent", "points", "rate", "reason", "received",
-  "registered", "removed", "row", "second", "seconds", "selected", "sent", "shown", "size", "start",
+  "action", "added", "address", "attempt", "chars", "column", "columns", "count", "date", "domain",
+  "duration", "email", "end", "filename", "fingerprint", "first", "from", "id", "ip", "keys", "letter",
+  "login", "m", "max", "minute", "minutes", "n", "name", "percent", "points", "provider", "rate",
+  "reason", "received", "registered", "removed", "row", "second", "seconds", "selected", "sent",
+  "shown", "size", "start",
   "tab", "table", "target", "targetColumns", "third", "time", "title", "to", "total", "w", "when",
   "who",
 ]);

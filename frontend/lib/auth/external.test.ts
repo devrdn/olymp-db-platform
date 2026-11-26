@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { externalStartHref, PROVIDER_IDS, PROVIDER_NAMES, type ProviderId } from "./external";
+import { externalStartHref, isProviderId, PROVIDER_IDS, PROVIDER_NAMES, type ProviderId } from "./external";
 
 const START = "/api/v1/auth/microsoft/start";
 const microsoftStartHref = (next: string | undefined) => externalStartHref("microsoft", next);
@@ -70,5 +70,14 @@ describe("microsoftStartHref", () => {
     const longest = `/${"a".repeat(511)}`;
 
     expect(microsoftStartHref(longest)).toBe(`${START}?return=${encodeURIComponent(longest)}`);
+  });
+});
+
+describe("isProviderId", () => {
+  test("knows the providers this release ships and nothing else", () => {
+    for (const id of PROVIDER_IDS) expect(isProviderId(id)).toBe(true);
+    expect(isProviderId("gitlab")).toBe(false);
+    expect(isProviderId("Microsoft")).toBe(false);
+    expect(isProviderId("")).toBe(false);
   });
 });

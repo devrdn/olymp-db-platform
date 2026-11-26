@@ -1,10 +1,21 @@
 "use client";
 
-import { ActionButton, ActionFooter, ActionForm, ActionOutcome } from "@/components/product/action-form";
+import { useId } from "react";
+
+import {
+  ActionButton,
+  ActionFooter,
+  ActionForm,
+  ActionOutcome,
+  ActionReload,
+} from "@/components/product/action-form";
+import { ProviderLogo } from "@/components/product/provider-logo";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
-import type { Account, Role } from "@/lib/api/accounts";
+import type { Account, IdentityList, Role } from "@/lib/api/accounts";
+import { isProviderId, PROVIDER_NAMES } from "@/lib/auth/external";
+import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { fill, isolate } from "@/lib/i18n/fill";
@@ -16,6 +27,7 @@ import {
   resetPasswordAction,
   restoreAction,
   unblockAction,
+  unlinkIdentityAction,
   unlockSignInAction,
   updateProfileAction,
 } from "./actions";
@@ -24,8 +36,9 @@ import { ReasonField, useRequiredReason } from "../required-reason";
 import { offeredActions } from "./offered";
 
 /**
- * One account and its actions. Three forms for three endpoints (profile, roles,
- * access): these are separate decisions, and a typo fix must not risk a block.
+ * One account and its actions. A form per endpoint (profile, roles, each
+ * sign-in service, access): these are separate decisions, and a typo fix must
+ * not risk a block.
  */
 
 /** A titled block: `help` behind a "?", `hint` a consequence that stays on screen. */
@@ -42,11 +55,15 @@ function Panel({
   helpLabel?: string;
   children: React.ReactNode;
 }) {
+  const headingId = useId();
+
   return (
-    <section className="flex flex-col gap-5 border-t border-line pt-5">
+    <section aria-labelledby={headingId} className="flex flex-col gap-5 border-t border-line pt-5">
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <h3 className="text-h3 text-ink">{title}</h3>
+          <h3 id={headingId} className="text-h3 text-ink">
+            {title}
+          </h3>
           {help && helpLabel ? <Tooltip label={helpLabel}>{help}</Tooltip> : null}
         </div>
         {hint ? <p className="max-w-body text-small text-ink-2">{hint}</p> : null}
@@ -87,9 +104,95 @@ function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary })
   );
 }
 
+/**
+ * The account's sign-ins through external services, each unlinked after a
+ * question naming it. Unlinking the only one of an account with no password
+ * leaves it no way in, and the question says so.
+ */
+function SignInServices({
+  account,
+  identities,
+  dict,
+  locale,
+}: {
+  account: Account;
+  identities: IdentityList;
+  dict: Dictionary;
+  locale: Locale;
+}) {
+  const t = dict.accounts.card;
+
+  if (identities.items.length === 0) {
+    return <p className="max-w-body text-small text-ink-3">{t.identitiesEmpty}</p>;
+  }
+
+  const lastWayIn = !identities.hasPassword && identities.items.length === 1;
+  const detail = lastWayIn
+    ? `${t.unlinkIdentityConfirmBody} ${fill(t.unlinkIdentityLastWay, { action: t.resetPassword })}`
+    : t.unlinkIdentityConfirmBody;
+
+  return (
+    <ul className="flex flex-col">
+      {identities.items.map((identity) => {
+        // A provider newer than this build is shown by its id, with no mark.
+        const provider = isProviderId(identity.provider) ? identity.provider : null;
+        const name = provider ? PROVIDER_NAMES[provider] : identity.provider;
+
+        return (
+          <li
+            key={identity.id}
+            className="flex items-start justify-between gap-4 border-t border-line py-4 first:border-t-0 first:pt-0 max-narrow:flex-col"
+          >
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <span className="flex items-center gap-2 text-control text-ink">
+                {provider ? <ProviderLogo provider={provider} /> : null}
+                {name}
+              </span>
+              <span className="font-mono text-data break-all text-ink-3">{identity.issuer}</span>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-small">
+                <dt className="text-ink-3">{t.identityEmail}</dt>
+                <dd className="break-all text-ink">{identity.email || t.identityNoEmail}</dd>
+                <dt className="text-ink-3">{t.identityLinked}</dt>
+                <dd className="text-ink">{formatMoment(identity.linkedAt, { locale })}</dd>
+                <dt className="text-ink-3">{t.identityLastUsed}</dt>
+                <dd className="text-ink">{formatMoment(identity.lastUsedAt, { locale })}</dd>
+              </dl>
+            </div>
+
+            <ActionForm
+              action={unlinkIdentityAction}
+              fields={{ userId: account.id, identityId: identity.id }}
+              confirm={{
+                title: identity.email
+                  ? fill(t.unlinkIdentityConfirmTitle, { provider: name, email: isolate(identity.email) })
+                  : fill(t.unlinkIdentityConfirmTitleNoEmail, { provider: name }),
+                detail,
+                answer: t.unlinkIdentityConfirm,
+                cancel: t.unlinkIdentityCancel,
+                danger: true,
+              }}
+              errors={dict.errors}
+              className="flex flex-col items-start gap-2.5"
+            >
+              <ActionButton variant="danger" pendingLabel={t.saving}>
+                {t.unlinkIdentity}
+              </ActionButton>
+              {/* No "saved": the row is gone once the page re-reads. */}
+              <ActionOutcome>
+                <ActionReload code="identity_not_found" label={t.identitiesReload} />
+              </ActionOutcome>
+            </ActionForm>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function AccountCard({
   account,
   roles,
+  identities,
   viewerId,
   dict,
   /** Already formatted for the locale. */
@@ -99,6 +202,8 @@ export function AccountCard({
 }: {
   account: Account;
   roles: Role[];
+  /** Null when they could not be read: the panel is left out, not the card. */
+  identities: IdentityList | null;
   /** The viewer, so a self-block is not offered. */
   viewerId: string;
   dict: Dictionary;
@@ -188,6 +293,12 @@ export function AccountCard({
 
             <ActionFooter labels={t} />
           </ActionForm>
+        </Panel>
+      ) : null}
+
+      {offered.signInServices && identities ? (
+        <Panel title={t.identities} hint={t.identitiesHint}>
+          <SignInServices account={account} identities={identities} dict={dict} locale={locale} />
         </Panel>
       ) : null}
 

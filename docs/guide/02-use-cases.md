@@ -374,7 +374,7 @@ flowchart LR
         uc2(["Import a roster of accounts"])
         uc3(["Act on many accounts at once"])
         uc4(["Block, delete and restore an account"])
-        uc5(["Reset a password, lift a sign-in lockout"])
+        uc5(["Reset a password, lift a sign-in lockout, unlink a sign-in service"])
         uc6(["Change global roles"])
         uc7(["Read the audit trail"])
         uc8(["Brand the installation"])
