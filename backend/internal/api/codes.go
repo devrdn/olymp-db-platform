@@ -302,6 +302,8 @@ var (
 		"A role code is not one of the installation's roles. The message names the code.")
 	codeAccountDeleted = httpx.NewCode("account_deleted",
 		"The operation assumes the account can still be reached — a profile edit, a password reset, a role change — and this one is deleted.")
+	codeIdentityNotFound = httpx.NewCode("identity_not_found",
+		"The account holds no sign-in through an external service with that identifier: it was never linked to this account, or it has been unlinked since.")
 
 	// --- Contest lifecycle --------------------------------------------------
 

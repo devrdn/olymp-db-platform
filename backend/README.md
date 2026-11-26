@@ -328,14 +328,17 @@ password. Each other way in is the installation's choice:
   can be linked into the new holder's account on their first sign-in
   through that provider, and then enters it. A sign-in through the
   installation's own directory is not affected, and a staff account is
-  never linked this way. Do not give an address to somebody new; there is
-  no way to unlink an identity, so if it has happened, an administrator
-  blocks the account.
+  never linked this way. Do not give an address to somebody new. If it has
+  happened, an administrator blocks the account, or unlinks the identity
+  (`DELETE /users/{id}/identities/{identityID}`) and changes the account's
+  address: unlinked, the identity no longer enters the account, but the old
+  address would link it again.
 - **What the audit trail records.** A password sign-up is `user.create` with
   no actor; a first provider sign-in that made an account is
   `user.external_sign_up`, one linked to an existing account
   `user.external_identity_link`, and a one-time password it dropped
-  `user.one_time_password_retire`; a password set through a mailed link is
+  `user.one_time_password_retire`; an administrator unlinking an identity is
+  `user.external_identity_unlink`; a password set through a mailed link is
   `user.password_reset_by_link`. The sign-in that follows a confirmed
   sign-up, and a sign-in through a provider, are `auth.login` with `method`
   `signup`, `microsoft`, `google` or `github`; a password sign-in carries

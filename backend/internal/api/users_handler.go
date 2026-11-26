@@ -18,7 +18,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const userIDParam = "userID"
+const (
+	userIDParam     = "userID"
+	identityIDParam = "identityID"
+)
 
 // RoleCatalog lists the roles an account may hold.
 type RoleCatalog interface {
@@ -97,6 +100,8 @@ func (h *UsersHandler) Mount(r chi.Router) {
 			r.Post("/password-reset", h.resetPassword)
 			r.Post("/sign-in/unlock", h.unlockSignIn)
 			r.Put("/roles", h.replaceRoles)
+			r.Get("/identities", h.identities)
+			r.Delete("/identities/{"+identityIDParam+"}", h.unlinkIdentity)
 		})
 	})
 }
@@ -564,6 +569,65 @@ func (h *UsersHandler) replaceRoles(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.service.ReplaceRoles(r.Context(), identity.UserID, id, req.Roles); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+// linkedIdentityResponse is one sign-in through an external service as an
+// administrator sees it. The subject, the provider's own name for the person,
+// is left out: nothing on the screen needs it. Email is empty when the
+// provider gave none.
+type linkedIdentityResponse struct {
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	Issuer     string `json:"issuer"`
+	Email      string `json:"email"`
+	LinkedAt   string `json:"linked_at"`
+	LastUsedAt string `json:"last_used_at"`
+}
+
+type linkedIdentitiesResponse struct {
+	HasPassword bool                     `json:"has_password"`
+	Items       []linkedIdentityResponse `json:"items"`
+}
+
+func (h *UsersHandler) identities(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.accountID(w, r)
+	if !ok {
+		return
+	}
+
+	list, err := h.service.Identities(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	items := make([]linkedIdentityResponse, 0, len(list.Items))
+	for _, l := range list.Items {
+		items = append(items, linkedIdentityResponse{
+			ID: l.ID.String(), Provider: l.Provider, Issuer: l.Issuer, Email: l.Email,
+			LinkedAt:   l.LinkedAt.UTC().Format(timeLayout),
+			LastUsedAt: l.LastUsedAt.UTC().Format(timeLayout),
+		})
+	}
+	httpx.JSON(w, r, http.StatusOK, linkedIdentitiesResponse{HasPassword: list.HasPassword, Items: items})
+}
+
+func (h *UsersHandler) unlinkIdentity(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.accountID(w, r)
+	if !ok {
+		return
+	}
+	identityID, err := uuid.Parse(chi.URLParam(r, identityIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The identity identifier is not a UUID")
+		return
+	}
+
+	actor, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.UnlinkExternal(r.Context(), actor.UserID, id, identityID); err != nil {
 		h.fail(w, r, err)
 		return
 	}

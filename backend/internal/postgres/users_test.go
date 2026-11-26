@@ -1811,6 +1811,58 @@ func TestTwoConcurrentLinksOfOneIssuerLinkOne(t *testing.T) {
 	}
 }
 
+// An unlink that starts while a link holds the account waits for it, and then
+// sees the identity that link added, so the trail does not record the account
+// as left with no way to sign in.
+func TestUnlinkExternalWaitsForALinkInFlight(t *testing.T) {
+	tag := "ext-unlink-" + uuid.NewString()[:8]
+	service := externalAccounts(t, tag)
+	ana := externalStudent(t, tag)
+	repo := NewUsers(testPool)
+	ctx := context.Background()
+	if err := repo.MarkEmailVerified(ctx, ana.ID, time.Now()); err != nil {
+		t.Fatalf("verify the address: %v", err)
+	}
+	first := externalLink(tag)
+	first.UserID, first.Issuer = ana.ID, "https://first.example/v2.0"
+	if err := repo.LinkExternalIdentity(ctx, first); err != nil {
+		t.Fatalf("LinkExternalIdentity() = %v", err)
+	}
+	linked, err := repo.IdentitiesOf(ctx, ana.ID)
+	if err != nil || len(linked) != 1 {
+		t.Fatalf("IdentitiesOf() = %+v, %v", linked, err)
+	}
+
+	err = raceOnTwoConnections(t,
+		func(ctx context.Context) error {
+			_, err := service.LinkExternal(ctx, users.LinkExternalCommand{UserID: ana.ID, Identity: externalLink(tag), VerifiedAt: time.Now()})
+			return err
+		},
+		func(ctx context.Context) error {
+			// No actor, so no administrator account outlives the test: the
+			// trail's actor_id would keep it from the cleanup.
+			return service.UnlinkExternal(ctx, uuid.Nil, ana.ID, linked[0].ID)
+		},
+		"FOR NO KEY UPDATE")
+
+	if err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+	left, err := repo.IdentitiesOf(ctx, ana.ID)
+	if err != nil || len(left) != 1 || left[0].Issuer != externalLink(tag).Issuer {
+		t.Errorf("identities = %+v, %v; want only the one the link added", left, err)
+	}
+	var signsInOtherwise bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT (payload->>'signs_in_otherwise')::boolean FROM audit_log
+		WHERE action = $1 AND entity_id = $2`, audit.ActionUserExternalIdentityUnlink, ana.ID.String()).Scan(&signsInOtherwise); err != nil {
+		t.Fatalf("read the unlink's entry: %v", err)
+	}
+	if !signsInOtherwise {
+		t.Error("the entry says the account no longer signs in, though the link committed first")
+	}
+}
+
 // A change another transaction holds when Lock starts commits before Lock
 // returns, and the read that follows sees it: what the reset-link
 // completion counts on so as not to verify an address changed meanwhile.

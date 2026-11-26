@@ -83,6 +83,7 @@ func (a *hookedAccounts) LinkExternal(ctx context.Context, cmd users.LinkExterna
 
 type fixture struct {
 	repo     *userstest.Repository
+	users    *users.Service
 	store    *countingStore
 	accounts *hookedAccounts
 	pending  pendingLogins
@@ -99,6 +100,7 @@ func newFixture(t *testing.T) *fixture {
 		WithExternalIdentities(repo)
 	return &fixture{
 		repo:     repo,
+		users:    service,
 		store:    &countingStore{Store: repo},
 		accounts: &hookedAccounts{Accounts: service},
 		pending:  pendingLogins{},
@@ -318,6 +320,52 @@ func TestATrustedEmailWithNoAccountCreatesAVerifiedOne(t *testing.T) {
 	}
 	if linked, err := f.repo.IdentitiesOf(t.Context(), got.ID); err != nil || len(linked) != 1 || linked[0].Subject != "sub-ana" {
 		t.Errorf("identities = %+v, %v; want sub-ana", linked, err)
+	}
+}
+
+// unlink removes the account's one identity as an administrator would.
+func (f *fixture) unlink(t *testing.T, u users.User) {
+	t.Helper()
+	linked, err := f.repo.IdentitiesOf(t.Context(), u.ID)
+	if err != nil || len(linked) != 1 {
+		t.Fatalf("IdentitiesOf() = %+v, %v; want one", linked, err)
+	}
+	if err := f.users.UnlinkExternal(t.Context(), uuid.New(), u.ID, linked[0].ID); err != nil {
+		t.Fatalf("UnlinkExternal() = %v", err)
+	}
+}
+
+// The owner ruled against barring the identity: an unlink cuts the link, and
+// the address the provider vouches for may tie it again.
+func TestAnUnlinkedIdentityWithATrustedEmailLinksAgainByIt(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
+	f.link(t, ana, "sub-ana")
+	f.unlink(t, ana)
+
+	got, err := f.service().Resolve(t.Context(), trusted("sub-ana"))
+
+	if err != nil || got.ID != ana.ID {
+		t.Fatalf("Resolve() = %v, %v; want ana's account, linked again by its address", got.ID, err)
+	}
+	if f.store.byEmail != 1 || len(f.accounts.linked) != 1 {
+		t.Errorf("looked up by email %d times and linked %d times, want the identity no longer found and linked again", f.store.byEmail, len(f.accounts.linked))
+	}
+}
+
+func TestAnUnlinkedIdentityWithoutATrustedEmailNoLongerEntersTheAccount(t *testing.T) {
+	f := newFixture(t)
+	ana := f.repo.Add(users.User{Login: "ana", FullName: "Ana", Email: "ana@example.edu", EmailVerifiedAt: &proved, Roles: []string{users.RoleStudent}})
+	f.link(t, ana, "sub-ana")
+	f.unlink(t, ana)
+
+	got, err := f.service().Resolve(t.Context(), claims("sub-ana"))
+
+	if err != nil {
+		t.Fatalf("Resolve() = %v", err)
+	}
+	if linked, err := f.repo.IdentitiesOf(t.Context(), ana.ID); got.ID == ana.ID || err != nil || len(linked) != 0 {
+		t.Errorf("signed into %v with ana's identities %+v, %v; want another account and ana's left unlinked", got.ID, linked, err)
 	}
 }
 

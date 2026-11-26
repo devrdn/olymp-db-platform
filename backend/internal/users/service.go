@@ -346,9 +346,10 @@ func (s *Service) CreateVerified(ctx context.Context, cmd CreateVerifiedCommand)
 	return created, nil
 }
 
-// errNoIdentityStore means CreateExternal or LinkExternal ran on a service
-// wired without WithExternalIdentities: a wiring fault, never a person's.
-var errNoIdentityStore = errors.New("users: linking an external identity needs WithExternalIdentities")
+// errNoIdentityStore means an operation on external identities ran on a
+// service wired without WithExternalIdentities: a wiring fault, never a
+// person's.
+var errNoIdentityStore = errors.New("users: an operation on external identities needs WithExternalIdentities")
 
 // CreateExternalCommand is an account a person's identity at a provider asked
 // for. Email is empty when the provider did not vouch for the address, which
@@ -545,6 +546,83 @@ func (s *Service) refuseExternalEntry(ctx context.Context, u User, homeDirectory
 		return true, ErrStaffNotLinkable
 	}
 	return staff, nil
+}
+
+// IdentityList is how an account signs in: the identities linked to it, and
+// whether it has a password too.
+type IdentityList struct {
+	Items       []LinkedIdentity
+	HasPassword bool
+}
+
+// Identities lists the identities linked to the account; ErrNotFound for an
+// unknown account.
+func (s *Service) Identities(ctx context.Context, userID uuid.UUID) (IdentityList, error) {
+	if s.identities == nil {
+		return IdentityList{}, errNoIdentityStore
+	}
+	u, err := s.repo.ByID(ctx, userID)
+	if err != nil {
+		return IdentityList{}, err
+	}
+	items, err := s.identities.IdentitiesOf(ctx, userID)
+	if err != nil {
+		return IdentityList{}, err
+	}
+	return IdentityList{Items: items, HasPassword: u.HasPassword()}, nil
+}
+
+// UnlinkExternal removes one identity from the account, so signing in through
+// it no longer enters the account, and ends every session: a session records
+// no sign-in method, and a sign-in that read the identity before the delete
+// still opens one, which only the generation bump retires. The account is
+// locked and read again first, so a LinkExternal in flight, which adds an
+// identity and may drop a one-time password, commits before the audit entry
+// says whether the account still signs in. It refuses ErrCannotActOnSelf,
+// ErrAccountDeleted and ErrIdentityNotFound, and unlinks a blocked account.
+// Removing the last way to sign in is allowed: the administrator can issue a
+// password next.
+func (s *Service) UnlinkExternal(ctx context.Context, actorID, userID, identityID uuid.UUID) error {
+	if s.identities == nil {
+		return errNoIdentityStore
+	}
+	if actorID == userID {
+		return ErrCannotActOnSelf
+	}
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, userID); err != nil {
+			return err
+		}
+		u, err := s.repo.ByID(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if u.Status == StatusDeleted {
+			return ErrAccountDeleted
+		}
+		gone, err := s.identities.UnlinkExternalIdentity(ctx, userID, identityID)
+		if err != nil {
+			return err
+		}
+		left, err := s.identities.IdentitiesOf(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserExternalIdentityUnlink, userID, map[string]any{
+			"identity_id":        gone.ID.String(),
+			"provider":           gone.Provider,
+			"issuer":             gone.Issuer,
+			"signs_in_otherwise": u.HasPassword() || len(left) > 0,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	s.forget(ctx, userID)
+	return nil
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]User, int, error) {

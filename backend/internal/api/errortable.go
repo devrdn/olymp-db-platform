@@ -328,6 +328,8 @@ var usersErrors = errorTable{
 	{err: users.ErrIssuerAlreadyLinked, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a second identity's refusal to link reached a handler"},
+	{err: users.ErrIdentityNotFound, status: http.StatusNotFound, code: codeIdentityNotFound,
+		message: "This sign-in service is no longer linked to the account"},
 }
 
 // monitorErrors answers every error in monitor.Errors() (walked by

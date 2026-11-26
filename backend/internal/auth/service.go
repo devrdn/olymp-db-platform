@@ -438,7 +438,11 @@ func (s *Service) SignInAs(ctx context.Context, cmd SignInAsCommand) (LoginResul
 
 // completeSignIn is what follows a proven identity: a session at the
 // account's generation, the replaced session's end, the login stamp, the
-// caller's device handling and the audit entry.
+// caller's device handling and the audit entry. The generation is the one
+// user was read with, together with what proved it (the password, the linked
+// identity, or the sign-up's confirmation), and is never read again: an
+// unlink or a block that commits after that read raises it past the
+// session's and so retires it.
 func (s *Service) completeSignIn(ctx context.Context, user users.User, previousToken, ip, userAgent string, payload map[string]any, afterStamp func()) (string, error) {
 	token, err := s.sessions.Create(ctx, Principal{
 		UserID:     user.ID,
