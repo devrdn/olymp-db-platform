@@ -14,6 +14,7 @@ vi.mock("@/lib/api/server", async (importOriginal) => ({
 import { ApiError } from "@/lib/api/client";
 
 import {
+  allowIdentityAction,
   blockAction,
   deleteAction,
   resetPasswordAction,
@@ -226,6 +227,45 @@ describe("unlinkIdentityAction", () => {
     );
 
     expect(await unlinkIdentityAction({}, form({ userId, identityId }))).toEqual({ code: "identity_not_found" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("allowIdentityAction", () => {
+  const unlinkedId = "3b0c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4";
+
+  test("lifts the unlinked record from the account and revalidates", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    const state = await allowIdentityAction({}, form({ userId, unlinkedId }));
+
+    expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/unlinked-identities/${unlinkedId}`, {
+      method: "DELETE",
+    });
+    expect(state).toEqual({ ok: true });
+    expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
+  });
+
+  test("refuses an account identifier that is not one without calling the server", async () => {
+    const state = await allowIdentityAction({}, form({ userId: "../roles", unlinkedId }));
+
+    expect(state).toEqual({ code: "invalid_user_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("refuses a record identifier that is not one without calling the server", async () => {
+    const state = await allowIdentityAction({}, form({ userId, unlinkedId: "../../roles" }));
+
+    expect(state).toEqual({ code: "invalid_request" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("reports a record lifted since the page loaded by its code", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("unlinked_identity_not_found", 404, "gone"));
+
+    expect(await allowIdentityAction({}, form({ userId, unlinkedId }))).toEqual({
+      code: "unlinked_identity_not_found",
+    });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

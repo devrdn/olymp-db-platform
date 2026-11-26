@@ -17,7 +17,7 @@ export type Offered = {
   unlockSignIn: boolean;
   roles: boolean;
   profile: boolean;
-  /** Lists the account's sign-in services, each with its unlink. */
+  /** Lists the account's sign-in services, each with its unlink, and the unlinked ones with their allow. */
   signInServices: boolean;
 };
 

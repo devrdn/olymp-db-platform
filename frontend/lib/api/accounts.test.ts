@@ -309,6 +309,7 @@ describe("identityListSchema", () => {
           last_used_at: "2026-11-26T11:00:00Z",
         },
       ],
+      unlinked: [],
     });
 
     expect(parsed).toEqual({
@@ -331,7 +332,34 @@ describe("identityListSchema", () => {
           lastUsedAt: "2026-11-26T11:00:00Z",
         },
       ],
+      unlinked: [],
     });
+  });
+
+  test("reads the services unlinked from the account, which wait to be allowed again", () => {
+    const parsed = identityListSchema.parse({
+      has_password: true,
+      items: [],
+      unlinked: [
+        {
+          id: "3b0c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4",
+          provider: "google",
+          issuer: "https://accounts.google.com",
+          email: "ana@example.edu",
+          unlinked_at: "2026-11-26T22:01:25Z",
+        },
+      ],
+    });
+
+    expect(parsed.unlinked).toEqual([
+      {
+        id: "3b0c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4",
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        email: "ana@example.edu",
+        unlinkedAt: "2026-11-26T22:01:25Z",
+      },
+    ]);
   });
 
   test("keeps a provider newer than this build rather than refusing the list", () => {
@@ -347,6 +375,7 @@ describe("identityListSchema", () => {
           last_used_at: "2026-11-26T09:30:00Z",
         },
       ],
+      unlinked: [],
     });
 
     expect(parsed.items[0].provider).toBe("gitlab");

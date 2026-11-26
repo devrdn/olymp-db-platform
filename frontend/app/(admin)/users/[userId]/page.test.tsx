@@ -71,7 +71,7 @@ beforeEach(() => {
 
 describe("the account page", () => {
   test("lists the account's sign-in services", async () => {
-    answering(async () => ({ has_password: true, items: [] }));
+    answering(async () => ({ has_password: true, items: [], unlinked: [] }));
 
     await renderPage();
 
