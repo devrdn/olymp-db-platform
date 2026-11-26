@@ -1,7 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { readSeed } from "./api";
-import { runQuery, signIn } from "./support";
+import { runQuery, signIn, test } from "./support";
 
 /**
  * The participant's main path in a read_write contest, in order, on one

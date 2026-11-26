@@ -61,6 +61,35 @@ const eslintConfig = defineConfig([
       "bundle/no-schema-in-client": ["error", { root: import.meta.dirname }],
     },
   },
+  {
+    // The content policy guard in e2e/support.ts, which a check cannot skip.
+    files: ["e2e/**/*.{spec,perf}.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@playwright/test",
+              importNames: ["test"],
+              message: "Import `test` from ./support, which watches the content policy.",
+            },
+          ],
+        },
+      ],
+      // Replaces the list above for these files, so it repeats it.
+      "no-restricted-syntax": [
+        "error",
+        ...restricted,
+        {
+          // `browser.newContext` and `….browser.newContext`; an API request context is fine.
+          selector:
+            "CallExpression[callee.property.name='newContext']:matches([callee.object.name='browser'], [callee.object.property.name='browser'])",
+          message: "Open a context with newContext from ./support, which watches the content policy.",
+        },
+      ],
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

@@ -1,7 +1,7 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 
 import { Api, readSeed } from "./api";
-import { capture, cellUnder, openPlay, openSideTab, signIn } from "./support";
+import { capture, cellUnder, newContext, openPlay, openSideTab, signIn, test } from "./support";
 
 /**
  * The bonus question, last of the post-beta checks because it ends the
@@ -63,7 +63,7 @@ test("a correct bonus answer gives back the penalty, in the standings and on the
 
   // The project's connection settings, so a second browser cannot drift from the first.
   const { baseURL, ignoreHTTPSErrors, locale } = test.info().project.use;
-  const staff = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, viewport: { width: 1600, height: 900 } });
+  const staff = await newContext(browser, { baseURL, ignoreHTTPSErrors, locale, viewport: { width: 1600, height: 900 } });
   const desk = await staff.newPage();
   await signIn(desk, seed.admin);
   await desk.goto(`/contests/${id}/standings`);

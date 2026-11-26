@@ -1,6 +1,76 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import type { Account } from "./api";
+
+/** How Chromium words a refusal under the content policy, whichever directive refused. */
+const POLICY_VIOLATION = /Content Security Policy/;
+const VIOLATED = "the browser refused something under the content policy";
+
+/** The current test's violations, while one runs. */
+let violations: string[] | null = null;
+
+function watch(context: BrowserContext, into: string[]): void {
+  context.on("console", (message) => {
+    if (POLICY_VIOLATION.test(message.text())) into.push(`${message.page()?.url() ?? "a page"}: ${message.text()}`);
+  });
+}
+
+/**
+ * A browser context watched for content policy violations, for a spec that
+ * needs one beside its own. In a test the test fails on one. In a hook, where
+ * no test can, closing the context fails the hook instead.
+ */
+export async function newContext(browser: Browser, options?: BrowserContextOptions): Promise<BrowserContext> {
+  const context = await browser.newContext(options);
+  if (violations) {
+    watch(context, violations);
+    return context;
+  }
+  const seen: string[] = [];
+  watch(context, seen);
+  const close = context.close.bind(context);
+  context.close = async (closeOptions) => {
+    await close(closeOptions);
+    expect(seen, VIOLATED).toEqual([]);
+  };
+  return context;
+}
+
+/**
+ * Every spec's `test`: it fails on a content policy violation in any watched
+ * context, since a page whose scripts were refused still shows its HTML.
+ */
+export const test = base.extend<{ contentPolicy: void }>({
+  // `run` rather than Playwright's usual `use`, which the React hooks rule
+  // would take for the hook.
+  contentPolicy: [
+    async ({}, run) => {
+      const seen: string[] = [];
+      violations = seen;
+      try {
+        await run();
+      } finally {
+        violations = null;
+      }
+      expect(seen, VIOLATED).toEqual([]);
+    },
+    { auto: true },
+  ],
+  // Depends on `contentPolicy` so that its check runs after this context closes.
+  context: async ({ context, contentPolicy }, run) => {
+    void contentPolicy;
+    watch(context, violations!);
+    await run(context);
+  },
+});
 
 /** Signs in through the form, as a person would, and waits to leave it. */
 export async function signIn(page: Page, account: Account): Promise<void> {

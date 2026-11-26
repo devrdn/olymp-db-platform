@@ -2,10 +2,10 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, type Browser, type Page } from "@playwright/test";
 
 import { readSeed, STATE_DIR } from "./api";
-import { newSqlTab, signIn } from "./support";
+import { newContext, newSqlTab, signIn, test } from "./support";
 
 /**
  * How the participant's play screen performs in a real Chromium, on the
@@ -302,7 +302,7 @@ async function eachCondition(
   for (let repeat = 1; repeat <= REPEATS; repeat++) {
     for (const condition of CONDITIONS) {
       const load = await waitForQuietMachine();
-      const context = await browser.newContext({ ...contextOptions(), storageState: SESSION_FILE });
+      const context = await newContext(browser, { ...contextOptions(), storageState: SESSION_FILE });
       await context.addInitScript(installObservers);
       const page = await context.newPage();
       // The development server's hot-reload channel: its numbers mean nothing.
@@ -545,7 +545,7 @@ const WIDE_QUERY =
 
 test.beforeAll(async ({ browser, baseURL, ignoreHTTPSErrors, viewport, locale, userAgent, deviceScaleFactor }) => {
   contextOptions = () => ({ baseURL, ignoreHTTPSErrors, viewport, locale, userAgent, deviceScaleFactor });
-  const context = await browser.newContext(contextOptions());
+  const context = await newContext(browser, contextOptions());
   const page = await context.newPage();
   await signIn(page, readSeed().participant);
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });

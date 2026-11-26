@@ -221,6 +221,19 @@ the bonus question (`features-results`, last because it finishes its
 contest). The main path alone runs with `npx playwright test
 participant.spec.ts` from `frontend/`.
 
+- **It fails any test whose page broke the content policy.** A page whose
+  scripts the policy blocks still shows its server-rendered HTML and never
+  hydrates, so every spec, and the play screen's measurements, take `test`
+  from `e2e/support.ts`, whose fixture fails the test on a policy violation
+  in the browser's console. A second context comes from its `newContext`,
+  watched the same way; in a hook, closing that context fails the hook.
+  ESLint refuses `test` from `@playwright/test` and a bare
+  `browser.newContext` in `e2e/*.spec.ts` and `e2e/*.perf.ts`.
+  `content-policy.spec.ts` checks that every script `/login` sends carries
+  the nonce of its response's policy, and that a path the proxy skips, and a
+  different-case spelling of one that it serves, each answer exactly one
+  policy: the static one and the nonce one.
+
 - **It seeds through the public API** (`e2e/seed.ts`, the global setup),
   signed in as the stack's administrator (`E2E_ADMIN_LOGIN`,
   `E2E_ADMIN_PASSWORD`): an administrator and a participant of its own, a
